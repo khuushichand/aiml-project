@@ -148,22 +148,48 @@ async function assertCardOrder(page: Page) {
   expect((mediaBox?.y ?? 0) < (chatBox?.y ?? 0)).toBeTruthy()
 }
 
-async function ensureOnboardingSuccessScreen(
+async function openOnboardingSuccessScreen(
   page: Page
-): Promise<"connected_now" | "already_connected"> {
+): Promise<"connected-now" | "already-connected"> {
   await page.goto("/setup", { waitUntil: "domcontentloaded" })
-  await waitForConnection(page, 25_000)
 
-  const successScreen = page.getByTestId("onboarding-success-screen")
-  if (await successScreen.isVisible({ timeout: 5_000 }).catch(() => false)) {
-    return "already_connected"
+  const connect = page.getByTestId("onboarding-connect")
+  const success = page.getByTestId("onboarding-success-screen")
+
+  await Promise.race([
+    connect.waitFor({ state: "visible", timeout: 15_000 }),
+    success.waitFor({ state: "visible", timeout: 15_000 }),
+  ])
+
+  const needsConnect = await connect.isVisible().catch(() => false)
+  if (needsConnect) {
+    await connect.click()
   }
 
-  const connectButton = page.getByTestId("onboarding-connect")
-  await expect(connectButton).toBeVisible({ timeout: 15_000 })
-  await connectButton.evaluate((el: HTMLElement) => el.click())
-  await expect(successScreen).toBeVisible({ timeout: 20_000 })
-  return "connected_now"
+  await expect(success).toBeVisible({ timeout: 20_000 })
+  return needsConnect ? "connected-now" : "already-connected"
+}
+
+async function clickOnboardingCtaAndExpectRoute(
+  page: Page,
+  ctaTestId: string,
+  expectedUrl: RegExp
+): Promise<void> {
+  const cta = page.getByTestId(ctaTestId)
+  let lastError: unknown
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await expect(cta).toBeVisible({ timeout: 15_000 })
+    await cta.click()
+    try {
+      await expect(page).toHaveURL(expectedUrl, { timeout: 10_000 })
+      return
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw lastError
 }
 
 test.describe("Onboarding Ingestion-First Journey", () => {
@@ -203,16 +229,18 @@ test.describe("Onboarding Ingestion-First Journey", () => {
         height: viewport.height,
       })
 
-      const initialSetupState = await ensureOnboardingSuccessScreen(authedPage)
+      const initialConnectState = await openOnboardingSuccessScreen(authedPage)
+      await ensureOnboardingSuccessScreen(authedPage)
       await captureStep(
         authedPage,
         evidenceRows,
         viewport.label,
         "01-setup-connect",
-        initialSetupState === "connected_now"
-          ? "Connect control visible."
-          : "Setup resumed from an already connected state."
+        initialConnectState === "connected-now"
+          ? "Connected via onboarding from setup."
+          : "Onboarding success already visible from prior connected state."
       )
+
       await expect(authedPage.getByTestId("onboarding-success-screen")).toHaveAttribute(
         "data-ingest-status",
         "idle"
@@ -262,10 +290,11 @@ test.describe("Onboarding Ingestion-First Journey", () => {
         "Post-ingest recommendation state prioritizes media verification."
       )
 
-      await authedPage
-        .getByTestId("onboarding-success-media")
-        .evaluate((el: HTMLElement) => el.click())
-      await expect(authedPage).toHaveURL(/\/media(?:[/?#].*)?$/)
+      await clickOnboardingCtaAndExpectRoute(
+        authedPage,
+        "onboarding-success-media",
+        /\/media(?:[/?#].*)?$/
+      )
       await captureStep(
         authedPage,
         evidenceRows,
@@ -274,6 +303,7 @@ test.describe("Onboarding Ingestion-First Journey", () => {
         "Media verification route reached from onboarding CTA."
       )
 
+      await openOnboardingSuccessScreen(authedPage)
       await ensureOnboardingSuccessScreen(authedPage)
 
       await authedPage

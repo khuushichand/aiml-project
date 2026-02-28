@@ -123,6 +123,7 @@ jobs:
       TEST_DB_NAME: tldw_test
       TLDW_TEST_POSTGRES_REQUIRED: '1'
       RUN_JOBS: '1'
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       WORKFLOWS_EGRESS_ALLOWLIST: "93.184.216.34,does-not-resolve.invalid,example.com"
     steps:
       - name: Checkout

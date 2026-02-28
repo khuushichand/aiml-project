@@ -18,12 +18,11 @@ import {
   seedAuth,
   getCriticalIssues,
   classifySmokeIssues,
-  SMOKE_LOAD_TIMEOUT,
 } from './smoke.setup';
 import { PAGES, PageEntry, getActivePages, PAGE_COUNT, ACTIVE_PAGE_COUNT } from './page-inventory';
 
 // Test configuration
-const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT;
+const LOAD_TIMEOUT = 30_000; // 30s max for page load
 const ELEMENT_TIMEOUT = 15_000; // 15s max for element visibility
 const VERBOSE_CONSOLE = process.env.TLDW_SMOKE_VERBOSE_CONSOLE === '1';
 const ALLOWLIST_LOG_LIMIT = Number(process.env.TLDW_SMOKE_ALLOWLIST_LOG_LIMIT || 10);
@@ -36,20 +35,6 @@ const TRANSIENT_RUNTIME_RETRY_DELAY_MS = Math.max(
   0,
   Number(process.env.TLDW_SMOKE_TRANSIENT_RUNTIME_RETRY_DELAY_MS || 500)
 );
-const TRANSIENT_NAVIGATION_RETRY_ATTEMPTS = Math.max(
-  1,
-  Number(process.env.TLDW_SMOKE_TRANSIENT_NAVIGATION_RETRIES || 3)
-);
-const TRANSIENT_NAVIGATION_RETRY_DELAY_MS = Math.max(
-  0,
-  Number(process.env.TLDW_SMOKE_TRANSIENT_NAVIGATION_RETRY_DELAY_MS || 1_500)
-);
-const ROUTE_LOAD_TIMEOUT_OVERRIDES: Record<string, number> = {
-  '/review': 90_000,
-  '/reading': 90_000,
-  '/settings': 90_000,
-  '/settings/tldw': 90_000,
-};
 const KEY_NAV_TARGETS = ['/chat', '/media', '/knowledge', '/notes', '/prompts', '/settings/tldw'];
 const WAYFINDING_404_PATH = '/__wayfinding-missing-route__';
 const ROUTE_ERROR_FIXTURE_QUERY_KEY = '__forceRouteError';
@@ -231,20 +216,6 @@ function hasTransientRuntimeOverlaySignal(input: string): boolean {
   return TRANSIENT_RUNTIME_OVERLAY_PATTERNS.some((pattern) => pattern.test(input));
 }
 
-function isTransientNavigationError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error ?? '');
-  return (
-    /ERR_CONNECTION_REFUSED/i.test(message) ||
-    /ERR_EMPTY_RESPONSE/i.test(message) ||
-    /Timeout .* exceeded/i.test(message)
-  );
-}
-
-function resolveRouteLoadTimeout(routePath: string): number {
-  const routeOverride = ROUTE_LOAD_TIMEOUT_OVERRIDES[routePath];
-  return Math.max(routeOverride ?? LOAD_TIMEOUT, LOAD_TIMEOUT);
-}
-
 function resetDiagnostics(diagnostics: DiagnosticsData): void {
   diagnostics.console.length = 0;
   diagnostics.pageErrors.length = 0;
@@ -263,7 +234,6 @@ async function visitRouteWithTransientRetry(
   diagnostics: DiagnosticsData,
   routePath: string
 ): Promise<RouteVisitResult> {
-  const routeLoadTimeout = resolveRouteLoadTimeout(routePath);
   let retriesUsed = 0;
   let response: Awaited<ReturnType<Page['goto']>> = null;
   let issues: ReturnType<typeof getCriticalIssues> = {
@@ -281,44 +251,11 @@ async function visitRouteWithTransientRetry(
 
   for (let attempt = 0; attempt <= TRANSIENT_RUNTIME_RETRY_ATTEMPTS; attempt += 1) {
     resetDiagnostics(diagnostics);
-    let lastNavigationError: unknown = null;
-
-    for (
-      let navigationAttempt = 1;
-      navigationAttempt <= TRANSIENT_NAVIGATION_RETRY_ATTEMPTS;
-      navigationAttempt += 1
-    ) {
-      try {
-        response = await page.goto(routePath, {
-          waitUntil: 'domcontentloaded',
-          timeout: routeLoadTimeout,
-        });
-        lastNavigationError = null;
-        break;
-      } catch (error) {
-        lastNavigationError = error;
-        if (
-          !isTransientNavigationError(error) ||
-          navigationAttempt >= TRANSIENT_NAVIGATION_RETRY_ATTEMPTS
-        ) {
-          throw error;
-        }
-        console.warn(
-          `[smoke-transient-navigation-retry] ${routePath} retry ${navigationAttempt}/${TRANSIENT_NAVIGATION_RETRY_ATTEMPTS} after navigation error: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-        if (TRANSIENT_NAVIGATION_RETRY_DELAY_MS > 0) {
-          await page.waitForTimeout(TRANSIENT_NAVIGATION_RETRY_DELAY_MS);
-        }
-      }
-    }
-
-    if (lastNavigationError) {
-      throw lastNavigationError;
-    }
-
-    await page.waitForLoadState('networkidle', { timeout: routeLoadTimeout }).catch(() => {});
+    response = await page.goto(routePath, {
+      waitUntil: 'domcontentloaded',
+      timeout: LOAD_TIMEOUT,
+    });
+    await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
 
     issues = getCriticalIssues(diagnostics);
     classifiedIssues = classifySmokeIssues(routePath, issues);

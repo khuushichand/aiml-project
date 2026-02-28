@@ -2057,6 +2057,74 @@ class JobManager:
         finally:
             conn.close()
 
+    def list_job_events_after(
+        self,
+        *,
+        after_id: int = 0,
+        limit: int = 100,
+        event_types: tuple[str, ...] | list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """List job events after a cursor id, optionally filtered by event type."""
+
+        bounded_limit = max(1, min(1000, int(limit)))
+        normalized_after = max(0, int(after_id))
+        normalized_types = tuple(str(v) for v in (event_types or ()) if str(v).strip())
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                query = (
+                    "SELECT id, event_type, attrs_json, job_id, domain, queue, job_type, owner_user_id, "
+                    "request_id, trace_id, created_at FROM job_events WHERE id > %s"
+                )
+                params: list[Any] = [normalized_after]
+                if normalized_types:
+                    placeholders = ", ".join(["%s"] * len(normalized_types))
+                    query += f" AND event_type IN ({placeholders})"
+                    params.extend(normalized_types)
+                query += " ORDER BY id ASC LIMIT %s"
+                params.append(bounded_limit)
+                with self._pg_cursor(conn) as cur:
+                    cur.execute(query, params)
+                    rows = cur.fetchall() or []
+                return [dict(r) for r in rows]
+
+            query = (
+                "SELECT id, event_type, attrs_json, job_id, domain, queue, job_type, owner_user_id, "
+                "request_id, trace_id, created_at FROM job_events WHERE id > ?"
+            )
+            params = [normalized_after]
+            if normalized_types:
+                placeholders = ",".join(["?"] * len(normalized_types))
+                query += f" AND event_type IN ({placeholders})"
+                params.extend(normalized_types)
+            query += " ORDER BY id ASC LIMIT ?"
+            params.append(bounded_limit)
+            rows = conn.execute(query, tuple(params)).fetchall() or []
+
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    out.append(dict(row))
+                    continue
+                out.append(
+                    {
+                        "id": row[0],
+                        "event_type": row[1],
+                        "attrs_json": row[2],
+                        "job_id": row[3],
+                        "domain": row[4],
+                        "queue": row[5],
+                        "job_type": row[6],
+                        "owner_user_id": row[7],
+                        "request_id": row[8],
+                        "trace_id": row[9],
+                        "created_at": row[10],
+                    }
+                )
+            return out
+        finally:
+            conn.close()
+
     def summarize_by_status(
         self,
         *,
@@ -2973,7 +3041,7 @@ class JobManager:
                                 )
                         # Pre-fetch for metrics and idempotency
                         cur.execute(
-                            "SELECT status, completion_token, worker_id, lease_id, domain, queue, job_type, available_at, started_at, acquired_at, trace_id, request_id FROM jobs WHERE id = %s",
+                            "SELECT status, completion_token, worker_id, lease_id, domain, queue, job_type, available_at, started_at, acquired_at, trace_id, request_id, owner_user_id FROM jobs WHERE id = %s",
                             (int(job_id),),
                         )
                         base = cur.fetchone()
@@ -3199,7 +3267,7 @@ class JobManager:
                             )
                     # Pre-fetch for metrics + idempotency
                     rowm = conn.execute(
-                        "SELECT status, completion_token, domain, queue, job_type, available_at, started_at, acquired_at, trace_id, request_id FROM jobs WHERE id = ?",
+                        "SELECT status, completion_token, domain, queue, job_type, available_at, started_at, acquired_at, trace_id, request_id, owner_user_id FROM jobs WHERE id = ?",
                         (job_id,),
                     ).fetchone()
                     if rowm:
@@ -3321,6 +3389,7 @@ class JobManager:
                                 "acquired_at": rowm[7],
                                 "trace_id": rowm[8] if len(rowm) > 8 else None,
                                 "request_id": rowm[9] if len(rowm) > 9 else None,
+                                "owner_user_id": rowm[10] if len(rowm) > 10 else None,
                             }
                             s = _parse_dt(d.get("started_at")) or _parse_dt(d.get("acquired_at"))
                             observe_duration(
@@ -3408,13 +3477,14 @@ class JobManager:
                                 conn.execute(
                                     (
                                         "INSERT INTO job_events(job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at) "
-                                        "VALUES (?, ?, ?, ?, 'job.completed', '{}', NULL, ?, ?, DATETIME('now'))"
+                                        "VALUES (?, ?, ?, ?, 'job.completed', '{}', ?, ?, ?, DATETIME('now'))"
                                     ),
                                     (
                                         int(job_id),
                                         d.get("domain"),
                                         d.get("queue"),
                                         d.get("job_type"),
+                                        d.get("owner_user_id"),
                                         d.get("request_id"),
                                         d.get("trace_id"),
                                     ),
@@ -3431,6 +3501,9 @@ class JobManager:
                                             "domain": d.get("domain"),
                                             "queue": d.get("queue"),
                                             "job_type": d.get("job_type"),
+                                            "owner_user_id": d.get("owner_user_id"),
+                                            "request_id": d.get("request_id"),
+                                            "trace_id": d.get("trace_id"),
                                         },
                                     )
                             except _JOB_NONCRITICAL_EXCEPTIONS:
@@ -3441,6 +3514,9 @@ class JobManager:
                                     "domain": d.get("domain"),
                                     "queue": d.get("queue"),
                                     "job_type": d.get("job_type"),
+                                    "owner_user_id": d.get("owner_user_id"),
+                                    "request_id": d.get("request_id"),
+                                    "trace_id": d.get("trace_id"),
                                 }
                                 submit_job_audit_event("job.completed", job=ev, attrs=None)
                             except _JOB_NONCRITICAL_EXCEPTIONS:
@@ -3789,7 +3865,7 @@ class JobManager:
                                     f"[JM TEST MUT] fail_job enter job_id={job_id} retryable={retryable} backoff={backoff_seconds} enforce={enforce} backend=pg"
                                 )
                         cur.execute(
-                            "SELECT status, completion_token, retry_count, failure_streak_code, failure_streak_count, domain, queue, job_type, uuid FROM jobs WHERE id = %s",
+                            "SELECT status, completion_token, retry_count, failure_streak_code, failure_streak_count, domain, queue, job_type, uuid, request_id, trace_id, owner_user_id FROM jobs WHERE id = %s",
                             (int(job_id),),
                         )
                         elem = cur.fetchone()
@@ -4153,6 +4229,9 @@ class JobManager:
                                         "domain": d.get("domain"),
                                         "queue": d.get("queue"),
                                         "job_type": d.get("job_type"),
+                                        "owner_user_id": d.get("owner_user_id"),
+                                        "request_id": d.get("request_id"),
+                                        "trace_id": d.get("trace_id"),
                                     }
                                     emit_job_event("job.failed", job=ev, attrs={"error_code": (error_code or error)})
                                 except _JOB_NONCRITICAL_EXCEPTIONS:
@@ -4186,7 +4265,7 @@ class JobManager:
                             )
                     # For metrics, fetch labels
                     rowl = conn.execute(
-                        "SELECT status, completion_token, domain, queue, job_type, uuid FROM jobs WHERE id = ?",
+                        "SELECT status, completion_token, domain, queue, job_type, uuid, request_id, trace_id, owner_user_id FROM jobs WHERE id = ?",
                         (job_id,),
                     ).fetchone()
                     if rowl:
@@ -4561,8 +4640,30 @@ class JobManager:
                                         "domain": d.get("domain"),
                                         "queue": d.get("queue"),
                                         "job_type": d.get("job_type"),
+                                        "owner_user_id": d.get("owner_user_id"),
+                                        "request_id": d.get("request_id"),
+                                        "trace_id": d.get("trace_id"),
                                     }
-                                    emit_job_event("job.failed", job=ev, attrs={"error_code": (error_code or error)})
+                                    if JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
+                                        # Insert failed event in-transaction to avoid cross-connection SQLite lock drops.
+                                        conn.execute(
+                                            (
+                                                "INSERT INTO job_events(job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at) "
+                                                "VALUES (?, ?, ?, ?, 'job.failed', ?, ?, ?, ?, DATETIME('now'))"
+                                            ),
+                                            (
+                                                int(job_id),
+                                                ev.get("domain"),
+                                                ev.get("queue"),
+                                                ev.get("job_type"),
+                                                json.dumps({"error_code": (error_code or error)}),
+                                                ev.get("owner_user_id"),
+                                                ev.get("request_id"),
+                                                ev.get("trace_id"),
+                                            ),
+                                        )
+                                    else:
+                                        emit_job_event("job.failed", job=ev, attrs={"error_code": (error_code or error)})
                                 except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 try:
@@ -4571,6 +4672,38 @@ class JobManager:
                                         post_commit_cancel_reason = "dependency_failed"
                                 except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
+                            pass
+                        # Ensure terminal failed events are persisted to outbox in SQLite even if
+                        # non-critical metric/gauge code above exits early.
+                        try:
+                            if ok and JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
+                                has_failed_event = conn.execute(
+                                    "SELECT 1 FROM job_events WHERE job_id = ? AND event_type = 'job.failed' ORDER BY id DESC LIMIT 1",
+                                    (int(job_id),),
+                                ).fetchone()
+                                if not has_failed_event:
+                                    row_evt = conn.execute(
+                                        "SELECT domain, queue, job_type, owner_user_id, request_id, trace_id FROM jobs WHERE id = ?",
+                                        (int(job_id),),
+                                    ).fetchone()
+                                    if row_evt:
+                                        conn.execute(
+                                            (
+                                                "INSERT INTO job_events(job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at) "
+                                                "VALUES (?, ?, ?, ?, 'job.failed', ?, ?, ?, ?, DATETIME('now'))"
+                                            ),
+                                            (
+                                                int(job_id),
+                                                row_evt[0],
+                                                row_evt[1],
+                                                row_evt[2],
+                                                json.dumps({"error_code": (error_code or error)}),
+                                                row_evt[3],
+                                                row_evt[4],
+                                                row_evt[5],
+                                            ),
+                                        )
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if _is_test_mode():

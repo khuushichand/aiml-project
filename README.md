@@ -133,6 +133,7 @@ Latest release: 0.1.21 (2026-02-21). Beta. Expect rough edges; please report iss
 - MCP Unified module with JWT/RBAC, tool execution APIs, WebSockets, and metrics
 - Next.js WebUI and Admin UI (primary web client)
 - Research & ingestion upgrades: OCR, web search + academic search, connectors, outputs/artifacts, watchlists/workflows
+- Reminder tasks + in-app notifications inbox, including realtime SSE stream and snooze actions
 - Strict OpenAI compatibility mode for local/self-hosted providers
 - PostgreSQL content mode + backup/restore helpers; Prometheus/Grafana monitoring + admin usage reporting
 
@@ -733,6 +734,8 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - VLM Backends: `GET /api/v1/vlm/backends` - available VLM providers ([docs](Docs/Code_Documentation/VLM_Backends.md))
 - Connectors: `GET /api/v1/connectors/providers` - Drive/Notion providers ([docs](Docs/Product/External_Connectors_PRD.md))
 - Outputs: `POST /api/v1/outputs` - generate output artifact (md/html/mp3) ([docs](Docs/Product/Completed/Content_Collections_PRD.md))
+- Tasks: `POST /api/v1/tasks` + `GET /api/v1/tasks` - reminder task create/list ([docs](Docs/API-related/Reminder_Notifications_API.md))
+- Notifications: `GET /api/v1/notifications` + `GET /api/v1/notifications/stream` - inbox list + realtime SSE ([docs](Docs/API-related/Reminder_Notifications_API.md))
 - Metrics: `GET /api/v1/metrics/text` - Prometheus metrics (text format) ([docs](Docs/Deployment/Monitoring/Metrics_Cheatsheet.md))
 - Providers: `GET /api/v1/llm/providers` - provider/models list ([docs](Docs/API-related/Providers_API_Documentation.md))
 - MCP: `GET /api/v1/mcp/status` - MCP server status ([docs](Docs/MCP/Unified/System_Admin_Guide.md))

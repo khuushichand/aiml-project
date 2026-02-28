@@ -297,9 +297,10 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     const { rerender } = render(<WatchlistsPlaygroundPage />)
 
     expect(screen.getByText("Beta Feature")).toBeInTheDocument()
-    const betaAlert = screen.getByText("Beta Feature").parentElement
-    expect(betaAlert).not.toBeNull()
-    fireEvent.click(within(betaAlert as HTMLElement).getByRole("button", { name: "Dismiss" }))
+    const betaBanner = screen.getByText("Beta Feature").parentElement
+    expect(betaBanner).not.toBeNull()
+    if (!betaBanner) throw new Error("Expected beta banner container to exist")
+    fireEvent.click(within(betaBanner).getByRole("button", { name: "Dismiss" }))
 
     expect(screen.queryByText("Beta Feature")).not.toBeInTheDocument()
     expect(localStorage.getItem("beta-dismissed:watchlists")).toBe("1")

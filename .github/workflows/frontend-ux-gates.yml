@@ -22,12 +22,8 @@ jobs:
     env:
       PYTHONPATH: .
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-      TEST_MODE: 'false'
-      TLDW_TEST_MODE: '0'
-      TESTING: '0'
+      TEST_MODE: 'true'
       DISABLE_HEAVY_STARTUP: '1'
-      # Work around protobuf/opentelemetry runtime incompatibilities in CI runners.
-      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       MINIMAL_TEST_APP: '1'
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
       AUTH_MODE: single_user
@@ -38,7 +34,7 @@ jobs:
       TLDW_API_KEY: smoke-ci-key-12345
       TLDW_WEB_URL: http://localhost:8080
       TLDW_WEB_AUTOSTART: 'true'
-      TLDW_WEB_CMD: npm run dev -- --webpack -p 8080
+      TLDW_WEB_CMD: bun run dev -- -p 8080
       TLDW_ONBOARDING_EVIDENCE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
@@ -62,12 +58,6 @@ jobs:
       - name: Install Playwright Chromium
         run: bunx playwright install --with-deps chromium
         working-directory: apps/tldw-frontend
-
-      - name: Install PortAudio build deps
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y portaudio19-dev
 
       - name: Setup Python and server dependencies
         uses: ./.github/actions/setup-python-deps
@@ -131,12 +121,8 @@ jobs:
     env:
       PYTHONPATH: .
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-      TEST_MODE: 'false'
-      TLDW_TEST_MODE: '0'
-      TESTING: '0'
+      TEST_MODE: 'true'
       DISABLE_HEAVY_STARTUP: '1'
-      # Work around protobuf/opentelemetry runtime incompatibilities in CI runners.
-      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       MINIMAL_TEST_APP: '1'
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
       AUTH_MODE: single_user
@@ -147,9 +133,8 @@ jobs:
       TLDW_API_KEY: smoke-ci-key-12345
       TLDW_WEB_URL: http://localhost:8080
       TLDW_WEB_AUTOSTART: 'true'
-      TLDW_WEB_CMD: npm run dev -- --webpack -p 8080
+      TLDW_WEB_CMD: bun run dev -- -p 8080
       TLDW_SMOKE_HARD_GATE: '1'
-      TLDW_SMOKE_LOAD_TIMEOUT_MS: '45000'
 
     steps:
       - name: Checkout
@@ -172,12 +157,6 @@ jobs:
       - name: Install Playwright Chromium
         run: bunx playwright install --with-deps chromium
         working-directory: apps/tldw-frontend
-
-      - name: Install PortAudio build deps
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y portaudio19-dev
 
       - name: Setup Python and server dependencies
         uses: ./.github/actions/setup-python-deps
