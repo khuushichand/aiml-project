@@ -967,6 +967,20 @@ else:
         logger.warning(f"Collections WebSub endpoints unavailable; skipping import: {_cw_err}")
         _HAS_COLLECTIONS_WEBSUB = False
     try:
+        from tldw_Server_API.app.api.v1.endpoints.slack import router as slack_router
+
+        _HAS_SLACK = True
+    except _IMPORT_EXCEPTIONS as _slack_err:
+        logger.warning(f"Slack endpoints unavailable; skipping import: {_slack_err}")
+        _HAS_SLACK = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.discord import router as discord_router
+
+        _HAS_DISCORD = True
+    except _IMPORT_EXCEPTIONS as _discord_err:
+        logger.warning(f"Discord endpoints unavailable; skipping import: {_discord_err}")
+        _HAS_DISCORD = False
+    try:
         from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
 
         _HAS_FILES = True
@@ -5233,6 +5247,18 @@ elif _MINIMAL_TEST_APP:
     except _IMPORT_EXCEPTIONS as _websub_min_err:
         logger.debug(f"Skipping collections_websub router in minimal test app: {_websub_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.slack import router as slack_router
+
+        app.include_router(slack_router, prefix=f"{API_V1_PREFIX}", tags=["slack"])
+    except _IMPORT_EXCEPTIONS as _slack_min_err:
+        logger.debug(f"Skipping slack router in minimal test app: {_slack_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.discord import router as discord_router
+
+        app.include_router(discord_router, prefix=f"{API_V1_PREFIX}", tags=["discord"])
+    except _IMPORT_EXCEPTIONS as _discord_min_err:
+        logger.debug(f"Skipping discord router in minimal test app: {_discord_min_err}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
 
         app.include_router(files_router, prefix=f"{API_V1_PREFIX}", tags=["files"])
@@ -5760,6 +5786,10 @@ else:
         _include_if_enabled(
             "collections-websub", websub_callback_router, prefix=f"{API_V1_PREFIX}", tags=["collections-websub"]
         )
+    if _HAS_SLACK and "slack_router" in locals():
+        _include_if_enabled("slack", slack_router, prefix=f"{API_V1_PREFIX}", tags=["slack"], default_stable=False)
+    if _HAS_DISCORD and "discord_router" in locals():
+        _include_if_enabled("discord", discord_router, prefix=f"{API_V1_PREFIX}", tags=["discord"], default_stable=False)
     try:
         # Optional outputs artifacts endpoint
         from tldw_Server_API.app.api.v1.endpoints.outputs import router as _outputs_router

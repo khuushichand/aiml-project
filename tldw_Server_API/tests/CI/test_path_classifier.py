@@ -37,7 +37,18 @@ def test_api_schema_change_enables_e2e() -> None:
         ]
     )
     assert flags["backend_changed"] is True
+    assert flags["coverage_required"] is True
     assert flags["e2e_changed"] is True
+
+
+def test_workflow_only_change_keeps_backend_gate_but_skips_coverage() -> None:
+    flags = classify_paths(
+        [
+            ".github/workflows/e2e-required.yml",
+        ]
+    )
+    assert flags["backend_changed"] is True
+    assert flags["coverage_required"] is False
 
 
 def test_emitter_writes_github_output(tmp_path, monkeypatch) -> None:

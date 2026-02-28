@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 
 from hypothesis import given, settings as hyp_settings, strategies as st
 
+from tldw_Server_API.app.core.Collections.reading_importers import ReadingImportItem
 from tldw_Server_API.app.core.Collections.reading_service import ReadingService, _contains_html_tag
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.config import settings
@@ -135,6 +136,34 @@ async def test_reading_update_status_and_filters(reading_env):
     rows, total = service.list_items(status=["read"], page=1, size=10)
     assert total >= 1
     assert any(row.id == save_result.item.id for row in rows)
+
+
+def test_reading_import_items_normalize_domain_and_read_at(reading_env):
+    service = ReadingService(TEST_USER_ID + 11)
+    result = service.import_items(
+        items=[
+            ReadingImportItem(
+                url="https://example.org/path/to-article/?utm_source=newsletter",
+                title=None,
+                tags=["ImportTag"],
+                status="read",
+                favorite=False,
+                notes=None,
+                read_at=None,
+                metadata={},
+            )
+        ]
+    )
+
+    assert result.imported == 1
+    rows, total = service.list_items(page=1, size=10)
+    assert total == 1
+    row = rows[0]
+    assert row.url == "https://example.org/path/to-article"
+    assert row.canonical_url == "https://example.org/path/to-article"
+    assert row.domain == "example.org"
+    assert row.status == "read"
+    assert row.read_at is not None
 
 
 @pytest.mark.asyncio

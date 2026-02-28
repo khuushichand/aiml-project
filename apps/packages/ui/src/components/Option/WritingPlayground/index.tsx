@@ -1090,6 +1090,16 @@ const getSettingsFromPayload = (
       "max_tokens",
       "new_line",
       "fill_suffix"
+    ].includes(
+      String(
+        settings.basic_stopping_mode_type ??
+          settings.basicStoppingModeType ??
+          ""
+      )
+    )
+      ? (String(
+          settings.basic_stopping_mode_type ?? settings.basicStoppingModeType
+        ) as BasicStoppingModeType)
     ].includes(rawBasicStoppingModeType)
       ? (rawBasicStoppingModeType as BasicStoppingModeType)
       : DEFAULT_SETTINGS.basic_stopping_mode_type,

@@ -623,6 +623,17 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
     routes: ["/collections", "/reading"]
   },
   {
+    id: "m5-characters-useform-context-warning",
+    scope: "console",
+    pattern:
+      /Warning:\s+Instance created by `useForm` is not connected to any Form element\.\s+Forget to pass `form` prop\?/i,
+    rationale:
+      "Known Ant Design form instance warning in characters route under minimal smoke backend profile; route remains functional.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31",
+    routes: ["/characters"]
+  },
+  {
     id: "m5-model-metadata-rate-limit-log-noise",
     scope: "console",
     pattern:
@@ -631,7 +642,7 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
       "Dense smoke sweeps can rate-limit model metadata probes; treated as environment noise for these routes.",
     owner: "Platform",
     expiresOn: "2026-03-31",
-    routes: ["/content-review", "/claims-review"]
+    routes: ["/content-review", "/claims-review", "/workspace-playground"]
   },
   {
     id: "m5-chatbooks-evaluations-cors-noise",
