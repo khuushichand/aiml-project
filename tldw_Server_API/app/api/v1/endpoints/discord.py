@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
@@ -11,7 +10,6 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import key_hint_for_api_key
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
 
 from tldw_Server_API.app.api.v1.endpoints.discord_support import (
@@ -48,6 +46,15 @@ from tldw_Server_API.app.api.v1.endpoints.discord_support import (
     _safe_int,
     _set_discord_policy,
     _verify_discord_signature,
+)
+from tldw_Server_API.app.api.v1.endpoints.discord_oauth_admin import (
+    discord_admin_delete_installation_impl,
+    discord_admin_get_policy_impl,
+    discord_admin_list_installations_impl,
+    discord_admin_set_installation_state_impl,
+    discord_admin_set_policy_impl,
+    discord_oauth_callback_impl,
+    discord_oauth_start_impl,
 )
 
 router = APIRouter(prefix="/discord", tags=["discord"])
@@ -321,49 +328,18 @@ async def discord_job_status(
 async def discord_oauth_start(
     user: User = Depends(get_request_user),
 ):
-    client_id = _oauth_client_id()
-    if not client_id:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="DISCORD_CLIENT_ID is not configured",
-        )
-    redirect_uri = _oauth_redirect_uri()
-    state = secrets.token_urlsafe(32)
-    auth_session_id = secrets.token_urlsafe(24)
-    now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(seconds=max(1, _oauth_state_ttl_seconds()))
-
-    state_repo = await _get_oauth_state_repo()
-    state_secret = _encrypt_discord_payload({"nonce": secrets.token_urlsafe(24)})
-    await state_repo.create_state(
-        state=state,
-        user_id=int(user.id),
-        provider="discord",
-        auth_session_id=auth_session_id,
-        redirect_uri=redirect_uri,
-        pkce_verifier_encrypted=state_secret,
-        expires_at=expires_at,
-        created_at=now,
+    return await discord_oauth_start_impl(
+        user=user,
+        oauth_client_id=_oauth_client_id,
+        oauth_redirect_uri=_oauth_redirect_uri,
+        oauth_state_ttl_seconds=_oauth_state_ttl_seconds,
+        get_oauth_state_repo=_get_oauth_state_repo,
+        encrypt_discord_payload=_encrypt_discord_payload,
+        oauth_auth_url=_oauth_auth_url,
+        oauth_scope=_oauth_scope,
+        oauth_permissions=_oauth_permissions,
+        urlencode_fn=urlencode,
     )
-
-    query: dict[str, str] = {
-        "client_id": client_id,
-        "response_type": "code",
-        "redirect_uri": redirect_uri,
-        "scope": _oauth_scope(),
-        "state": state,
-    }
-    permissions = _oauth_permissions()
-    if permissions:
-        query["permissions"] = permissions
-    auth_url = f"{_oauth_auth_url()}?{urlencode(query)}"
-    return {
-        "ok": True,
-        "status": "ready",
-        "auth_url": auth_url,
-        "auth_session_id": auth_session_id,
-        "expires_at": expires_at.isoformat(),
-    }
 
 
 @router.get("/oauth/callback")
@@ -373,116 +349,22 @@ async def discord_oauth_callback(
     guild_id: str | None = Query(default=None),
     guild_name: str | None = Query(default=None),
 ):
-    code_value = _coerce_nonempty_string(code)
-    state_value = _coerce_nonempty_string(state)
-    if not code_value or not state_value:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing OAuth callback parameters",
-        )
-
-    state_repo = await _get_oauth_state_repo()
-    state_record = await state_repo.consume_state(
-        state=state_value,
-        provider="discord",
+    return await discord_oauth_callback_impl(
+        code=code,
+        state=state,
+        guild_id=guild_id,
+        guild_name=guild_name,
+        coerce_nonempty_string=_coerce_nonempty_string,
+        get_oauth_state_repo=_get_oauth_state_repo,
+        oauth_client_id=_oauth_client_id,
+        oauth_client_secret=_oauth_client_secret,
+        oauth_token_url=_oauth_token_url,
+        discord_oauth_token_exchange=_discord_oauth_token_exchange,
+        get_user_secret_repo=_get_user_secret_repo,
+        decrypt_discord_payload=_decrypt_discord_payload,
+        normalize_installations_payload=_normalize_installations_payload,
+        encrypt_discord_payload=_encrypt_discord_payload,
     )
-    if not state_record:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid or expired OAuth state",
-        )
-
-    redirect_uri = _coerce_nonempty_string(state_record.get("redirect_uri"))
-    if not redirect_uri:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OAuth state is missing redirect metadata",
-        )
-    user_id_raw = state_record.get("user_id")
-    try:
-        user_id = int(user_id_raw)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OAuth state user context is invalid",
-        ) from exc
-
-    client_id = _oauth_client_id()
-    client_secret = _oauth_client_secret()
-    if not client_id or not client_secret:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Discord OAuth client credentials are not configured",
-        )
-
-    token_payload = await _discord_oauth_token_exchange(
-        token_url=_oauth_token_url(),
-        form_data={
-            "grant_type": "authorization_code",
-            "code": code_value,
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "redirect_uri": redirect_uri,
-        },
-    )
-    access_token = _coerce_nonempty_string(token_payload.get("access_token"))
-    if not access_token:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Discord OAuth response missing access_token",
-        )
-
-    payload_guild = token_payload.get("guild")
-    resolved_guild_id = (
-        _coerce_nonempty_string(payload_guild.get("id")) if isinstance(payload_guild, dict) else None
-    ) or _coerce_nonempty_string(guild_id)
-    resolved_guild_name = (
-        _coerce_nonempty_string(payload_guild.get("name")) if isinstance(payload_guild, dict) else None
-    ) or _coerce_nonempty_string(guild_name)
-    if not resolved_guild_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Discord OAuth callback is missing guild_id",
-        )
-
-    user_repo = await _get_user_secret_repo()
-    existing_row = await user_repo.fetch_secret_for_user(user_id, "discord")
-    existing_payload = _decrypt_discord_payload(existing_row.get("encrypted_blob")) if existing_row else None
-    merged_payload = _normalize_installations_payload(existing_payload)
-    installations = merged_payload.get("installations")
-    if not isinstance(installations, dict):
-        installations = {}
-        merged_payload["installations"] = installations
-
-    now = datetime.now(timezone.utc)
-    installations[resolved_guild_id] = {
-        "guild_id": resolved_guild_id,
-        "guild_name": resolved_guild_name,
-        "access_token": access_token,
-        "refresh_token": _coerce_nonempty_string(token_payload.get("refresh_token")),
-        "scope": _coerce_nonempty_string(token_payload.get("scope")),
-        "installed_at": now.isoformat(),
-        "installed_by": user_id,
-        "disabled": False,
-    }
-
-    encrypted_blob = _encrypt_discord_payload(merged_payload)
-    await user_repo.upsert_secret(
-        user_id=user_id,
-        provider="discord",
-        encrypted_blob=encrypted_blob,
-        key_hint=key_hint_for_api_key(access_token),
-        metadata={"installation_count": len(installations)},
-        updated_at=now,
-        created_by=user_id,
-        updated_by=user_id,
-    )
-    return {
-        "ok": True,
-        "status": "installed",
-        "guild_id": resolved_guild_id,
-        "guild_name": resolved_guild_name,
-    }
 
 
 @router.get(
@@ -492,13 +374,11 @@ async def discord_oauth_callback(
 async def discord_admin_get_policy(
     guild_id: str | None = Query(default=None),
 ):
-    cleaned_guild_id = _coerce_nonempty_string(guild_id)
-    policy = _discord_policy_for_guild(cleaned_guild_id)
-    return {
-        "ok": True,
-        "guild_id": cleaned_guild_id,
-        "policy": policy,
-    }
+    return discord_admin_get_policy_impl(
+        guild_id=guild_id,
+        coerce_nonempty_string=_coerce_nonempty_string,
+        discord_policy_for_guild=_discord_policy_for_guild,
+    )
 
 
 @router.put(
@@ -508,39 +388,25 @@ async def discord_admin_get_policy(
 async def discord_admin_set_policy(
     payload: dict[str, Any] | None = None,
 ):
-    body = dict(payload or {})
-    cleaned_guild_id = _coerce_nonempty_string(body.pop("guild_id", None))
-    scope = "guild" if cleaned_guild_id else "default"
-    guild_id, policy = _set_discord_policy(cleaned_guild_id, body)
-    _emit_discord_counter("discord_policy_updates_total", scope=scope)
-    return {
-        "ok": True,
-        "status": "updated",
-        "guild_id": guild_id,
-        "policy": policy,
-    }
+    return discord_admin_set_policy_impl(
+        payload=payload,
+        coerce_nonempty_string=_coerce_nonempty_string,
+        set_discord_policy=_set_discord_policy,
+        emit_discord_counter=_emit_discord_counter,
+    )
 
 
 @router.get("/admin/installations")
 async def discord_admin_list_installations(
     user: User = Depends(get_request_user),
 ):
-    user_repo = await _get_user_secret_repo()
-    row = await user_repo.fetch_secret_for_user(int(user.id), "discord")
-    payload = _decrypt_discord_payload(row.get("encrypted_blob")) if row else None
-    merged_payload = _normalize_installations_payload(payload)
-    installations = merged_payload.get("installations")
-    if not isinstance(installations, dict):
-        installations = {}
-    results = []
-    for guild_id_key, installation in installations.items():
-        if not isinstance(installation, dict):
-            continue
-        record = _public_installation_record(installation)
-        record["guild_id"] = record.get("guild_id") or guild_id_key
-        results.append(record)
-    results.sort(key=lambda item: str(item.get("guild_id") or ""))
-    return {"ok": True, "installations": results}
+    return await discord_admin_list_installations_impl(
+        user=user,
+        get_user_secret_repo=_get_user_secret_repo,
+        decrypt_discord_payload=_decrypt_discord_payload,
+        normalize_installations_payload=_normalize_installations_payload,
+        public_installation_record=_public_installation_record,
+    )
 
 
 @router.delete("/admin/installations/{guild_id}")
@@ -548,45 +414,15 @@ async def discord_admin_delete_installation(
     guild_id: str,
     user: User = Depends(get_request_user),
 ):
-    cleaned_guild_id = _coerce_nonempty_string(guild_id)
-    if not cleaned_guild_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="guild_id is required")
-    user_id = int(user.id)
-    user_repo = await _get_user_secret_repo()
-    row = await user_repo.fetch_secret_for_user(user_id, "discord")
-    payload = _decrypt_discord_payload(row.get("encrypted_blob")) if row else None
-    merged_payload = _normalize_installations_payload(payload)
-    installations = merged_payload.get("installations")
-    if not isinstance(installations, dict) or cleaned_guild_id not in installations:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="installation_not_found")
-
-    installations.pop(cleaned_guild_id, None)
-    now = datetime.now(timezone.utc)
-    if not installations:
-        await user_repo.delete_secret(
-            user_id=user_id,
-            provider="discord",
-            revoked_by=user_id,
-            revoked_at=now,
-        )
-    else:
-        replacement_token: str | None = None
-        for remaining in installations.values():
-            if isinstance(remaining, dict):
-                replacement_token = _coerce_nonempty_string(remaining.get("access_token"))
-                if replacement_token:
-                    break
-        await user_repo.upsert_secret(
-            user_id=user_id,
-            provider="discord",
-            encrypted_blob=_encrypt_discord_payload(merged_payload),
-            key_hint=key_hint_for_api_key(replacement_token) if replacement_token else None,
-            metadata={"installation_count": len(installations)},
-            updated_at=now,
-            created_by=user_id,
-            updated_by=user_id,
-        )
-    return {"ok": True, "status": "deleted", "guild_id": cleaned_guild_id}
+    return await discord_admin_delete_installation_impl(
+        guild_id=guild_id,
+        user=user,
+        coerce_nonempty_string=_coerce_nonempty_string,
+        get_user_secret_repo=_get_user_secret_repo,
+        decrypt_discord_payload=_decrypt_discord_payload,
+        normalize_installations_payload=_normalize_installations_payload,
+        encrypt_discord_payload=_encrypt_discord_payload,
+    )
 
 
 @router.put("/admin/installations/{guild_id}")
@@ -595,40 +431,13 @@ async def discord_admin_set_installation_state(
     payload: dict[str, Any] | None = None,
     user: User = Depends(get_request_user),
 ):
-    cleaned_guild_id = _coerce_nonempty_string(guild_id)
-    if not cleaned_guild_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="guild_id is required")
-
-    disabled = bool((payload or {}).get("disabled"))
-    user_id = int(user.id)
-    user_repo = await _get_user_secret_repo()
-    row = await user_repo.fetch_secret_for_user(user_id, "discord")
-    stored_payload = _decrypt_discord_payload(row.get("encrypted_blob")) if row else None
-    merged_payload = _normalize_installations_payload(stored_payload)
-    installations = merged_payload.get("installations")
-    if not isinstance(installations, dict):
-        installations = {}
-        merged_payload["installations"] = installations
-    installation = installations.get(cleaned_guild_id)
-    if not isinstance(installation, dict):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="installation_not_found")
-
-    installation["disabled"] = disabled
-    now = datetime.now(timezone.utc)
-    key_hint_token = _coerce_nonempty_string(installation.get("access_token"))
-    await user_repo.upsert_secret(
-        user_id=user_id,
-        provider="discord",
-        encrypted_blob=_encrypt_discord_payload(merged_payload),
-        key_hint=key_hint_for_api_key(key_hint_token) if key_hint_token else None,
-        metadata={"installation_count": len(installations)},
-        updated_at=now,
-        created_by=user_id,
-        updated_by=user_id,
+    return await discord_admin_set_installation_state_impl(
+        guild_id=guild_id,
+        payload=payload,
+        user=user,
+        coerce_nonempty_string=_coerce_nonempty_string,
+        get_user_secret_repo=_get_user_secret_repo,
+        decrypt_discord_payload=_decrypt_discord_payload,
+        normalize_installations_payload=_normalize_installations_payload,
+        encrypt_discord_payload=_encrypt_discord_payload,
     )
-    return {
-        "ok": True,
-        "status": "updated",
-        "guild_id": cleaned_guild_id,
-        "disabled": disabled,
-    }

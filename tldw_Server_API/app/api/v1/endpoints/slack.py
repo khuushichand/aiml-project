@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qs, urlencode
 
@@ -13,7 +12,6 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import key_hint_for_api_key
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
 
 from tldw_Server_API.app.api.v1.endpoints.slack_support import (
@@ -53,6 +51,15 @@ from tldw_Server_API.app.api.v1.endpoints.slack_support import (
     _slack_oauth_token_exchange,
     _slack_policy_for_workspace,
     _verify_slack_signature,
+)
+from tldw_Server_API.app.api.v1.endpoints.slack_oauth_admin import (
+    slack_admin_delete_installation_impl,
+    slack_admin_get_policy_impl,
+    slack_admin_list_installations_impl,
+    slack_admin_set_installation_state_impl,
+    slack_admin_set_policy_impl,
+    slack_oauth_callback_impl,
+    slack_oauth_start_impl,
 )
 
 router = APIRouter(prefix="/slack", tags=["slack"])
@@ -415,45 +422,17 @@ async def slack_job_status(
 async def slack_oauth_start(
     user: User = Depends(get_request_user),
 ):
-    client_id = _oauth_client_id()
-    if not client_id:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SLACK_CLIENT_ID is not configured",
-        )
-    redirect_uri = _oauth_redirect_uri()
-    state = secrets.token_urlsafe(32)
-    auth_session_id = secrets.token_urlsafe(24)
-    now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(seconds=max(1, _oauth_state_ttl_seconds()))
-
-    state_repo = await _get_oauth_state_repo()
-    state_secret = _encrypt_slack_payload({"nonce": secrets.token_urlsafe(24)})
-    await state_repo.create_state(
-        state=state,
-        user_id=int(user.id),
-        provider="slack",
-        auth_session_id=auth_session_id,
-        redirect_uri=redirect_uri,
-        pkce_verifier_encrypted=state_secret,
-        expires_at=expires_at,
-        created_at=now,
+    return await slack_oauth_start_impl(
+        user=user,
+        oauth_client_id=_oauth_client_id,
+        oauth_redirect_uri=_oauth_redirect_uri,
+        oauth_state_ttl_seconds=_oauth_state_ttl_seconds,
+        get_oauth_state_repo=_get_oauth_state_repo,
+        encrypt_slack_payload=_encrypt_slack_payload,
+        oauth_auth_url=_oauth_auth_url,
+        oauth_scopes=_oauth_scopes,
+        urlencode_fn=urlencode,
     )
-
-    query = {
-        "client_id": client_id,
-        "scope": _oauth_scopes(),
-        "redirect_uri": redirect_uri,
-        "state": state,
-    }
-    auth_url = f"{_oauth_auth_url()}?{urlencode(query)}"
-    return {
-        "ok": True,
-        "status": "ready",
-        "auth_url": auth_url,
-        "auth_session_id": auth_session_id,
-        "expires_at": expires_at.isoformat(),
-    }
 
 
 @router.get("/oauth/callback")
@@ -461,124 +440,20 @@ async def slack_oauth_callback(
     code: str,
     state: str,
 ):
-    code_value = _coerce_nonempty_string(code)
-    state_value = _coerce_nonempty_string(state)
-    if not code_value or not state_value:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing OAuth callback parameters",
-        )
-
-    state_repo = await _get_oauth_state_repo()
-    state_record = await state_repo.consume_state(
-        state=state_value,
-        provider="slack",
+    return await slack_oauth_callback_impl(
+        code=code,
+        state=state,
+        coerce_nonempty_string=_coerce_nonempty_string,
+        get_oauth_state_repo=_get_oauth_state_repo,
+        oauth_client_id=_oauth_client_id,
+        oauth_client_secret=_oauth_client_secret,
+        oauth_token_url=_oauth_token_url,
+        slack_oauth_token_exchange=_slack_oauth_token_exchange,
+        get_user_secret_repo=_get_user_secret_repo,
+        decrypt_slack_payload=_decrypt_slack_payload,
+        normalize_installations_payload=_normalize_installations_payload,
+        encrypt_slack_payload=_encrypt_slack_payload,
     )
-    if not state_record:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid or expired OAuth state",
-        )
-
-    redirect_uri = _coerce_nonempty_string(state_record.get("redirect_uri"))
-    if not redirect_uri:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OAuth state is missing redirect metadata",
-        )
-
-    user_id_raw = state_record.get("user_id")
-    try:
-        user_id = int(user_id_raw)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OAuth state user context is invalid",
-        ) from exc
-
-    client_id = _oauth_client_id()
-    client_secret = _oauth_client_secret()
-    if not client_id or not client_secret:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Slack OAuth client credentials are not configured",
-        )
-
-    token_payload = await _slack_oauth_token_exchange(
-        token_url=_oauth_token_url(),
-        form_data={
-            "code": code_value,
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "redirect_uri": redirect_uri,
-        },
-    )
-    if not bool(token_payload.get("ok")):
-        provider_error = _coerce_nonempty_string(token_payload.get("error")) or "token_exchange_failed"
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Slack OAuth token exchange failed: {provider_error}",
-        )
-
-    access_token = _coerce_nonempty_string(token_payload.get("access_token"))
-    if not access_token:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Slack OAuth response missing access_token",
-        )
-
-    team_data = token_payload.get("team")
-    team_id = _coerce_nonempty_string(team_data.get("id")) if isinstance(team_data, dict) else None
-    team_name = _coerce_nonempty_string(team_data.get("name")) if isinstance(team_data, dict) else None
-    if not team_id:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Slack OAuth response missing team.id",
-        )
-
-    user_repo = await _get_user_secret_repo()
-    existing_row = await user_repo.fetch_secret_for_user(user_id, "slack")
-    existing_payload = _decrypt_slack_payload(existing_row.get("encrypted_blob")) if existing_row else None
-    merged_payload = _normalize_installations_payload(existing_payload)
-    installations = merged_payload.get("installations")
-    if not isinstance(installations, dict):
-        installations = {}
-        merged_payload["installations"] = installations
-
-    now = datetime.now(timezone.utc)
-    authed_user = token_payload.get("authed_user")
-    authed_user_id = _coerce_nonempty_string(authed_user.get("id")) if isinstance(authed_user, dict) else None
-    installations[team_id] = {
-        "team_id": team_id,
-        "team_name": team_name,
-        "enterprise_id": _coerce_nonempty_string(token_payload.get("enterprise_id")),
-        "bot_user_id": _coerce_nonempty_string(token_payload.get("bot_user_id")),
-        "scope": _coerce_nonempty_string(token_payload.get("scope")),
-        "authed_user_id": authed_user_id,
-        "access_token": access_token,
-        "installed_at": now.isoformat(),
-        "installed_by": user_id,
-        "disabled": False,
-    }
-
-    encrypted_blob = _encrypt_slack_payload(merged_payload)
-    await user_repo.upsert_secret(
-        user_id=user_id,
-        provider="slack",
-        encrypted_blob=encrypted_blob,
-        key_hint=key_hint_for_api_key(access_token),
-        metadata={"installation_count": len(installations)},
-        updated_at=now,
-        created_by=user_id,
-        updated_by=user_id,
-    )
-
-    return {
-        "ok": True,
-        "status": "installed",
-        "team_id": team_id,
-        "team_name": team_name,
-    }
 
 
 @router.get(
@@ -588,13 +463,11 @@ async def slack_oauth_callback(
 async def slack_admin_get_policy(
     team_id: str | None = Query(default=None),
 ):
-    cleaned_team_id = _coerce_nonempty_string(team_id)
-    policy = _slack_policy_for_workspace(cleaned_team_id)
-    return {
-        "ok": True,
-        "team_id": cleaned_team_id,
-        "policy": policy,
-    }
+    return slack_admin_get_policy_impl(
+        team_id=team_id,
+        coerce_nonempty_string=_coerce_nonempty_string,
+        slack_policy_for_workspace=_slack_policy_for_workspace,
+    )
 
 
 @router.put(
@@ -604,39 +477,25 @@ async def slack_admin_get_policy(
 async def slack_admin_set_policy(
     payload: dict[str, Any] | None = None,
 ):
-    body = dict(payload or {})
-    cleaned_team_id = _coerce_nonempty_string(body.pop("team_id", None))
-    scope = "workspace" if cleaned_team_id else "default"
-    team_id, policy = _set_slack_policy(cleaned_team_id, body)
-    _emit_slack_counter("slack_policy_updates_total", scope=scope)
-    return {
-        "ok": True,
-        "status": "updated",
-        "team_id": team_id,
-        "policy": policy,
-    }
+    return slack_admin_set_policy_impl(
+        payload=payload,
+        coerce_nonempty_string=_coerce_nonempty_string,
+        set_slack_policy=_set_slack_policy,
+        emit_slack_counter=_emit_slack_counter,
+    )
 
 
 @router.get("/admin/installations")
 async def slack_admin_list_installations(
     user: User = Depends(get_request_user),
 ):
-    user_repo = await _get_user_secret_repo()
-    row = await user_repo.fetch_secret_for_user(int(user.id), "slack")
-    payload = _decrypt_slack_payload(row.get("encrypted_blob")) if row else None
-    merged_payload = _normalize_installations_payload(payload)
-    installations = merged_payload.get("installations")
-    if not isinstance(installations, dict):
-        installations = {}
-    results = []
-    for team_id, installation in installations.items():
-        if not isinstance(installation, dict):
-            continue
-        record = _public_installation_record(installation)
-        record["team_id"] = record.get("team_id") or team_id
-        results.append(record)
-    results.sort(key=lambda item: str(item.get("team_id") or ""))
-    return {"ok": True, "installations": results}
+    return await slack_admin_list_installations_impl(
+        user=user,
+        get_user_secret_repo=_get_user_secret_repo,
+        decrypt_slack_payload=_decrypt_slack_payload,
+        normalize_installations_payload=_normalize_installations_payload,
+        public_installation_record=_public_installation_record,
+    )
 
 
 @router.delete("/admin/installations/{team_id}")
@@ -644,45 +503,15 @@ async def slack_admin_delete_installation(
     team_id: str,
     user: User = Depends(get_request_user),
 ):
-    cleaned_team_id = _coerce_nonempty_string(team_id)
-    if not cleaned_team_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id is required")
-    user_id = int(user.id)
-    user_repo = await _get_user_secret_repo()
-    row = await user_repo.fetch_secret_for_user(user_id, "slack")
-    payload = _decrypt_slack_payload(row.get("encrypted_blob")) if row else None
-    merged_payload = _normalize_installations_payload(payload)
-    installations = merged_payload.get("installations")
-    if not isinstance(installations, dict) or cleaned_team_id not in installations:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="installation_not_found")
-
-    installations.pop(cleaned_team_id, None)
-    now = datetime.now(timezone.utc)
-    if not installations:
-        await user_repo.delete_secret(
-            user_id=user_id,
-            provider="slack",
-            revoked_by=user_id,
-            revoked_at=now,
-        )
-    else:
-        replacement_token: str | None = None
-        for remaining in installations.values():
-            if isinstance(remaining, dict):
-                replacement_token = _coerce_nonempty_string(remaining.get("access_token"))
-                if replacement_token:
-                    break
-        await user_repo.upsert_secret(
-            user_id=user_id,
-            provider="slack",
-            encrypted_blob=_encrypt_slack_payload(merged_payload),
-            key_hint=key_hint_for_api_key(replacement_token) if replacement_token else None,
-            metadata={"installation_count": len(installations)},
-            updated_at=now,
-            created_by=user_id,
-            updated_by=user_id,
-        )
-    return {"ok": True, "status": "deleted", "team_id": cleaned_team_id}
+    return await slack_admin_delete_installation_impl(
+        team_id=team_id,
+        user=user,
+        coerce_nonempty_string=_coerce_nonempty_string,
+        get_user_secret_repo=_get_user_secret_repo,
+        decrypt_slack_payload=_decrypt_slack_payload,
+        normalize_installations_payload=_normalize_installations_payload,
+        encrypt_slack_payload=_encrypt_slack_payload,
+    )
 
 
 @router.put("/admin/installations/{team_id}")
@@ -691,40 +520,13 @@ async def slack_admin_set_installation_state(
     payload: dict[str, Any] | None = None,
     user: User = Depends(get_request_user),
 ):
-    cleaned_team_id = _coerce_nonempty_string(team_id)
-    if not cleaned_team_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id is required")
-
-    disabled = bool((payload or {}).get("disabled"))
-    user_id = int(user.id)
-    user_repo = await _get_user_secret_repo()
-    row = await user_repo.fetch_secret_for_user(user_id, "slack")
-    stored_payload = _decrypt_slack_payload(row.get("encrypted_blob")) if row else None
-    merged_payload = _normalize_installations_payload(stored_payload)
-    installations = merged_payload.get("installations")
-    if not isinstance(installations, dict):
-        installations = {}
-        merged_payload["installations"] = installations
-    installation = installations.get(cleaned_team_id)
-    if not isinstance(installation, dict):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="installation_not_found")
-
-    installation["disabled"] = disabled
-    now = datetime.now(timezone.utc)
-    key_hint_token = _coerce_nonempty_string(installation.get("access_token")) or ""
-    await user_repo.upsert_secret(
-        user_id=user_id,
-        provider="slack",
-        encrypted_blob=_encrypt_slack_payload(merged_payload),
-        key_hint=key_hint_for_api_key(key_hint_token) if key_hint_token else None,
-        metadata={"installation_count": len(installations)},
-        updated_at=now,
-        created_by=user_id,
-        updated_by=user_id,
+    return await slack_admin_set_installation_state_impl(
+        team_id=team_id,
+        payload=payload,
+        user=user,
+        coerce_nonempty_string=_coerce_nonempty_string,
+        get_user_secret_repo=_get_user_secret_repo,
+        decrypt_slack_payload=_decrypt_slack_payload,
+        normalize_installations_payload=_normalize_installations_payload,
+        encrypt_slack_payload=_encrypt_slack_payload,
     )
-    return {
-        "ok": True,
-        "status": "updated",
-        "team_id": cleaned_team_id,
-        "disabled": disabled,
-    }
