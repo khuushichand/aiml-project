@@ -193,8 +193,7 @@ async def process_ebooks_endpoint(
         temp_dir_path = Path(temp_dir)
 
         # Preserve test-time monkeypatching of `media.file_validator_instance`
-        # by resolving the validator via the shim and propagating it back into
-        # the legacy module.
+        # by resolving the validator from the media module export.
         validator: FileValidator = getattr(
             media_mod,
             "file_validator_instance",

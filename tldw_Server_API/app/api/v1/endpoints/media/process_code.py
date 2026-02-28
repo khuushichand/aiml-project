@@ -52,8 +52,8 @@ async def process_code_endpoint(
     lines or structure-aware code chunking, and returns artifacts without
     DB writes.
 
-    This mirrors the legacy `_legacy_media.process_code_endpoint` behavior
-    while routing through the modular `media` package.
+    This mirrors legacy `process-code` behavior while routing through the
+    modular `media` package.
     """
 
     # Reuse shared validation so that error messages and 400 semantics match
@@ -73,7 +73,7 @@ async def process_code_endpoint(
         # Handle uploads
         if files:
             # Preserve test-time monkeypatching of `_save_uploaded_files` and
-            # `file_validator_instance` via the `media` shim.
+            # `file_validator_instance` via media-module exports.
             save_uploaded_files = media_mod._save_uploaded_files
             validator = media_mod.file_validator_instance
 

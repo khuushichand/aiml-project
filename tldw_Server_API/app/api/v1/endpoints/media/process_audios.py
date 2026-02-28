@@ -138,8 +138,7 @@ async def process_audios_endpoint(
         )
 
         # Preserve test-time monkeypatching of `media.file_validator_instance`
-        # by resolving the validator via the shim and propagating it back into
-        # the legacy module when available.
+        # by resolving the validator from the media module export.
         validator = getattr(
             media_mod,
             "file_validator_instance",

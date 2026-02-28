@@ -249,79 +249,6 @@ def _callable_accepts_keyword(
     )
 
 
-def _callable_for_keyword_probe(
-    *,
-    candidate_callable: Callable[..., Any],
-    core_fallback: Callable[..., Any],
-) -> Callable[..., Any]:
-    """
-    Return the callable that should be inspected for keyword support.
-
-    Endpoint media shim wrappers intentionally use `*args, **kwargs` and can
-    over-report support for keywords the underlying core implementation does not
-    accept. When we detect that known shim pattern, inspect the core fallback
-    instead.
-    """
-    try:
-        signature = inspect.signature(candidate_callable)
-    except (TypeError, ValueError):
-        return candidate_callable
-
-    has_var_keyword = any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        for parameter in signature.parameters.values()
-    )
-    if not has_var_keyword:
-        return candidate_callable
-
-    candidate_module = getattr(candidate_callable, "__module__", "")
-    candidate_name = getattr(candidate_callable, "__name__", "")
-    if (
-        candidate_module
-        == "tldw_Server_API.app.api.v1.endpoints.media"
-        and candidate_name in {"process_videos", "process_audio_files"}
-    ):
-        return core_fallback
-
-    return candidate_callable
-
-
-def _resolve_shimmed_batch_processor(
-    *,
-    core_callable: Callable[..., Any],
-    media_module: Any,
-    shim_attr: str,
-    shim_core_attr: str,
-) -> Callable[..., Any]:
-    """
-    Resolve shimmed processor callable while avoiding stale endpoint wrappers.
-
-    Endpoint shims expose `process_*` wrappers that delegate through cached
-    `_process_*_core` references. When tests monkeypatch the core module directly
-    after the shim cache is populated, those wrappers can keep calling stale
-    callables. In that case, prefer the currently imported core callable.
-    """
-    shimmed_callable = getattr(media_module, shim_attr, None)
-    if not callable(shimmed_callable):
-        return core_callable
-
-    shim_core_callable = getattr(media_module, shim_core_attr, None)
-    if shimmed_callable is shim_core_callable and core_callable is not shim_core_callable:
-        return core_callable
-
-    shimmed_module = getattr(shimmed_callable, "__module__", "")
-    shimmed_name = getattr(shimmed_callable, "__name__", "")
-    if (
-        shimmed_module == "tldw_Server_API.app.api.v1.endpoints.media"
-        and shimmed_name == shim_attr
-    ):
-        if callable(shim_core_callable) and shim_core_callable is core_callable:
-            return shimmed_callable
-        return core_callable
-
-    return shimmed_callable
-
-
 def _normalize_analysis_text_chunk(
     value: Any,
     *,
@@ -1927,8 +1854,8 @@ def validate_add_media_inputs(
     """
     Validate basic inputs for the `/media/add` endpoint.
 
-    This is the core implementation of the legacy `_validate_inputs`
-    helper previously defined in `_legacy_media`.
+    This is the core implementation of the historical endpoint
+    `_validate_inputs` helper.
     """
     if not urls and not files:
         logger.warning("No URLs or files provided in add_media request")
@@ -1984,14 +1911,13 @@ async def add_media_orchestrate(
     Orchestration helper for the `/media/add` endpoint.
 
     This function now owns the full ingestion and processing pipeline
-    that previously lived in `_legacy_media._add_media_impl`, while
-    reusing helper functions defined in that module and the modular
-    `media` shim so tests can continue to monkeypatch helpers via
-    `endpoints.media`.
+    that previously lived in endpoint-local helpers, while resolving
+    selected helpers from modular `media` exports so tests can
+    monkeypatch `endpoints.media.*` patch points.
     """
-    # Resolve helpers via the modular `media` shim when available so
+    # Resolve helpers via the modular `media` exports when available so
     # tests that patch `endpoints.media.*` continue to work. Fall back
-    # to core implementations when the shim is unavailable.
+    # to core implementations when those exports are unavailable.
     try:
         from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
             media as media_mod,
@@ -3764,22 +3690,8 @@ async def process_batch_media(
             )
 
             target_callable: Callable[..., Any] = process_videos
-            try:
-                import tldw_Server_API.app.api.v1.endpoints.media as _media_mod  # type: ignore
-
-                target_callable = _resolve_shimmed_batch_processor(
-                    core_callable=process_videos,
-                    media_module=_media_mod,
-                    shim_attr="process_videos",
-                    shim_core_attr="_process_videos_core",
-                )
-            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
-                target_callable = process_videos
             attach_chunk_options = _callable_accepts_keyword(
-                _callable_for_keyword_probe(
-                    candidate_callable=target_callable,
-                    core_fallback=process_videos,
-                ),
+                target_callable,
                 "chunk_options",
             )
 
@@ -3855,22 +3767,8 @@ async def process_batch_media(
             )
 
             target_callable: Callable[..., Any] = process_audio_files
-            try:
-                import tldw_Server_API.app.api.v1.endpoints.media as _media_mod  # type: ignore
-
-                target_callable = _resolve_shimmed_batch_processor(
-                    core_callable=process_audio_files,
-                    media_module=_media_mod,
-                    shim_attr="process_audio_files",
-                    shim_core_attr="_process_audio_files_core",
-                )
-            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
-                target_callable = process_audio_files
             attach_chunk_options = _callable_accepts_keyword(
-                _callable_for_keyword_probe(
-                    candidate_callable=target_callable,
-                    core_fallback=process_audio_files,
-                ),
+                target_callable,
                 "chunk_options",
             )
 

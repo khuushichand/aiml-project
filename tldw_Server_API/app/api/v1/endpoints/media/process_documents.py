@@ -79,8 +79,8 @@ async def process_documents_endpoint(
     """
     Process Documents (No Persistence).
 
-    This is a modularized version of the original legacy implementation in
-    `_legacy_media.process_documents_endpoint`, preserving behavior while
+    This is a modularized version of the original legacy implementation,
+    preserving behavior while
     routing through the `media` package and resolving compatibility patch
     targets directly from `media` (e.g. `_save_uploaded_files`,
     `_download_url_async`).

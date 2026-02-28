@@ -114,13 +114,11 @@ def test_invalidate_uses_scan_when_index_missing(monkeypatch):
 def test_cache_index_added_and_invalidated_modular_mode(monkeypatch):
     """
     Ensure cache_response / invalidate_cache honour a monkeypatched
-    media.cache when legacy media is disabled (modular-only/_DummyCache mode).
+    media.cache using the modular media package cache implementation.
     """
     from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
     fake = _FakeRedis()
-    # Force the non-legacy branch inside media.cache_response / invalidate_cache.
-    monkeypatch.setattr(media_mod, "_legacy_media", None, raising=False)
     monkeypatch.setattr(media_mod, "cache", fake, raising=False)
 
     key = "cache:/api/v1/media/789:abc789"
@@ -147,7 +145,7 @@ def test_cache_index_added_and_invalidated_modular_mode(monkeypatch):
 def test_invalidate_uses_scan_when_index_missing_modular_mode(monkeypatch):
     """
     Ensure scan-based invalidation path also uses the patched cache in
-    modular-only mode (no legacy media module).
+    modular media cache mode.
     """
     from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
@@ -165,7 +163,6 @@ def test_invalidate_uses_scan_when_index_missing_modular_mode(monkeypatch):
             return 0, []
 
     fake = _ScanOnlyRedis()
-    monkeypatch.setattr(media_mod, "_legacy_media", None, raising=False)
     monkeypatch.setattr(media_mod, "cache", fake, raising=False)
 
     media_mod.invalidate_cache(999)

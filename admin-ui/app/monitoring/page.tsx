@@ -23,11 +23,7 @@ import {
   writeStoredAlertRules,
 } from '@/lib/monitoring-alerts';
 import {
-  buildSyntheticMonitoringMetricsHistory,
-  extractAdditionalMetricSnapshot,
   MONITORING_DEFAULT_SERIES_VISIBILITY,
-  normalizeMonitoringMetricsPayload,
-  resolveMonitoringRangeParams,
   toggleMonitoringSeriesVisibility,
   type MonitoringMetricSeriesKey,
   type MonitoringMetricsSeriesVisibility,
@@ -62,6 +58,7 @@ import {
   normalizeNotificationSettings,
   normalizeRecentNotifications,
 } from './notification-utils';
+import { useMonitoringMetricsHistory } from './use-monitoring-metrics-history';
 import type {
   AlertAssignableUser,
   AlertHistoryEntry,
@@ -69,7 +66,6 @@ import type {
   AlertRuleDraft,
   AlertRuleValidationErrors,
   Metric,
-  MetricsHistoryPoint,
   NotificationSettings,
   RecentNotification,
   SnoozeDurationOption,
@@ -80,12 +76,6 @@ import type {
   WatchlistDraft,
 } from './types';
 
-interface HealthMetricsResponse {
-  cpu?: { percent?: number };
-  memory?: { percent?: number };
-}
-
-const METRICS_HISTORY_POLL_MS = 5 * 60 * 1000;
 const METRIC_CRITICAL_THRESHOLD = 90;
 const METRIC_WARNING_THRESHOLD = 70;
 const DEFAULT_SYSTEM_STATUS: SystemStatusItem[] = [
@@ -104,14 +94,6 @@ const MONITORING_TIME_RANGE_OPTIONS: Array<{ value: MonitoringTimeRangeOption; l
   { value: '30d', label: '30d' },
   { value: 'custom', label: 'Custom' },
 ];
-const toDatetimeLocalInputValue = (value: Date): string => {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, '0');
-  const day = String(value.getDate()).padStart(2, '0');
-  const hours = String(value.getHours()).padStart(2, '0');
-  const minutes = String(value.getMinutes()).padStart(2, '0');
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
-};
 
 export const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
   return normalizeMonitoringHealthStatus(status);
@@ -119,18 +101,9 @@ export const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
 
 export default function MonitoringPage() {
   const confirm = useConfirm();
-  const now = new Date();
-  const defaultCustomEnd = toDatetimeLocalInputValue(now);
-  const defaultCustomStart = toDatetimeLocalInputValue(new Date(now.getTime() - (24 * 60 * 60 * 1000)));
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
   const [alerts, setAlerts] = useState<SystemAlert[]>([]);
-  const [metricsHistory, setMetricsHistory] = useState<MetricsHistoryPoint[]>([]);
-  const [timeRange, setTimeRange] = useState<MonitoringTimeRangeOption>('24h');
-  const [customRangeStart, setCustomRangeStart] = useState<string>(defaultCustomStart);
-  const [customRangeEnd, setCustomRangeEnd] = useState<string>(defaultCustomEnd);
-  const [rangeValidationError, setRangeValidationError] = useState('');
-  const [activeRangeLabel, setActiveRangeLabel] = useState('24h');
   const [seriesVisibility, setSeriesVisibility] = useState<MonitoringMetricsSeriesVisibility>(
     MONITORING_DEFAULT_SERIES_VISIBILITY
   );
@@ -170,66 +143,26 @@ export default function MonitoringPage() {
   const alertsRef = useRef<SystemAlert[]>([]);
   const alertHistoryRef = useRef<AlertHistoryEntry[]>([]);
 
-  const loadMetricsHistoryForRange = useCallback(async (
-    selectedRange: MonitoringTimeRangeOption,
-    customStart: string,
-    customEnd: string
-  ): Promise<boolean> => {
-    const resolvedRange = resolveMonitoringRangeParams(selectedRange, customStart, customEnd);
-    if (!resolvedRange.ok) {
-      setRangeValidationError(resolvedRange.error);
-      return false;
-    }
-
-    setRangeValidationError('');
-    const rangeParams = resolvedRange.params;
-    setActiveRangeLabel(rangeParams.rangeLabel);
-
-    try {
-      const historyPayload = await api.getMonitoringMetrics({
-        start: rangeParams.start,
-        end: rangeParams.end,
-        granularity: rangeParams.granularity,
-      });
-      const normalized = normalizeMonitoringMetricsPayload(historyPayload, rangeParams.end);
-      if (normalized.length > 0) {
-        setMetricsHistory(normalized);
-        return true;
-      }
-      throw new Error('No monitoring metrics history returned');
-    } catch (historyErr: unknown) {
-      console.warn('Failed to load monitoring metrics history endpoint, using fallback sample.', historyErr);
-      try {
-        const [healthResult, metricsResult] = await Promise.allSettled([
-          api.getHealthMetrics(),
-          api.getMetrics(),
-        ]);
-        const healthPayload = healthResult.status === 'fulfilled'
-          ? (healthResult.value as HealthMetricsResponse)
-          : {};
-        const metricsPayload = metricsResult.status === 'fulfilled' ? metricsResult.value : {};
-        const additional = extractAdditionalMetricSnapshot(metricsPayload);
-        const cpu = Number(healthPayload?.cpu?.percent ?? 0);
-        const memory = Number(healthPayload?.memory?.percent ?? 0);
-        const fallbackHistory = buildSyntheticMonitoringMetricsHistory(
-          {
-            cpu,
-            memory,
-            diskUsage: additional.diskUsage,
-            throughput: additional.throughput,
-            activeConnections: additional.activeConnections,
-            queueDepth: additional.queueDepth,
-          },
-          rangeParams
-        );
-        setMetricsHistory(fallbackHistory);
-      } catch (fallbackErr: unknown) {
-        console.warn('Failed to load fallback metrics history:', fallbackErr);
-        setMetricsHistory([]);
-      }
-      return false;
-    }
+  const handleManualRangeLoadSuccess = useCallback(() => {
+    setLastUpdated(new Date());
   }, []);
+
+  const {
+    metricsHistory,
+    timeRange,
+    customRangeStart,
+    customRangeEnd,
+    rangeValidationError,
+    activeRangeLabel,
+    setCustomRangeStart,
+    setCustomRangeEnd,
+    loadMetricsHistoryForRange,
+    handleSelectTimeRange,
+    handleApplyCustomTimeRange,
+  } = useMonitoringMetricsHistory({
+    apiClient: api,
+    onManualRangeLoadSuccess: handleManualRangeLoadSuccess,
+  });
 
   const handleToggleSeries = (seriesKey: MonitoringMetricSeriesKey) => {
     setSeriesVisibility((prev) => toggleMonitoringSeriesVisibility(prev, seriesKey));
@@ -344,33 +277,6 @@ export default function MonitoringPage() {
       }
     };
   }, [success]);
-
-  useEffect(() => {
-    void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);
-    const intervalId = window.setInterval(() => {
-      void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);
-    }, METRICS_HISTORY_POLL_MS);
-    return () => window.clearInterval(intervalId);
-  }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, timeRange]);
-
-  const handleSelectTimeRange = async (nextRange: MonitoringTimeRangeOption) => {
-    setTimeRange(nextRange);
-    if (nextRange === 'custom') {
-      return;
-    }
-    const loaded = await loadMetricsHistoryForRange(nextRange, customRangeStart, customRangeEnd);
-    if (loaded) {
-      setLastUpdated(new Date());
-    }
-  };
-
-  const handleApplyCustomTimeRange = async () => {
-    setTimeRange('custom');
-    const loaded = await loadMetricsHistoryForRange('custom', customRangeStart, customRangeEnd);
-    if (loaded) {
-      setLastUpdated(new Date());
-    }
-  };
 
   const handleCreateWatchlist = async () => {
     if (!newWatchlist.name || !newWatchlist.target) {
@@ -642,7 +548,6 @@ export default function MonitoringPage() {
                       value={customRangeStart}
                       onChange={(event) => {
                         setCustomRangeStart(event.target.value);
-                        setRangeValidationError('');
                       }}
                     />
                   </div>
@@ -654,7 +559,6 @@ export default function MonitoringPage() {
                       value={customRangeEnd}
                       onChange={(event) => {
                         setCustomRangeEnd(event.target.value);
-                        setRangeValidationError('');
                       }}
                     />
                   </div>
