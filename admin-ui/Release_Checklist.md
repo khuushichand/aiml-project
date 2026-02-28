@@ -33,16 +33,16 @@ This checklist covers release readiness for the admin UI (Next.js). Treat it as 
 
 ## 4. Build & Install
 
-- [ ] Run `npm install` (or the chosen package manager) from `admin-ui/`.
-- [ ] Run `npm run lint` and address warnings.
-- [ ] Run `npm run build` and confirm the build completes without errors.
-- [ ] Start the production build (`npm run start`) and confirm pages load correctly.
+- [ ] Run `bun install` from `admin-ui/`.
+- [ ] Run `bun run lint` and address warnings.
+- [ ] Run `bun run build` and confirm the build completes without errors.
+- [ ] Start the production build (`bun run start`) and confirm pages load correctly.
 
 ---
 
 ## 5. Test Matrix (Frontend)
 
-- [ ] Run unit tests (for example `npx vitest run` or configured test script).
+- [ ] Run unit tests (`bun run test` or `bunx vitest run`).
 - [ ] Confirm React Testing Library coverage for new UI flows and error states.
 - [ ] If snapshots are used, review and update them intentionally.
 - [ ] Verify key pages (dashboard, monitoring, auth/config views) render without console errors.

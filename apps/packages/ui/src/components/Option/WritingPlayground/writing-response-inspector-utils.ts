@@ -111,3 +111,25 @@ export const buildResponseInspectorCsv = (
   ]
   return lines.join("\n")
 }
+
+export const buildRerollPromptFromRows = (
+  rows: WritingLogprobEntry[],
+  options: {
+    prefix: string
+    suffix: string
+    sequence: number
+    replacementToken?: string
+    placeholder?: string
+  }
+): string => {
+  const max = rows.length
+  const clamped = Math.max(0, Math.min(max, Math.floor(options.sequence)))
+  const generatedPrefix = rows
+    .slice(0, clamped)
+    .map((row) => row.token)
+    .join("")
+  const placeholder = options.placeholder ?? "{predict}"
+  const replacementToken =
+    typeof options.replacementToken === "string" ? options.replacementToken : ""
+  return `${options.prefix}${generatedPrefix}${replacementToken}${placeholder}${options.suffix}`
+}

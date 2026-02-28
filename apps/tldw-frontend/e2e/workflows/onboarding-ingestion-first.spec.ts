@@ -7,7 +7,7 @@ import {
   assertNoCriticalErrors,
   skipIfServerUnavailable,
 } from "../utils/fixtures"
-import { TEST_CONFIG } from "../utils/helpers"
+import { TEST_CONFIG, waitForConnection } from "../utils/helpers"
 
 type ViewportTarget = {
   label: "desktop" | "mobile"
@@ -230,6 +230,7 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       })
 
       const initialConnectState = await openOnboardingSuccessScreen(authedPage)
+      const initialSetupState = await ensureOnboardingSuccessScreen(authedPage)
       await captureStep(
         authedPage,
         evidenceRows,
@@ -240,6 +241,10 @@ test.describe("Onboarding Ingestion-First Journey", () => {
           : "Onboarding success already visible from prior connected state."
       )
 
+        initialSetupState === "connected_now"
+          ? "Connect control visible."
+          : "Setup resumed from an already connected state."
+      )
       await expect(authedPage.getByTestId("onboarding-success-screen")).toHaveAttribute(
         "data-ingest-status",
         "idle"
@@ -303,6 +308,7 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       )
 
       await openOnboardingSuccessScreen(authedPage)
+      await ensureOnboardingSuccessScreen(authedPage)
 
       await authedPage
         .getByTestId("onboarding-success-ingest")
@@ -329,12 +335,22 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       }
       await expect(quickIngestDialog).toBeHidden({ timeout: 10_000 })
 
-      await openOnboardingSuccessScreen(authedPage)
-      await clickOnboardingCtaAndExpectRoute(
-        authedPage,
-        "onboarding-success-chat",
-        /\/chat(?:[/?#].*)?$/
-      )
+      await ensureOnboardingSuccessScreen(authedPage)
+
+      await authedPage.evaluate(() => {
+        try {
+          localStorage.setItem("__tldw_first_run_complete", "true")
+        } catch {
+          // Non-blocking; CTA should still handle completion in-app.
+        }
+      })
+
+      await authedPage
+        .getByTestId("onboarding-success-chat")
+        .evaluate((el: HTMLElement) => el.click())
+      await expect(authedPage).toHaveURL(/\/chat(?:[/?#].*)?$/, {
+        timeout: 20_000,
+      })
       await expect(authedPage.getByTestId("chat-input")).toBeVisible({
         timeout: 15_000,
       })

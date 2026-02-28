@@ -36,6 +36,10 @@ from tldw_Server_API.app.core.LLM_Calls.extra_body_compat_catalog import (
     get_model_extra_body_compat,
     get_provider_extra_body_compat,
 )
+from tldw_Server_API.app.core.LLM_Calls.tokenizer_resolver import (
+    resolve_tokenizer_metadata,
+    strict_token_counting_enabled as _strict_token_counting_enabled_shared,
+)
 from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
 
 #######################################################################################################################
@@ -1256,6 +1260,30 @@ def _truthy(value: Any) -> bool:
     return False
 
 
+def _resolve_model_tokenizer_support(
+    provider_name: str,
+    model_name: str,
+    config_parser: Any,
+) -> dict[str, Any]:
+    try:
+        return resolve_tokenizer_metadata(
+            provider_name,
+            model_name,
+            strict_mode_effective=_strict_token_counting_enabled_shared(default=False),
+            config_parser=config_parser,
+        )
+    except Exception:  # noqa: BLE001 - metadata path should fail open
+        return {
+            "available": False,
+            "tokenizer": None,
+            "kind": None,
+            "source": None,
+            "detokenize": False,
+            "count_accuracy": "unavailable",
+            "strict_mode_effective": _strict_token_counting_enabled_shared(default=False),
+        }
+
+
 def _build_runtime_context(config_parser: Any) -> dict[str, Any]:
     strict_openai_compat = False
     try:
@@ -1655,6 +1683,31 @@ def get_configured_providers(
                     model_name,
                     runtime_context,
                 )
+                tokenizer_support = _resolve_model_tokenizer_support(provider_name, model_name, config_parser)
+                model_info["tokenizer_available"] = bool(tokenizer_support.get("available"))
+                model_info["tokenizer"] = tokenizer_support.get("tokenizer")
+                model_info["tokenizer_kind"] = tokenizer_support.get("kind")
+                model_info["tokenizer_source"] = tokenizer_support.get("source")
+                model_info["detokenize_available"] = bool(tokenizer_support.get("detokenize"))
+                model_info["count_accuracy"] = tokenizer_support.get("count_accuracy", "unavailable")
+                model_info["strict_mode_effective"] = bool(tokenizer_support.get("strict_mode_effective", False))
+                if tokenizer_support.get("error"):
+                    model_info["tokenization_error"] = tokenizer_support.get("error")
+
+            tokenizers_by_model = {
+                str(model_info.get("name") or model_info.get("id") or "").strip(): {
+                    "available": bool(model_info.get("tokenizer_available")),
+                    "tokenizer": model_info.get("tokenizer"),
+                    "kind": model_info.get("tokenizer_kind"),
+                    "source": model_info.get("tokenizer_source"),
+                    "detokenize": bool(model_info.get("detokenize_available")),
+                    "count_accuracy": model_info.get("count_accuracy", "unavailable"),
+                    "strict_mode_effective": bool(model_info.get("strict_mode_effective", False)),
+                    "error": model_info.get("tokenization_error"),
+                }
+                for model_info in models_info
+                if str(model_info.get("name") or model_info.get("id") or "").strip()
+            }
 
             endpoint_only = provider_info['type'] == 'local' and is_configured and not models
 
@@ -1669,6 +1722,7 @@ def get_configured_providers(
                 'is_configured': is_configured,  # Add configuration status
                 'endpoint_only': endpoint_only,
                 'extra_body_compat': _safe_provider_extra_body_compat(provider_name, runtime_context),
+                'tokenizers': tokenizers_by_model or None,
             }
 
             # Add endpoint for local providers

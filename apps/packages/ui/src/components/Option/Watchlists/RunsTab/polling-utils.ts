@@ -1,6 +1,6 @@
 import type { WatchlistRun } from "@/types/watchlists"
 
-const normalizeStatus = (status: unknown): string =>
+const normalizeRunStatus = (status: unknown): string =>
   String(status ?? "")
     .trim()
     .toLowerCase()
@@ -24,7 +24,7 @@ export const hasActiveWatchlistRuns = (
   runs: Array<Pick<WatchlistRun, "status">> | null | undefined
 ): boolean => {
   if (!Array.isArray(runs) || runs.length === 0) return false
-  return runs.some((run) => ACTIVE_RUN_STATUSES.has(normalizeStatus(run.status)))
+  return runs.some((run) => ACTIVE_RUN_STATUSES.has(normalizeRunStatus(run.status)))
 }
 
 export const resolveAdaptiveRunNotificationsPollMs = (

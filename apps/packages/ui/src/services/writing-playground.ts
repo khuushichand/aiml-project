@@ -32,14 +32,28 @@ export type WritingServerCapabilities = {
   sessions: boolean
   templates: boolean
   themes: boolean
+  defaults_catalog?: boolean
+  snapshots?: boolean
   tokenize: boolean
+  detokenize?: boolean
   token_count: boolean
   wordclouds?: boolean
+  token_probabilities?: {
+    inline_reroll?: boolean
+  }
+  context?: {
+    author_note_depth_mode?: "insertion" | "annotation" | string
+    context_order?: boolean
+    context_budget?: boolean
+  }
 }
 
 export type WritingTokenizerSupport = {
   available: boolean
   tokenizer?: string | null
+  kind?: string | null
+  source?: string | null
+  detokenize?: boolean
   error?: string | null
 }
 
@@ -71,6 +85,9 @@ export type WritingRequestedCapabilities = {
   features: Record<string, boolean>
   tokenizer_available: boolean
   tokenizer?: string | null
+  tokenizer_kind?: string | null
+  tokenizer_source?: string | null
+  detokenize_available?: boolean
   tokenization_error?: string | null
   extra_body_compat?: WritingExtraBodyCompat
 }
@@ -199,6 +216,84 @@ export type WritingThemeUpdate = {
   order?: number | null
 }
 
+export type WritingDefaultTemplate = {
+  name: string
+  payload: Record<string, unknown>
+  schema_version: number
+  is_default: boolean
+}
+
+export type WritingDefaultTheme = {
+  name: string
+  class_name?: string | null
+  css?: string | null
+  schema_version: number
+  is_default: boolean
+  order: number
+}
+
+export type WritingDefaultsResponse = {
+  version: number
+  templates: WritingDefaultTemplate[]
+  themes: WritingDefaultTheme[]
+}
+
+export type WritingSnapshotCounts = {
+  sessions: number
+  templates: number
+  themes: number
+}
+
+export type WritingSnapshotSessionItem = {
+  id?: string | null
+  name: string
+  payload: Record<string, unknown>
+  schema_version: number
+  version_parent_id?: string | null
+}
+
+export type WritingSnapshotTemplateItem = {
+  name: string
+  payload: Record<string, unknown>
+  schema_version: number
+  version_parent_id?: string | null
+  is_default?: boolean
+}
+
+export type WritingSnapshotThemeItem = {
+  name: string
+  class_name?: string | null
+  css?: string | null
+  schema_version: number
+  version_parent_id?: string | null
+  is_default?: boolean
+  order?: number
+}
+
+export type WritingSnapshotPayload = {
+  sessions: WritingSnapshotSessionItem[]
+  templates: WritingSnapshotTemplateItem[]
+  themes: WritingSnapshotThemeItem[]
+}
+
+export type WritingSnapshotExportResponse = {
+  version: number
+  counts: WritingSnapshotCounts
+  sessions: WritingSnapshotSessionItem[]
+  templates: WritingSnapshotTemplateItem[]
+  themes: WritingSnapshotThemeItem[]
+}
+
+export type WritingSnapshotImportRequest = {
+  mode?: "merge" | "replace"
+  snapshot: WritingSnapshotPayload
+}
+
+export type WritingSnapshotImportResponse = {
+  mode: "merge" | "replace"
+  imported: WritingSnapshotCounts
+}
+
 export type WritingTokenizeOptions = {
   include_strings?: boolean
 }
@@ -214,6 +309,9 @@ export type WritingTokenizeMeta = {
   provider: string
   model: string
   tokenizer: string
+  tokenizer_kind?: string | null
+  tokenizer_source?: string | null
+  detokenize_available?: boolean
   input_chars: number
   token_count: number
   warnings: string[]
@@ -233,6 +331,18 @@ export type WritingTokenCountRequest = {
 
 export type WritingTokenCountResponse = {
   count: number
+  meta: WritingTokenizeMeta
+}
+
+export type WritingDetokenizeRequest = {
+  provider: string
+  model: string
+  ids: number[]
+}
+
+export type WritingDetokenizeResponse = {
+  text: string
+  strings?: string[]
   meta: WritingTokenizeMeta
 }
 
@@ -302,6 +412,13 @@ export async function getWritingCapabilities(
   const path = `/api/v1/writing/capabilities${query}` as AllowedPath
   return await bgRequest<WritingCapabilitiesResponse>({
     path,
+    method: "GET"
+  })
+}
+
+export async function getWritingDefaults(): Promise<WritingDefaultsResponse> {
+  return await bgRequest<WritingDefaultsResponse>({
+    path: "/api/v1/writing/defaults",
     method: "GET"
   })
 }
@@ -437,6 +554,24 @@ export async function deleteWritingTheme(
   })
 }
 
+export async function exportWritingSnapshot(): Promise<WritingSnapshotExportResponse> {
+  return await bgRequest<WritingSnapshotExportResponse>({
+    path: "/api/v1/writing/snapshot/export",
+    method: "GET"
+  })
+}
+
+export async function importWritingSnapshot(
+  input: WritingSnapshotImportRequest
+): Promise<WritingSnapshotImportResponse> {
+  return await bgRequest<WritingSnapshotImportResponse>({
+    path: "/api/v1/writing/snapshot/import",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input
+  })
+}
+
 export async function tokenizeWritingText(
   input: WritingTokenizeRequest
 ): Promise<WritingTokenizeResponse> {
@@ -453,6 +588,17 @@ export async function countWritingTokens(
 ): Promise<WritingTokenCountResponse> {
   return await bgRequest<WritingTokenCountResponse>({
     path: "/api/v1/writing/token-count",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input
+  })
+}
+
+export async function detokenizeWritingTokens(
+  input: WritingDetokenizeRequest
+): Promise<WritingDetokenizeResponse> {
+  return await bgRequest<WritingDetokenizeResponse>({
+    path: "/api/v1/writing/detokenize",
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: input

@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
+import { EmptyState } from '@/components/ui/empty-state';
 import { ArrowLeft, Check, X } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission } from '@/types';
@@ -132,7 +133,10 @@ export default function RoleComparisonPage() {
               {loading ? (
                 <div className="text-muted-foreground">Loading roles...</div>
               ) : roles.length === 0 ? (
-                <div className="text-muted-foreground">No roles available for comparison.</div>
+                <EmptyState
+                  title="No roles available for comparison."
+                  description="Create roles first, then select two or three roles to compare."
+                />
               ) : (
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                   {roles.map((role) => {
@@ -178,7 +182,10 @@ export default function RoleComparisonPage() {
                   Choose two or three roles above to compare.
                 </div>
               ) : permissions.length === 0 ? (
-                <div className="text-muted-foreground">No permissions available.</div>
+                <EmptyState
+                  title="No permissions available."
+                  description="Create permissions to render a role-by-role comparison matrix."
+                />
               ) : (
                 <>
                   <div className="overflow-x-auto">

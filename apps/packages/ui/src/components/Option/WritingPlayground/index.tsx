@@ -53,9 +53,12 @@ import {
   deleteWritingSession,
   deleteWritingTemplate,
   deleteWritingTheme,
+  exportWritingSnapshot,
   getWritingCapabilities,
+  getWritingDefaults,
   getWritingWordcloud,
   getWritingSession,
+  importWritingSnapshot,
   listWritingSessions,
   listWritingTemplates,
   listWritingThemes,
@@ -79,6 +82,7 @@ import { useStoreChatModelSettings } from "@/store/model"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
 import { cn } from "@/libs/utils"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
+import { markdownToText } from "@/utils/markdown-to-text"
 import {
   buildExtraBodyPayload,
   parseExtraBodyJsonObject,
@@ -86,6 +90,7 @@ import {
 } from "./extra-body-utils"
 import {
   buildContextSystemMessages,
+  composeContextPrompt,
   injectSystemMessages,
   parseWorldInfoKeysInput,
   type WritingAuthorNote,
@@ -93,7 +98,7 @@ import {
   type WritingWorldInfoEntry,
   type WritingWorldInfoSettings
 } from "./writing-context-utils"
-import { buildTokenPreviewRows } from "./writing-token-utils"
+import { buildTokenPreviewRows, joinTokenStrings } from "./writing-token-utils"
 import {
   resolveGenerationStopStrings,
   type BasicStoppingModeType
@@ -103,7 +108,18 @@ import {
   type WritingLogprobEntry
 } from "./writing-logprob-utils"
 import {
+  formatLogitBiasValue,
+  normalizeLogitBiasValue,
+  parseLogitBiasInput,
+  withLogitBiasEntry,
+  withTokenIdsPresetLogitBias,
+  withTokenIdPresetLogitBias,
+  withoutLogitBiasEntry
+} from "./writing-logit-bias-utils"
+import {
+  buildRerollPromptFromRows,
   buildResponseInspectorCsv,
+  normalizeInspectorToken,
   selectResponseInspectorRows,
   type ResponseInspectorSort
 } from "./writing-response-inspector-utils"
@@ -111,10 +127,48 @@ import {
   normalizeWordcloudWords,
   parseWordcloudStopwordsInput
 } from "./writing-wordcloud-utils"
+import { buildWorldInfoExportPayload } from "./writing-world-info-transfer-utils"
+import { moveWorldInfoEntry } from "./writing-world-info-utils"
 import {
   computeTokensPerSecond,
   estimateTokenCountFromText
 } from "./writing-generation-stats-utils"
+import { WritingWorldInfoImportControls } from "./WritingWorldInfoImportControls"
+import {
+  buildSpeechVoiceOptions,
+  clampSpeechRate,
+  resolvePauseResumeAction,
+  resolveSpeechVoice
+} from "./writing-speech-utils"
+import {
+  normalizeWritingSpeechPreferences,
+  type WritingSpeechPreferences
+} from "./writing-speech-settings-utils"
+import {
+  applyPlaceholderAtRange,
+  applyTextAtRange
+} from "./writing-editor-actions-utils"
+import {
+  buildContextPreviewFilename,
+  serializeContextPreviewJson
+} from "./writing-context-preview-utils"
+import {
+  extractImportedSessionItems,
+  getImportedSessionModelHint,
+  getImportedSessionProviderHint,
+  parseImportedSessionPayload
+} from "./writing-session-import-utils"
+import { extractImportedTemplateItems } from "./writing-template-import-utils"
+import { extractImportedThemeItems } from "./writing-theme-import-utils"
+import {
+  resolveSnapshotImportAction,
+  type SnapshotImportMode
+} from "./writing-snapshot-import-utils"
+import {
+  DEFAULT_TEMPLATE_CATALOG,
+  DEFAULT_THEME_CATALOG,
+  buildDuplicateName
+} from "./writing-template-theme-utils"
 
 const { Title, Paragraph } = Typography
 
@@ -124,6 +178,8 @@ type SessionUsage = {
 }
 
 type SessionUsageMap = Record<string, SessionUsage>
+
+const WRITING_SPEECH_PREFS_STORAGE_KEY = "writing:speech-preferences"
 
 type WritingSessionPayload = Record<string, unknown> & {
   prompt?: string
@@ -159,6 +215,9 @@ type WritingSessionSettings = {
   memory_block: WritingContextBlock
   author_note: WritingAuthorNote
   world_info: WritingWorldInfoSettings
+  context_order: string
+  context_length: number
+  author_note_depth_mode: "insertion" | "annotation"
 }
 
 type EditorViewMode = "edit" | "preview" | "split"
@@ -175,6 +234,11 @@ type GenerationPlan = {
 type GenerationHistoryEntry = {
   before: string
   after: string
+}
+
+type LastGenerationContext = {
+  prefix: string
+  suffix: string
 }
 
 type NormalizedTemplate = {
@@ -291,8 +355,12 @@ const DEFAULT_AUTHOR_NOTE: WritingAuthorNote = {
 const DEFAULT_WORLD_INFO: WritingWorldInfoSettings = {
   enabled: false,
   search_range: 2000,
+  prefix: "",
+  suffix: "",
   entries: []
 }
+const DEFAULT_CONTEXT_ORDER =
+  "{memPrefix}{wiPrefix}{wiText}{wiSuffix}{memText}{memSuffix}{prompt}"
 
 const DEFAULT_SETTINGS: WritingSessionSettings = {
   temperature: 0.7,
@@ -311,7 +379,10 @@ const DEFAULT_SETTINGS: WritingSessionSettings = {
   advanced_extra_body: {},
   memory_block: DEFAULT_MEMORY_BLOCK,
   author_note: DEFAULT_AUTHOR_NOTE,
-  world_info: DEFAULT_WORLD_INFO
+  world_info: DEFAULT_WORLD_INFO,
+  context_order: DEFAULT_CONTEXT_ORDER,
+  context_length: 8192,
+  author_note_depth_mode: "insertion"
 }
 
 const cloneDefaultSettings = (): WritingSessionSettings => ({
@@ -320,7 +391,10 @@ const cloneDefaultSettings = (): WritingSessionSettings => ({
   advanced_extra_body: {},
   memory_block: { ...DEFAULT_MEMORY_BLOCK },
   author_note: { ...DEFAULT_AUTHOR_NOTE },
-  world_info: { ...DEFAULT_WORLD_INFO, entries: [] }
+  world_info: { ...DEFAULT_WORLD_INFO, entries: [] },
+  context_order: DEFAULT_CONTEXT_ORDER,
+  context_length: 8192,
+  author_note_depth_mode: "insertion"
 })
 
 const ADVANCED_EXTRA_BODY_PARAM_KEYS = [
@@ -328,6 +402,7 @@ const ADVANCED_EXTRA_BODY_PARAM_KEYS = [
   "dynatemp_exponent",
   "repeat_penalty",
   "repeat_last_n",
+  "penalize_nl",
   "ignore_eos",
   "mirostat",
   "mirostat_tau",
@@ -343,7 +418,9 @@ const ADVANCED_EXTRA_BODY_PARAM_KEYS = [
   "dry_penalty_last_n",
   "dry_sequence_breakers",
   "banned_tokens",
-  "grammar"
+  "grammar",
+  "logit_bias",
+  "post_sampling_probs"
 ] as const
 
 type AdvancedNumberParamConfig = {
@@ -458,8 +535,16 @@ const normalizeWorldInfoEntries = (value: unknown): WritingWorldInfoEntry[] => {
       const content = toStringValue(entry.content).trim()
       if (!content) return null
       if (keys.length === 0) return null
+      const entrySearchRange = toNullableNumber(
+        entry.search_range ?? entry.searchRange,
+        null
+      )
       return {
         id: String(entry.id || createWorldInfoId()),
+        display_name: toStringValue(
+          entry.display_name ?? entry.displayName ?? entry.comment,
+          ""
+        ).trim(),
         enabled: toBoolean(entry.enabled, true),
         keys,
         content,
@@ -467,7 +552,11 @@ const normalizeWorldInfoEntries = (value: unknown): WritingWorldInfoEntry[] => {
         case_sensitive: toBoolean(
           entry.case_sensitive ?? entry.caseSensitive,
           false
-        )
+        ),
+        search_range:
+          entrySearchRange == null
+            ? undefined
+            : Math.max(0, Math.floor(entrySearchRange))
       } as WritingWorldInfoEntry
     })
     .filter(Boolean) as WritingWorldInfoEntry[]
@@ -510,6 +599,8 @@ const normalizeWorldInfoSettings = (raw: unknown): WritingWorldInfoSettings => {
       0,
       Math.floor(toNumber(value.search_range ?? value.searchRange, 2000))
     ),
+    prefix: toStringValue(value.prefix, DEFAULT_WORLD_INFO.prefix),
+    suffix: toStringValue(value.suffix, DEFAULT_WORLD_INFO.suffix),
     entries: normalizeWorldInfoEntries(value.entries)
   }
 }
@@ -977,6 +1068,12 @@ const getSettingsFromPayload = (
     settings.top_logprobs ?? settings.topLogprobs,
     DEFAULT_SETTINGS.top_logprobs
   )
+  const rawBasicStoppingModeType = String(
+    settings.basic_stopping_mode_type ?? settings.basicStoppingModeType ?? ""
+  )
+  const rawAuthorDepthMode = String(
+    settings.author_note_depth_mode ?? settings.authorNoteDepthMode ?? ""
+  )
   return {
     temperature: toNumber(settings.temperature, DEFAULT_SETTINGS.temperature),
     top_p: toNumber(settings.top_p, DEFAULT_SETTINGS.top_p),
@@ -1001,6 +1098,8 @@ const getSettingsFromPayload = (
       ? (String(
           settings.basic_stopping_mode_type ?? settings.basicStoppingModeType
         ) as BasicStoppingModeType)
+    ].includes(rawBasicStoppingModeType)
+      ? (rawBasicStoppingModeType as BasicStoppingModeType)
       : DEFAULT_SETTINGS.basic_stopping_mode_type,
     logprobs: toBoolean(settings.logprobs, DEFAULT_SETTINGS.logprobs),
     top_logprobs:
@@ -1024,7 +1123,23 @@ const getSettingsFromPayload = (
     advanced_extra_body: advancedExtraBody,
     memory_block: memoryBlock,
     author_note: authorNote,
-    world_info: worldInfo
+    world_info: worldInfo,
+    context_order:
+      typeof (settings.context_order ?? settings.contextOrder) === "string" &&
+      String(settings.context_order ?? settings.contextOrder).trim()
+        ? String(settings.context_order ?? settings.contextOrder)
+        : DEFAULT_CONTEXT_ORDER,
+    context_length: Math.max(
+      0,
+      Math.floor(
+        toNumber(
+          settings.context_length ?? settings.contextLength,
+          DEFAULT_SETTINGS.context_length
+        )
+      )
+    ),
+    author_note_depth_mode:
+      rawAuthorDepthMode === "annotation" ? "annotation" : "insertion"
   }
 }
 
@@ -1108,7 +1223,11 @@ const areSettingsEqual = (
   if (leftAuthor !== rightAuthor) return false
   const leftWorldInfo = JSON.stringify(left.world_info || {})
   const rightWorldInfo = JSON.stringify(right.world_info || {})
-  return leftWorldInfo === rightWorldInfo
+  if (leftWorldInfo !== rightWorldInfo) return false
+  if (left.context_order !== right.context_order) return false
+  if (left.context_length !== right.context_length) return false
+  if (left.author_note_depth_mode !== right.author_note_depth_mode) return false
+  return true
 }
 
 export const WritingPlayground = () => {
@@ -1122,17 +1241,27 @@ export const WritingPlayground = () => {
     setActiveSessionId,
     setActiveSessionName
   } = useWritingPlaygroundStore()
-  const [selectedModel] = useStorage<string>("selectedModel")
+  const [selectedModel, setSelectedModel] = useStorage<string>("selectedModel")
   const apiProviderOverride = useStoreChatModelSettings(
     (state) => state.apiProvider
   )
+  const setApiProvider = useStoreChatModelSettings((state) => state.setApiProvider)
   const [sessionUsageMap, setSessionUsageMap] = useStorage<SessionUsageMap>(
     "writing:session-usage",
     {}
   )
+  const [storedSpeechPreferences, setStoredSpeechPreferences] =
+    useStorage<WritingSpeechPreferences>(WRITING_SPEECH_PREFS_STORAGE_KEY, {
+      rate: 1,
+      voiceURI: null
+    })
   const [createModalOpen, setCreateModalOpen] = React.useState(false)
   const [newSessionName, setNewSessionName] = React.useState("")
   const [sessionImporting, setSessionImporting] = React.useState(false)
+  const [snapshotImporting, setSnapshotImporting] = React.useState(false)
+  const [snapshotExporting, setSnapshotExporting] = React.useState(false)
+  const [snapshotImportMode, setSnapshotImportMode] =
+    React.useState<SnapshotImportMode>("merge")
   const [renameModalOpen, setRenameModalOpen] = React.useState(false)
   const [renameSessionName, setRenameSessionName] = React.useState("")
   const [renameTarget, setRenameTarget] =
@@ -1145,6 +1274,12 @@ export const WritingPlayground = () => {
   const [bannedTokensInput, setBannedTokensInput] = React.useState("")
   const [drySequenceBreakersInput, setDrySequenceBreakersInput] =
     React.useState("")
+  const [logitBiasInput, setLogitBiasInput] = React.useState("")
+  const [logitBiasError, setLogitBiasError] =
+    React.useState<string | null>(null)
+  const [logitBiasTokenInput, setLogitBiasTokenInput] = React.useState("")
+  const [logitBiasValueInput, setLogitBiasValueInput] =
+    React.useState<number | null>(null)
   const [extraBodyJsonModalOpen, setExtraBodyJsonModalOpen] =
     React.useState(false)
   const [extraBodyJsonDraft, setExtraBodyJsonDraft] = React.useState("{}")
@@ -1161,12 +1296,18 @@ export const WritingPlayground = () => {
   const [editingTemplate, setEditingTemplate] =
     React.useState<WritingTemplateResponse | null>(null)
   const [templateImporting, setTemplateImporting] = React.useState(false)
+  const [templateRestoringDefaults, setTemplateRestoringDefaults] =
+    React.useState(false)
   const [themesModalOpen, setThemesModalOpen] = React.useState(false)
   const [themeForm, setThemeForm] =
     React.useState<ThemeFormState>(EMPTY_THEME_FORM)
   const [editingTheme, setEditingTheme] =
     React.useState<WritingThemeResponse | null>(null)
   const [themeImporting, setThemeImporting] = React.useState(false)
+  const [themeRestoringDefaults, setThemeRestoringDefaults] =
+    React.useState(false)
+  const [contextPreviewModalOpen, setContextPreviewModalOpen] =
+    React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState("")
   const [replaceQuery, setReplaceQuery] = React.useState("")
@@ -1178,6 +1319,19 @@ export const WritingPlayground = () => {
   const [isGenerating, setIsGenerating] = React.useState(false)
   const [canUndoGeneration, setCanUndoGeneration] = React.useState(false)
   const [canRedoGeneration, setCanRedoGeneration] = React.useState(false)
+  const [isSpeaking, setIsSpeaking] = React.useState(false)
+  const [isSpeechPaused, setIsSpeechPaused] = React.useState(false)
+  const normalizedStoredSpeechPreferences = React.useMemo(
+    () => normalizeWritingSpeechPreferences(storedSpeechPreferences),
+    [storedSpeechPreferences]
+  )
+  const [speechRate, setSpeechRate] = React.useState(
+    normalizedStoredSpeechPreferences.rate
+  )
+  const [speechVoiceURI, setSpeechVoiceURI] = React.useState<string | null>(
+    normalizedStoredSpeechPreferences.voiceURI
+  )
+  const [speechVoices, setSpeechVoices] = React.useState<SpeechSynthesisVoice[]>([])
   const [tokenCountResult, setTokenCountResult] =
     React.useState<WritingTokenCountResponse | null>(null)
   const [tokenizeResult, setTokenizeResult] =
@@ -1228,12 +1382,17 @@ export const WritingPlayground = () => {
   const lastSavedChatModeRef = React.useRef<Record<string, boolean>>({})
   const templateFileInputRef = React.useRef<HTMLInputElement | null>(null)
   const sessionFileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const snapshotFileInputRef = React.useRef<HTMLInputElement | null>(null)
   const themeFileInputRef = React.useRef<HTMLInputElement | null>(null)
   const generationServiceRef = React.useRef(new TldwChatService())
   const generationUndoRef = React.useRef<GenerationHistoryEntry[]>([])
   const generationRedoRef = React.useRef<GenerationHistoryEntry[]>([])
+  const lastGenerationContextRef = React.useRef<LastGenerationContext | null>(
+    null
+  )
   const generationSessionIdRef = React.useRef<string | null>(null)
   const generationCancelledRef = React.useRef(false)
+  const speechUtteranceRef = React.useRef<SpeechSynthesisUtterance | null>(null)
   const editorRef = React.useRef<TextAreaRef | null>(null)
   const previewRef = React.useRef<HTMLDivElement | null>(null)
   const isSyncingScrollRef = React.useRef(false)
@@ -1250,7 +1409,53 @@ export const WritingPlayground = () => {
   const hasWriting = Boolean(writingCaps?.server?.sessions)
   const hasTemplates = Boolean(writingCaps?.server?.templates)
   const hasThemes = Boolean(writingCaps?.server?.themes)
+  const hasServerDefaultsCatalog = Boolean(
+    writingCaps?.server?.defaults_catalog
+  )
+  const hasSnapshots = Boolean(writingCaps?.server?.snapshots)
   const hasChat = capabilities?.hasChat !== false
+
+  const { data: writingDefaultsData } = useQuery({
+    queryKey: ["writing-defaults"],
+    queryFn: () => getWritingDefaults(),
+    enabled: isOnline && hasWriting && hasServerDefaultsCatalog,
+    staleTime: 5 * 60 * 1000
+  })
+
+  const templateDefaultCatalog = React.useMemo(() => {
+    if (
+      Array.isArray(writingDefaultsData?.templates) &&
+      writingDefaultsData.templates.length > 0
+    ) {
+      return writingDefaultsData.templates.map((item) => ({
+        name: String(item.name || "").trim() || "default",
+        payload: isRecord(item.payload) ? item.payload : {},
+        schema_version:
+          typeof item.schema_version === "number" ? item.schema_version : 1,
+        is_default: item.is_default !== false
+      }))
+    }
+    return DEFAULT_TEMPLATE_CATALOG
+  }, [writingDefaultsData?.templates])
+
+  const themeDefaultCatalog = React.useMemo(() => {
+    if (
+      Array.isArray(writingDefaultsData?.themes) &&
+      writingDefaultsData.themes.length > 0
+    ) {
+      return writingDefaultsData.themes.map((item) => ({
+        name: String(item.name || "").trim() || "default",
+        class_name:
+          typeof item.class_name === "string" ? item.class_name : "",
+        css: typeof item.css === "string" ? item.css : "",
+        schema_version:
+          typeof item.schema_version === "number" ? item.schema_version : 1,
+        is_default: item.is_default !== false,
+        order: typeof item.order === "number" ? item.order : 0
+      }))
+    }
+    return DEFAULT_THEME_CATALOG
+  }, [writingDefaultsData?.themes])
 
   const { data: requestedCaps, isLoading: requestedCapsLoading } = useQuery({
     queryKey: [
@@ -1673,6 +1878,255 @@ export const WritingPlayground = () => {
     [t]
   )
 
+  const exportSnapshot = React.useCallback(async () => {
+    setSnapshotExporting(true)
+    try {
+      const snapshot = await exportWritingSnapshot()
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+      const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
+        type: "application/json"
+      })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = `writing-snapshot-${stamp}.json`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      message.success(
+        t(
+          "option:writingPlayground.snapshotExportSuccess",
+          "Snapshot exported."
+        )
+      )
+    } catch (err) {
+      const detail =
+        err instanceof Error ? err.message : t("option:error", "Error")
+      message.error(
+        t(
+          "option:writingPlayground.snapshotExportError",
+          "Failed to export snapshot: {{detail}}",
+          { detail }
+        )
+      )
+    } finally {
+      setSnapshotExporting(false)
+    }
+  }, [t])
+
+  const openSnapshotImportPicker = React.useCallback(
+    (mode: SnapshotImportMode) => {
+      const action = resolveSnapshotImportAction(mode, {
+        title: t(
+          "option:writingPlayground.snapshotReplaceConfirmTitle",
+          "Replace existing writing data?"
+        ),
+        body: t(
+          "option:writingPlayground.snapshotReplaceConfirmBody",
+          "This will replace current sessions, templates, and themes with the imported snapshot."
+        ),
+        action: t(
+          "option:writingPlayground.snapshotReplaceConfirmAction",
+          "Choose file"
+        ),
+        cancel: t("common:cancel", "Cancel")
+      })
+
+      if (action.type === "confirm-replace") {
+        Modal.confirm({
+          title: action.title,
+          content: action.content,
+          okText: action.okText,
+          cancelText: action.cancelText,
+          okButtonProps: { danger: action.danger },
+          onOk: () => {
+            setSnapshotImportMode(action.mode)
+            snapshotFileInputRef.current?.click()
+          }
+        })
+        return
+      }
+      setSnapshotImportMode(action.mode)
+      snapshotFileInputRef.current?.click()
+    },
+    [t]
+  )
+
+  const handleSnapshotImport = React.useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      if (!file) return
+      setSnapshotImporting(true)
+      try {
+        const importMode = snapshotImportMode
+        const raw = await file.text()
+        const parsed = JSON.parse(raw)
+        const source =
+          isRecord(parsed) && isRecord(parsed.snapshot) ? parsed.snapshot : parsed
+        if (!isRecord(source)) {
+          message.error(
+            t(
+              "option:writingPlayground.snapshotImportInvalid",
+              "No snapshot payload found in file."
+            )
+          )
+          return
+        }
+
+        const importedSessions = extractImportedSessionItems(source)
+        const importedTemplates = extractImportedTemplateItems(source)
+        const importedThemes = extractImportedThemeItems(source)
+
+        if (
+          importedSessions.length === 0 &&
+          importedTemplates.length === 0 &&
+          importedThemes.length === 0
+        ) {
+          message.error(
+            t(
+              "option:writingPlayground.snapshotImportInvalid",
+              "No snapshot payload found in file."
+            )
+          )
+          return
+        }
+
+        let importedModelHint: string | null = null
+        let importedProviderHint: string | null = null
+        const normalizedSessions = importedSessions
+          .filter(isRecord)
+          .map((item) => {
+            const payload = parseImportedSessionPayload(item)
+            if (!importedModelHint) {
+              importedModelHint = getImportedSessionModelHint(payload)
+            }
+            if (!importedProviderHint) {
+              importedProviderHint = getImportedSessionProviderHint(payload)
+            }
+            const id =
+              typeof item.id === "string" && item.id.trim().length > 0
+                ? item.id.trim()
+                : undefined
+            const nameCandidate =
+              typeof item.name === "string"
+                ? item.name
+                : typeof item.title === "string"
+                  ? item.title
+                  : ""
+            const name = nameCandidate.trim() || `Imported session ${Date.now()}`
+            const schemaVersion =
+              typeof item.schema_version === "number"
+                ? item.schema_version
+                : typeof item.schemaVersion === "number"
+                  ? item.schemaVersion
+                  : 1
+            const versionParentId =
+              typeof item.version_parent_id === "string"
+                ? item.version_parent_id
+                : typeof item.versionParentId === "string"
+                  ? item.versionParentId
+                  : null
+            return {
+              id,
+              name,
+              payload,
+              schema_version: schemaVersion,
+              version_parent_id: versionParentId
+            }
+          })
+
+        const normalizedTemplates = importedTemplates.map((item) => ({
+          name: item.name,
+          payload: item.payload,
+          schema_version: item.schemaVersion,
+          is_default: item.isDefault
+        }))
+        const normalizedThemes = importedThemes.map((item) => ({
+          name: item.name,
+          class_name: item.className,
+          css: item.css,
+          schema_version: item.schemaVersion,
+          is_default: item.isDefault,
+          order: item.order
+        }))
+
+        const importResult = await importWritingSnapshot({
+          mode: importMode,
+          snapshot: {
+            sessions: normalizedSessions,
+            templates: normalizedTemplates,
+            themes: normalizedThemes
+          }
+        })
+
+        if (importMode === "replace") {
+          setActiveSessionId(null)
+          setActiveSessionName(null)
+        }
+
+        if (!selectedModel && importedModelHint) {
+          void setSelectedModel(importedModelHint)
+        }
+        if (!apiProviderOverride && importedProviderHint) {
+          setApiProvider(importedProviderHint)
+        }
+
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["writing-sessions"] }),
+          queryClient.invalidateQueries({ queryKey: ["writing-templates"] }),
+          queryClient.invalidateQueries({ queryKey: ["writing-themes"] })
+        ])
+        message.success(
+          t(
+            "option:writingPlayground.snapshotImportSuccess",
+            "Snapshot {{mode}} (sessions: {{sessions}}, templates: {{templates}}, themes: {{themes}}).",
+            {
+              mode:
+                importMode === "replace"
+                  ? t(
+                      "option:writingPlayground.snapshotImportModeReplaced",
+                      "replaced"
+                    )
+                  : t(
+                      "option:writingPlayground.snapshotImportModeMerged",
+                      "imported"
+                    ),
+              sessions: importResult.imported.sessions,
+              templates: importResult.imported.templates,
+              themes: importResult.imported.themes
+            }
+          )
+        )
+      } catch (err) {
+        const detail =
+          err instanceof Error ? err.message : t("option:error", "Error")
+        message.error(
+          t(
+            "option:writingPlayground.snapshotImportError",
+            "Failed to import snapshot: {{detail}}",
+            { detail }
+          )
+        )
+      } finally {
+        setSnapshotImporting(false)
+        setSnapshotImportMode("merge")
+        event.target.value = ""
+      }
+    },
+    [
+      apiProviderOverride,
+      queryClient,
+      selectedModel,
+      snapshotImportMode,
+      setApiProvider,
+      setActiveSessionId,
+      setActiveSessionName,
+      setSelectedModel,
+      t
+    ]
+  )
+
   const handleSessionImport = React.useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0]
@@ -1681,13 +2135,7 @@ export const WritingPlayground = () => {
       try {
         const raw = await file.text()
         const parsed = JSON.parse(raw)
-        const items = Array.isArray(parsed)
-          ? parsed
-          : Array.isArray(parsed?.sessions)
-            ? parsed.sessions
-            : parsed
-              ? [parsed]
-              : []
+        const items = extractImportedSessionItems(parsed)
         if (!Array.isArray(items) || items.length === 0) {
           message.error(
             t(
@@ -1698,6 +2146,8 @@ export const WritingPlayground = () => {
           return
         }
         const existingNames = new Set(sessions.map((session) => session.name))
+        let importedModelHint: string | null = null
+        let importedProviderHint: string | null = null
         const resolveName = (base: string) => {
           if (!existingNames.has(base)) return base
           let idx = 1
@@ -1713,11 +2163,13 @@ export const WritingPlayground = () => {
           const rawName = String(item.name || item.title || "").trim()
           const name = resolveName(rawName || `Imported session ${Date.now()}`)
           existingNames.add(name)
-          const payload = isRecord(item.payload)
-            ? item.payload
-            : isRecord(item.payload_json)
-              ? item.payload_json
-              : {}
+          const payload = parseImportedSessionPayload(item)
+          if (!importedModelHint) {
+            importedModelHint = getImportedSessionModelHint(payload)
+          }
+          if (!importedProviderHint) {
+            importedProviderHint = getImportedSessionProviderHint(payload)
+          }
           const schemaVersion =
             typeof item.schema_version === "number" ? item.schema_version : 1
           await createWritingSession({
@@ -1725,6 +2177,12 @@ export const WritingPlayground = () => {
             payload,
             schema_version: schemaVersion
           })
+        }
+        if (!selectedModel && importedModelHint) {
+          void setSelectedModel(importedModelHint)
+        }
+        if (!apiProviderOverride && importedProviderHint) {
+          setApiProvider(importedProviderHint)
         }
         queryClient.invalidateQueries({ queryKey: ["writing-sessions"] })
         message.success(
@@ -1748,8 +2206,116 @@ export const WritingPlayground = () => {
         event.target.value = ""
       }
     },
-    [queryClient, sessions, t]
+    [
+      apiProviderOverride,
+      queryClient,
+      selectedModel,
+      sessions,
+      setApiProvider,
+      setSelectedModel,
+      t
+    ]
   )
+
+  const stopSpeech = React.useCallback(() => {
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+    }
+    speechUtteranceRef.current = null
+    setIsSpeaking(false)
+    setIsSpeechPaused(false)
+  }, [])
+
+  const pauseSpeech = React.useCallback(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return
+    const synthesis = window.speechSynthesis
+    if (!synthesis.speaking || synthesis.paused) return
+    synthesis.pause()
+    setIsSpeechPaused(true)
+  }, [])
+
+  const resumeSpeech = React.useCallback(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return
+    const synthesis = window.speechSynthesis
+    if (!synthesis.paused) return
+    synthesis.resume()
+    setIsSpeechPaused(false)
+  }, [])
+
+  const updateSpeechPreferences = React.useCallback(
+    (patch: Partial<WritingSpeechPreferences>) => {
+      const next = normalizeWritingSpeechPreferences({
+        rate: speechRate,
+        voiceURI: speechVoiceURI,
+        ...patch
+      })
+      setSpeechRate(next.rate)
+      setSpeechVoiceURI(next.voiceURI)
+      setStoredSpeechPreferences(next)
+    },
+    [setStoredSpeechPreferences, speechRate, speechVoiceURI]
+  )
+
+  const speechVoiceOptions = React.useMemo(
+    () => buildSpeechVoiceOptions(speechVoices),
+    [speechVoices]
+  )
+  const pauseResumeAction = resolvePauseResumeAction(isSpeaking, isSpeechPaused)
+
+  const handleSpeakEditor = React.useCallback(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      message.warning(
+        t(
+          "option:writingPlayground.speechUnavailable",
+          "Browser speech synthesis is not available."
+        )
+      )
+      return
+    }
+    const editorEl = editorRef.current?.resizableTextArea?.textArea
+    const selectionStart = editorEl?.selectionStart ?? 0
+    const selectionEnd = editorEl?.selectionEnd ?? 0
+    const selectedText =
+      selectionEnd > selectionStart
+        ? editorText.slice(selectionStart, selectionEnd)
+        : ""
+    const sourceText = selectedText.trim().length > 0 ? selectedText : editorText
+    const utteranceText = markdownToText(sourceText).trim()
+    if (!utteranceText) {
+      message.info(
+        t(
+          "option:writingPlayground.speechEmpty",
+          "Write or select text in the editor first."
+        )
+      )
+      return
+    }
+    const selectedVoice = resolveSpeechVoice(speechVoices, speechVoiceURI)
+    const utterance = new SpeechSynthesisUtterance(utteranceText)
+    utterance.rate = clampSpeechRate(speechRate)
+    if (selectedVoice) {
+      utterance.voice = selectedVoice
+    }
+    utterance.onend = () => {
+      if (speechUtteranceRef.current === utterance) {
+        speechUtteranceRef.current = null
+        setIsSpeaking(false)
+        setIsSpeechPaused(false)
+      }
+    }
+    utterance.onerror = () => {
+      if (speechUtteranceRef.current === utterance) {
+        speechUtteranceRef.current = null
+        setIsSpeaking(false)
+        setIsSpeechPaused(false)
+      }
+    }
+    window.speechSynthesis.cancel()
+    speechUtteranceRef.current = utterance
+    setIsSpeaking(true)
+    setIsSpeechPaused(false)
+    window.speechSynthesis.speak(utterance)
+  }, [editorText, speechRate, speechVoiceURI, speechVoices, t])
 
   React.useEffect(() => {
     return () => {
@@ -1766,6 +2332,40 @@ export const WritingPlayground = () => {
   }, [])
 
   React.useEffect(() => {
+    return () => {
+      stopSpeech()
+    }
+  }, [stopSpeech])
+
+  React.useEffect(() => {
+    const next = normalizeWritingSpeechPreferences(storedSpeechPreferences)
+    setSpeechRate(next.rate)
+    setSpeechVoiceURI(next.voiceURI)
+  }, [storedSpeechPreferences])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return
+    const synthesis = window.speechSynthesis
+    const syncVoices = () => {
+      const voices = synthesis.getVoices()
+      setSpeechVoices(voices)
+      if (speechVoiceURI && voices.some((voice) => voice.voiceURI === speechVoiceURI)) {
+        return
+      }
+      updateSpeechPreferences({
+        voiceURI:
+          voices.find((voice) => voice.default)?.voiceURI ?? voices[0]?.voiceURI ?? null
+      })
+    }
+
+    syncVoices()
+    synthesis.addEventListener("voiceschanged", syncVoices)
+    return () => {
+      synthesis.removeEventListener("voiceschanged", syncVoices)
+    }
+  }, [speechVoiceURI, updateSpeechPreferences])
+
+  React.useEffect(() => {
     wordcloudUnmountedRef.current = false
     return () => {
       wordcloudUnmountedRef.current = true
@@ -1773,6 +2373,7 @@ export const WritingPlayground = () => {
   }, [])
 
   React.useEffect(() => {
+    stopSpeech()
     generationUndoRef.current = []
     generationRedoRef.current = []
     generationSessionIdRef.current = null
@@ -1791,7 +2392,7 @@ export const WritingPlayground = () => {
     setWordcloudMeta(null)
     setWordcloudError(null)
     setIsGeneratingWordcloud(false)
-  }, [activeSessionId])
+  }, [activeSessionId, stopSpeech])
 
   const templates = templatesData?.templates ?? []
   const themes = themesData?.themes ?? []
@@ -1895,6 +2496,10 @@ export const WritingPlayground = () => {
       setStopStringsInput("")
       setBannedTokensInput("")
       setDrySequenceBreakersInput("")
+      setLogitBiasInput("")
+      setLogitBiasError(null)
+      setLogitBiasTokenInput("")
+      setLogitBiasValueInput(null)
       setSelectedTemplateName(null)
       setSelectedThemeName(null)
       setChatMode(false)
@@ -1925,6 +2530,10 @@ export const WritingPlayground = () => {
     const nextTemplateName = getTemplateNameFromPayload(activeSessionDetail.payload)
     const nextThemeName = getThemeNameFromPayload(activeSessionDetail.payload)
     const nextChatMode = getChatModeFromPayload(activeSessionDetail.payload)
+    const nextModelHint = getImportedSessionModelHint(activeSessionDetail.payload)
+    const nextProviderHint = getImportedSessionProviderHint(
+      activeSessionDetail.payload
+    )
     const lastLoadedId = lastLoadedSessionIdRef.current
     if (activeSessionDetail.id !== lastLoadedId) {
       setEditorText(nextPrompt)
@@ -1940,6 +2549,12 @@ export const WritingPlayground = () => {
           nextSettings.advanced_extra_body.dry_sequence_breakers
         ).join("\n")
       )
+      setLogitBiasInput(
+        formatLogitBiasValue(nextSettings.advanced_extra_body.logit_bias)
+      )
+      setLogitBiasError(null)
+      setLogitBiasTokenInput("")
+      setLogitBiasValueInput(null)
       setSelectedTemplateName(nextTemplateName)
       setSelectedThemeName(nextThemeName)
       setChatMode(nextChatMode)
@@ -1965,6 +2580,12 @@ export const WritingPlayground = () => {
       lastSavedTemplateNameRef.current[activeSessionDetail.id] = nextTemplateName
       lastSavedThemeNameRef.current[activeSessionDetail.id] = nextThemeName
       lastSavedChatModeRef.current[activeSessionDetail.id] = nextChatMode
+      if (nextModelHint && nextModelHint !== selectedModel) {
+        void setSelectedModel(nextModelHint)
+      }
+      if (nextProviderHint && nextProviderHint !== apiProviderOverride) {
+        setApiProvider(nextProviderHint)
+      }
       lastLoadedSessionIdRef.current = activeSessionDetail.id
       return
     }
@@ -1985,6 +2606,12 @@ export const WritingPlayground = () => {
             nextSettings.advanced_extra_body.dry_sequence_breakers
           ).join("\n")
         )
+        setLogitBiasInput(
+          formatLogitBiasValue(nextSettings.advanced_extra_body.logit_bias)
+        )
+        setLogitBiasError(null)
+        setLogitBiasTokenInput("")
+        setLogitBiasValueInput(null)
       }
       if (selectedTemplateName !== nextTemplateName) {
         setSelectedTemplateName(nextTemplateName)
@@ -2007,8 +2634,12 @@ export const WritingPlayground = () => {
     chatMode,
     editorText,
     isDirty,
+    apiProviderOverride,
     selectedTemplateName,
     selectedThemeName,
+    selectedModel,
+    setApiProvider,
+    setSelectedModel,
     settings
   ])
 
@@ -2301,6 +2932,8 @@ export const WritingPlayground = () => {
     },
     [advancedExtraBody, knownExtraBodyParamSet]
   )
+  const tokenInspectorSupportsLogitBias =
+    supportsAdvancedCompat && shouldShowAdvancedParam("logit_bias")
 
   const updateAdvancedExtraBodyField = React.useCallback(
     (key: string, value: unknown) => {
@@ -2334,6 +2967,50 @@ export const WritingPlayground = () => {
     [advancedExtraBody]
   )
 
+  const applyLogitBiasObject = React.useCallback(
+    (nextLogitBias: Record<string, number>) => {
+      updateAdvancedExtraBodyField(
+        "logit_bias",
+        Object.keys(nextLogitBias).length > 0 ? nextLogitBias : null
+      )
+      setLogitBiasInput(formatLogitBiasValue(nextLogitBias))
+      setLogitBiasError(null)
+    },
+    [updateAdvancedExtraBodyField]
+  )
+
+  const applyTokenInspectorLogitBiasPreset = React.useCallback(
+    (tokenId: number, preset: "ban" | "favor") => {
+      const next = withTokenIdPresetLogitBias(
+        advancedExtraBody.logit_bias,
+        tokenId,
+        preset
+      )
+      applyLogitBiasObject(next)
+    },
+    [advancedExtraBody.logit_bias, applyLogitBiasObject]
+  )
+
+  const applyTokenInspectorLogitBiasPresetBatch = React.useCallback(
+    (tokenIds: number[], preset: "ban" | "favor") => {
+      const next = withTokenIdsPresetLogitBias(
+        advancedExtraBody.logit_bias,
+        tokenIds,
+        preset
+      )
+      applyLogitBiasObject(next)
+    },
+    [advancedExtraBody.logit_bias, applyLogitBiasObject]
+  )
+
+  const logitBiasEntries = React.useMemo(
+    () =>
+      Object.entries(normalizeLogitBiasValue(advancedExtraBody.logit_bias)).sort(
+        ([left], [right]) => left.localeCompare(right)
+      ),
+    [advancedExtraBody.logit_bias]
+  )
+
   const openExtraBodyJsonEditor = React.useCallback(() => {
     setExtraBodyJsonDraft(
       JSON.stringify(advancedExtraBody || {}, null, 2) || "{}"
@@ -2348,6 +3025,20 @@ export const WritingPlayground = () => {
       setExtraBodyJsonError(parsed.error)
       return
     }
+    if (Object.prototype.hasOwnProperty.call(parsed.value, "logit_bias")) {
+      const normalized = parseLogitBiasInput(
+        JSON.stringify(parsed.value.logit_bias)
+      )
+      if (normalized.error) {
+        setExtraBodyJsonError(`Invalid logit_bias: ${normalized.error}`)
+        return
+      }
+      if (normalized.value) {
+        parsed.value.logit_bias = normalized.value
+      } else {
+        delete parsed.value.logit_bias
+      }
+    }
     updateSetting({
       advanced_extra_body: parsed.value
     })
@@ -2357,6 +3048,10 @@ export const WritingPlayground = () => {
     setDrySequenceBreakersInput(
       normalizeStringArrayValue(parsed.value.dry_sequence_breakers).join("\n")
     )
+    setLogitBiasInput(formatLogitBiasValue(parsed.value.logit_bias))
+    setLogitBiasError(null)
+    setLogitBiasTokenInput("")
+    setLogitBiasValueInput(null)
     setExtraBodyJsonError(null)
     setExtraBodyJsonModalOpen(false)
   }, [extraBodyJsonDraft, updateSetting])
@@ -2423,11 +3118,13 @@ export const WritingPlayground = () => {
   const addWorldInfoEntry = React.useCallback(() => {
     const entry: WritingWorldInfoEntry = {
       id: createWorldInfoId(),
+      display_name: "",
       enabled: true,
       keys: [],
       content: "",
       use_regex: false,
-      case_sensitive: false
+      case_sensitive: false,
+      search_range: undefined
     }
     updateWorldInfo({
       entries: [...worldInfoEntries, entry]
@@ -2457,6 +3154,76 @@ export const WritingPlayground = () => {
       })
     },
     [updateWorldInfo, worldInfoEntries]
+  )
+
+  const moveWorldInfoEntryById = React.useCallback(
+    (entryId: string, direction: "up" | "down") => {
+      updateWorldInfo({
+        entries: moveWorldInfoEntry(worldInfoEntries, entryId, direction)
+      })
+    },
+    [updateWorldInfo, worldInfoEntries]
+  )
+
+  const handleWorldInfoExport = React.useCallback(() => {
+    const payload = buildWorldInfoExportPayload(worldInfo)
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json"
+    })
+    const now = new Date()
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}-${String(now.getDate()).padStart(2, "0")}`
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = `writing-world-info-${stamp}.json`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  }, [worldInfo])
+
+  const handleWorldInfoImported = React.useCallback(
+    (
+      nextWorldInfo: WritingWorldInfoSettings,
+      mode: "append" | "replace"
+    ) => {
+      updateWorldInfo(nextWorldInfo)
+      message.success(
+        t(
+          "option:writingPlayground.worldInfoImportSuccess",
+          "World info imported ({{mode}}).",
+          {
+            mode:
+              mode === "append"
+                ? t(
+                    "option:writingPlayground.worldInfoImportModeAppendShort",
+                    "append"
+                  )
+                : t(
+                    "option:writingPlayground.worldInfoImportModeReplaceShort",
+                    "replace"
+                  )
+          }
+        )
+      )
+    },
+    [t, updateWorldInfo]
+  )
+
+  const handleWorldInfoImportError = React.useCallback(
+    (detail: string) => {
+      message.error(
+        t(
+          "option:writingPlayground.worldInfoImportError",
+          "World info import failed: {{detail}}",
+          { detail }
+        )
+      )
+    },
+    [t]
   )
 
   const handleTemplateChange = React.useCallback(
@@ -2841,6 +3608,72 @@ export const WritingPlayground = () => {
     setTemplateForm({ ...EMPTY_TEMPLATE_FORM })
   }, [])
 
+  const handleTemplateDuplicate = React.useCallback(() => {
+    const sourceName = templateForm.name.trim() || editingTemplate?.name || ""
+    if (!sourceName) return
+    const duplicateName = buildDuplicateName(
+      sourceName,
+      templates.map((item) => item.name)
+    )
+    createTemplateMutation.mutate({
+      name: duplicateName,
+      payload: buildTemplatePayload(templateForm),
+      schema_version: editingTemplate?.schema_version ?? 1,
+      is_default: false
+    })
+  }, [createTemplateMutation, editingTemplate, templateForm, templates])
+
+  const handleTemplateRestoreDefaults = React.useCallback(async () => {
+    if (templateRestoringDefaults) return
+    setTemplateRestoringDefaults(true)
+    try {
+      for (const item of templateDefaultCatalog) {
+        const existing = templates.find((template) => template.name === item.name)
+        if (existing) {
+          await updateWritingTemplate(
+            existing.name,
+            {
+              name: item.name,
+              payload: item.payload,
+              schema_version: item.schema_version,
+              is_default: item.is_default
+            },
+            existing.version
+          )
+        } else {
+          await createWritingTemplate(item)
+        }
+      }
+      await queryClient.invalidateQueries({ queryKey: ["writing-templates"] })
+      handleTemplateChange(templateDefaultCatalog[0]?.name ?? null)
+      message.success(
+        t(
+          "option:writingPlayground.templateRestoreDefaultsSuccess",
+          "Default templates restored."
+        )
+      )
+    } catch (err) {
+      const detail =
+        err instanceof Error ? err.message : t("option:error", "Error")
+      message.error(
+        t(
+          "option:writingPlayground.templateRestoreDefaultsError",
+          "Failed to restore template defaults: {{detail}}",
+          { detail }
+        )
+      )
+    } finally {
+      setTemplateRestoringDefaults(false)
+    }
+  }, [
+    handleTemplateChange,
+    queryClient,
+    t,
+    templateDefaultCatalog,
+    templateRestoringDefaults,
+    templates
+  ])
+
   const handleOpenTemplatesModal = React.useCallback(() => {
     const baseTemplate =
       selectedTemplate ?? defaultTemplate ?? templates[0] ?? null
@@ -2863,6 +3696,73 @@ export const WritingPlayground = () => {
     setEditingTheme(null)
     setThemeForm({ ...EMPTY_THEME_FORM })
   }, [])
+
+  const handleThemeDuplicate = React.useCallback(() => {
+    const sourceName = themeForm.name.trim() || editingTheme?.name || ""
+    if (!sourceName) return
+    const duplicateName = buildDuplicateName(
+      sourceName,
+      themes.map((item) => item.name)
+    )
+    createThemeMutation.mutate({
+      name: duplicateName,
+      ...buildThemePayload(themeForm),
+      schema_version: editingTheme?.schema_version ?? 1,
+      is_default: false
+    })
+  }, [createThemeMutation, editingTheme, themeForm, themes])
+
+  const handleThemeRestoreDefaults = React.useCallback(async () => {
+    if (themeRestoringDefaults) return
+    setThemeRestoringDefaults(true)
+    try {
+      for (const item of themeDefaultCatalog) {
+        const existing = themes.find((theme) => theme.name === item.name)
+        if (existing) {
+          await updateWritingTheme(
+            existing.name,
+            {
+              class_name: item.class_name,
+              css: item.css,
+              schema_version: item.schema_version,
+              is_default: item.is_default,
+              order: item.order
+            },
+            existing.version
+          )
+        } else {
+          await createWritingTheme(item)
+        }
+      }
+      await queryClient.invalidateQueries({ queryKey: ["writing-themes"] })
+      handleThemeChange(themeDefaultCatalog[0]?.name ?? null)
+      message.success(
+        t(
+          "option:writingPlayground.themeRestoreDefaultsSuccess",
+          "Default themes restored."
+        )
+      )
+    } catch (err) {
+      const detail =
+        err instanceof Error ? err.message : t("option:error", "Error")
+      message.error(
+        t(
+          "option:writingPlayground.themeRestoreDefaultsError",
+          "Failed to restore theme defaults: {{detail}}",
+          { detail }
+        )
+      )
+    } finally {
+      setThemeRestoringDefaults(false)
+    }
+  }, [
+    handleThemeChange,
+    queryClient,
+    t,
+    themeDefaultCatalog,
+    themeRestoringDefaults,
+    themes
+  ])
 
   const handleOpenThemesModal = React.useCallback(() => {
     const baseTheme = selectedTheme ?? defaultTheme ?? themes[0] ?? null
@@ -3015,20 +3915,7 @@ export const WritingPlayground = () => {
       try {
         const text = await file.text()
         const parsed = JSON.parse(text)
-        const items: Array<{
-          name?: unknown
-          payload?: unknown
-          schema_version?: unknown
-          schemaVersion?: unknown
-          is_default?: unknown
-          isDefault?: unknown
-        }> = Array.isArray(parsed)
-          ? parsed
-          : Array.isArray(parsed?.templates)
-            ? parsed.templates
-            : parsed && typeof parsed === "object"
-              ? [parsed]
-              : []
+        const items = extractImportedTemplateItems(parsed)
         if (!items.length) {
           throw new Error(
             t(
@@ -3038,22 +3925,7 @@ export const WritingPlayground = () => {
           )
         }
         for (const item of items) {
-          const name =
-            typeof item?.name === "string" ? item.name.trim() : ""
-          if (!name) continue
-          const payload = isRecord(item?.payload) ? item.payload : {}
-          const schemaVersion =
-            typeof item?.schema_version === "number"
-              ? item.schema_version
-              : typeof item?.schemaVersion === "number"
-                ? item.schemaVersion
-                : 1
-          const isDefault =
-            typeof item?.is_default === "boolean"
-              ? item.is_default
-              : typeof item?.isDefault === "boolean"
-                ? item.isDefault
-                : false
+          const { name, payload, schemaVersion, isDefault } = item
           const existing = templates.find((tmpl) => tmpl.name === name)
           if (existing) {
             await updateWritingTemplate(
@@ -3130,14 +4002,8 @@ export const WritingPlayground = () => {
       try {
         const raw = await file.text()
         const parsed = JSON.parse(raw)
-        const items = Array.isArray(parsed)
-          ? parsed
-          : Array.isArray(parsed?.themes)
-            ? parsed.themes
-            : parsed
-              ? [parsed]
-              : []
-        if (!Array.isArray(items) || items.length === 0) {
+        const items = extractImportedThemeItems(parsed)
+        if (items.length === 0) {
           message.error(
             t(
               "option:writingPlayground.themeImportInvalid",
@@ -3147,36 +4013,14 @@ export const WritingPlayground = () => {
           return
         }
         for (const item of items) {
-          if (!item || typeof item !== "object") continue
-          const name = String((item as { name?: string }).name || "").trim()
-          if (!name) continue
+          const name = item.name
           const existing = themes.find((theme) => theme.name === name)
-          const rawClassName = (item as { class_name?: string; className?: string })
-            .class_name ?? (item as { className?: string }).className
-          const rawIsDefault = (item as { is_default?: boolean; isDefault?: boolean })
-            .is_default ?? (item as { isDefault?: boolean }).isDefault
           const payload = {
-            class_name:
-              typeof rawClassName === "string"
-                ? rawClassName
-                : null,
-            css:
-              typeof (item as { css?: string }).css === "string"
-                ? (item as { css?: string }).css
-                : null,
-            schema_version:
-              typeof (item as { schema_version?: number }).schema_version ===
-              "number"
-                ? (item as { schema_version?: number }).schema_version
-                : 1,
-            is_default:
-              typeof rawIsDefault === "boolean"
-                ? rawIsDefault
-                : false,
-            order:
-              typeof (item as { order?: number }).order === "number"
-                ? (item as { order?: number }).order
-                : 0
+            class_name: item.className,
+            css: item.css,
+            schema_version: item.schemaVersion,
+            is_default: item.isDefault,
+            order: item.order
           }
           if (existing) {
             await updateWritingTheme(existing.name, payload, existing.version)
@@ -3222,12 +4066,65 @@ export const WritingPlayground = () => {
       }
       const start = editorEl.selectionStart ?? currentValue.length
       const end = editorEl.selectionEnd ?? currentValue.length
-      const nextValue =
-        currentValue.slice(0, start) + placeholder + currentValue.slice(end)
-      const cursor = start + placeholder.length
+      const { nextValue, cursor } = applyPlaceholderAtRange(
+        currentValue,
+        start,
+        end,
+        placeholder
+      )
       applyPromptValue(nextValue, { start: cursor, end: cursor })
     },
     [applyPromptValue, editorText]
+  )
+
+  const fillSelectionAtCursor = React.useCallback(() => {
+    const editorEl = editorRef.current?.resizableTextArea?.textArea
+    const currentValue = editorText
+    const start = editorEl?.selectionStart ?? currentValue.length
+    const end = editorEl?.selectionEnd ?? currentValue.length
+    if (end <= start) {
+      message.info(
+        t(
+          "option:writingPlayground.fillSelectionRequired",
+          "Select text to replace with {fill}."
+        )
+      )
+      return
+    }
+    const { nextValue, cursor } = applyPlaceholderAtRange(
+      currentValue,
+      start,
+      end,
+      "{fill}"
+    )
+    applyPromptValue(nextValue, { start: cursor, end: cursor })
+  }, [applyPromptValue, editorText, t])
+
+  const insertTokenTextAtCursor = React.useCallback(
+    (tokenText: string) => {
+      const editorEl = editorRef.current?.resizableTextArea?.textArea
+      const currentValue = editorText
+      if (!editorEl) {
+        applyPromptValue(currentValue + tokenText, {
+          start: currentValue.length + tokenText.length,
+          end: currentValue.length + tokenText.length
+        })
+        return
+      }
+      const start = editorEl.selectionStart ?? currentValue.length
+      const end = editorEl.selectionEnd ?? currentValue.length
+      const { nextValue, cursor } = applyTextAtRange(
+        currentValue,
+        start,
+        end,
+        tokenText
+      )
+      applyPromptValue(nextValue, { start: cursor, end: cursor })
+      message.success(
+        t("option:writingPlayground.tokenInspectorInsertSuccess", "Token text inserted.")
+      )
+    },
+    [applyPromptValue, editorText, t]
   )
 
   const insertTemplateBlock = React.useCallback(
@@ -3280,6 +4177,41 @@ export const WritingPlayground = () => {
     [applyPromptValue, editorText, effectiveTemplate, t]
   )
 
+  const templateInsertMenuItems: NonNullable<MenuProps["items"]> =
+    React.useMemo(
+      () => [
+        {
+          key: "template-system",
+          label: t(
+            "option:writingPlayground.templateInsertSystem",
+            "System"
+          ),
+          disabled:
+            !effectiveTemplate.systemPrefix && !effectiveTemplate.systemSuffix,
+          onClick: () => insertTemplateBlock("system")
+        },
+        {
+          key: "template-user",
+          label: t("option:writingPlayground.templateInsertUser", "User"),
+          disabled:
+            !effectiveTemplate.userPrefix && !effectiveTemplate.userSuffix,
+          onClick: () => insertTemplateBlock("user")
+        },
+        {
+          key: "template-assistant",
+          label: t(
+            "option:writingPlayground.templateInsertAssistant",
+            "Assistant"
+          ),
+          disabled:
+            !effectiveTemplate.assistantPrefix &&
+            !effectiveTemplate.assistantSuffix,
+          onClick: () => insertTemplateBlock("assistant")
+        }
+      ],
+      [effectiveTemplate, insertTemplateBlock, t]
+    )
+
   const insertMenuItems: NonNullable<MenuProps["items"]> = React.useMemo(
     () => [
       {
@@ -3296,40 +4228,31 @@ export const WritingPlayground = () => {
         onClick: () => insertPlaceholder("{fill}")
       },
       { type: "divider" },
-      {
-        key: "template-system",
-        label: t(
-          "option:writingPlayground.templateInsertSystem",
-          "System"
-        ),
-        disabled:
-          !effectiveTemplate.systemPrefix && !effectiveTemplate.systemSuffix,
-        onClick: () => insertTemplateBlock("system")
-      },
-      {
-        key: "template-user",
-        label: t("option:writingPlayground.templateInsertUser", "User"),
-        disabled: !effectiveTemplate.userPrefix && !effectiveTemplate.userSuffix,
-        onClick: () => insertTemplateBlock("user")
-      },
-      {
-        key: "template-assistant",
-        label: t(
-          "option:writingPlayground.templateInsertAssistant",
-          "Assistant"
-        ),
-        disabled:
-          !effectiveTemplate.assistantPrefix &&
-          !effectiveTemplate.assistantSuffix,
-        onClick: () => insertTemplateBlock("assistant")
-      }
+      ...templateInsertMenuItems
     ],
-    [effectiveTemplate, insertPlaceholder, insertTemplateBlock, t]
+    [insertPlaceholder, t, templateInsertMenuItems]
   )
 
   const editorMenuItems: MenuProps["items"] = React.useMemo(
     () => [
-      ...insertMenuItems,
+      {
+        key: "predict-here",
+        label: t(
+          "option:writingPlayground.predictHereAction",
+          "Predict here"
+        ),
+        onClick: () => insertPlaceholder("{predict}")
+      },
+      {
+        key: "fill-here",
+        label: t(
+          "option:writingPlayground.fillInMiddleAction",
+          "Fill in middle here"
+        ),
+        onClick: fillSelectionAtCursor
+      },
+      { type: "divider" },
+      ...templateInsertMenuItems,
       { type: "divider" },
       {
         key: "search",
@@ -3340,7 +4263,7 @@ export const WritingPlayground = () => {
         onClick: () => setSearchOpen(true)
       }
     ],
-    [insertMenuItems, t]
+    [fillSelectionAtCursor, insertPlaceholder, t, templateInsertMenuItems]
   )
 
   const searchData = React.useMemo(() => {
@@ -3528,7 +4451,8 @@ export const WritingPlayground = () => {
     generationServiceRef.current.cancelStream()
   }, [isGenerating])
 
-  const handleGenerate = React.useCallback(async () => {
+  const handleGenerate = React.useCallback(
+    async (overrideText?: string) => {
     if (isGenerating) return
     if (!activeSessionDetail) {
       message.info(
@@ -3558,7 +4482,7 @@ export const WritingPlayground = () => {
       return
     }
 
-    const beforeText = editorText
+    const beforeText = typeof overrideText === "string" ? overrideText : editorText
     const plan = resolveGenerationPlan(beforeText)
     const fimPrompt =
       plan.mode === "fill"
@@ -3576,16 +4500,25 @@ export const WritingPlayground = () => {
       plan.mode === "fill"
         ? fimPrompt ?? buildFillPrompt(plan.prefix, plan.suffix)
         : plan.prefix
+    const contextSettings = {
+      memory_block: settings.memory_block,
+      author_note: settings.author_note,
+      world_info: settings.world_info,
+      context_order: settings.context_order,
+      context_length: settings.context_length,
+      author_note_depth_mode: settings.author_note_depth_mode
+    }
+    const contextComposedPrompt = chatMode
+      ? promptText
+      : composeContextPrompt(promptText, contextSettings)
     const baseMessages = buildChatMessages(
-      promptText,
+      contextComposedPrompt,
       effectiveTemplate,
       chatMode
     )
-    const contextMessages = buildContextSystemMessages(beforeText, {
-      memory_block: settings.memory_block,
-      author_note: settings.author_note,
-      world_info: settings.world_info
-    })
+    const contextMessages = chatMode
+      ? buildContextSystemMessages(beforeText, contextSettings)
+      : []
     const messages = injectSystemMessages(baseMessages, contextMessages)
     const stopStrings = resolveGenerationStopStrings({
       useBasicMode: settings.use_basic_stopping_mode,
@@ -3706,6 +4639,14 @@ export const WritingPlayground = () => {
       applyHistoryText(finalText)
       pushGenerationHistory(beforeText, finalText)
       setResponseLogprobs(streamedLogprobs)
+      if (streamedLogprobs.length > 0) {
+        lastGenerationContextRef.current = {
+          prefix: plan.prefix,
+          suffix: plan.suffix
+        }
+      } else {
+        lastGenerationContextRef.current = null
+      }
     }
 
     generationSessionIdRef.current = null
@@ -3725,22 +4666,24 @@ export const WritingPlayground = () => {
         )
       )
     }
-  }, [
-    activeSessionDetail,
-    applyHistoryText,
-    chatMode,
-    editorText,
-    effectiveTemplate,
-    hasChat,
-    isGenerating,
-    isOnline,
-    pushGenerationHistory,
-    selectedModel,
-    settings,
-    requestedLogprobsExplicitlyUnsupported,
-    supportsAdvancedCompat,
-    t
-  ])
+    },
+    [
+      activeSessionDetail,
+      applyHistoryText,
+      chatMode,
+      editorText,
+      effectiveTemplate,
+      hasChat,
+      isGenerating,
+      isOnline,
+      pushGenerationHistory,
+      selectedModel,
+      settings,
+      requestedLogprobsExplicitlyUnsupported,
+      supportsAdvancedCompat,
+      t
+    ]
+  )
 
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -3797,6 +4740,88 @@ export const WritingPlayground = () => {
     }
   }, [editorText])
 
+  const contextPreviewMessages = React.useMemo(() => {
+    const plan = resolveGenerationPlan(editorText)
+    const fimPrompt =
+      plan.mode === "fill"
+        ? applyFimTemplate(effectiveTemplate, plan.prefix, plan.suffix)
+        : null
+    const promptText =
+      plan.mode === "fill"
+        ? fimPrompt ?? buildFillPrompt(plan.prefix, plan.suffix)
+        : plan.prefix
+    const contextSettings = {
+      memory_block: settings.memory_block,
+      author_note: settings.author_note,
+      world_info: settings.world_info,
+      context_order: settings.context_order,
+      context_length: settings.context_length,
+      author_note_depth_mode: settings.author_note_depth_mode
+    }
+    const contextComposedPrompt = chatMode
+      ? promptText
+      : composeContextPrompt(promptText, contextSettings)
+    const baseMessages = buildChatMessages(
+      contextComposedPrompt,
+      effectiveTemplate,
+      chatMode
+    )
+    const contextMessages = chatMode
+      ? buildContextSystemMessages(editorText, contextSettings)
+      : []
+    return injectSystemMessages(baseMessages, contextMessages)
+  }, [
+    chatMode,
+    editorText,
+    effectiveTemplate,
+    settings.author_note,
+    settings.author_note_depth_mode,
+    settings.context_length,
+    settings.context_order,
+    settings.memory_block,
+    settings.world_info
+  ])
+  const contextPreviewJson = React.useMemo(
+    () => serializeContextPreviewJson(contextPreviewMessages),
+    [contextPreviewMessages]
+  )
+
+  const handleCopyContextPreview = React.useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(contextPreviewJson)
+      message.success(
+        t(
+          "option:writingPlayground.contextPreviewCopySuccess",
+          "Context preview copied."
+        )
+      )
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : t("option:error", "Error")
+      message.error(
+        t(
+          "option:writingPlayground.contextPreviewCopyError",
+          "Failed to copy context preview: {{detail}}",
+          { detail }
+        )
+      )
+    }
+  }, [contextPreviewJson, t])
+
+  const handleExportContextPreview = React.useCallback(() => {
+    const blob = new Blob([contextPreviewJson], {
+      type: "application/json"
+    })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = buildContextPreviewFilename(new Date())
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  }, [contextPreviewJson])
+
   const clearTokenInspector = React.useCallback(() => {
     setTokenCountResult(null)
     setTokenizeResult(null)
@@ -3808,6 +4833,7 @@ export const WritingPlayground = () => {
     setResponseInspectorQuery("")
     setResponseInspectorSort("sequence")
     setResponseInspectorHideWhitespace(false)
+    lastGenerationContextRef.current = null
   }, [])
 
   const handleCopyResponseInspectorJson = React.useCallback(async () => {
@@ -3838,6 +4864,32 @@ export const WritingPlayground = () => {
       )
     }
   }, [responseLogprobs, t])
+
+  const handleRerollFromResponseToken = React.useCallback(
+    (sequence: number, replacementToken?: string) => {
+      if (isGenerating) return
+      if (responseLogprobs.length === 0) return
+      const context = lastGenerationContextRef.current
+      if (!context) {
+        message.info(
+          t(
+            "option:writingPlayground.responseInspectorRerollUnavailable",
+            "Generate once with logprobs enabled before rerolling from a token."
+          )
+        )
+        return
+      }
+      const rerollPrompt = buildRerollPromptFromRows(responseLogprobs, {
+        prefix: context.prefix,
+        suffix: context.suffix,
+        sequence,
+        replacementToken,
+        placeholder: PREDICT_PLACEHOLDER
+      })
+      void handleGenerate(rerollPrompt)
+    },
+    [handleGenerate, isGenerating, responseLogprobs, t]
+  )
 
   const resolveTokenInspectorTarget = React.useCallback(async () => {
     const model = String(selectedModel || "").trim()
@@ -4066,6 +5118,10 @@ export const WritingPlayground = () => {
     () => buildTokenPreviewRows(tokenizeResult?.ids ?? [], tokenizeResult?.strings, 200),
     [tokenizeResult]
   )
+  const tokenPreviewRawText = React.useMemo(
+    () => joinTokenStrings(tokenizeResult?.strings),
+    [tokenizeResult?.strings]
+  )
   const responseInspectorRowsAll = React.useMemo(
     () =>
       selectResponseInspectorRows(responseLogprobs, {
@@ -4087,6 +5143,21 @@ export const WritingPlayground = () => {
   )
   const responseLogprobTruncated =
     responseInspectorRowsAll.length > responseLogprobRows.length
+  const inlineResponseTokens = React.useMemo(
+    () =>
+      responseLogprobs.slice(0, MAX_RESPONSE_LOGPROBS).map((entry, sequence) => ({
+        sequence,
+        displayToken: normalizeInspectorToken(entry.token) || " ",
+        topLogprobs: entry.topLogprobs.slice(0, 10).map((alt) => ({
+          token: alt.token,
+          displayToken: normalizeInspectorToken(alt.token) || " ",
+          probability: Math.exp(alt.logprob)
+        }))
+      })),
+    [responseLogprobs]
+  )
+  const inlineResponseTokensTruncated =
+    responseLogprobs.length > inlineResponseTokens.length
   const handleExportResponseInspectorCsv = React.useCallback(() => {
     if (responseInspectorRowsAll.length === 0) return
     const csv = buildResponseInspectorCsv(responseInspectorRowsAll)
@@ -4236,22 +5307,43 @@ export const WritingPlayground = () => {
   const templateSaveDisabled =
     templateSaveLoading || !templateForm.name.trim()
   const templateExportDisabled = !editingTemplate
+  const templateDuplicateDisabled =
+    !editingTemplate || templateSaveLoading || deleteTemplateMutation.isPending
+  const templateRestoreDefaultsDisabled =
+    templateSaveLoading ||
+    deleteTemplateMutation.isPending ||
+    templateImporting ||
+    templateRestoringDefaults
   const templateDeleteDisabled =
     !editingTemplate || deleteTemplateMutation.isPending
   const templateFormDisabled =
-    templateSaveLoading || deleteTemplateMutation.isPending
+    templateSaveLoading ||
+    deleteTemplateMutation.isPending ||
+    templateRestoringDefaults
   const themeSelectDisabled =
     settingsDisabled || !hasThemes || themesLoading || Boolean(themesError)
   const themeSaveLoading =
     createThemeMutation.isPending || updateThemeMutation.isPending
   const themeSaveDisabled = themeSaveLoading || !themeForm.name.trim()
   const themeExportDisabled = !editingTheme
+  const themeDuplicateDisabled =
+    !editingTheme || themeSaveLoading || deleteThemeMutation.isPending
+  const themeRestoreDefaultsDisabled =
+    themeSaveLoading ||
+    deleteThemeMutation.isPending ||
+    themeImporting ||
+    themeRestoringDefaults
   const themeDeleteDisabled =
     !editingTheme || deleteThemeMutation.isPending
-  const themeFormDisabled = themeSaveLoading || deleteThemeMutation.isPending
+  const themeFormDisabled =
+    themeSaveLoading || deleteThemeMutation.isPending || themeRestoringDefaults
   const canCreateSession = newSessionName.trim().length > 0
   const sessionImportDisabled =
     !hasWriting || sessionsLoading || sessionImporting
+  const snapshotImportDisabled =
+    !hasSnapshots || snapshotImporting || snapshotExporting
+  const snapshotExportDisabled =
+    !hasSnapshots || snapshotExporting || snapshotImporting
   const canRenameSession =
     renameSessionName.trim().length > 0 &&
     renameTarget != null &&
@@ -4347,6 +5439,43 @@ export const WritingPlayground = () => {
                   disabled={sessionImportDisabled}>
                   {t("option:writingPlayground.importSession", "Import")}
                 </Button>
+                {hasSnapshots ? (
+                  <>
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        void exportSnapshot()
+                      }}
+                      loading={snapshotExporting}
+                      disabled={snapshotExportDisabled}>
+                      {t(
+                        "option:writingPlayground.exportSnapshot",
+                        "Export all"
+                      )}
+                    </Button>
+                    <Button
+                      size="small"
+                      onClick={() => openSnapshotImportPicker("merge")}
+                      loading={snapshotImporting}
+                      disabled={snapshotImportDisabled}>
+                      {t(
+                        "option:writingPlayground.importSnapshot",
+                        "Import all"
+                      )}
+                    </Button>
+                    <Button
+                      size="small"
+                      danger
+                      onClick={() => openSnapshotImportPicker("replace")}
+                      loading={snapshotImporting}
+                      disabled={snapshotImportDisabled}>
+                      {t(
+                        "option:writingPlayground.replaceSnapshot",
+                        "Replace all"
+                      )}
+                    </Button>
+                  </>
+                ) : null}
               </div>
             }>
             {sessionsLoading ? (
@@ -4548,7 +5677,9 @@ export const WritingPlayground = () => {
                           <Button
                             type="primary"
                             size="small"
-                            onClick={handleGenerate}
+                            onClick={() => {
+                              void handleGenerate()
+                            }}
                             loading={isGenerating}
                             disabled={!canGenerate}>
                             {t(
@@ -4588,6 +5719,35 @@ export const WritingPlayground = () => {
                           onClick={handleRedoGeneration}>
                           {t("option:writingPlayground.redoGeneration", "Redo")}
                         </Button>
+                        <Button
+                          size="small"
+                          disabled={isGenerating && !isSpeaking}
+                          onClick={() => {
+                            if (isSpeaking) {
+                              stopSpeech()
+                            } else {
+                              handleSpeakEditor()
+                            }
+                          }}>
+                          {isSpeaking
+                            ? t("option:writingPlayground.speechStopAction", "Stop reading")
+                            : t("option:writingPlayground.speechReadAction", "Read aloud")}
+                        </Button>
+                        {pauseResumeAction ? (
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              if (pauseResumeAction === "pause") {
+                                pauseSpeech()
+                              } else {
+                                resumeSpeech()
+                              }
+                            }}>
+                            {pauseResumeAction === "pause"
+                              ? t("option:writingPlayground.speechPauseAction", "Pause")
+                              : t("option:writingPlayground.speechResumeAction", "Resume")}
+                          </Button>
+                        ) : null}
                         <Dropdown
                           menu={{ items: insertMenuItems }}
                           trigger={["click"]}
@@ -4653,6 +5813,45 @@ export const WritingPlayground = () => {
                         "option:writingPlayground.shortcutsHint",
                         "Shortcuts: Ctrl/Cmd+Enter to generate, Esc to stop."
                       )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface p-2">
+                      <span className="text-xs text-text-muted">
+                        {t("option:writingPlayground.speechVoiceLabel", "Read voice")}
+                      </span>
+                      <Select
+                        size="small"
+                        value={speechVoiceURI ?? undefined}
+                        disabled={isGenerating || speechVoiceOptions.length === 0}
+                        options={speechVoiceOptions}
+                        placeholder={t(
+                          "option:writingPlayground.speechVoicePlaceholder",
+                          "Default voice"
+                        )}
+                        popupMatchSelectWidth={false}
+                        allowClear
+                        onChange={(value) =>
+                          updateSpeechPreferences({
+                            voiceURI: typeof value === "string" ? value : null
+                          })
+                        }
+                        className="min-w-[200px]"
+                      />
+                      <span className="text-xs text-text-muted">
+                        {t("option:writingPlayground.speechRateLabel", "Rate")}
+                      </span>
+                      <InputNumber
+                        size="small"
+                        min={0.5}
+                        max={2}
+                        step={0.1}
+                        value={speechRate}
+                        disabled={isGenerating}
+                        onChange={(value) =>
+                          updateSpeechPreferences({
+                            rate: clampSpeechRate(value == null ? 1 : value)
+                          })
+                        }
+                      />
                     </div>
                     {searchOpen && (
                       <div className="rounded-md border border-border bg-surface p-3">
@@ -4853,6 +6052,88 @@ export const WritingPlayground = () => {
                         </div>
                       </div>
                     )}
+                    {responseLogprobs.length > 0 ? (
+                      <div className="rounded-md border border-border bg-surface p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs text-text-muted">
+                            {t(
+                              "option:writingPlayground.inlineTokenInspectorHint",
+                              "Inline token probabilities: hover token chips to inspect alternatives, click a token or alternative to reroll from that point."
+                            )}
+                          </span>
+                          <Tag color="blue">
+                            {t(
+                              "option:writingPlayground.inlineTokenInspectorCount",
+                              "{{count}} tokens",
+                              { count: inlineResponseTokens.length }
+                            )}
+                          </Tag>
+                        </div>
+                        <div className="mt-2 max-h-40 overflow-y-auto rounded-md border border-border bg-background p-2">
+                          <div className="flex flex-wrap gap-1">
+                            {inlineResponseTokens.map((row) => (
+                              <Tooltip
+                                key={`inline-token-${row.sequence}`}
+                                placement="top"
+                                title={
+                                  <div className="flex max-w-[360px] flex-col gap-1">
+                                    <span className="text-[11px] text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.inlineTokenAlternativesLabel",
+                                        "Top alternatives"
+                                      )}
+                                    </span>
+                                    {row.topLogprobs.length === 0 ? (
+                                      <span className="text-[11px] text-text-muted">
+                                        {t(
+                                          "option:writingPlayground.inlineTokenAlternativesEmpty",
+                                          "No alternatives."
+                                        )}
+                                      </span>
+                                    ) : (
+                                      row.topLogprobs.map((alt, idx) => (
+                                        <Button
+                                          key={`inline-alt-${row.sequence}-${idx}`}
+                                          size="small"
+                                          type="text"
+                                          className="!h-auto !justify-start !px-1.5 !py-0.5 font-mono text-[11px]"
+                                          onClick={(event) => {
+                                            event.preventDefault()
+                                            event.stopPropagation()
+                                            handleRerollFromResponseToken(
+                                              row.sequence,
+                                              alt.token
+                                            )
+                                          }}>
+                                          {`${alt.displayToken} (${alt.probability >= 0.001 ? alt.probability.toFixed(3) : alt.probability.toExponential(2)})`}
+                                        </Button>
+                                      ))
+                                    )}
+                                  </div>
+                                }>
+                                <button
+                                  type="button"
+                                  className="rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[11px] text-text transition hover:bg-surface-hover"
+                                  onClick={() =>
+                                    handleRerollFromResponseToken(row.sequence)
+                                  }>
+                                  {row.displayToken}
+                                </button>
+                              </Tooltip>
+                            ))}
+                          </div>
+                        </div>
+                        {inlineResponseTokensTruncated ? (
+                          <span className="mt-2 block text-xs text-text-muted">
+                            {t(
+                              "option:writingPlayground.inlineTokenInspectorTruncated",
+                              "Showing first {{count}} tokens.",
+                              { count: inlineResponseTokens.length }
+                            )}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <Collapse
                       ghost
                       size="small"
@@ -5051,7 +6332,7 @@ export const WritingPlayground = () => {
                                     {responseLogprobRows.length > 0 ? (
                                       <div className="flex flex-col gap-2">
                                         <div className="max-h-64 overflow-y-auto rounded-md border border-border bg-surface">
-                                          <div className="grid grid-cols-[auto_1fr_auto_auto_2fr] gap-x-3 gap-y-1 px-3 py-2 text-xs">
+                                          <div className="grid grid-cols-[auto_1fr_auto_auto_2fr_auto] gap-x-3 gap-y-1 px-3 py-2 text-xs">
                                             <span className="font-medium text-text-muted">
                                               #
                                             </span>
@@ -5077,6 +6358,12 @@ export const WritingPlayground = () => {
                                               {t(
                                                 "option:writingPlayground.responseInspectorTopLabel",
                                                 "Top alternatives"
+                                              )}
+                                            </span>
+                                            <span className="font-medium text-text-muted">
+                                              {t(
+                                                "option:writingPlayground.responseInspectorActionLabel",
+                                                "Action"
                                               )}
                                             </span>
                                             {responseLogprobRows.map((row) => {
@@ -5107,6 +6394,21 @@ export const WritingPlayground = () => {
                                                   <span className="whitespace-pre-wrap text-text-muted">
                                                     {alternatives || "(none)"}
                                                   </span>
+                                                  <div>
+                                                    <Button
+                                                      size="small"
+                                                      disabled={settingsDisabled}
+                                                      onClick={() =>
+                                                        handleRerollFromResponseToken(
+                                                          row.sequence
+                                                        )
+                                                      }>
+                                                      {t(
+                                                        "option:writingPlayground.responseInspectorRerollAction",
+                                                        "Reroll"
+                                                      )}
+                                                    </Button>
+                                                  </div>
                                                 </React.Fragment>
                                               )
                                             })}
@@ -5234,8 +6536,61 @@ export const WritingPlayground = () => {
                                     ) : null}
                                     {tokenizeResult ? (
                                       <div className="flex flex-col gap-2">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <Button
+                                            size="small"
+                                            disabled={
+                                              isGenerating || tokenPreviewRawText.length === 0
+                                            }
+                                            onClick={() =>
+                                              insertTokenTextAtCursor(tokenPreviewRawText)
+                                            }>
+                                            {t(
+                                              "option:writingPlayground.tokenInspectorUseAllAction",
+                                              "Use all token text"
+                                            )}
+                                          </Button>
+                                          {tokenInspectorSupportsLogitBias ? (
+                                            <>
+                                              <Button
+                                                size="small"
+                                                disabled={
+                                                  settingsDisabled ||
+                                                  tokenizeResult.ids.length === 0
+                                                }
+                                                onClick={() =>
+                                                  applyTokenInspectorLogitBiasPresetBatch(
+                                                    tokenizeResult.ids,
+                                                    "ban"
+                                                  )
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.tokenInspectorBiasBanAllAction",
+                                                  "Ban all IDs"
+                                                )}
+                                              </Button>
+                                              <Button
+                                                size="small"
+                                                disabled={
+                                                  settingsDisabled ||
+                                                  tokenizeResult.ids.length === 0
+                                                }
+                                                onClick={() =>
+                                                  applyTokenInspectorLogitBiasPresetBatch(
+                                                    tokenizeResult.ids,
+                                                    "favor"
+                                                  )
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.tokenInspectorBiasFavorAllAction",
+                                                  "Favor all IDs"
+                                                )}
+                                              </Button>
+                                            </>
+                                          ) : null}
+                                        </div>
                                         <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-surface">
-                                          <div className="grid grid-cols-[auto_auto_1fr] gap-x-3 gap-y-1 px-3 py-2 text-xs">
+                                          <div className="grid grid-cols-[auto_auto_1fr_auto] gap-x-3 gap-y-1 px-3 py-2 text-xs">
                                             <span className="font-medium text-text-muted">
                                               #
                                             </span>
@@ -5246,6 +6601,12 @@ export const WritingPlayground = () => {
                                               {t(
                                                 "option:writingPlayground.tokenInspectorTextLabel",
                                                 "Text"
+                                              )}
+                                            </span>
+                                            <span className="font-medium text-text-muted">
+                                              {t(
+                                                "option:writingPlayground.tokenInspectorActionLabel",
+                                                "Action"
                                               )}
                                             </span>
                                             {tokenPreviewRows.map((row) => (
@@ -5260,6 +6621,51 @@ export const WritingPlayground = () => {
                                                 <span className="whitespace-pre-wrap text-text">
                                                   {row.text}
                                                 </span>
+                                                <div className="flex flex-wrap gap-1">
+                                                  <Button
+                                                    size="small"
+                                                    disabled={isGenerating}
+                                                    onClick={() =>
+                                                      insertTokenTextAtCursor(row.rawText)
+                                                    }>
+                                                    {t(
+                                                      "option:writingPlayground.tokenInspectorUseAction",
+                                                      "Use"
+                                                    )}
+                                                  </Button>
+                                                  {tokenInspectorSupportsLogitBias ? (
+                                                    <>
+                                                      <Button
+                                                        size="small"
+                                                        disabled={settingsDisabled}
+                                                        onClick={() =>
+                                                          applyTokenInspectorLogitBiasPreset(
+                                                            row.id,
+                                                            "ban"
+                                                          )
+                                                        }>
+                                                        {t(
+                                                          "option:writingPlayground.tokenInspectorBiasBanAction",
+                                                          "Ban"
+                                                        )}
+                                                      </Button>
+                                                      <Button
+                                                        size="small"
+                                                        disabled={settingsDisabled}
+                                                        onClick={() =>
+                                                          applyTokenInspectorLogitBiasPreset(
+                                                            row.id,
+                                                            "favor"
+                                                          )
+                                                        }>
+                                                        {t(
+                                                          "option:writingPlayground.tokenInspectorBiasFavorAction",
+                                                          "Favor"
+                                                        )}
+                                                      </Button>
+                                                    </>
+                                                  ) : null}
+                                                </div>
                                               </React.Fragment>
                                             ))}
                                           </div>
@@ -5966,6 +7372,106 @@ export const WritingPlayground = () => {
                           ),
                           children: (
                             <div className="flex flex-col gap-4">
+                              <div className="flex items-center justify-end">
+                                <Button
+                                  size="small"
+                                  disabled={settingsDisabled}
+                                  onClick={() => setContextPreviewModalOpen(true)}>
+                                  {t(
+                                    "option:writingPlayground.contextPreviewAction",
+                                    "Show context preview"
+                                  )}
+                                </Button>
+                              </div>
+                              <div className="rounded-md border border-border bg-surface p-3">
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.contextLengthLabel",
+                                        "Context length (tokens)"
+                                      )}
+                                    </span>
+                                    <InputNumber
+                                      size="small"
+                                      min={0}
+                                      step={128}
+                                      value={settings.context_length}
+                                      disabled={settingsDisabled}
+                                      onChange={(value) =>
+                                        updateSetting({
+                                          context_length:
+                                            value == null
+                                              ? DEFAULT_SETTINGS.context_length
+                                              : Math.max(0, Math.floor(value))
+                                        })
+                                      }
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.authorDepthModeLabel",
+                                        "Author note depth mode"
+                                      )}
+                                    </span>
+                                    <Select
+                                      size="small"
+                                      value={settings.author_note_depth_mode}
+                                      disabled={settingsDisabled}
+                                      onChange={(value) =>
+                                        updateSetting({
+                                          author_note_depth_mode:
+                                            value === "annotation"
+                                              ? "annotation"
+                                              : "insertion"
+                                        })
+                                      }
+                                      options={[
+                                        {
+                                          value: "insertion",
+                                          label: t(
+                                            "option:writingPlayground.authorDepthModeInsertion",
+                                            "Insertion"
+                                          )
+                                        },
+                                        {
+                                          value: "annotation",
+                                          label: t(
+                                            "option:writingPlayground.authorDepthModeAnnotation",
+                                            "Annotation"
+                                          )
+                                        }
+                                      ]}
+                                    />
+                                  </div>
+                                </div>
+                                <div className="mt-3 flex flex-col gap-1">
+                                  <span className="text-xs text-text-muted">
+                                    {t(
+                                      "option:writingPlayground.contextOrderLabel",
+                                      "Context order"
+                                    )}
+                                  </span>
+                                  <Input.TextArea
+                                    value={settings.context_order}
+                                    rows={2}
+                                    disabled={settingsDisabled}
+                                    placeholder={DEFAULT_CONTEXT_ORDER}
+                                    onChange={(event) =>
+                                      updateSetting({
+                                        context_order: event.target.value
+                                      })
+                                    }
+                                  />
+                                  <span className="text-[11px] text-text-muted">
+                                    {t(
+                                      "option:writingPlayground.contextOrderHint",
+                                      "Placeholders: {memPrefix}, {wiPrefix}, {wiText}, {wiSuffix}, {memText}, {memSuffix}, {prompt}"
+                                    )}
+                                  </span>
+                                </div>
+                              </div>
                               <div className="rounded-md border border-border bg-surface p-3">
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="text-xs font-medium text-text">
@@ -6141,6 +7647,22 @@ export const WritingPlayground = () => {
                                         "Add entry"
                                       )}
                                     </Button>
+                                    <WritingWorldInfoImportControls
+                                      disabled={settingsDisabled}
+                                      worldInfo={worldInfo}
+                                      onImported={handleWorldInfoImported}
+                                      onImportError={handleWorldInfoImportError}
+                                      t={t}
+                                    />
+                                    <Button
+                                      size="small"
+                                      disabled={settingsDisabled}
+                                      onClick={handleWorldInfoExport}>
+                                      {t(
+                                        "option:writingPlayground.worldInfoExportAction",
+                                        "Export"
+                                      )}
+                                    </Button>
                                   </div>
                                 </div>
                                 <div className="mt-3 flex flex-col gap-3">
@@ -6167,6 +7689,34 @@ export const WritingPlayground = () => {
                                       }
                                     />
                                   </div>
+                                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                    <Input
+                                      value={worldInfo.prefix}
+                                      disabled={settingsDisabled}
+                                      placeholder={t(
+                                        "option:writingPlayground.worldInfoPrefixLabel",
+                                        "World info prefix"
+                                      )}
+                                      onChange={(event) =>
+                                        updateWorldInfo({
+                                          prefix: event.target.value
+                                        })
+                                      }
+                                    />
+                                    <Input
+                                      value={worldInfo.suffix}
+                                      disabled={settingsDisabled}
+                                      placeholder={t(
+                                        "option:writingPlayground.worldInfoSuffixLabel",
+                                        "World info suffix"
+                                      )}
+                                      onChange={(event) =>
+                                        updateWorldInfo({
+                                          suffix: event.target.value
+                                        })
+                                      }
+                                    />
+                                  </div>
                                   {worldInfoEntries.length === 0 ? (
                                     <span className="text-xs text-text-muted">
                                       {t(
@@ -6182,23 +7732,75 @@ export const WritingPlayground = () => {
                                           className="rounded-md border border-border bg-background p-3">
                                           <div className="flex items-center justify-between gap-2">
                                             <span className="text-xs font-medium text-text">
-                                              {t(
-                                                "option:writingPlayground.worldInfoEntryLabel",
-                                                "Entry {{index}}",
-                                                { index: index + 1 }
-                                              )}
+                                              {entry.display_name?.trim()
+                                                ? entry.display_name
+                                                : t(
+                                                    "option:writingPlayground.worldInfoEntryLabel",
+                                                    "Entry {{index}}",
+                                                    { index: index + 1 }
+                                                  )}
                                             </span>
-                                            <Button
-                                              size="small"
-                                              danger
-                                              disabled={settingsDisabled}
-                                              onClick={() =>
-                                                removeWorldInfoEntry(entry.id)
-                                              }>
-                                              {t("common:delete", "Delete")}
-                                            </Button>
+                                            <div className="flex items-center gap-2">
+                                              <Button
+                                                size="small"
+                                                disabled={
+                                                  settingsDisabled || index === 0
+                                                }
+                                                onClick={() =>
+                                                  moveWorldInfoEntryById(
+                                                    entry.id,
+                                                    "up"
+                                                  )
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.worldInfoMoveUp",
+                                                  "Move up"
+                                                )}
+                                              </Button>
+                                              <Button
+                                                size="small"
+                                                disabled={
+                                                  settingsDisabled ||
+                                                  index >=
+                                                    worldInfoEntries.length - 1
+                                                }
+                                                onClick={() =>
+                                                  moveWorldInfoEntryById(
+                                                    entry.id,
+                                                    "down"
+                                                  )
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.worldInfoMoveDown",
+                                                  "Move down"
+                                                )}
+                                              </Button>
+                                              <Button
+                                                size="small"
+                                                danger
+                                                disabled={settingsDisabled}
+                                                onClick={() =>
+                                                  removeWorldInfoEntry(entry.id)
+                                                }>
+                                                {t("common:delete", "Delete")}
+                                              </Button>
+                                            </div>
                                           </div>
                                           <div className="mt-3 flex flex-col gap-3">
+                                            <Input
+                                              value={entry.display_name || ""}
+                                              disabled={settingsDisabled}
+                                              placeholder={t(
+                                                "option:writingPlayground.worldInfoDisplayNamePlaceholder",
+                                                "Display name (optional)"
+                                              )}
+                                              onChange={(event) =>
+                                                updateWorldInfoEntry(entry.id, {
+                                                  display_name:
+                                                    event.target.value
+                                                })
+                                              }
+                                            />
                                             <div className="flex flex-wrap items-center gap-3">
                                               <Checkbox
                                                 checked={entry.enabled}
@@ -6238,6 +7840,48 @@ export const WritingPlayground = () => {
                                                   "Case sensitive"
                                                 )}
                                               </Checkbox>
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                              <span className="text-xs text-text-muted">
+                                                {t(
+                                                  "option:writingPlayground.worldInfoEntrySearchRange",
+                                                  "Entry search range (chars)"
+                                                )}
+                                              </span>
+                                              <InputNumber
+                                                size="small"
+                                                min={0}
+                                                step={100}
+                                                value={
+                                                  entry.search_range ??
+                                                  worldInfo.search_range
+                                                }
+                                                disabled={settingsDisabled}
+                                                onChange={(value) =>
+                                                  updateWorldInfoEntry(entry.id, {
+                                                    search_range:
+                                                      value == null
+                                                        ? undefined
+                                                        : Math.max(
+                                                            0,
+                                                            Math.floor(value)
+                                                          )
+                                                  })
+                                                }
+                                              />
+                                              <Button
+                                                size="small"
+                                                disabled={settingsDisabled}
+                                                onClick={() =>
+                                                  updateWorldInfoEntry(entry.id, {
+                                                    search_range: undefined
+                                                  })
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.worldInfoUseGlobalRange",
+                                                  "Use global"
+                                                )}
+                                              </Button>
                                             </div>
                                             <Input.TextArea
                                               value={entry.keys.join("\n")}
@@ -6341,6 +7985,10 @@ export const WritingPlayground = () => {
                                         })
                                         setBannedTokensInput("")
                                         setDrySequenceBreakersInput("")
+                                        setLogitBiasInput("")
+                                        setLogitBiasError(null)
+                                        setLogitBiasTokenInput("")
+                                        setLogitBiasValueInput(null)
                                       }}>
                                       {t(
                                         "option:writingPlayground.clearAdvancedSettings",
@@ -6425,6 +8073,42 @@ export const WritingPlayground = () => {
                                     )}
                                   </Checkbox>
                                 )}
+                                {shouldShowAdvancedParam("penalize_nl") && (
+                                  <Checkbox
+                                    checked={Boolean(advancedExtraBody.penalize_nl)}
+                                    disabled={
+                                      settingsDisabled || !supportsAdvancedCompat
+                                    }
+                                    onChange={(event) =>
+                                      updateAdvancedExtraBodyField(
+                                        "penalize_nl",
+                                        event.target.checked ? true : null
+                                      )
+                                    }>
+                                    {t(
+                                      "option:writingPlayground.penalizeNewlineLabel",
+                                      "Penalize newline"
+                                    )}
+                                  </Checkbox>
+                                )}
+                                {shouldShowAdvancedParam("post_sampling_probs") && (
+                                  <Checkbox
+                                    checked={Boolean(advancedExtraBody.post_sampling_probs)}
+                                    disabled={
+                                      settingsDisabled || !supportsAdvancedCompat
+                                    }
+                                    onChange={(event) =>
+                                      updateAdvancedExtraBodyField(
+                                        "post_sampling_probs",
+                                        event.target.checked ? true : null
+                                      )
+                                    }>
+                                    {t(
+                                      "option:writingPlayground.postSamplingProbsLabel",
+                                      "Post-sampling probabilities"
+                                    )}
+                                  </Checkbox>
+                                )}
                                 {shouldShowAdvancedParam("banned_tokens") && (
                                   <div className="flex flex-col gap-1">
                                     <span className="text-xs text-text-muted">
@@ -6502,6 +8186,108 @@ export const WritingPlayground = () => {
                                     />
                                   </div>
                                 )}
+                                {shouldShowAdvancedParam("logit_bias") && (
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.logitBiasLabel",
+                                        "Logit bias (JSON object)"
+                                      )}
+                                    </span>
+                                    <Input.TextArea
+                                      value={logitBiasInput}
+                                      rows={4}
+                                      disabled={
+                                        settingsDisabled || !supportsAdvancedCompat
+                                      }
+                                      placeholder='{"50256": -100, "198": -1.5}'
+                                      onChange={(event) => {
+                                        const nextInput = event.target.value
+                                        setLogitBiasInput(nextInput)
+                                        const parsed = parseLogitBiasInput(nextInput)
+                                        if (parsed.error) {
+                                          setLogitBiasError(parsed.error)
+                                          return
+                                        }
+                                        applyLogitBiasObject(parsed.value ?? {})
+                                      }}
+                                    />
+                                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_140px_auto]">
+                                      <Input
+                                        value={logitBiasTokenInput}
+                                        disabled={
+                                          settingsDisabled || !supportsAdvancedCompat
+                                        }
+                                        placeholder={t(
+                                          "option:writingPlayground.logitBiasTokenPlaceholder",
+                                          "Token id (e.g. 50256)"
+                                        )}
+                                        onChange={(event) =>
+                                          setLogitBiasTokenInput(event.target.value)
+                                        }
+                                      />
+                                      <InputNumber
+                                        min={-100}
+                                        max={100}
+                                        step={0.1}
+                                        value={logitBiasValueInput}
+                                        disabled={
+                                          settingsDisabled || !supportsAdvancedCompat
+                                        }
+                                        placeholder={"0"}
+                                        onChange={(value) =>
+                                          setLogitBiasValueInput(
+                                            value == null ? null : value
+                                          )
+                                        }
+                                      />
+                                      <Button
+                                        disabled={
+                                          settingsDisabled ||
+                                          !supportsAdvancedCompat ||
+                                          !logitBiasTokenInput.trim() ||
+                                          logitBiasValueInput == null
+                                        }
+                                        onClick={() => {
+                                          const next = withLogitBiasEntry(
+                                            advancedExtraBody.logit_bias,
+                                            logitBiasTokenInput,
+                                            logitBiasValueInput
+                                          )
+                                          applyLogitBiasObject(next)
+                                          setLogitBiasTokenInput("")
+                                          setLogitBiasValueInput(null)
+                                        }}>
+                                        {t(
+                                          "option:writingPlayground.logitBiasAddAction",
+                                          "Add"
+                                        )}
+                                      </Button>
+                                    </div>
+                                    {logitBiasEntries.length > 0 ? (
+                                      <div className="flex flex-wrap gap-1">
+                                        {logitBiasEntries.map(([token, bias]) => (
+                                          <Tag
+                                            key={token}
+                                            closable
+                                            onClose={(event) => {
+                                              event.preventDefault()
+                                              const next = withoutLogitBiasEntry(
+                                                advancedExtraBody.logit_bias,
+                                                token
+                                              )
+                                              applyLogitBiasObject(next)
+                                            }}>
+                                            {`${token}: ${bias}`}
+                                          </Tag>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                    {logitBiasError ? (
+                                      <Alert type="error" showIcon message={logitBiasError} />
+                                    ) : null}
+                                  </div>
+                                )}
                               </div>
                             )
                           }
@@ -6564,6 +8350,46 @@ export const WritingPlayground = () => {
 
       <Modal
         title={t(
+          "option:writingPlayground.contextPreviewTitle",
+          "Context preview"
+        )}
+        open={contextPreviewModalOpen}
+        onCancel={() => setContextPreviewModalOpen(false)}
+        footer={[
+          <Button
+            key="copy"
+            size="small"
+            onClick={() => {
+              void handleCopyContextPreview()
+            }}>
+            {t("option:writingPlayground.contextPreviewCopyAction", "Copy JSON")}
+          </Button>,
+          <Button
+            key="export"
+            size="small"
+            onClick={handleExportContextPreview}>
+            {t("option:writingPlayground.contextPreviewExportAction", "Export JSON")}
+          </Button>
+        ]}
+        width={820}>
+        <div className="flex flex-col gap-3">
+          <span className="text-xs text-text-muted">
+            {t(
+              "option:writingPlayground.contextPreviewHint",
+              "Preview of assembled messages after template parsing and context injection."
+            )}
+          </span>
+          <Input.TextArea
+            value={contextPreviewJson}
+            readOnly
+            rows={18}
+            className="font-mono"
+          />
+        </div>
+      </Modal>
+
+      <Modal
+        title={t(
           "option:writingPlayground.templatesModalTitle",
           "Manage templates"
         )}
@@ -6585,6 +8411,12 @@ export const WritingPlayground = () => {
               </Button>
               <Button
                 size="small"
+                disabled={templateDuplicateDisabled}
+                onClick={handleTemplateDuplicate}>
+                {t("option:writingPlayground.templateDuplicateAction", "Duplicate")}
+              </Button>
+              <Button
+                size="small"
                 onClick={() => templateFileInputRef.current?.click()}
                 loading={templateImporting}>
                 {t("option:writingPlayground.templateImportAction", "Import")}
@@ -6596,6 +8428,18 @@ export const WritingPlayground = () => {
                   if (editingTemplate) exportTemplate(editingTemplate)
                 }}>
                 {t("option:writingPlayground.templateExportAction", "Export")}
+              </Button>
+              <Button
+                size="small"
+                disabled={templateRestoreDefaultsDisabled}
+                loading={templateRestoringDefaults}
+                onClick={() => {
+                  void handleTemplateRestoreDefaults()
+                }}>
+                {t(
+                  "option:writingPlayground.templateRestoreDefaultsAction",
+                  "Restore defaults"
+                )}
               </Button>
             </div>
           </div>
@@ -6879,6 +8723,12 @@ export const WritingPlayground = () => {
               </Button>
               <Button
                 size="small"
+                disabled={themeDuplicateDisabled}
+                onClick={handleThemeDuplicate}>
+                {t("option:writingPlayground.themeDuplicateAction", "Duplicate")}
+              </Button>
+              <Button
+                size="small"
                 onClick={() => themeFileInputRef.current?.click()}
                 loading={themeImporting}>
                 {t("option:writingPlayground.themeImportAction", "Import")}
@@ -6890,6 +8740,18 @@ export const WritingPlayground = () => {
                   if (editingTheme) exportTheme(editingTheme)
                 }}>
                 {t("option:writingPlayground.themeExportAction", "Export")}
+              </Button>
+              <Button
+                size="small"
+                disabled={themeRestoreDefaultsDisabled}
+                loading={themeRestoringDefaults}
+                onClick={() => {
+                  void handleThemeRestoreDefaults()
+                }}>
+                {t(
+                  "option:writingPlayground.themeRestoreDefaultsAction",
+                  "Restore defaults"
+                )}
               </Button>
             </div>
           </div>
@@ -7154,6 +9016,14 @@ export const WritingPlayground = () => {
         accept=".json,application/json"
         onChange={handleSessionImport}
         data-testid="writing-session-import"
+        className="hidden"
+      />
+      <input
+        ref={snapshotFileInputRef}
+        type="file"
+        accept=".json,application/json"
+        onChange={handleSnapshotImport}
+        data-testid="writing-snapshot-import"
         className="hidden"
       />
     </div>

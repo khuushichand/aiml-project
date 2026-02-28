@@ -90,6 +90,39 @@ _WORLD_BOOK_NONCRITICAL_EXCEPTIONS = (
 )
 
 
+def _coerce_backend_type(raw_backend_type: Any) -> BackendType:
+    """Return a stable backend enum, defaulting unknown values to SQLite."""
+    if isinstance(raw_backend_type, BackendType):
+        return raw_backend_type
+
+    if isinstance(raw_backend_type, str):
+        normalized = raw_backend_type.strip().lower()
+        if normalized in {"postgres", "postgresql"}:
+            return BackendType.POSTGRESQL
+        if normalized in {"sqlite", "sqlite3"}:
+            return BackendType.SQLITE
+
+    return BackendType.SQLITE
+
+
+def _coerce_metadata_bool(value: Any, default: bool = False) -> bool:
+    """Interpret legacy/loose metadata booleans consistently."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "f", "no", "n", "off", ""}:
+            return False
+        return default
+    return bool(value)
+
+
 def _build_safe_update_clause(
     updates: list[str],
     allowed_fields: frozenset[str]
@@ -190,7 +223,9 @@ class WorldBookEntry:
         case_sensitive: bool = False,
         regex_match: bool = False,
         whole_word_match: bool = True,
-        metadata: Optional[dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None,
+        created_at: Optional[Any] = None,
+        last_modified: Optional[Any] = None,
     ):
         """
         Initialize a world book entry.
@@ -206,6 +241,8 @@ class WorldBookEntry:
             regex_match: Whether keywords are regex patterns
             whole_word_match: Whether to match whole words only
             metadata: Additional metadata
+            created_at: Entry creation timestamp
+            last_modified: Entry last-modified timestamp
         """
         self.entry_id = entry_id
         self.world_book_id = world_book_id
@@ -217,6 +254,8 @@ class WorldBookEntry:
         self.regex_match = regex_match
         self.whole_word_match = whole_word_match
         self.metadata = metadata or {}
+        self.created_at = created_at
+        self.last_modified = last_modified
 
         # Compile patterns for efficient matching
         self._patterns = self._compile_patterns()
@@ -335,14 +374,16 @@ class WorldBookEntry:
                 if self.metadata.get('group') not in (None, "")
                 else None
             ),
-            'appendable': bool(self.metadata.get('appendable', False)),
+            'appendable': _coerce_metadata_bool(self.metadata.get('appendable', False)),
             'priority': int(self.priority),
             'enabled': bool(self.enabled),
             'case_sensitive': bool(self.case_sensitive),
             'regex_match': bool(self.regex_match),
             'whole_word_match': bool(self.whole_word_match),
-            'recursive_scanning': bool(self.metadata.get('recursive_scanning', False)),
+            'recursive_scanning': _coerce_metadata_bool(self.metadata.get('recursive_scanning', False)),
             'metadata': dict(self.metadata or {}),
+            'created_at': self.created_at,
+            'last_modified': self.last_modified,
         }
 
 
@@ -358,11 +399,13 @@ class WorldBookEntry:
             keywords=keywords or [],
             content=data.get('content', ''),
             priority=int(data.get('priority', 0)),
-            enabled=bool(data.get('enabled', True)),
-            case_sensitive=bool(data.get('case_sensitive', False)),
-            regex_match=bool(data.get('regex_match', False)),
-            whole_word_match=bool(data.get('whole_word_match', True)),
-            metadata=metadata or {}
+            enabled=_coerce_metadata_bool(data.get('enabled', True), default=True),
+            case_sensitive=_coerce_metadata_bool(data.get('case_sensitive', False), default=False),
+            regex_match=_coerce_metadata_bool(data.get('regex_match', False), default=False),
+            whole_word_match=_coerce_metadata_bool(data.get('whole_word_match', True), default=True),
+            metadata=metadata or {},
+            created_at=data.get('created_at'),
+            last_modified=data.get('last_modified'),
         )
 
 class WorldBookEntryView:
@@ -539,8 +582,16 @@ class WorldBookService:
                 # Create indexes
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_wb_entries_book_id ON world_book_entries(world_book_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_wb_entries_priority ON world_book_entries(priority DESC)")
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_wb_entries_book_enabled_priority "
+                    "ON world_book_entries(world_book_id, enabled, priority DESC)"
+                )
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_char_wb_char_id ON character_world_books(character_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_char_wb_book_id ON character_world_books(world_book_id)")
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_char_wb_char_enabled_priority "
+                    "ON character_world_books(character_id, enabled, priority DESC)"
+                )
 
                 conn.commit()
                 logger.info("World book tables initialized")
@@ -565,7 +616,7 @@ class WorldBookService:
         Args:
             name: Unique name for the world book
             description: Optional description
-            scan_depth: How many messages to scan for keywords
+            scan_depth: Maximum matched entries per world book during processing
             token_budget: Maximum tokens to use for world info
             recursive_scanning: Whether to scan matched entries for more keywords
             enabled: Whether the world book is active
@@ -592,8 +643,8 @@ class WorldBookService:
                     description,
                     scan_depth,
                     token_budget,
-                    bool(recursive_scanning),
-                    bool(enabled),
+                    _coerce_metadata_bool(recursive_scanning, default=False),
+                    _coerce_metadata_bool(enabled, default=True),
                 )
                 if self.db.backend_type == BackendType.POSTGRESQL:
                     insert_sql += " RETURNING id"
@@ -707,6 +758,65 @@ class WorldBookService:
             logger.error(f"Error listing world books: {e}")
             raise CharactersRAGDBError(f"Error listing world books: {e}") from e
 
+    def get_entry_counts_for_world_books(
+        self,
+        world_book_ids: Optional[list[int]] = None,
+    ) -> dict[int, int]:
+        """
+        Return entry counts keyed by world_book_id.
+
+        Args:
+            world_book_ids: Optional subset of world book IDs. When omitted,
+                counts are returned for every world book that has entries.
+
+        Returns:
+            Mapping of world_book_id -> entry_count.
+        """
+        normalized_ids: Optional[list[int]] = None
+        if world_book_ids is not None:
+            deduped_ids: set[int] = set()
+            for raw_id in world_book_ids:
+                try:
+                    parsed_id = int(raw_id)
+                except (TypeError, ValueError):
+                    continue
+                if parsed_id > 0:
+                    deduped_ids.add(parsed_id)
+            normalized_ids = sorted(deduped_ids)
+            if not normalized_ids:
+                return {}
+
+        try:
+            with self.db.get_connection() as conn:
+                query = """
+                    SELECT world_book_id, COUNT(*) AS entry_count
+                    FROM world_book_entries
+                """
+                params: list[Any] = []
+                if normalized_ids is not None:
+                    placeholders = ",".join("?" for _ in normalized_ids)
+                    query += f" WHERE world_book_id IN ({placeholders})"  # nosec B608
+                    params.extend(normalized_ids)
+                query += " GROUP BY world_book_id"
+
+                cursor = conn.execute(query, tuple(params))
+                counts: dict[int, int] = {}
+                for row in cursor.fetchall():
+                    row_dict = dict(row)
+                    try:
+                        world_book_id = int(row_dict.get("world_book_id"))
+                    except (TypeError, ValueError):
+                        continue
+                    counts[world_book_id] = int(row_dict.get("entry_count") or 0)
+
+                if normalized_ids is not None:
+                    for world_book_id in normalized_ids:
+                        counts.setdefault(world_book_id, 0)
+                return counts
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Error fetching world book entry counts: {e}")
+            raise CharactersRAGDBError(f"Error fetching world book entry counts: {e}") from e
+
     def update_world_book(
         self,
         world_book_id: int,
@@ -751,10 +861,10 @@ class WorldBookService:
                 params.append(token_budget)
             if recursive_scanning is not None:
                 updates.append("recursive_scanning = ?")
-                params.append(bool(recursive_scanning))
+                params.append(_coerce_metadata_bool(recursive_scanning, default=False))
             if enabled is not None:
                 updates.append("enabled = ?")
-                params.append(bool(enabled))
+                params.append(_coerce_metadata_bool(enabled, default=True))
 
             if not updates:
                 return True
@@ -894,9 +1004,12 @@ class WorldBookService:
         priority = max(0, min(100, priority))
 
         # Support per-entry recursive scanning via metadata
-        if 'recursive_scanning' in kwargs and isinstance(kwargs['recursive_scanning'], bool):
+        if 'recursive_scanning' in kwargs:
             md = dict(metadata or {})
-            md['recursive_scanning'] = kwargs['recursive_scanning']
+            md['recursive_scanning'] = _coerce_metadata_bool(
+                kwargs['recursive_scanning'],
+                default=False,
+            )
             metadata = md
 
         # Validate regex patterns if regex_match is True (including ReDoS prevention)
@@ -927,10 +1040,10 @@ class WorldBookService:
                     keywords_json,
                     content,
                     priority,
-                    bool(enabled),
-                    bool(case_sensitive),
-                    bool(regex_match),
-                    bool(whole_word_match),
+                    _coerce_metadata_bool(enabled, default=True),
+                    _coerce_metadata_bool(case_sensitive, default=False),
+                    _coerce_metadata_bool(regex_match, default=False),
+                    _coerce_metadata_bool(whole_word_match, default=True),
                     metadata_json,
                 )
                 if self.db.backend_type == BackendType.POSTGRESQL:
@@ -989,7 +1102,10 @@ class WorldBookService:
     def get_entries(
         self,
         world_book_id: Optional[int] = None,
-        enabled_only: bool = False
+        enabled_only: bool = False,
+        group: Optional[str] = None,
+        appendable: Optional[bool] = None,
+        recursive_scanning: Optional[bool] = None,
     ) -> list[dict[str, Any]]:
         """
         Get world book entries.
@@ -997,16 +1113,65 @@ class WorldBookService:
         Args:
             world_book_id: Optional specific world book ID
             enabled_only: Only return enabled entries
+            group: Optional group/category filter
+            appendable: Optional appendable-flag filter
+            recursive_scanning: Optional recursive-source filter
 
         Returns:
             List of WorldBookEntry instances
         """
+        normalized_group: Optional[str] = None
+        if group is not None:
+            normalized_group = str(group).strip()
+            if not normalized_group:
+                normalized_group = None
+        normalized_group_lower = normalized_group.lower() if normalized_group is not None else None
+        normalized_appendable: Optional[bool] = (
+            _coerce_metadata_bool(appendable, default=False)
+            if appendable is not None else None
+        )
+        normalized_recursive_filter: Optional[bool] = (
+            _coerce_metadata_bool(recursive_scanning, default=False)
+            if recursive_scanning is not None else None
+        )
+        has_metadata_filters = (
+            normalized_group_lower is not None
+            or normalized_appendable is not None
+            or normalized_recursive_filter is not None
+        )
+
+        def _apply_entry_filters(entries_to_filter: list[WorldBookEntryView]) -> list[WorldBookEntryView]:
+            if not has_metadata_filters:
+                return entries_to_filter
+
+            filtered_entries: list[WorldBookEntryView] = []
+            for entry_view in entries_to_filter:
+                if normalized_group_lower is not None:
+                    group_value = entry_view.get("group")
+                    group_normalized = str(group_value).strip().lower() if group_value not in (None, "") else ""
+                    if group_normalized != normalized_group_lower:
+                        continue
+                if normalized_appendable is not None:
+                    if _coerce_metadata_bool(entry_view.get("appendable", False)) != normalized_appendable:
+                        continue
+                if normalized_recursive_filter is not None:
+                    if _coerce_metadata_bool(entry_view.get("recursive_scanning", False)) != normalized_recursive_filter:
+                        continue
+                filtered_entries.append(entry_view)
+            return filtered_entries
+
         # Check cache first
         if world_book_id and world_book_id in self._entry_cache:
             entries = self._entry_cache[world_book_id]
             if enabled_only:
+                # Match DB behavior: when enabled_only is requested, disabled
+                # world books should not return entries.
+                book = self.get_world_book(world_book_id)
+                if not book or not _coerce_metadata_bool(book.get("enabled", True), default=True):
+                    return []
                 entries = [e for e in entries if e.enabled]
-            return [e.to_api_dict() for e in entries]
+            entry_views = [WorldBookEntryView(e.to_api_dict()) for e in entries]
+            return _apply_entry_filters(entry_views)
 
         try:
             with self.db.get_connection() as conn:
@@ -1025,6 +1190,74 @@ class WorldBookService:
                     query += " AND e.enabled = ? AND wb.enabled = ?"
                     params.extend([True, True])
 
+                if has_metadata_filters:
+                    backend_type = _coerce_backend_type(
+                        getattr(self.db, "backend_type", None)
+                    )
+                    if backend_type == BackendType.POSTGRESQL:
+                        metadata_json_expr = "COALESCE(NULLIF(TRIM(e.metadata), ''), '{}')::jsonb"
+                        truthy_set = "('true','1','t','yes','on')"
+
+                        if normalized_group_lower is not None:
+                            query += (
+                                f" AND LOWER(COALESCE({metadata_json_expr} ->> 'group', '')) = ?"
+                            )  # nosec B608
+                            params.append(normalized_group_lower)
+                        if normalized_appendable is not None:
+                            if normalized_appendable:
+                                query += (
+                                    f" AND LOWER(COALESCE({metadata_json_expr} ->> 'appendable', 'false')) IN {truthy_set}"
+                                )  # nosec B608
+                            else:
+                                query += (
+                                    f" AND LOWER(COALESCE({metadata_json_expr} ->> 'appendable', 'false')) NOT IN {truthy_set}"
+                                )  # nosec B608
+                        if normalized_recursive_filter is not None:
+                            if normalized_recursive_filter:
+                                query += (
+                                    f" AND LOWER(COALESCE({metadata_json_expr} ->> 'recursive_scanning', 'false')) IN {truthy_set}"
+                                )  # nosec B608
+                            else:
+                                query += (
+                                    f" AND LOWER(COALESCE({metadata_json_expr} ->> 'recursive_scanning', 'false')) NOT IN {truthy_set}"
+                                )  # nosec B608
+                    elif backend_type == BackendType.SQLITE:
+                        metadata_json_expr = "COALESCE(NULLIF(TRIM(e.metadata), ''), '{}')"
+                        truthy_set = "('1','true','t','yes','on')"
+                        if normalized_group_lower is not None:
+                            query += (
+                                f" AND LOWER(COALESCE(CAST(json_extract({metadata_json_expr}, '$.group') AS TEXT), '')) = ?"
+                            )  # nosec B608
+                            params.append(normalized_group_lower)
+                        if normalized_appendable is not None:
+                            appendable_expr = (
+                                "LOWER(COALESCE("
+                                f"CAST(json_extract({metadata_json_expr}, '$.appendable') AS TEXT), "
+                                "'false'))"
+                            )
+                            if normalized_appendable:
+                                query += (
+                                    f" AND {appendable_expr} IN {truthy_set}"
+                                )  # nosec B608
+                            else:
+                                query += (
+                                    f" AND {appendable_expr} NOT IN {truthy_set}"
+                                )  # nosec B608
+                        if normalized_recursive_filter is not None:
+                            recursive_expr = (
+                                "LOWER(COALESCE("
+                                f"CAST(json_extract({metadata_json_expr}, '$.recursive_scanning') AS TEXT), "
+                                "'false'))"
+                            )
+                            if normalized_recursive_filter:
+                                query += (
+                                    f" AND {recursive_expr} IN {truthy_set}"
+                                )  # nosec B608
+                            else:
+                                query += (
+                                    f" AND {recursive_expr} NOT IN {truthy_set}"
+                                )  # nosec B608
+
                 query += " ORDER BY e.priority DESC, e.id"
 
                 cursor = conn.execute(query, tuple(params))
@@ -1035,16 +1268,65 @@ class WorldBookService:
                     entry = WorldBookEntry.from_dict(entry_data)
                     entries.append(entry)
 
-                # Cache if fetching for specific book
-                if world_book_id:
+                # Cache full per-book result sets only (avoid partial-cache poisoning
+                # from enabled-only or metadata-filtered reads).
+                if world_book_id and not enabled_only and not has_metadata_filters:
                     self._entry_cache[world_book_id] = entries
 
                 # Return hybrid views for legacy/new compatibility
-                return [WorldBookEntryView(e.to_api_dict()) for e in entries]
+                entry_views = [WorldBookEntryView(e.to_api_dict()) for e in entries]
+                return _apply_entry_filters(entry_views)
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching world book entries: {e}")
             raise CharactersRAGDBError(f"Error fetching world book entries: {e}") from e
+
+    def get_entry(self, entry_id: int) -> Optional[WorldBookEntryView]:
+        """
+        Get a single world book entry by ID.
+
+        Args:
+            entry_id: Entry ID
+
+        Returns:
+            Hybrid entry view if found, else None
+        """
+        try:
+            normalized_entry_id = int(entry_id)
+        except (TypeError, ValueError):
+            return None
+
+        if normalized_entry_id <= 0:
+            return None
+
+        # Check cached book entry lists first.
+        for cached_entries in self._entry_cache.values():
+            for cached_entry in cached_entries:
+                try:
+                    cached_id = int(getattr(cached_entry, "entry_id", 0) or 0)
+                except (TypeError, ValueError):
+                    cached_id = 0
+                if cached_id == normalized_entry_id:
+                    return WorldBookEntryView(cached_entry.to_api_dict())
+
+        try:
+            with self.db.get_connection() as conn:
+                query = """
+                    SELECT e.*, wb.enabled as book_enabled
+                    FROM world_book_entries e
+                    JOIN world_books wb ON e.world_book_id = wb.id
+                    WHERE e.id = ? AND wb.deleted = ?
+                    LIMIT 1
+                """
+                row = conn.execute(query, (normalized_entry_id, False)).fetchone()
+                if not row:
+                    return None
+                entry = WorldBookEntry.from_dict(dict(row))
+                return WorldBookEntryView(entry.to_api_dict())
+
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Error fetching world book entry {entry_id}: {e}")
+            raise CharactersRAGDBError(f"Error fetching world book entry {entry_id}: {e}") from e
 
     def update_entry(
         self,
@@ -1071,11 +1353,16 @@ class WorldBookService:
         try:
             updates = []
             params = []
+            effective_regex_match: Optional[bool] = (
+                _coerce_metadata_bool(regex_match, default=False)
+                if regex_match is not None else None
+            )
 
             if keywords is not None:
                 if not keywords:
                     raise InputError("Entry must have at least one keyword")
-                if regex_match:
+                # If regex_match is explicitly set, validate immediately.
+                if effective_regex_match is True:
                     for keyword in keywords:
                         # Validate regex safety (ReDoS prevention)
                         is_safe, reason = _validate_regex_safety(keyword)
@@ -1104,19 +1391,19 @@ class WorldBookService:
 
             if enabled is not None:
                 updates.append("enabled = ?")
-                params.append(bool(enabled))
+                params.append(_coerce_metadata_bool(enabled, default=True))
 
             if case_sensitive is not None:
                 updates.append("case_sensitive = ?")
-                params.append(bool(case_sensitive))
+                params.append(_coerce_metadata_bool(case_sensitive, default=False))
 
             if regex_match is not None:
                 updates.append("regex_match = ?")
-                params.append(bool(regex_match))
+                params.append(_coerce_metadata_bool(regex_match, default=False))
 
             if whole_word_match is not None:
                 updates.append("whole_word_match = ?")
-                params.append(bool(whole_word_match))
+                params.append(_coerce_metadata_bool(whole_word_match, default=True))
 
             if metadata is not None:
                 updates.append("metadata = ?")
@@ -1129,6 +1416,29 @@ class WorldBookService:
             params.append(entry_id)
 
             with self.db.get_connection() as conn:
+                # If keywords are being updated but regex_match is omitted, inherit
+                # current regex mode from DB so invalid patterns are still blocked.
+                if keywords is not None and effective_regex_match is None:
+                    row = conn.execute(
+                        "SELECT regex_match FROM world_book_entries WHERE id = ?",
+                        (entry_id,),
+                    ).fetchone()
+                    existing_regex = False
+                    if row is not None:
+                        if hasattr(row, "keys") and "regex_match" in row.keys():
+                            existing_regex = _coerce_metadata_bool(row["regex_match"], default=False)
+                        else:
+                            existing_regex = _coerce_metadata_bool(row[0], default=False)
+                    if existing_regex:
+                        for keyword in keywords:
+                            is_safe, reason = _validate_regex_safety(keyword)
+                            if not is_safe:
+                                raise InputError(f"Unsafe regex pattern '{keyword}': {reason}")
+                            try:
+                                re.compile(keyword)
+                            except re.error as e:
+                                raise InputError(f"Invalid regex pattern '{keyword}': {e}") from e
+
                 set_clause = _build_safe_update_clause(updates, _WORLD_BOOK_ENTRY_UPDATE_FIELDS)
                 cursor = conn.execute(
                     f"UPDATE world_book_entries SET {set_clause} WHERE id = ?",  # nosec B608
@@ -1199,7 +1509,12 @@ class WorldBookService:
         """
         try:
             with self.db.get_connection() as conn:
-                params = (character_id, world_book_id, bool(enabled), int(priority))
+                params = (
+                    character_id,
+                    world_book_id,
+                    _coerce_metadata_bool(enabled, default=True),
+                    int(priority),
+                )
                 try:
                     if self.db.backend_type == BackendType.POSTGRESQL:
                         conn.execute(
@@ -1321,7 +1636,7 @@ class WorldBookService:
         character_id: Optional[int] = None,
         scan_depth: int = 3,
         token_budget: int = 500,
-        recursive_scanning: bool = False,
+        recursive_scanning: Optional[bool] = None,
         **kwargs
     ) -> Union[dict[str, Any], list[dict[str, Any]]]:
         """
@@ -1331,9 +1646,10 @@ class WorldBookService:
             text: Text to scan for keywords (usually recent messages)
             world_book_ids: Specific world books to use (optional)
             character_id: Character whose world books to use (optional)
-            scan_depth: Override for scan depth
+            scan_depth: Override maximum matched entries per world book
             token_budget: Maximum tokens to inject
-            recursive_scanning: Whether to scan matched entries for more keywords
+            recursive_scanning: Whether to scan matched entries for more keywords.
+                If None, inherits from selected world-book settings.
 
         Returns:
             Dictionary with processed_context and statistics
@@ -1341,7 +1657,7 @@ class WorldBookService:
         # Aliases
         if 'max_tokens' in kwargs and kwargs.get('max_tokens') is not None:
             token_budget = int(kwargs['max_tokens'])
-        include_diagnostics = bool(kwargs.get("include_diagnostics", False))
+        include_diagnostics = _coerce_metadata_bool(kwargs.get("include_diagnostics", False), default=False)
         recursive_depth = int(kwargs.get('recursive_depth', 0) or 0)
         # Clamp recursive depth to prevent infinite loops
         if recursive_depth > MAX_RECURSIVE_DEPTH:
@@ -1376,6 +1692,12 @@ class WorldBookService:
                 unique_books[book_id] = book
             books_to_use = list(unique_books.values())
 
+        if recursive_scanning is None:
+            recursive_scanning = any(
+                _coerce_metadata_bool(book.get("recursive_scanning", False))
+                for book in books_to_use
+            )
+
         if not books_to_use:
             empty = {
                 "processed_context": "",
@@ -1407,10 +1729,12 @@ class WorldBookService:
             if book['id'] in self._entry_cache:
                 book_entries = [e for e in self._entry_cache[book['id']] if e.enabled]
             else:
-                # Populate cache via DB
-                _ = self.get_entries(book['id'], enabled_only=True)
-                book_entries = self._entry_cache.get(book['id'], [])
+                # Populate full per-book cache via DB. `enabled_only=True` reads are
+                # intentionally not cached to avoid partial-cache poisoning.
+                _ = self.get_entries(book['id'], enabled_only=False)
+                book_entries = [e for e in self._entry_cache.get(book['id'], []) if e.enabled]
             all_entries.extend(book_entries)
+            # scan_depth is currently treated as a per-book match cap.
             book_depth = _normalize_depth(book.get('scan_depth'))
             book_id = book.get('id')
             if book_id is None:
@@ -1423,6 +1747,62 @@ class WorldBookService:
 
         # Sort by priority (highest first)
         all_entries.sort(key=lambda e: e.priority, reverse=True)
+        has_recursive_sources = any(
+            _coerce_metadata_bool((entry.metadata or {}).get("recursive_scanning", False))
+            for entry in all_entries
+        )
+
+        def _is_recursive_source(entry: WorldBookEntry) -> bool:
+            # Backward compatibility: if no entry explicitly opts into recursive
+            # source scanning, preserve legacy behavior (all matched entries can chain).
+            if not has_recursive_sources:
+                return True
+            return _coerce_metadata_bool((entry.metadata or {}).get("recursive_scanning", False))
+
+        # Build a lightweight normalized keyword index for common literal lookups.
+        # Regex/case-sensitive/partial-match entries fall back to full scan.
+        quick_keyword_index: dict[str, list[WorldBookEntry]] = {}
+        entries_requiring_scan: list[WorldBookEntry] = []
+
+        def _entry_quick_lookup_keywords(entry: WorldBookEntry) -> Optional[list[str]]:
+            if entry.regex_match or entry.case_sensitive or not entry.whole_word_match:
+                return None
+
+            normalized_keywords: list[str] = []
+            for keyword in entry.keywords:
+                normalized_keyword = str(keyword or "").strip().lower()
+                if not normalized_keyword:
+                    continue
+                # Keep quick lookup conservative to preserve exact matching behavior.
+                if re.fullmatch(r"\w+", normalized_keyword) is None:
+                    return None
+                normalized_keywords.append(normalized_keyword)
+
+            return normalized_keywords or None
+
+        for entry in all_entries:
+            quick_keywords = _entry_quick_lookup_keywords(entry)
+            if not quick_keywords:
+                entries_requiring_scan.append(entry)
+                continue
+            for normalized_keyword in quick_keywords:
+                quick_keyword_index.setdefault(normalized_keyword, []).append(entry)
+
+        def _candidate_entries_for_text(source_text: str) -> list[WorldBookEntry]:
+            if not quick_keyword_index:
+                return all_entries
+
+            tokens = set(re.findall(r"\b\w+\b", (source_text or "").lower()))
+            quick_candidates: set[WorldBookEntry] = set()
+            for token in tokens:
+                for candidate in quick_keyword_index.get(token, []):
+                    quick_candidates.add(candidate)
+
+            if not quick_candidates:
+                return entries_requiring_scan
+
+            ordered_quick_candidates = [entry for entry in all_entries if entry in quick_candidates]
+            return ordered_quick_candidates + entries_requiring_scan
 
         # Find matching entries
         matched_entries = []
@@ -1456,12 +1836,12 @@ class WorldBookService:
                 "token_cost": int(entry_tokens),
                 "priority": int(entry.priority),
                 "regex_match": bool(entry.regex_match),
-                "appendable": bool(entry.metadata.get("appendable", False)) if entry.metadata else False,
+                "appendable": _coerce_metadata_bool(entry.metadata.get("appendable", False)) if entry.metadata else False,
                 "content_preview": (entry.content or "")[:240],
                 "depth_level": depth_level,
             }
 
-        for entry in all_entries:
+        for entry in _candidate_entries_for_text(text):
             match_info = entry.get_first_match_info(text)
             if match_info is None:
                 continue
@@ -1491,11 +1871,12 @@ class WorldBookService:
         if recursive_scanning and matched_entries:
             current_depth = max(1, recursive_depth)
             seen = set(matched_entries)
-            combined_content = " ".join(e.content for e in matched_entries)
-            while current_depth > 0:
+            recursive_seed_entries = [entry for entry in matched_entries if _is_recursive_source(entry)]
+            combined_content = " ".join(entry.content for entry in recursive_seed_entries)
+            while current_depth > 0 and combined_content:
                 depth_level = current_depth
                 additional_entries = []
-                for entry in all_entries:
+                for entry in _candidate_entries_for_text(combined_content):
                     if entry in seen:
                         continue
                     book_id = getattr(entry, 'world_book_id', None)
@@ -1525,7 +1906,10 @@ class WorldBookService:
                 for e in additional_entries:
                     seen.add(e)
                 matched_entries.extend(additional_entries)
-                combined_content = " ".join(e.content for e in matched_entries)
+                recursive_seed_entries = [entry for entry in additional_entries if _is_recursive_source(entry)]
+                if not recursive_seed_entries:
+                    break
+                combined_content = " ".join(entry.content for entry in recursive_seed_entries)
                 current_depth -= 1
 
         # Build injected content (appendable-aware grouping)
@@ -1537,7 +1921,10 @@ class WorldBookService:
             blocks: list[str] = []
             current_block: list[str] = []
             for entry in matched_entries:
-                is_appendable = bool(entry.metadata.get("appendable", False)) if entry.metadata else False
+                is_appendable = (
+                    _coerce_metadata_bool(entry.metadata.get("appendable", False))
+                    if entry.metadata else False
+                )
                 if is_appendable:
                     current_block.append(entry.content)
                 else:
@@ -1615,8 +2002,8 @@ class WorldBookService:
             "description": book.get('description'),
             "scan_depth": book.get('scan_depth'),
             "token_budget": book.get('token_budget'),
-            "recursive_scanning": bool(book.get('recursive_scanning', 0)),
-            "enabled": bool(book.get('enabled', 1)),
+            "recursive_scanning": _coerce_metadata_bool(book.get('recursive_scanning', 0)),
+            "enabled": _coerce_metadata_bool(book.get('enabled', 1), default=True),
             "entries": [ev._d for ev in entries],
         }
         # Legacy nested shape
@@ -1626,8 +2013,8 @@ class WorldBookService:
             "description": book.get('description'),
             "scan_depth": book.get('scan_depth'),
             "token_budget": book.get('token_budget'),
-            "recursive_scanning": bool(book.get('recursive_scanning', 0)),
-            "enabled": bool(book.get('enabled', 1)),
+            "recursive_scanning": _coerce_metadata_bool(book.get('recursive_scanning', 0)),
+            "enabled": _coerce_metadata_bool(book.get('enabled', 1), default=True),
         }
         return top
 
@@ -1668,8 +2055,14 @@ class WorldBookService:
                 description=book_data.get("description"),
                 scan_depth=book_data.get("scan_depth", 3),
                 token_budget=book_data.get("token_budget", 500),
-                recursive_scanning=book_data.get("recursive_scanning", False),
-                enabled=book_data.get("enabled", True)
+                recursive_scanning=_coerce_metadata_bool(
+                    book_data.get("recursive_scanning", False),
+                    default=False,
+                ),
+                enabled=_coerce_metadata_bool(
+                    book_data.get("enabled", True),
+                    default=True,
+                ),
             )
 
         # Import entries
@@ -1679,12 +2072,15 @@ class WorldBookService:
                 keywords=entry_data.get("keywords", []),
                 content=entry_data.get("content", ""),
                 priority=entry_data.get("priority", 0),
-                enabled=entry_data.get("enabled", True),
-                case_sensitive=entry_data.get("case_sensitive", False),
-                regex_match=entry_data.get("regex_match", False),
-                whole_word_match=entry_data.get("whole_word_match", True),
+                enabled=_coerce_metadata_bool(entry_data.get("enabled", True), default=True),
+                case_sensitive=_coerce_metadata_bool(entry_data.get("case_sensitive", False)),
+                regex_match=_coerce_metadata_bool(entry_data.get("regex_match", False)),
+                whole_word_match=_coerce_metadata_bool(entry_data.get("whole_word_match", True), default=True),
                 metadata=entry_data.get("metadata", {}),
-                recursive_scanning=bool(entry_data.get('recursive_scanning', False)),
+                recursive_scanning=_coerce_metadata_bool(
+                    entry_data.get('recursive_scanning', False),
+                    default=False,
+                ),
             )
 
         logger.info(f"Imported world book with {len(entries_data)} entries")
@@ -1694,8 +2090,8 @@ class WorldBookService:
 
     def _invalidate_cache(self):
         """Invalidate the request-scoped cache."""
-        self._entry_cache = {}
-        self._book_cache = {}
+        self._entry_cache = BoundedDict(MAX_ENTRY_CACHE_SIZE)
+        self._book_cache = BoundedDict(MAX_BOOK_CACHE_SIZE)
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -1732,7 +2128,7 @@ class WorldBookService:
                         total_keywords += len(kws)
                         # metadata - use safe parsing with structure validation
                         md = safe_parse_json_dict(r['metadata'], 'metadata')
-                        if md.get('recursive_scanning'):
+                        if _coerce_metadata_bool(md.get('recursive_scanning')):
                             recursive_entries += 1
                     return {
                         'total_entries': int(row.get('total_entries', 0) or 0),
@@ -1839,7 +2235,7 @@ class WorldBookService:
                         rd['keywords'] = kw_raw if isinstance(kw_raw, list) else []
                     # Parse metadata with validation
                     md = safe_parse_json_dict(rd.get('metadata'), 'metadata')
-                    rd['recursive_scanning'] = bool(md.get('recursive_scanning', False))
+                    rd['recursive_scanning'] = _coerce_metadata_bool(md.get('recursive_scanning', False))
                     results.append(rd)
                 return results
 
@@ -1964,10 +2360,10 @@ class WorldBookService:
                                 json.dumps(entry.get('keywords') or []),
                                 entry.get('content', ''),
                                 int(entry.get('priority', 0)),
-                                bool(entry.get('enabled', True)),
-                                bool(entry.get('case_sensitive', False)),
-                                bool(entry.get('regex_match', False)),
-                                bool(entry.get('whole_word_match', True)),
+                                _coerce_metadata_bool(entry.get('enabled', True), default=True),
+                                _coerce_metadata_bool(entry.get('case_sensitive', False), default=False),
+                                _coerce_metadata_bool(entry.get('regex_match', False), default=False),
+                                _coerce_metadata_bool(entry.get('whole_word_match', True), default=True),
                                 metadata_json,
                             ),
                         )
@@ -2002,7 +2398,7 @@ class WorldBookService:
             with self.db.get_connection() as conn:
                 cur = conn.execute("SELECT enabled FROM world_book_entries WHERE id = ?", (entry_id,))
                 row = cur.fetchone()
-                current = bool(row[0]) if row else True
+                current = _coerce_metadata_bool(row[0], default=True) if row else True
                 cur = conn.execute(
                     "UPDATE world_book_entries SET enabled = ?, last_modified = CURRENT_TIMESTAMP WHERE id = ?",
                     (not current, entry_id)
@@ -2029,7 +2425,7 @@ class WorldBookService:
                 regex_match=e.get('regex_match', False),
                 whole_word_match=e.get('whole_word_match', True),
                 metadata=e.get('metadata', {}),
-                recursive_scanning=bool(e.get('recursive_scanning', False)),
+                recursive_scanning=_coerce_metadata_bool(e.get('recursive_scanning', False), default=False),
             )
             added += 1
         return {'added': added}
@@ -2040,7 +2436,7 @@ class WorldBookService:
         for e in entries:
             if min_priority is not None and int(e.get('priority', 0)) < int(min_priority):
                 continue
-            if recursive_only and not e.get('recursive_scanning', False):
+            if recursive_only and not _coerce_metadata_bool(e.get('recursive_scanning', False), default=False):
                 continue
             res.append(e)
         return res

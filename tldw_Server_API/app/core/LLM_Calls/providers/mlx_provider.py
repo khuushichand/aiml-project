@@ -390,6 +390,14 @@ class MLXSessionRegistry:
                 "config": config,
             }
 
+    def get_active_tokenizer(self, model_id: str | None = None) -> tuple[Any, str] | None:
+        with self._lock:
+            if not self._session:
+                return None
+            if model_id and str(model_id).strip() and self._session.model_id != str(model_id).strip():
+                return None
+            return self._session.tokenizer, self._session.model_id
+
 
 _registry: MLXSessionRegistry | None = None
 _registry_lock = threading.Lock()
@@ -402,6 +410,11 @@ def get_mlx_registry() -> MLXSessionRegistry:
             if _registry is None:
                 _registry = MLXSessionRegistry()
     return _registry
+
+
+def get_active_mlx_tokenizer(model_id: str | None = None) -> tuple[Any, str] | None:
+    """Return active tokenizer/model from MLX registry when loaded."""
+    return get_mlx_registry().get_active_tokenizer(model_id=model_id)
 
 
 def _messages_to_prompt(messages: Any, tokenizer: Any, system_message: str | None, template_override: str | None) -> str:
@@ -653,4 +666,10 @@ class MLXEmbeddingsAdapter(EmbeddingsProvider):
         return {"data": data, "object": "list", "model": session.model_id}
 
 
-__all__ = ["MLXChatAdapter", "MLXEmbeddingsAdapter", "MLXSessionRegistry", "get_mlx_registry"]
+__all__ = [
+    "MLXChatAdapter",
+    "MLXEmbeddingsAdapter",
+    "MLXSessionRegistry",
+    "get_mlx_registry",
+    "get_active_mlx_tokenizer",
+]

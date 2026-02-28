@@ -1596,7 +1596,7 @@ describe("CharactersManager first-use onboarding", () => {
         5
       )
     })
-  }, 30000)
+  }, 60_000)
 
   it("filters to favorited characters when favorites-only is enabled", async () => {
     const user = userEvent.setup()

@@ -68,31 +68,7 @@ vi.mock('@/lib/api-client', () => ({
   },
 }));
 
-type ApiMock = {
-  getMetrics: ReturnType<typeof vi.fn>;
-  getWatchlists: ReturnType<typeof vi.fn>;
-  getAlerts: ReturnType<typeof vi.fn>;
-  getUsers: ReturnType<typeof vi.fn>;
-  getHealth: ReturnType<typeof vi.fn>;
-  getHealthMetrics: ReturnType<typeof vi.fn>;
-  getLlmHealth: ReturnType<typeof vi.fn>;
-  getRagHealth: ReturnType<typeof vi.fn>;
-  getTtsHealth: ReturnType<typeof vi.fn>;
-  getSttHealth: ReturnType<typeof vi.fn>;
-  getEmbeddingsHealth: ReturnType<typeof vi.fn>;
-  getMetricsText: ReturnType<typeof vi.fn>;
-  getNotificationSettings: ReturnType<typeof vi.fn>;
-  getRecentNotifications: ReturnType<typeof vi.fn>;
-  createWatchlist: ReturnType<typeof vi.fn>;
-  deleteWatchlist: ReturnType<typeof vi.fn>;
-  acknowledgeAlert: ReturnType<typeof vi.fn>;
-  dismissAlert: ReturnType<typeof vi.fn>;
-  getMonitoringMetrics: ReturnType<typeof vi.fn>;
-  updateNotificationSettings: ReturnType<typeof vi.fn>;
-  testNotification: ReturnType<typeof vi.fn>;
-};
-
-const apiMock = api as unknown as ApiMock;
+const apiMock = vi.mocked(api);
 
 const setDefaultApiMocks = () => {
   apiMock.getMetrics.mockResolvedValue({ cpu_usage: 45, memory_usage: 67 });
@@ -324,8 +300,9 @@ describe('MonitoringPage', () => {
 
     render(<MonitoringPage />);
     await flushPromises();
+    await flushPromises();
     const baselineCalls = apiMock.getMonitoringMetrics.mock.calls.length;
-    expect(baselineCalls).toBeGreaterThan(0);
+    expect(baselineCalls).toBeGreaterThanOrEqual(2);
 
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     await flushPromises();
@@ -562,10 +539,12 @@ describe('MonitoringPage', () => {
     render(<MonitoringPage />);
     await screen.findByText('Monitoring');
 
-    expect(screen.getByTestId('system-status-card-tts').textContent).toContain('metrics fallback');
-    expect(screen.getByTestId('system-status-card-stt').textContent).toContain('metrics fallback');
-    expect(screen.getByTestId('system-status-card-embeddings').textContent).toContain('metrics fallback');
-    expect(screen.getByTestId('system-status-card-queue').textContent).toContain('Depth 91');
+    await waitFor(() => {
+      expect(screen.getByTestId('system-status-card-tts').textContent).toContain('metrics fallback');
+      expect(screen.getByTestId('system-status-card-stt').textContent).toContain('metrics fallback');
+      expect(screen.getByTestId('system-status-card-embeddings').textContent).toContain('metrics fallback');
+      expect(screen.getByTestId('system-status-card-queue').textContent).toContain('Depth 91');
+    });
   });
 
   it('renders notification delivery dashboard and retries failed notifications', async () => {

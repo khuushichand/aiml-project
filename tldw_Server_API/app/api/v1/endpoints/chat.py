@@ -1952,8 +1952,14 @@ async def create_chat_completion(
                             auth_user_id=int(getattr(current_user, 'id', 0)) if getattr(current_user, 'id', None) is not None else None,
                             request_meta={
                                 'endpoint': '/chat/completions',
+                                'auth_user_id': int(getattr(current_user, 'id', 0)) if getattr(current_user, 'id', None) is not None else None,
                                 'conversation_id': request_data.conversation_id,
                                 'character_id': request_data.character_id,
+                                'chat_db': chat_db,
+                                'user_base_dir': user_base_dir,
+                                'selected_provider': selected_provider,
+                                'selected_model': selected_model,
+                                'tools': request_data.tools,
                             },
                         )
                         result = await command_router.async_dispatch_command(ctx, cmd_name, cmd_args)

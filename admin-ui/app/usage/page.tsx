@@ -14,8 +14,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { RefreshCw, BarChart3, Calendar, Download } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { buildApiUrl } from '@/lib/api-config';
-import { buildAuthHeaders } from '@/lib/http';
+import { downloadExportFile } from '@/lib/export-download';
 import { formatBytes, formatDateTime, formatLatency } from '@/lib/format';
 import { buildUsageCostForecast, normalizeDailyCostPoints, type DailyCostPoint, type UsageCostForecast } from '@/lib/usage-forecast';
 import {
@@ -130,12 +129,6 @@ const getErrorMessage = (reason: unknown, fallback: string) => {
     return reason.message;
   }
   return fallback;
-};
-
-const getFilenameFromDisposition = (disposition: string | null): string | null => {
-  if (!disposition) return null;
-  const match = disposition.match(/filename="?([^"]+)"?/i);
-  return match ? match[1] : null;
 };
 
 const ORG_ATTRIBUTION_USER_LIMIT = 100;
@@ -277,32 +270,6 @@ const buildOrgAttributionRows = async (rows: LlmSummaryRow[]): Promise<OrgCostAt
       percentOfTotal: totalCost > 0 ? (row.totalCostUsd / totalCost) * 100 : 0,
     }))
     .sort((a, b) => b.totalCostUsd - a.totalCostUsd);
-};
-
-const downloadCsv = async (
-  endpoint: string,
-  params: Record<string, string>,
-  fallbackFilename: string
-) => {
-  const query = new URLSearchParams(params).toString();
-  const response = await fetch(buildApiUrl(`${endpoint}${query ? `?${query}` : ''}`), {
-    headers: buildAuthHeaders('GET'),
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || 'Failed to download CSV');
-  }
-  const blob = await response.blob();
-  const filename = getFilenameFromDisposition(response.headers.get('content-disposition')) || fallbackFilename;
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(url);
 };
 
 export default function UsagePage() {
@@ -491,7 +458,12 @@ export default function UsagePage() {
   ) => {
     setExporting((prev) => ({ ...prev, [key]: true }));
     try {
-      await downloadCsv(endpoint, params, fallbackFilename);
+      await downloadExportFile({
+        endpoint,
+        params,
+        fallbackFilename,
+        defaultError: 'Failed to download CSV',
+      });
       success('Export ready', 'CSV download started.');
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to export CSV';

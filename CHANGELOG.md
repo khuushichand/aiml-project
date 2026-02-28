@@ -10,6 +10,13 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
+- Strict token counting phase-1 foundation for writing and provider metadata:
+  - Added shared tokenizer resolver service at `tldw_Server_API/app/core/LLM_Calls/tokenizer_resolver.py` to centralize provider/model tokenizer classification.
+  - Added additive tokenizer metadata fields `count_accuracy` (`exact`/`unavailable`) and `strict_mode_effective` in writing tokenize/count/detokenize responses, writing capabilities payloads, and `/api/v1/llm/providers`.
+  - Added exact tokenizer resolution paths for `ollama` (provider-native HTTP tokenize/detokenize probing) and `mlx` (active registry tokenizer with artifact fallback).
+  - Added Bedrock `CountTokens` exact-count path (Anthropic-on-Bedrock model family) with model-level strict classification and mirrored metadata on `/api/v1/llm/providers`.
+  - Added strict writing token endpoint gate: when `STRICT_TOKEN_COUNTING=true`, non-exact tokenizer resolutions return HTTP `422`.
+  - Added regression coverage for strict runtime propagation and tokenizer metadata mirroring across Writing and provider metadata tests.
 - Alibaba Model Studio image backend support for `/api/v1/files/create` image generation via the new `modelstudio` backend.
 - Model Studio adapter support for sync generation, async task submission/polling, and `auto` mode.
 - Model Studio image configuration fields in `[Image-Generation]`:
@@ -31,6 +38,11 @@ and this project adheres to Some kind of Versioning
   - Added Feynman prompt template at `Docs/Prompts/Academic-or-Studying/Feynman_Technique.md`.
   - Added Skills Manager built-ins seeding dropdown actions for both `Seed Missing Only` (`overwrite=false`) and `Seed and Overwrite Existing` (`overwrite=true`).
   - Added protocol-sync regression coverage for Feynman skill/prompt assets in `tldw_Server_API/tests/Skills/unit/test_feynman_assets_sync.py`.
+- Chat slash Skills commands
+  - Added backend `/skills` slash command to list available skills with optional filter support.
+  - Added backend `/skill <name> [args]` slash command to execute a specific skill from chat.
+  - Added privilege catalog scopes for `/skills` and `/skill` command execution.
+  - Added command injection coverage for `/skill` and `/skills` system-mode behavior in `tldw_Server_API/tests/Chat_NEW/integration/test_chat_skill_commands_injection.py`.
 - Added regression coverage ensuring Watchlists pipeline setup propagates HTML template format into generated job and output payloads.
 - Watchlists guardrails and release-gate coverage:
   - Added static duplicate guard coverage for Watchlists source files (`useWatchlistsStore` selector reuse, duplicate top-level identifiers, duplicate interface keys).
@@ -42,6 +54,21 @@ and this project adheres to Some kind of Versioning
   - Added unified-pipeline clarification short-circuit for ambiguous generation requests (`200 OK` with clarifying prompt in `generated_answer` plus clarification metadata).
   - Added research-loop action-signature dedup (web/academic/discussion/local DB) with result reuse and `action_dedup` metadata reporting.
   - Added regression coverage for schema acceptance, clarification short-circuit behavior, clarification metric emission, action-signature dedup (unit + integration), and `/api/v1/rag/features` contract updates.
+- Notes moodboard remediation coverage:
+  - Added backend regression assertions for paged moodboard note listing and true `total` reporting in:
+    - `tldw_Server_API/tests/Notes_NEW/unit/test_notes_moodboard_db.py`
+    - `tldw_Server_API/tests/Notes_NEW/integration/test_moodboards_api.py`
+  - Added/expanded frontend stage42 moodboard tests covering lazy moodboard fetch behavior and moodboard pagination controls/navigation.
+- Slack/Discord endpoint modularization follow-up:
+  - Added dedicated OAuth/admin handler modules:
+    - `tldw_Server_API/app/api/v1/endpoints/slack_oauth_admin.py`
+    - `tldw_Server_API/app/api/v1/endpoints/discord_oauth_admin.py`
+  - Added delegated route wiring in primary endpoint modules while preserving existing API paths/function names and test monkeypatch compatibility.
+- Jobs notifications abstraction hardening:
+  - Added `JobManager.list_job_events_after(...)` to centralize event-stream retrieval behind Jobs core abstractions.
+  - Added/updated bridge regression coverage to validate abstraction-backed notifications event processing behavior.
+- Reminders/notifications review-remediation coverage:
+  - Added API/DB regressions for scheduler-managed PATCH field rejection, dismissed-notification list filtering, reminders scheduler failure logging, and snooze reconciliation behavior.
 
 ### Changed
 - Workspace snapshot lifecycle now fully persists banner state across create/switch/duplicate/archive/restore/import/export pathways.
@@ -61,11 +88,34 @@ and this project adheres to Some kind of Versioning
 - Watchlists source delete confirmation copy now reuses a single locale key across standard and in-use delete flows to reduce translation-key duplication.
 - Watchlists guided quick setup now uses a single audio preference field (`includeAudioBriefing`) across telemetry, preview copy, and submission flow instead of dual field state.
 - RAG features/capabilities surfaces now advertise pre-retrieval clarification and research action-dedup support (`/api/v1/rag/features`, `/api/v1/rag/capabilities`, API guide, and capabilities docs).
+- Chat command routing now passes Skills command context from the chat endpoint into the command router so `/skill` execution can resolve and run skills consistently.
+- Route-toggle policy now allows environment override application during test mode (`is_test_mode()`), preventing collection-order drift between explicit pytest runtime markers and test-mode configuration.
+- Notes moodboard API/DB behavior:
+  - Moodboard note listing now performs SQL-level union/collapse/pagination for manual + smart-rule membership instead of full in-memory merge/sort/slice.
+  - Moodboard notes endpoint now reports a true `total` via `count_moodboard_notes(...)` while preserving `count` for the current page.
+  - Moodboard endpoint signatures now include explicit return type hints, helper docstrings, and normalized function signature formatting.
+  - Async moodboard endpoints now offload synchronous DB operations via `asyncio.to_thread` to avoid event-loop blocking.
+- Notes moodboard WebUI behavior:
+  - Moodboard query fetching is now gated to active moodboard view (`listMode=active` + `listViewMode=moodboard`) instead of eager active-mode fetches.
+  - Moodboard list retrieval now iterates paged API requests and deduplicates IDs, removing the practical fixed-size fetch cap behavior.
+  - Moodboard view now includes local pagination controls (page-size selector, prev/next, summary/index) backed by paged API requests.
+  - Moodboard rename/delete expected-version handling now uses the simplified `selectedMoodboard.version ?? 1` path.
+- Slack/Discord endpoint organization:
+  - `slack.py` and `discord.py` now delegate OAuth/admin routes to focused modules, reducing endpoint-file size and separating routing from lifecycle/policy internals.
+- Notifications/reminders endpoint behavior:
+  - Notifications snooze now delegates task creation to `RemindersService` and performs immediate best-effort scheduler reconciliation.
+  - Reminders create/update/delete endpoints now keep best-effort scheduling semantics but log reconciliation/unschedule failures instead of silently suppressing them.
+  - Notifications SSE/list-window query helpers now align on active-inbox semantics by excluding dismissed rows from non-archived query paths.
+  - Notifications endpoint handlers and reminders/notifications schemas now include expanded docstrings and explicit SSE generator return typing for stronger API-contract readability.
+- Jobs notifications bridge:
+  - `jobs_notifications_service` now consumes Jobs manager event-list APIs instead of in-service raw `job_events` SQL queries.
 
 ### Removed
 - No removals in this session.
 
 ### Fixed
+
+- Fixed tokenizer resolution error precedence so non-native providers no longer surface misleading provider-native configuration errors when tokenizer lookup is unavailable.
 - Fixed `modelstudio_image_mode=auto` to actually do sync-first fallback to async.
 - Fixed validation so `payload.extra_params.mode` is accepted for Model Studio control flow without requiring passthrough allowlisting.
 - Fixed user-facing error hygiene by sanitizing Model Studio transport exception details while logging internals.
@@ -81,6 +131,13 @@ and this project adheres to Some kind of Versioning
 - Fixed Watchlists quick-setup review/test-flow regressions caused by stale CTA label assumptions and missing source-preview service mocks in the Overview test suite.
 - Fixed Watchlists a11y/load-retry test drift for Sources/Monitors toggles by aligning assertions with row-context ARIA labels and current table-render behavior.
 - Fixed redundant iterative research-loop calls for equivalent action/query signatures by reusing previously successful action outputs.
+- Fixed `/skill` command error handling to convert unexpected skill-resolution/runtime exceptions into a structured command error response instead of bubbling unhandled exceptions.
+- Fixed `tldw_Server_API/tests/Skills/integration/test_skills_api.py` startup abort risk by setting minimal test-route env toggles early and lazily importing `app.main` within the fixture, avoiding heavy module side effects at collection time.
+- Fixed moodboard create endpoint robustness by handling unexpected `None` ID returns before integer conversion.
+- Fixed moodboard docs path placeholder inconsistency by using `{moodboard_id}` for `GET /moodboards/{moodboard_id}/notes`.
+- Fixed reminder task PATCH safety by removing scheduler-owned fields (`last_status`, `next_run_at`, `last_run_at`) from public update schema to prevent user-driven scheduler state corruption.
+- Fixed dismissed-notification inbox consistency by excluding dismissed rows from non-archived list/stream query paths, aligning unread-count semantics with visible inbox rows.
+- Fixed hidden scheduler-sync failures in reminders task endpoints by surfacing non-critical reconcile/unschedule exceptions in warning logs.
 
 
 ## [0.1.24] 2026-02-22

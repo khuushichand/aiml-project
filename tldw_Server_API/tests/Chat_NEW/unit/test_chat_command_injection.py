@@ -231,3 +231,60 @@ def test_system_injection_truncates_to_max_chars(monkeypatch):
     assert text_part is not None
     assert text_part.get("text", "").startswith("[/time]")
     assert len(text_part.get("text", "")) <= 22
+
+
+def test_system_injection_for_skill_without_request_meta(monkeypatch):
+    monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
+    monkeypatch.setenv("CHAT_COMMAND_INJECTION_MODE", "system")
+
+    async def fake_execute(ctx, skill_name, skill_args):
+        assert ctx.request_meta is None
+        assert skill_name == "summarize"
+        assert skill_args == "release notes"
+        return {
+            "success": True,
+            "execution_mode": "inline",
+            "rendered_prompt": "Skill inline output",
+            "fork_output": None,
+        }
+
+    monkeypatch.setattr(command_router_module, "_execute_skill", fake_execute)
+
+    captured_payload: List[Dict[str, Any]] = []
+
+    def fake_call(api_endpoint: str, messages_payload: List[Dict[str, Any]], **kwargs):
+        nonlocal captured_payload
+        captured_payload = messages_payload
+        return "ok"
+
+    async def fake_call_async(api_endpoint: str, messages_payload: List[Dict[str, Any]], **kwargs):
+        nonlocal captured_payload
+        captured_payload = messages_payload
+        return "ok"
+
+    monkeypatch.setattr(chat_orchestrator, "chat_api_call", fake_call)
+    monkeypatch.setattr(chat_orchestrator, "chat_api_call_async", fake_call_async)
+
+    resp = chat_orchestrator.chat(
+        message="/skill summarize release notes",
+        history=[],
+        media_content=None,
+        selected_parts=[],
+        api_endpoint="openai",
+        api_key=None,
+        custom_prompt=None,
+        temperature=0.2,
+        system_message=None,
+        streaming=False,
+        chatdict_entries=None,
+    )
+
+    assert resp == "ok"
+    assert any(
+        m.get("role") == "system"
+        and any(
+            (p.get("type") == "text" and "/skill" in p.get("text", "") and "Skill inline output" in p.get("text", ""))
+            for p in (m.get("content") or [])
+        )
+        for m in captured_payload
+    )

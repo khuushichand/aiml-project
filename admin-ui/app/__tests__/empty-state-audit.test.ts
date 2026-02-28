@@ -11,6 +11,9 @@ const TARGET_FILES = [
   'app/incidents/page.tsx',
   'app/logs/page.tsx',
   'app/voice-commands/page.tsx',
+  'app/flags/page.tsx',
+  'app/budgets/page.tsx',
+  'app/roles/compare/page.tsx',
 ] as const;
 
 describe('empty-state audit for core list pages', () => {

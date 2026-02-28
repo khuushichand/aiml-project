@@ -1469,10 +1469,19 @@ async def list_world_books(
         service = WorldBookService(db)
         books = service.list_world_books(include_disabled=include_disabled)
 
-        # Add entry counts
+        # Add entry counts in one query to avoid N+1 lookups.
+        book_ids = [
+            int(book["id"])
+            for book in books
+            if isinstance(book.get("id"), int)
+        ]
+        entry_counts = service.get_entry_counts_for_world_books(book_ids)
         for book in books:
-            entries = service.get_entries(book['id'], enabled_only=False)
-            book['entry_count'] = len(entries)
+            try:
+                world_book_id = int(book.get("id"))
+            except (TypeError, ValueError):
+                world_book_id = -1
+            book["entry_count"] = int(entry_counts.get(world_book_id, 0))
 
         # Convert to response models (filter unexpected fields)
         allowed_keys = {
@@ -1992,9 +2001,16 @@ async def get_world_book(
         # Convert entries to response models
         entry_responses = []
         for entry in entries:
-            entry_dict = entry.to_dict()
-            entry_dict['created_at'] = book['created_at']  # Use book's timestamp as fallback
-            entry_dict['last_modified'] = book['last_modified']
+            if hasattr(entry, "to_api_dict"):
+                entry_dict = entry.to_api_dict()
+            elif hasattr(entry, "_d"):
+                entry_dict = dict(entry._d)
+            elif hasattr(entry, "to_dict"):
+                entry_dict = entry.to_dict()
+            else:
+                entry_dict = dict(entry)
+            entry_dict['created_at'] = entry_dict.get('created_at') or book.get('created_at')
+            entry_dict['last_modified'] = entry_dict.get('last_modified') or book.get('last_modified')
             entry_responses.append(WorldBookEntryResponse(**entry_dict))
 
         return WorldBookWithEntries(
@@ -2158,6 +2174,17 @@ def _merge_entry_group_metadata(
         merged["group"] = normalized_group
     return merged or None
 
+
+def _merge_entry_recursive_metadata(
+        metadata: Optional[dict[str, Any]],
+        recursive_scanning: Optional[bool],
+) -> Optional[dict[str, Any]]:
+    merged = dict(metadata or {})
+    if recursive_scanning is None:
+        return merged or None
+    merged["recursive_scanning"] = bool(recursive_scanning)
+    return merged or None
+
 @router.post("/world-books/{world_book_id}/entries", response_model=WorldBookEntryResponse,
              status_code=status.HTTP_201_CREATED, summary="Add entry to world book", tags=["World Books"])
 async def add_world_book_entry(
@@ -2181,6 +2208,10 @@ async def add_world_book_entry(
             _merge_entry_appendable_metadata(entry.metadata, entry.appendable),
             entry.group,
         )
+        entry_metadata = _merge_entry_recursive_metadata(
+            entry_metadata,
+            entry.recursive_scanning,
+        )
 
         entry_id = service.add_entry(
             world_book_id=world_book_id,
@@ -2194,9 +2225,8 @@ async def add_world_book_entry(
             metadata=entry_metadata
         )
 
-        # Get the created entry
-        entries = service.get_entries(world_book_id, enabled_only=False)
-        created_entry = next((e for e in entries if (getattr(e, 'id', None) == entry_id) or (isinstance(e, dict) and e.get('id') == entry_id) or (hasattr(e, 'get') and e.get('id') == entry_id)), None)
+        # Get the created entry by id (avoid scanning all book entries).
+        created_entry = service.get_entry(entry_id)
 
         if not created_entry:
             raise HTTPException(
@@ -2210,8 +2240,8 @@ async def add_world_book_entry(
             entry_dict = dict(created_entry._d)
         else:
             entry_dict = dict(created_entry)
-        entry_dict['created_at'] = book['created_at']
-        entry_dict['last_modified'] = book['last_modified']
+        entry_dict['created_at'] = entry_dict.get('created_at') or book.get('created_at')
+        entry_dict['last_modified'] = entry_dict.get('last_modified') or book.get('last_modified')
 
         return WorldBookEntryResponse(**entry_dict)
 
@@ -2233,6 +2263,12 @@ async def add_world_book_entry(
 async def list_world_book_entries(
         world_book_id: int = FastAPIPath(..., description="World book ID", gt=0),
         enabled_only: bool = Query(False, description="Only show enabled entries"),
+        group: Optional[str] = Query(None, description="Optional entry group/category filter"),
+        appendable: Optional[bool] = Query(None, description="Optional appendable flag filter"),
+        recursive_scanning: Optional[bool] = Query(
+            None,
+            description="Optional recursive-source flag filter",
+        ),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     """List all entries in a world book."""
@@ -2247,7 +2283,13 @@ async def list_world_book_entries(
                 detail=f"World book with ID {world_book_id} not found"
             )
 
-        entries = service.get_entries(world_book_id, enabled_only=enabled_only)
+        entries = service.get_entries(
+            world_book_id,
+            enabled_only=enabled_only,
+            group=group,
+            appendable=appendable,
+            recursive_scanning=recursive_scanning,
+        )
 
         # Convert to response models
         entry_responses = []
@@ -2258,8 +2300,8 @@ async def list_world_book_entries(
                 entry_dict = dict(entry._d)
             else:
                 entry_dict = dict(entry)
-            entry_dict['created_at'] = book['created_at']
-            entry_dict['last_modified'] = book['last_modified']
+            entry_dict['created_at'] = entry_dict.get('created_at') or book.get('created_at')
+            entry_dict['last_modified'] = entry_dict.get('last_modified') or book.get('last_modified')
             entry_responses.append(WorldBookEntryResponse(**entry_dict))
 
         return EntryListResponse(
@@ -2290,18 +2332,13 @@ async def update_world_book_entry(
         service = WorldBookService(db)
 
         entry_metadata = update_data.metadata
-        if update_data.appendable is not None or update_data.group is not None:
+        if (
+            update_data.appendable is not None
+            or update_data.group is not None
+            or update_data.recursive_scanning is not None
+        ):
             if entry_metadata is None:
-                existing_entries = service.get_entries(enabled_only=False)
-                existing_entry = next(
-                    (
-                        e
-                        for e in existing_entries
-                        if (getattr(e, 'id', None) == entry_id)
-                        or (hasattr(e, 'get') and e.get('id') == entry_id)
-                    ),
-                    None,
-                )
+                existing_entry = service.get_entry(entry_id)
                 if existing_entry is not None:
                     if hasattr(existing_entry, 'get'):
                         entry_metadata = existing_entry.get('metadata') or {}
@@ -2309,6 +2346,10 @@ async def update_world_book_entry(
                         entry_metadata = getattr(existing_entry, '_d', {}).get('metadata') or {}
             entry_metadata = _merge_entry_appendable_metadata(entry_metadata, update_data.appendable)
             entry_metadata = _merge_entry_group_metadata(entry_metadata, update_data.group)
+            entry_metadata = _merge_entry_recursive_metadata(
+                entry_metadata,
+                update_data.recursive_scanning,
+            )
 
         success = service.update_entry(
             entry_id=entry_id,
@@ -2328,10 +2369,8 @@ async def update_world_book_entry(
                 detail=f"Entry with ID {entry_id} not found"
             )
 
-        # Find the updated entry
-        # We need to search through all world books to find this entry
-        all_entries = service.get_entries(enabled_only=False)
-        updated_entry = next((e for e in all_entries if (getattr(e, 'id', None) == entry_id) or (hasattr(e, 'get') and e.get('id') == entry_id)), None)
+        # Get updated entry by id (avoid scanning all entries).
+        updated_entry = service.get_entry(entry_id)
 
         if not updated_entry:
             raise HTTPException(
@@ -2351,8 +2390,8 @@ async def update_world_book_entry(
             entry_dict = dict(updated_entry._d)
         else:
             entry_dict = dict(updated_entry)
-        entry_dict['created_at'] = book['created_at'] if book else datetime.utcnow()
-        entry_dict['last_modified'] = book['last_modified'] if book else datetime.utcnow()
+        entry_dict['created_at'] = entry_dict.get('created_at') or (book['created_at'] if book else datetime.utcnow())
+        entry_dict['last_modified'] = entry_dict.get('last_modified') or (book['last_modified'] if book else datetime.utcnow())
 
         return WorldBookEntryResponse(**entry_dict)
 
@@ -2528,14 +2567,23 @@ async def get_character_world_books(
 
         service = WorldBookService(db)
         books = service.get_character_world_books(character_id, enabled_only=enabled_only)
+        book_ids = [
+            int(book["id"])
+            for book in books
+            if isinstance(book.get("id"), int)
+        ]
+        entry_counts = service.get_entry_counts_for_world_books(book_ids)
 
         # Add entry counts and convert to response models
         response_books = []
         for book in books:
-            entries = service.get_entries(book['id'], enabled_only=False)
             # Build response dict with explicit world_book_id alias
             book_dict = dict(book)
-            book_dict['entry_count'] = len(entries)
+            try:
+                world_book_id = int(book_dict.get("id"))
+            except (TypeError, ValueError):
+                world_book_id = -1
+            book_dict['entry_count'] = int(entry_counts.get(world_book_id, 0))
             book_dict['world_book_id'] = book_dict.get('id')
             response_books.append(CharacterWorldBookResponse(**book_dict))
 

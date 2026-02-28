@@ -7,8 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { useToast } from '@/components/ui/toast';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
-import { buildApiUrl } from '@/lib/api-config';
-import { buildAuthHeaders } from '@/lib/http';
+import { downloadExportFile } from '@/lib/export-download';
 import { Download } from 'lucide-react';
 import { Field } from '@/components/data-ops/Field';
 
@@ -19,112 +18,6 @@ const EXPORT_FORMATS = [
 
 type ExportsSectionProps = {
   refreshSignal: number;
-};
-
-const splitDispositionParts = (value: string) => {
-  const parts: string[] = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < value.length; i += 1) {
-    const char = value[i];
-    if (char === '"' && (i === 0 || value[i - 1] !== '\\')) {
-      inQuotes = !inQuotes;
-    }
-    if (char === ';' && !inQuotes) {
-      const trimmed = current.trim();
-      if (trimmed) {
-        parts.push(trimmed);
-      }
-      current = '';
-      continue;
-    }
-    current += char;
-  }
-  const trimmed = current.trim();
-  if (trimmed) {
-    parts.push(trimmed);
-  }
-  return parts;
-};
-
-const unquoteHeaderValue = (value: string) => {
-  if (value.startsWith('"') && value.endsWith('"')) {
-    return value.slice(1, -1).replace(/\\(.)/g, '$1');
-  }
-  return value;
-};
-
-const decode5987Value = (value: string) => {
-  const raw = unquoteHeaderValue(value);
-  const match = raw.match(/^([^']*)'[^']*'(.*)$/);
-  const encoded = match ? match[2] : raw;
-  try {
-    return decodeURIComponent(encoded);
-  } catch {
-    return encoded;
-  }
-};
-
-const getFilenameFromDisposition = (disposition: string | null): string | null => {
-  if (!disposition) return null;
-  const parts = splitDispositionParts(disposition);
-  const params: Record<string, string> = {};
-  for (const part of parts.slice(1)) {
-    const eqIndex = part.indexOf('=');
-    if (eqIndex === -1) continue;
-    const key = part.slice(0, eqIndex).trim().toLowerCase();
-    if (!key) continue;
-    const rawValue = part.slice(eqIndex + 1).trim();
-    if (!rawValue) continue;
-    params[key] = unquoteHeaderValue(rawValue);
-  }
-  if (params['filename*']) {
-    const decoded = decode5987Value(params['filename*']);
-    if (decoded) return decoded;
-  }
-  return params.filename || null;
-};
-
-const downloadExport = async (
-  endpoint: string,
-  params: Record<string, string>,
-  fallbackFilename: string
-) => {
-  const timeoutMs = 30_000;
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-  const query = new URLSearchParams(params).toString();
-  try {
-    const response = await fetch(buildApiUrl(`${endpoint}${query ? `?${query}` : ''}`), {
-      headers: buildAuthHeaders('GET'),
-      credentials: 'include',
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      const message = await response.text();
-      throw new Error(message || 'Failed to download export');
-    }
-    const blob = await response.blob();
-    const filename = getFilenameFromDisposition(response.headers.get('content-disposition')) || fallbackFilename;
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(url);
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error('Download aborted: timeout');
-    }
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('Download aborted: timeout');
-    }
-    throw err;
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
 };
 
 export const ExportsSection = ({ refreshSignal }: ExportsSectionProps) => {
@@ -170,7 +63,12 @@ export const ExportsSection = ({ refreshSignal }: ExportsSectionProps) => {
       if (auditResource.trim()) params.resource = auditResource.trim();
       if (selectedOrg) params.org_id = String(selectedOrg.id);
       const filename = `audit_log.${auditFormat}`;
-      await downloadExport('/admin/audit-log/export', params, filename);
+      await downloadExportFile({
+        endpoint: '/admin/audit-log/export',
+        params,
+        fallbackFilename: filename,
+        timeoutMs: 30_000,
+      });
       success('Export ready', 'Audit log download started.');
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to export audit logs';
@@ -189,7 +87,12 @@ export const ExportsSection = ({ refreshSignal }: ExportsSectionProps) => {
       if (userStatus.trim()) params.is_active = userStatus.trim();
       if (selectedOrg) params.org_id = String(selectedOrg.id);
       const filename = `users.${userFormat}`;
-      await downloadExport('/admin/users/export', params, filename);
+      await downloadExportFile({
+        endpoint: '/admin/users/export',
+        params,
+        fallbackFilename: filename,
+        timeoutMs: 30_000,
+      });
       success('Export ready', 'User export download started.');
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to export users';

@@ -16,6 +16,8 @@ def test_list_chat_commands_basic(test_client, auth_headers, monkeypatch):
     # Built-ins should be present
     assert "time" in names
     assert "weather" in names
+    assert "skills" in names
+    assert "skill" in names
     # Ensure permission metadata present
     by_name = {c.get("name"): c for c in data["commands"]}
     assert "required_permission" in by_name["time"]
@@ -28,6 +30,16 @@ def test_list_chat_commands_basic(test_client, auth_headers, monkeypatch):
     assert "global 70/min" in by_name["time"]["rate_limit"]
     assert by_name["weather"]["usage"] == "/weather [location]"
     assert by_name["weather"]["args"] == ["location"]
+    assert by_name["skills"]["required_permission"] == "chat.commands.skills"
+    assert by_name["skills"]["usage"] == "/skills [filter]"
+    assert by_name["skills"]["args"] == ["filter"]
+    assert by_name["skills"]["requires_api_key"] is True
+    assert by_name["skills"]["rbac_required"] is True
+    assert by_name["skill"]["required_permission"] == "chat.commands.skill"
+    assert by_name["skill"]["usage"] == "/skill <name> [args]"
+    assert by_name["skill"]["args"] == ["name", "args"]
+    assert by_name["skill"]["requires_api_key"] is True
+    assert by_name["skill"]["rbac_required"] is True
 
 
 @pytest.mark.integration
@@ -49,3 +61,22 @@ def test_list_chat_commands_rbac_filtering(test_client, auth_headers, monkeypatc
     # Built-in commands that require permissions should be filtered out
     assert "time" not in names
     assert "weather" not in names
+    assert "skills" not in names
+    assert "skill" not in names
+
+
+@pytest.mark.integration
+def test_list_chat_commands_rbac_allow_path(test_client, auth_headers, monkeypatch):
+    monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "true")
+    monkeypatch.setenv("CHAT_COMMANDS_REQUIRE_PERMISSIONS", "true")
+    from tldw_Server_API.app.api.v1.endpoints import chat as chat_mod
+
+    monkeypatch.setattr(chat_mod, "user_has_permission", lambda user_id, perm: True, raising=True)
+
+    r = test_client.get("/api/v1/chat/commands", headers=auth_headers)
+    assert r.status_code == 200
+    names = {c.get("name") for c in r.json()["commands"]}
+    assert "time" in names
+    assert "weather" in names
+    assert "skills" in names
+    assert "skill" in names

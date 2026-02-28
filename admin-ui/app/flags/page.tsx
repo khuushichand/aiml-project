@@ -12,6 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { EmptyState } from '@/components/ui/empty-state';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
@@ -661,7 +662,10 @@ export default function FlagsPage() {
               {flagLoading ? (
                 <div className="py-8 text-center text-muted-foreground">Loading flags...</div>
               ) : flags.length === 0 ? (
-                <div className="py-8 text-center text-muted-foreground">No flags found.</div>
+                <EmptyState
+                  title="No flags found."
+                  description="Create a feature flag to control rollout behavior."
+                />
               ) : (
                 <Table>
                   <TableHeader>

@@ -12,12 +12,28 @@ BACKEND_GLOBS = [
     ".github/workflows/**",
 ]
 
+COVERAGE_GLOBS = [
+    "tldw_Server_API/**",
+    "pyproject.toml",
+    "uv.lock",
+]
+
 FRONTEND_GLOBS = [
+TLDW_FRONTEND_GLOBS = [
     "apps/tldw-frontend/**",
     "apps/packages/ui/**",
     "apps/extension/**",
     "apps/bun.lock",
     "apps/tldw-frontend/package-lock.json",
+]
+
+ADMIN_UI_GLOBS = [
+    "admin-ui/**",
+]
+
+FRONTEND_GLOBS = [
+    *TLDW_FRONTEND_GLOBS,
+    *ADMIN_UI_GLOBS,
 ]
 
 E2E_BACKEND_GLOBS = [
@@ -34,8 +50,10 @@ def _matches_any(path: str, patterns: Iterable[str]) -> bool:
 def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
     normalized_paths = list(paths)
     backend_changed = any(_matches_any(path, BACKEND_GLOBS) for path in normalized_paths)
+    tldw_frontend_changed = any(_matches_any(path, TLDW_FRONTEND_GLOBS) for path in normalized_paths)
+    admin_ui_changed = any(_matches_any(path, ADMIN_UI_GLOBS) for path in normalized_paths)
     frontend_changed = any(_matches_any(path, FRONTEND_GLOBS) for path in normalized_paths)
-    e2e_changed = frontend_changed or any(_matches_any(path, E2E_BACKEND_GLOBS) for path in normalized_paths)
+    e2e_changed = tldw_frontend_changed or any(_matches_any(path, E2E_BACKEND_GLOBS) for path in normalized_paths)
     security_relevant_changed = backend_changed or any(
         path.endswith(("requirements.txt", "pyproject.toml", "uv.lock")) for path in normalized_paths
     )
@@ -43,7 +61,9 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
     return {
         "backend_changed": backend_changed,
         "frontend_changed": frontend_changed,
+        "tldw_frontend_changed": tldw_frontend_changed,
+        "admin_ui_changed": admin_ui_changed,
         "e2e_changed": e2e_changed,
         "security_relevant_changed": security_relevant_changed,
-        "coverage_required": backend_changed,
+        "coverage_required": coverage_required,
     }
