@@ -49,10 +49,7 @@ export const launchWithExtensionOrSkip = async (
   options: Parameters<typeof launchWithExtension>[1] = {}
 ): Promise<LaunchWithExtensionResult> => {
   try {
-    return await launchWithExtension(extensionPath, {
-      launchTimeoutMs: 30000,
-      ...(options || {})
-    })
+    return await launchWithExtension(extensionPath, options || {})
   } catch (error) {
     test.skip(
       true,
@@ -67,10 +64,7 @@ export const launchWithBuiltExtensionOrSkip = async (
   options: Parameters<typeof launchWithBuiltExtension>[0] = {}
 ): Promise<Awaited<ReturnType<typeof launchWithBuiltExtension>>> => {
   try {
-    return await launchWithBuiltExtension({
-      launchTimeoutMs: 30000,
-      ...(options || {})
-    })
+    return await launchWithBuiltExtension(options || {})
   } catch (error) {
     test.skip(
       true,

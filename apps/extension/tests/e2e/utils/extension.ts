@@ -188,7 +188,9 @@ export async function launchWithExtension(
     launchTimeoutMs ??
     (Number.isFinite(configuredLaunchTimeout) && configuredLaunchTimeout > 0
       ? configuredLaunchTimeout
-      : 30000)
+      : process.env.CI
+        ? 90000
+        : 30000)
 
   const executablePath = resolveChromiumExecutablePath(
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
@@ -221,7 +223,9 @@ export async function launchWithExtension(
   const targetWaitMs =
     Number.isFinite(configuredTargetWait) && configuredTargetWait > 0
       ? configuredTargetWait
-      : 30000
+      : process.env.CI
+        ? 90000
+        : 30000
 
   // Wait for background targets to appear (service worker or background page)
   const waitForTargets = async () => {

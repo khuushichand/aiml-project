@@ -58,6 +58,8 @@ jobs:
       SERVER_LABEL: watchlists-extension-e2e
       TLDW_E2E_SERVER_URL: http://127.0.0.1:8000
       TLDW_E2E_API_KEY: watchlists-e2e-key-12345
+      TLDW_E2E_EXTENSION_LAUNCH_TIMEOUT_MS: "90000"
+      TLDW_E2E_EXTENSION_TARGET_WAIT_MS: "90000"
 
     steps:
       - name: Checkout
