@@ -59,6 +59,16 @@ and this project adheres to Some kind of Versioning
     - `tldw_Server_API/tests/Notes_NEW/unit/test_notes_moodboard_db.py`
     - `tldw_Server_API/tests/Notes_NEW/integration/test_moodboards_api.py`
   - Added/expanded frontend stage42 moodboard tests covering lazy moodboard fetch behavior and moodboard pagination controls/navigation.
+- Slack/Discord endpoint modularization follow-up:
+  - Added dedicated OAuth/admin handler modules:
+    - `tldw_Server_API/app/api/v1/endpoints/slack_oauth_admin.py`
+    - `tldw_Server_API/app/api/v1/endpoints/discord_oauth_admin.py`
+  - Added delegated route wiring in primary endpoint modules while preserving existing API paths/function names and test monkeypatch compatibility.
+- Jobs notifications abstraction hardening:
+  - Added `JobManager.list_job_events_after(...)` to centralize event-stream retrieval behind Jobs core abstractions.
+  - Added/updated bridge regression coverage to validate abstraction-backed notifications event processing behavior.
+- Reminders/notifications review-remediation coverage:
+  - Added API/DB regressions for scheduler-managed PATCH field rejection, dismissed-notification list filtering, reminders scheduler failure logging, and snooze reconciliation behavior.
 
 ### Changed
 - Workspace snapshot lifecycle now fully persists banner state across create/switch/duplicate/archive/restore/import/export pathways.
@@ -90,6 +100,15 @@ and this project adheres to Some kind of Versioning
   - Moodboard list retrieval now iterates paged API requests and deduplicates IDs, removing the practical fixed-size fetch cap behavior.
   - Moodboard view now includes local pagination controls (page-size selector, prev/next, summary/index) backed by paged API requests.
   - Moodboard rename/delete expected-version handling now uses the simplified `selectedMoodboard.version ?? 1` path.
+- Slack/Discord endpoint organization:
+  - `slack.py` and `discord.py` now delegate OAuth/admin routes to focused modules, reducing endpoint-file size and separating routing from lifecycle/policy internals.
+- Notifications/reminders endpoint behavior:
+  - Notifications snooze now delegates task creation to `RemindersService` and performs immediate best-effort scheduler reconciliation.
+  - Reminders create/update/delete endpoints now keep best-effort scheduling semantics but log reconciliation/unschedule failures instead of silently suppressing them.
+  - Notifications SSE/list-window query helpers now align on active-inbox semantics by excluding dismissed rows from non-archived query paths.
+  - Notifications endpoint handlers and reminders/notifications schemas now include expanded docstrings and explicit SSE generator return typing for stronger API-contract readability.
+- Jobs notifications bridge:
+  - `jobs_notifications_service` now consumes Jobs manager event-list APIs instead of in-service raw `job_events` SQL queries.
 
 ### Removed
 - No removals in this session.
@@ -116,6 +135,9 @@ and this project adheres to Some kind of Versioning
 - Fixed `tldw_Server_API/tests/Skills/integration/test_skills_api.py` startup abort risk by setting minimal test-route env toggles early and lazily importing `app.main` within the fixture, avoiding heavy module side effects at collection time.
 - Fixed moodboard create endpoint robustness by handling unexpected `None` ID returns before integer conversion.
 - Fixed moodboard docs path placeholder inconsistency by using `{moodboard_id}` for `GET /moodboards/{moodboard_id}/notes`.
+- Fixed reminder task PATCH safety by removing scheduler-owned fields (`last_status`, `next_run_at`, `last_run_at`) from public update schema to prevent user-driven scheduler state corruption.
+- Fixed dismissed-notification inbox consistency by excluding dismissed rows from non-archived list/stream query paths, aligning unread-count semantics with visible inbox rows.
+- Fixed hidden scheduler-sync failures in reminders task endpoints by surfacing non-critical reconcile/unschedule exceptions in warning logs.
 
 
 ## [0.1.24] 2026-02-22
