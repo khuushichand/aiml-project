@@ -44,13 +44,9 @@ import MetricsGrid from './components/MetricsGrid';
 import NotificationsPanel from './components/NotificationsPanel';
 import SystemStatusPanel from './components/SystemStatusPanel';
 import WatchlistsPanel from './components/WatchlistsPanel';
-import {
-  buildNotificationSettingsUpdate,
-  normalizeNotificationSettings,
-  normalizeRecentNotifications,
-} from './notification-utils';
 import { useMonitoringMetricsHistory } from './use-monitoring-metrics-history';
 import { useAlertActions } from './use-alert-actions';
+import { useNotificationActions } from './use-notification-actions';
 import { useWatchlistActions } from './use-watchlist-actions';
 import type {
   AlertAssignableUser,
@@ -109,7 +105,6 @@ export default function MonitoringPage() {
   // Notification settings
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
   const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([]);
-  const [notificationsSaving, setNotificationsSaving] = useState(false);
   const [notificationSettingsStatus, setNotificationSettingsStatus] = useState<'pending' | 'fulfilled' | 'rejected'>('pending');
 
   // Stage 2: Alert rules + enhanced alert management
@@ -238,6 +233,19 @@ export default function MonitoringPage() {
     assignableUsers,
   });
 
+  const {
+    notificationsSaving,
+    handleSaveNotificationSettings,
+    handleTestNotification,
+  } = useNotificationActions({
+    apiClient: api,
+    canSave: notificationSettingsStatus === 'fulfilled',
+    setNotificationSettings,
+    setRecentNotifications,
+    setError,
+    setSuccess,
+  });
+
   useEffect(() => {
     setAlertRules(readStoredAlertRules());
     setAlertHistory(readStoredAlertHistory());
@@ -313,50 +321,6 @@ export default function MonitoringPage() {
   const handleDeleteAlertRule = (rule: AlertRule) => {
     setAlertRules((prev) => prev.filter((item) => item.id !== rule.id));
     setSuccess('Alert rule deleted');
-  };
-
-  const handleSaveNotificationSettings = async (settings: NotificationSettings) => {
-    if (notificationSettingsStatus !== 'fulfilled') {
-      return false;
-    }
-    try {
-      setNotificationsSaving(true);
-      setError('');
-      const payload = buildNotificationSettingsUpdate(settings);
-      const updated = await api.updateNotificationSettings(payload as unknown as Record<string, unknown>);
-      setNotificationSettings(normalizeNotificationSettings(updated));
-      setSuccess('Notification settings saved');
-      return true;
-    } catch (err: unknown) {
-      console.error('Failed to save notification settings:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to save notification settings');
-      return false;
-    } finally {
-      setNotificationsSaving(false);
-    }
-  };
-
-  const handleTestNotification = async (
-    payload?: {
-      message?: string;
-      severity?: string;
-    },
-  ) => {
-    try {
-      setError('');
-      await api.testNotification(payload ?? {});
-      setSuccess('Test notification sent');
-      // Reload recent notifications
-      try {
-        const data = await api.getRecentNotifications();
-        setRecentNotifications(normalizeRecentNotifications(data));
-      } catch {
-        // Ignore reload errors
-      }
-    } catch (err: unknown) {
-      console.error('Failed to send test notification:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to send test notification');
-    }
   };
 
   const activeAlerts = alerts.filter((alert) => !alert.acknowledged && !isAlertSnoozed(alert));
