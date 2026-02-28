@@ -14,6 +14,8 @@ def _client(monkeypatch) -> TestClient:
     monkeypatch.setenv("ROUTES_ENABLE", "sandbox")
     # Make firecracker appear unavailable regardless of host
     monkeypatch.setenv("TLDW_SANDBOX_FIRECRACKER_AVAILABLE", "0")
+    # Keep fallback suggestion behavior deterministic in tests.
+    monkeypatch.setenv("TLDW_SANDBOX_DOCKER_AVAILABLE", "1")
     return TestClient(app)
 
 
@@ -55,3 +57,25 @@ def test_session_firecracker_unavailable_returns_503(monkeypatch) -> None:
         assert d.get("runtime") == "firecracker"
         assert d.get("available") is False
         assert isinstance(d.get("suggested"), list) and "docker" in d.get("suggested")
+
+
+def test_firecracker_unavailable_without_docker_has_empty_suggestions(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("ROUTES_ENABLE", "sandbox")
+    monkeypatch.setenv("TLDW_SANDBOX_FIRECRACKER_AVAILABLE", "0")
+    monkeypatch.setenv("TLDW_SANDBOX_DOCKER_AVAILABLE", "0")
+
+    with TestClient(app) as client:
+        body = {
+            "spec_version": "1.0",
+            "runtime": "firecracker",
+            "base_image": "python:3.11-slim",
+            "command": ["bash", "-lc", "echo"],
+            "timeout_sec": 5,
+        }
+        r = client.post("/api/v1/sandbox/runs", json=body)
+        assert r.status_code == 503
+        j = r.json()
+        d = j.get("error", {}).get("details", {})
+        assert d.get("runtime") == "firecracker"
+        assert d.get("suggested") == []

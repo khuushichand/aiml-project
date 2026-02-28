@@ -28,6 +28,7 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPMessa
 from tldw_Server_API.app.core.Agent_Client_Protocol.stream_client import ACPStreamClient
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.Sandbox.models import RunSpec, RuntimeType, SessionSpec
+from tldw_Server_API.app.core.Sandbox.runners.lima_runner import LimaRunner
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
 from tldw_Server_API.app.core.testing import is_truthy
 
@@ -366,6 +367,23 @@ class ACPSandboxRunnerManager:
         for sess in sessions:
             await self.close_session(sess.session_id)
 
+    def _validate_lima_strict_runtime_requirements(self) -> None:
+        runtime = str(self.config.runtime or "").strip().lower()
+        if runtime != RuntimeType.lima.value:
+            return
+        network_policy = str(self.config.network_policy or "deny_all").strip().lower()
+        if network_policy not in {"deny_all", "allowlist"}:
+            raise ACPResponseError(
+                "ACP lima strict policy requires network_policy to be deny_all or allowlist"
+            )
+        preflight = LimaRunner().preflight(network_policy=network_policy)
+        if preflight.available:
+            return
+        reasons = list(preflight.reasons or [])
+        raise ACPResponseError(
+            f"ACP lima strict policy requirements not satisfied: {', '.join(reasons) if reasons else 'unknown'}"
+        )
+
     # -------------------------------------------------------------------------
     # Session lifecycle
     # -------------------------------------------------------------------------
@@ -415,6 +433,7 @@ class ACPSandboxRunnerManager:
             execute_enabled = False
         if not execute_enabled:
             raise ACPResponseError("SANDBOX_ENABLE_EXECUTION must be enabled for ACP sandbox sessions")
+        self._validate_lima_strict_runtime_requirements()
 
         sandbox_service = sandbox_ep._service  # type: ignore[attr-defined]
 

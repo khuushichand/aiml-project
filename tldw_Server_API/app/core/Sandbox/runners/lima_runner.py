@@ -17,8 +17,10 @@ from pathlib import Path
 from loguru import logger
 
 from tldw_Server_API.app.core.testing import is_truthy
-from ..models import RunPhase, RunSpec, RunStatus
+from ..models import RunPhase, RunSpec, RunStatus, RuntimeType
+from ..runtime_capabilities import RuntimePreflightResult
 from ..streams import get_hub
+from .lima_enforcer import build_lima_enforcer
 
 _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -156,6 +158,49 @@ class LimaRunner:
 
     def __init__(self) -> None:
         pass
+
+    def preflight(self, network_policy: str | None = None) -> RuntimePreflightResult:
+        """Probe host/runtime capabilities for Lima strict policy admission."""
+        enforcer = build_lima_enforcer()
+        host = enforcer.host_facts()
+        ready = enforcer.preflight_capabilities()
+        net_policy = str(network_policy or "deny_all").strip().lower()
+        host_variant = str(host.get("variant", "")).strip().lower()
+        host_os = str(host.get("os", "")).strip().lower()
+        permission_denied_env = _truthy(os.getenv("TLDW_SANDBOX_LIMA_ENFORCER_PERMISSION_DENIED"))
+
+        reasons: list[str] = []
+
+        if permission_denied_env:
+            ready = {"deny_all": False, "allowlist": False}
+
+        def _append_reason(reason: str) -> None:
+            if reason not in reasons:
+                reasons.append(reason)
+
+        if not lima_available():
+            _append_reason("limactl_missing")
+            ready = {"deny_all": False, "allowlist": False}
+        else:
+            permission_denied_host = permission_denied_env or host_variant == "wsl" or host_os.startswith("win")
+            if net_policy == "deny_all" and not bool(ready.get("deny_all")):
+                if permission_denied_host:
+                    _append_reason("permission_denied_host_enforcement")
+                else:
+                    _append_reason("strict_deny_all_not_supported")
+            if net_policy == "allowlist" and not bool(ready.get("allowlist")):
+                if permission_denied_host:
+                    _append_reason("permission_denied_host_enforcement")
+                else:
+                    _append_reason("strict_allowlist_not_supported")
+
+        return RuntimePreflightResult(
+            runtime=RuntimeType.lima,
+            available=(len(reasons) == 0),
+            reasons=reasons,
+            host=host,
+            enforcement_ready=ready,
+        )
 
     @staticmethod
     def _lima_version() -> str | None:
@@ -328,6 +373,8 @@ class LimaRunner:
         cpu = int(spec.cpu) if spec.cpu else 2
         memory_mb = int(spec.memory_mb) if spec.memory_mb else 2048
         net_policy = (spec.network_policy or "deny_all").lower()
+        if net_policy == "allowlist":
+            raise RuntimeError("strict_allowlist_not_supported")
 
         lima_config = _generate_lima_config(
             workspace_host_path=workspace,
