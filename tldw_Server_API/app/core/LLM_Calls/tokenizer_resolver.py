@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.exceptions import TokenizerUnavailable
@@ -74,6 +74,11 @@ PROVIDER_NATIVE_TOKENIZER_CONFIG: dict[str, dict[str, str]] = {
 }
 
 COMMERCIAL_EXACT_TOKENIZER_CONFIG: dict[str, dict[str, Any]] = {
+    "bedrock": {
+        "section": "API",
+        "label": "bedrock",
+        "mode": "bedrock-count-only",
+    },
     "anthropic": {
         "section": "API",
         "api_key_field": "anthropic_api_key",
@@ -491,6 +496,54 @@ class CohereTokenizerHTTPAdapter(_HTTPJSONAdapterBase):
         return text
 
 
+class BedrockCountOnlyHTTPAdapter(_HTTPJSONAdapterBase):
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        api_key: str,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        super().__init__(base_url=base_url, timeout_seconds=timeout_seconds)
+        self.model = model.strip()
+        self.api_key = api_key
+
+    def _headers(self) -> dict[str, str]:
+        headers = super()._headers()
+        headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def _candidate_paths(self) -> tuple[str, ...]:
+        model_id = quote(self.model, safe="")
+        return (
+            f"/model/{model_id}/count-tokens",
+            f"/bedrock-runtime/model/{model_id}/count-tokens",
+        )
+
+    def count_tokens(self, text: str) -> int:
+        payload = {
+            "input": {
+                "converse": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [{"text": text}],
+                        }
+                    ]
+                }
+            }
+        }
+        data = self._request_json(self._candidate_paths(), payload)
+        parsed = _extract_int_value(
+            data,
+            ("inputTokens", "input_tokens", "totalTokens", "total_tokens", "token_count", "count"),
+        )
+        if parsed is None or parsed < 0:
+            raise TokenizerUnavailable("Bedrock count-tokens response missing token count")
+        return int(parsed)
+
+
 def _truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -607,6 +660,58 @@ def _resolve_commercial_base_url(
             return value.rstrip("/")
 
     return str(default_url or "").strip().rstrip("/")
+
+
+def _resolve_bedrock_api_key(parser: Any) -> str | None:
+    for env_name in ("BEDROCK_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"):
+        env_val = str(os.getenv(env_name, "") or "").strip()
+        if env_val and not env_val.startswith("<"):
+            return env_val
+    return _safe_config_string(parser, "API", "bedrock_api_key")
+
+
+def _normalize_bedrock_runtime_base_url(base_url: str) -> str:
+    normalized = str(base_url or "").strip().rstrip("/")
+    lowered = normalized.lower()
+    for suffix in ("/openai/v1", "/openai", "/v1/chat/completions", "/chat/completions"):
+        if lowered.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+            break
+    return normalized.rstrip("/")
+
+
+def _resolve_bedrock_runtime_base_url(parser: Any) -> str:
+    candidates = (
+        os.getenv("BEDROCK_RUNTIME_ENDPOINT"),
+        _safe_config_string(parser, "API", "bedrock_runtime_endpoint"),
+        os.getenv("BEDROCK_API_BASE_URL"),
+        os.getenv("BEDROCK_OPENAI_BASE_URL"),
+        _safe_config_string(parser, "API", "bedrock_api_base_url"),
+        _safe_config_string(parser, "API", "bedrock_openai_base_url"),
+    )
+    for candidate in candidates:
+        if candidate:
+            normalized = _normalize_bedrock_runtime_base_url(candidate)
+            if normalized:
+                return normalized
+
+    region = (
+        str(os.getenv("BEDROCK_REGION", "") or "").strip()
+        or str(_safe_config_string(parser, "API", "bedrock_region") or "").strip()
+        or "us-west-2"
+    )
+    return f"https://bedrock-runtime.{region}.amazonaws.com"
+
+
+def _bedrock_model_supports_exact_count(model: str) -> bool:
+    normalized = str(model or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized.startswith("anthropic.claude-"):
+        return True
+    if normalized.startswith("arn:") and "anthropic.claude-" in normalized:
+        return True
+    return False
 
 
 def _unavailable_resolution(
@@ -739,6 +844,42 @@ def resolve_commercial_exact_tokenizer(
             error=f"Commercial tokenizer config unavailable: {exc}",
         )
 
+    normalized_model = str(model or "").strip()
+    if provider_key == "bedrock":
+        if not _bedrock_model_supports_exact_count(normalized_model):
+            return _unavailable_resolution(
+                strict_mode_effective=strict_flag,
+                error="Bedrock exact tokenizer unavailable for provider/model",
+            )
+        api_key = _resolve_bedrock_api_key(parser)
+        if not api_key:
+            return _unavailable_resolution(
+                strict_mode_effective=strict_flag,
+                error="Provider tokenizer API key is not configured",
+            )
+        base_url = _resolve_bedrock_runtime_base_url(parser)
+        if not base_url:
+            return _unavailable_resolution(
+                strict_mode_effective=strict_flag,
+                error="Provider tokenizer endpoint is not configured",
+            )
+        adapter = BedrockCountOnlyHTTPAdapter(
+            base_url=base_url,
+            model=normalized_model,
+            api_key=api_key,
+        )
+        return TokenizerResolution(
+            available=True,
+            tokenizer=f"{label}:remote-count",
+            kind="provider-native-count",
+            source=f"{label}.http.count_tokens",
+            detokenize_available=False,
+            count_accuracy="exact",
+            strict_mode_effective=bool(strict_flag),
+            encoding=adapter,
+            error=None,
+        )
+
     api_key = _resolve_commercial_api_key(
         parser,
         section=section,
@@ -764,7 +905,6 @@ def resolve_commercial_exact_tokenizer(
             error="Provider tokenizer endpoint is not configured",
         )
 
-    normalized_model = str(model or "").strip()
     if mode == "count-only":
         if provider_key == "anthropic":
             adapter: Any = AnthropicCountOnlyHTTPAdapter(

@@ -14,6 +14,7 @@ and this project adheres to Some kind of Versioning
   - Added shared tokenizer resolver service at `tldw_Server_API/app/core/LLM_Calls/tokenizer_resolver.py` to centralize provider/model tokenizer classification.
   - Added additive tokenizer metadata fields `count_accuracy` (`exact`/`unavailable`) and `strict_mode_effective` in writing tokenize/count/detokenize responses, writing capabilities payloads, and `/api/v1/llm/providers`.
   - Added exact tokenizer resolution paths for `ollama` (provider-native HTTP tokenize/detokenize probing) and `mlx` (active registry tokenizer with artifact fallback).
+  - Added Bedrock `CountTokens` exact-count path (Anthropic-on-Bedrock model family) with model-level strict classification and mirrored metadata on `/api/v1/llm/providers`.
   - Added strict writing token endpoint gate: when `STRICT_TOKEN_COUNTING=true`, non-exact tokenizer resolutions return HTTP `422`.
   - Added regression coverage for strict runtime propagation and tokenizer metadata mirroring across Writing and provider metadata tests.
 - Alibaba Model Studio image backend support for `/api/v1/files/create` image generation via the new `modelstudio` backend.

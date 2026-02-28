@@ -138,6 +138,84 @@ def test_resolve_tokenizer_cohere_tokenizer_exact_from_config():
     assert callable(getattr(resolution.encoding, "decode", None))
 
 
+def test_resolve_tokenizer_bedrock_anthropic_count_only_exact_from_config():
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    config = configparser.ConfigParser()
+    config.add_section("API")
+    config.set("API", "bedrock_api_key", "bedrock-test-key")
+    config.set("API", "bedrock_model", "anthropic.claude-3-5-sonnet-20240620-v1:0")
+
+    resolution = resolver.resolve_tokenizer(
+        "bedrock",
+        "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        strict_mode_effective=True,
+        config_parser=config,
+    )
+
+    assert resolution.available is True
+    assert resolution.count_accuracy == "exact"
+    assert resolution.kind == "provider-native-count"
+    assert resolution.source == "bedrock.http.count_tokens"
+    assert resolution.tokenizer == "bedrock:remote-count"
+    assert resolution.detokenize_available is False
+    assert callable(getattr(resolution.encoding, "count_tokens", None))
+
+
+def test_resolve_tokenizer_bedrock_non_anthropic_not_exact(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    monkeypatch.setattr(resolver, "resolve_tiktoken_encoding", lambda _model: _FakeTokenizer("cl100k_base"))
+
+    config = configparser.ConfigParser()
+    config.add_section("API")
+    config.set("API", "bedrock_api_key", "bedrock-test-key")
+
+    resolution = resolver.resolve_tokenizer(
+        "bedrock",
+        "openai.gpt-oss-20b-1:0",
+        strict_mode_effective=True,
+        config_parser=config,
+    )
+
+    assert resolution.available is True
+    assert resolution.count_accuracy == "unavailable"
+    assert resolution.kind == "tiktoken"
+    assert resolution.tokenizer == "tiktoken:cl100k_base"
+
+
+def test_bedrock_count_only_adapter_calls_runtime_count_tokens(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    calls: list[tuple[str, dict[str, str], dict[str, object]]] = []
+
+    class _FakeResponse:
+        def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    def _fake_post(*, url: str, payload, headers, timeout):  # noqa: ANN001, ARG001
+        calls.append((url, dict(headers), dict(payload)))
+        return _FakeResponse(200, {"inputTokens": 9})
+
+    monkeypatch.setattr(resolver, "_http_post", _fake_post)
+
+    adapter = resolver.BedrockCountOnlyHTTPAdapter(
+        base_url="https://bedrock-runtime.us-west-2.amazonaws.com",
+        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        api_key="bedrock-test-key",
+    )
+
+    count = adapter.count_tokens("hello")
+    assert count == 9
+    assert calls
+    assert "/model/anthropic.claude-3-5-sonnet-20240620-v1%3A0/count-tokens" in calls[0][0]
+    assert calls[0][1].get("Authorization") == "Bearer bedrock-test-key"
+
+
 def test_resolve_tokenizer_ollama_native_exact_from_config():
     from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
 
