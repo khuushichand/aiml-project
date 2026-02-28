@@ -1,9 +1,10 @@
 # Installation & Setup Guide
 
-> **Note:** For curated setup docs in this published site, start here:
-> - [First-Time Production Setup](../../Deployment/First_Time_Production_Setup.md)
-> - [Long-Term Admin Guide](../../Deployment/Long_Term_Admin_Guide.md)
-> - [API README](../../API-related/API_README.md)
+> **Note:** This guide is being replaced by the new Getting Started guides:
+> - [Tire Kicker Guide](../../Getting_Started/Tire_Kicker.md) - 5-minute setup
+> - [Local Development Guide](../../Getting_Started/Local_Development.md) - building against the API
+> - [Docker Self-Host Guide](../../Getting_Started/Docker_Self_Host.md) - running on your server
+> - [Production Guide](../../Getting_Started/Production.md) - team deployment
 >
 > The content below remains valid but may not be actively maintained.
 

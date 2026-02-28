@@ -80,7 +80,7 @@ This guide covers all paths. Follow the sections marked with your choice.
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/tldw_server2.git
+git clone https://github.com/rmusser01/tldw_server.git tldw_server2
 cd tldw_server2
 
 # Create and activate a virtual environment
@@ -94,12 +94,28 @@ pip install -e ".[multiplayer]"
 #### Docker
 
 ```bash
-git clone https://github.com/your-org/tldw_server2.git
+git clone https://github.com/rmusser01/tldw_server.git tldw_server2
 cd tldw_server2
 
 # Build and start (Postgres included in compose file)
 docker compose -f Dockerfiles/docker-compose.yml up -d --build
 ```
+
+#### Docker WebUI: Separate Container vs Same Container
+
+| Approach | How it works | Pros | Cons | Recommendation |
+|----------|---------------|------|------|----------------|
+| **Separate WebUI container** | API runs in `app`; Next.js runs in a dedicated `webui` service via `docker-compose.webui.yml`. | Clear separation of concerns, easier upgrades/rollbacks, independent scaling and restarts, matches repo-provided compose overlays. | One extra container and one extra public port. | **Recommended** for Docker deployments. |
+| **Same container (custom image)** | Run Python API + Next.js in one container using a custom entrypoint/process manager. | Single container artifact. | More complex image/runtime, harder health checks and restarts, coupled release lifecycle, not the default in this repo. | Use only if you have strict single-container constraints. |
+
+Use the supported separate-container setup:
+
+```bash
+export NEXT_PUBLIC_API_URL=http://<server-ip>:8000
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.webui.yml up -d --build
+```
+
+Then open the WebUI at `http://<server-ip>:8080`.
 
 ### 4b. Configure Environment
 
@@ -178,7 +194,7 @@ You'll be prompted to create the admin account:
 
 ```text
 Enter admin username: householder
-Enter admin email: admin@example.com
+Enter admin email: <your-admin-email>
 Enter admin password: ********
 Confirm password: ********
 ```
@@ -210,8 +226,9 @@ The server starts automatically with `docker compose up`.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"householder","password":"YOUR_ADMIN_PASSWORD"}' | python3 -m json.tool
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "username=householder" \
+  --data-urlencode "password=YOUR_ADMIN_PASSWORD" | python3 -m json.tool
 ```
 
 Expected response (truncated):
@@ -219,12 +236,9 @@ Expected response (truncated):
 ```json
 {
     "access_token": "eyJ...",
+    "refresh_token": "eyJ...",
     "token_type": "bearer",
-    "user": {
-        "username": "householder",
-        "role": "admin",
-        ...
-    }
+    "expires_in": 1800
 }
 ```
 
@@ -279,8 +293,17 @@ If you'd rather let family members register themselves:
 1. **Generate registration codes** (one per person):
 
 ```bash
-python -m tldw_Server_API.app.core.AuthNZ.initialize --create-registration-code
+curl -s -X POST http://127.0.0.1:8000/api/v1/admin/registration-codes \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "max_uses": 1,
+    "expiry_days": 7,
+    "role_to_grant": "user"
+  }' | python3 -m json.tool
 ```
+
+The response includes a `code` value to share with the user.
 
 2. **Temporarily enable registration** in `.env`:
 
@@ -321,30 +344,35 @@ Run these checks to confirm everything works.
 ```bash
 # Alex logs in
 curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"alex","password":"AlexSecurePass123!"}' | python3 -m json.tool
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "username=alex" \
+  --data-urlencode "password=AlexSecurePass123!" | python3 -m json.tool
 
 # Jordan logs in
 curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"jordan","password":"JordanSecurePass123!"}' | python3 -m json.tool
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "username=jordan" \
+  --data-urlencode "password=JordanSecurePass123!" | python3 -m json.tool
 ```
 
 **Each user can see their own profile**:
 
 ```bash
 export ALEX_JWT="<paste alex's access_token>"
-
-curl -s http://127.0.0.1:8000/api/v1/auth/me \
+curl -s http://127.0.0.1:8000/api/v1/users/me/profile \
   -H "Authorization: Bearer $ALEX_JWT" | python3 -m json.tool
 ```
 
-Expected: returns alex's profile with `"role": "user"`.
+Expected: returns profile data with `user.username = "alex"` and `user.role = "user"`.
 
 **Per-user directories exist**:
 
 ```bash
+# Bare metal
 ls -la Databases/user_databases/
+
+# Docker
+docker compose -f Dockerfiles/docker-compose.yml exec app ls -la /app/Databases/user_databases/
 ```
 
 You should see directories for each user ID (created on first access to any data endpoint).
@@ -404,15 +432,17 @@ BYOK_ALLOWED_PROVIDERS=openai,anthropic
 
 See [BYOK_User_Guide.md](../Server/BYOK_User_Guide.md) for details.
 
-### Roles: User vs Viewer
+### Roles in This Guide
 
-By default, new users get the `user` role which grants access to all standard features (media, chat, RAG, notes, prompts). If you want a more restricted account that can only read/search but not create content, assign the `viewer` role:
+The built-in user record role field supports `user`, `admin`, and `service`. For a household setup, keep family members as `user`.
+
+If you need to promote a trusted person to admin:
 
 ```bash
-curl -s -X PATCH http://127.0.0.1:8000/api/v1/admin/users/<USER_ID> \
+curl -s -X PUT http://127.0.0.1:8000/api/v1/admin/users/<USER_ID> \
   -H "Authorization: Bearer $ADMIN_JWT" \
   -H "Content-Type: application/json" \
-  -d '{"role": "viewer"}'
+  -d '{"role": "admin"}'
 ```
 
 ### Virtual Keys (Optional)
@@ -425,15 +455,20 @@ Virtual keys let you set per-user budgets and model restrictions. See [Family_Gu
 
 ### How Users Log In
 
-**WebUI**: Open `http://<server-ip>:3000` (Next.js frontend) or `http://<server-ip>:8000/docs` (API docs). Enter username and password. The WebUI stores the JWT automatically.
+**WebUI**:
+- Bare metal frontend dev server: `http://<server-ip>:3000`
+- Docker with `docker-compose.webui.yml`: `http://<server-ip>:8080`
+- API docs only: `http://<server-ip>:8000/docs`
 
-**API**: POST to `/api/v1/auth/login` with username/password, receive a JWT, include it as `Authorization: Bearer <token>` in subsequent requests.
+The default `Dockerfiles/docker-compose.yml` stack is API-only (no WebUI container). Add `Dockerfiles/docker-compose.webui.yml` if you want browser UI in Docker.
+
+**API**: POST to `/api/v1/auth/login` using `application/x-www-form-urlencoded` fields (`username`, `password`), receive JWTs, include access token as `Authorization: Bearer <token>` in subsequent requests.
 
 ### Token Refresh
 
-JWTs expire after a configurable period (default: 24 hours). When a token expires:
+JWTs expire after a configurable period (default: 30 minutes via `ACCESS_TOKEN_EXPIRE_MINUTES=30`). When a token expires:
 - **WebUI**: Automatically refreshes or prompts for re-login
-- **API**: Call `/api/v1/auth/refresh` with the current token before it expires to get a new one
+- **API**: Call `/api/v1/auth/refresh` with the refresh token to get a new token pair
 
 ### What Each User Can Do
 
@@ -452,8 +487,8 @@ JWTs expire after a configurable period (default: 24 hours). When a token expire
 ### What the Admin Can Do
 
 - Create, deactivate, and delete user accounts
-- Reset user passwords
-- View active sessions across all users
+- Revoke sessions for specific users
+- Create/list/revoke registration codes
 - Configure virtual keys and permission overrides
 - Access server health and metrics endpoints
 
@@ -530,7 +565,7 @@ ALLOWED_ORIGINS=https://tldw.yourdomain.com
 For multiple origins (e.g., if the WebUI is on a different port):
 
 ```bash
-ALLOWED_ORIGINS='["https://tldw.yourdomain.com", "https://tldw.yourdomain.com:3000"]'
+ALLOWED_ORIGINS='["https://tldw.yourdomain.com", "https://tldw.yourdomain.com:8080"]'
 ```
 
 See [Production_Hardening_Checklist.md](../Server/Production_Hardening_Checklist.md) for more details.
@@ -544,8 +579,13 @@ See [Production_Hardening_Checklist.md](../Server/Production_Hardening_Checklist
 The simplest approach is to copy the database files while the server is stopped (or use SQLite's `.backup` command):
 
 ```bash
-# Stop the server first (or use WAL mode for hot backups)
+# Bare metal: stop the server first (or use WAL mode for hot backups)
 cp -r Databases/ Databases_backup_$(date +%Y%m%d)/
+
+# Docker: stop app, copy from container, restart
+docker compose -f Dockerfiles/docker-compose.yml stop app
+docker cp tldw-app:/app/Databases ./Databases_backup_$(date +%Y%m%d)
+docker compose -f Dockerfiles/docker-compose.yml start app
 ```
 
 For automated continuous backups, see [Backups_Using_Litestream.md](../Server/Backups_Using_Litestream.md).
@@ -553,7 +593,12 @@ For automated continuous backups, see [Backups_Using_Litestream.md](../Server/Ba
 ### Postgres Backups
 
 ```bash
+# Bare metal
 pg_dump -U tldw_user -h localhost tldw_users > authnz_backup_$(date +%Y%m%d).sql
+
+# Docker
+docker compose -f Dockerfiles/docker-compose.yml exec -T postgres \
+  pg_dump -U tldw_user tldw_users > authnz_backup_$(date +%Y%m%d).sql
 ```
 
 ### Per-User Data
@@ -561,8 +606,11 @@ pg_dump -U tldw_user -h localhost tldw_users > authnz_backup_$(date +%Y%m%d).sql
 Always include the per-user directory in backups:
 
 ```bash
-# This contains all user media DBs, notes, prompts, vector stores, etc.
+# Bare metal: this contains all user media DBs, notes, prompts, vector stores, etc.
 cp -r Databases/user_databases/ user_data_backup_$(date +%Y%m%d)/
+
+# Docker
+docker cp tldw-app:/app/Databases/user_databases ./user_data_backup_$(date +%Y%m%d)
 ```
 
 ### Backup Schedule Recommendation
@@ -594,8 +642,23 @@ Wrong username or password.
 **Fix**: Double-check credentials. If you've forgotten the admin password, reset it:
 
 ```bash
-python -m tldw_Server_API.app.core.AuthNZ.initialize --reset-admin-password
+curl -s -X POST http://127.0.0.1:8000/api/v1/auth/forgot-password \
+  -H "Content-Type: application/json" \
+  -d '{"email":"<your-admin-email>"}'
 ```
+
+Then submit the token from the reset email:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/auth/reset-password \
+  -H "Content-Type: application/json" \
+  -d '{
+    "token":"<RESET_TOKEN_FROM_EMAIL>",
+    "new_password":"NewSecurePass123!"
+  }'
+```
+
+If email delivery is not configured, `forgot-password` still returns a generic success message but no reset email will be sent. Configure SMTP/email first, or use `/api/v1/users/change-password` for users who still know their current password.
 
 ### Regular user gets 403 on an endpoint
 
@@ -644,14 +707,14 @@ Then access via `http://<server-ip>:8000` from other devices. Find your server's
 ### How to check active sessions
 
 ```bash
-curl -s http://127.0.0.1:8000/api/v1/admin/sessions \
+curl -s http://127.0.0.1:8000/api/v1/admin/users/<USER_ID>/sessions \
   -H "Authorization: Bearer $ADMIN_JWT" | python3 -m json.tool
 ```
 
 ### How to deactivate a user
 
 ```bash
-curl -s -X PATCH http://127.0.0.1:8000/api/v1/admin/users/<USER_ID> \
+curl -s -X PUT http://127.0.0.1:8000/api/v1/admin/users/<USER_ID> \
   -H "Authorization: Bearer $ADMIN_JWT" \
   -H "Content-Type: application/json" \
   -d '{"is_active": false}'
@@ -678,16 +741,18 @@ curl -s -X PATCH http://127.0.0.1:8000/api/v1/admin/users/<USER_ID> \
 |--------|--------|----------|
 | Log in | POST | `/api/v1/auth/login` |
 | Register (if enabled) | POST | `/api/v1/auth/register` |
-| View own profile | GET | `/api/v1/auth/me` |
+| View own profile | GET | `/api/v1/users/me/profile` |
 | Refresh token | POST | `/api/v1/auth/refresh` |
-| Change own password | POST | `/api/v1/auth/change-password` |
+| Change own password | POST | `/api/v1/users/change-password` |
 | Admin: create user | POST | `/api/v1/admin/users` |
 | Admin: list users | GET | `/api/v1/admin/users` |
-| Admin: update user | PATCH | `/api/v1/admin/users/<id>` |
+| Admin: update user | PUT | `/api/v1/admin/users/<id>` |
+| Admin: create registration code | POST | `/api/v1/admin/registration-codes` |
 | Admin: list permissions | GET | `/api/v1/admin/permissions` |
 | Admin: set permission override | POST | `/api/v1/admin/users/<id>/overrides` |
 | Admin: create virtual key | POST | `/api/v1/admin/users/<id>/virtual-keys` |
-| Admin: view sessions | GET | `/api/v1/admin/sessions` |
+| Admin: view user sessions | GET | `/api/v1/admin/users/<id>/sessions` |
+| Admin: revoke all user sessions | POST | `/api/v1/admin/users/<id>/sessions/revoke-all` |
 
 ### Key Environment Variables
 
@@ -704,6 +769,65 @@ curl -s -X PATCH http://127.0.0.1:8000/api/v1/admin/users/<USER_ID> \
 | `RG_ENABLED` | Enable Resource Governor rate limiting | `true` |
 | `RG_POLICY_PATH` | Policy file containing requests.rpm / requests.burst limits | `tldw_Server_API/Config_Files/resource_governor_policies.yaml` |
 | `ALLOWED_ORIGINS` | CORS allowed origins | `https://tldw.yourdomain.com` |
+
+### Validated Commands (AuthNZ API-Guide Style)
+
+#### Login (Multi-User Mode)
+`POST /api/v1/auth/login`
+
+Request content type: `application/x-www-form-urlencoded`
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "username=householder" \
+  --data-urlencode "password=YOUR_ADMIN_PASSWORD" | python3 -m json.tool
+```
+
+#### Refresh Token
+`POST /api/v1/auth/refresh`
+
+Request body: JSON
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"<REFRESH_TOKEN>"}' | python3 -m json.tool
+```
+
+#### Create User (Admin)
+`POST /api/v1/admin/users`
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/admin/users \
+  -H "Authorization: Bearer <ADMIN_JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username":"alex",
+    "email":"alex@example.com",
+    "password":"AlexSecurePass123!",
+    "role":"user",
+    "is_active": true
+  }' | python3 -m json.tool
+```
+
+#### Create Registration Code (Admin)
+`POST /api/v1/admin/registration-codes`
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/admin/registration-codes \
+  -H "Authorization: Bearer <ADMIN_JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"max_uses":1,"expiry_days":7,"role_to_grant":"user"}' | python3 -m json.tool
+```
+
+#### Revoke All Sessions for a User (Admin)
+`POST /api/v1/admin/users/<USER_ID>/sessions/revoke-all`
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/admin/users/<USER_ID>/sessions/revoke-all \
+  -H "Authorization: Bearer <ADMIN_JWT>" | python3 -m json.tool
+```
 
 ---
 

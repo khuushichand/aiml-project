@@ -1,0 +1,6 @@
+# Allowlist format:
+# <path_regex>|<line_regex>
+#
+# Use only for intentional exceptions that are not first-time setup commands.
+
+Docs/User_Guides/Server/CLI_Reference\.md|python -m tldw_Server_API\.app\.core\.AuthNZ\.initialize

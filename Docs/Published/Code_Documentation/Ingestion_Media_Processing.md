@@ -28,17 +28,17 @@ tldw_Server_API/app/core/Ingestion_Media_Processing/
 ```
 
 - Submodule docs and references:
-  - `Audio/` ([docs](./Ingestion_Pipeline_Audio.md))
-  - `Books/` ([docs](./Ingestion_Pipeline_Ebooks.md))
-  - `Claims/` ([docs](./Claims_Extraction.md))
-  - `MediaWiki/` ([docs](./Ingestion_Pipeline_MediaWiki.md))
-  - `OCR/` ([docs](../API-related/OCR_API_Documentation.md))
-  - `PDF/` ([docs](./Ingestion_Pipeline_PDF.md))
-  - `Plaintext/` ([docs](./Ingestion_Pipeline_Documents.md))
-  - `Video/` ([docs](./Ingestion_Pipeline_Video.md))
-  - `Media_Update_lib.py` ([code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/Ingestion_Media_Processing/Media_Update_lib.py))
-  - `Upload_Sink.py` ([code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/Ingestion_Media_Processing/Upload_Sink.py))
-  - `XML_Ingestion_Lib.py` ([code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/Ingestion_Media_Processing/XML_Ingestion_Lib.py))
+  - `Audio/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Audio.md))
+  - `Books/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Ebooks.md))
+  - `Claims/` ([docs](Docs/Code_Documentation/Claims_Extraction.md))
+  - `MediaWiki/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_MediaWiki.md))
+  - `OCR/` ([docs](Docs/API-related/OCR_API_Documentation.md))
+  - `PDF/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_PDF.md))
+  - `Plaintext/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Documents.md))
+  - `Video/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Video.md))
+  - `Media_Update_lib.py` ([code](tldw_Server_API/app/core/Ingestion_Media_Processing/Media_Update_lib.py))
+  - `Upload_Sink.py` ([code](tldw_Server_API/app/core/Ingestion_Media_Processing/Upload_Sink.py))
+  - `XML_Ingestion_Lib.py` ([code](tldw_Server_API/app/core/Ingestion_Media_Processing/XML_Ingestion_Lib.py))
 
 ## Validation & Security: `Upload_Sink.py`
 
@@ -78,13 +78,6 @@ Base prefix: `/api/v1/media`
 - Web content ingestion:
   - `POST /ingest-web-content` - Multi-mode scraping (individual, sitemap, url_level, recursive) with optional analysis/chunking and persistence.
   - `POST /process-web-scraping` - Process scraping jobs without persistence.
-
-### Deprecation Window (Media Processing)
-
-- One-release compatibility window:
-  - Release N: legacy compatibility input forms are still accepted where applicable, with additive deprecation signaling (`Deprecation`, `Sunset`, `Link` headers).
-  - Release N+1: compatibility shims/aliases are eligible for removal after parity and usage gates pass.
-- Current deprecation signaling is non-fatal and does not change response status/body contracts.
 
 ### Media Item Details
 

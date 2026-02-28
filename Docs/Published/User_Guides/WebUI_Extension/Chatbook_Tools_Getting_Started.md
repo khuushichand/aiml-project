@@ -5,7 +5,7 @@ This guide shows how to use the new Chatbook Tools features: templated chat dict
 ## Overview
 
 - Templating: Render dynamic values (date/time, matched text) in chat dictionary replacements using a sandboxed Jinja2 renderer.
-- Slash commands: Pre-LLM helpers like `/time` and `/weather` to enrich context.
+- Slash commands: Pre-LLM helpers like `/time`, `/weather`, `/skills`, and `/skill` to enrich context.
 - Validator: Lint chat dictionaries for schema, regex, and template issues (CLI + API).
 
 ## 1) Templating in Chat Dictionaries
@@ -78,6 +78,12 @@ default_location =        # fallback for /weather
 Built-in commands:
 - `/time [TZ]` → “Current time (America/New_York): 2025-11-10 20:15:00”
 - `/weather [location]` → “Boston: 42°F, clear skies” (requires provider config; otherwise “weather unavailable”). Configure `WEATHER_PROVIDER=openweather` and `OPENWEATHER_API_KEY` to enable live weather lookups.
+- `/skills [filter]` → lists invocable skills for the current user (optional substring filter on name/description/argument hint).
+- `/skill <name> [args]` → executes an invocable skill and injects its output using the configured slash-command injection mode.
+
+Examples:
+- `/skills summarize`
+- `/skill summarize release notes`
 
 Preface-mode example:
 - Input (user): `/time America/Los_Angeles`

@@ -1,0 +1,27 @@
+name: onboarding-docs-smoke-nightly
+
+on:
+  schedule:
+    - cron: "30 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: onboarding-docs-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  onboarding-docs-smoke:
+    name: onboarding-docs-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+      - name: Run onboarding smoke script
+        run: |
+          chmod +x Helper_Scripts/docs/smoke_onboarding_commands.sh
+          bash Helper_Scripts/docs/smoke_onboarding_commands.sh

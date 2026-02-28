@@ -37,7 +37,7 @@ Authorization: Bearer your-jwt-token-here
 
 Simple API key authentication for personal deployments:
 
-- **Configuration**: Set `AUTH_MODE=single_user` in `.env`
+- **Configuration**: Follow the canonical single-user setup profile: `Docs/Getting_Started/Profile_Local_Single_User.md` (or Docker single-user: `Docs/Getting_Started/Profile_Docker_Single_User.md`)
 - **API Key**: Auto-generated on first run, displayed in console
 - **Header**: `X-API-KEY`
 - **Use Case**: Personal installations, development
@@ -46,7 +46,7 @@ Simple API key authentication for personal deployments:
 
 JWT-based authentication with user management:
 
-- **Configuration**: Set `AUTH_MODE=multi_user` in `.env`
+- **Configuration**: Follow the canonical multi-user setup profile: `Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md`
 - **Authentication**: Username/password login returns JWT tokens
 - **Header**: `Authorization: Bearer <token>`
 - **Features**: User registration, roles, permissions; API key CRUD endpoints are not yet public
@@ -815,6 +815,6 @@ Import this collection for testing:
 
 ## Support
 
-- **Documentation**: See [AuthNZ Developer Guide](../Code_Documentation/AuthNZ-Developer-Guide.md)
+- **Documentation**: See [AuthNZ Developer Guide](../Development/AuthNZ-Developer-Guide.md)
 - **Issues**: Report at [GitHub Issues](https://github.com/rmusser01/tldw_server/issues)
 - **Security**: Report security issues privately to the maintainers

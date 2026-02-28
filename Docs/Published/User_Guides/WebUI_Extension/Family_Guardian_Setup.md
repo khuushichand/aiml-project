@@ -64,13 +64,43 @@ You have two safe options:
 
 ### Option A: Registration Codes (Recommended)
 
-Create a registration code for each person:
+1. Login as admin and capture a JWT:
 
 ```bash
-python -m tldw_Server_API.app.core.AuthNZ.initialize --create-registration-code
+curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "username=<admin username>" \
+  --data-urlencode "password=<admin password>" | python3 -m json.tool
 ```
 
-Then each family member registers using the code:
+Save the returned `access_token` as `<ADMIN_JWT>` for the next command.
+
+2. Create a registration code for each person:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/admin/registration-codes \
+  -H "Authorization: Bearer <ADMIN_JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "max_uses": 1,
+    "expiry_days": 7,
+    "role_to_grant": "user"
+  }' | python3 -m json.tool
+```
+
+3. Temporarily allow self-registration while still requiring a code:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/admin/registration-settings \
+  -H "Authorization: Bearer <ADMIN_JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enable_registration": true,
+    "require_registration_code": true
+  }' | python3 -m json.tool
+```
+
+4. Each family member registers using the returned `code`:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/auth/register \
@@ -83,15 +113,30 @@ curl -X POST http://127.0.0.1:8000/api/v1/auth/register \
   }'
 ```
 
+5. Lock registration down again after onboarding:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/admin/registration-settings \
+  -H "Authorization: Bearer <ADMIN_JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enable_registration": false,
+    "require_registration_code": true
+  }' | python3 -m json.tool
+```
+
 ### Option B: Admin Creates Accounts
 
 1. Login as admin and get a JWT:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"<admin password>"}'
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "username=<admin username>" \
+  --data-urlencode "password=<admin password>"
 ```
+
+Save the returned `access_token` and use it as `<ADMIN_JWT>`.
 
 2. Create a user via admin endpoint:
 
@@ -116,15 +161,16 @@ Before proceeding to guardrails, confirm each account works.
 ```bash
 # Log in as a family member
 curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"alex","password":"ChangeMe123!"}' | python3 -m json.tool
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "username=alex" \
+  --data-urlencode "password=ChangeMe123!" | python3 -m json.tool
 
 # Use the returned token to check profile
-curl -s http://127.0.0.1:8000/api/v1/auth/me \
+curl -s http://127.0.0.1:8000/api/v1/users/me/profile \
   -H "Authorization: Bearer <USER_JWT>" | python3 -m json.tool
 ```
 
-Expected: each user sees their own `username` and `"role": "user"`.
+Expected: each user sees their own `user.username` and `user.role = "user"`.
 
 **Regular users cannot access admin endpoints**:
 
@@ -138,7 +184,11 @@ Expected: `403 Forbidden`.
 **Per-user data directories** (created lazily on first data access):
 
 ```bash
+# Bare metal
 ls -la Databases/user_databases/
+
+# Docker
+docker compose -f Dockerfiles/docker-compose.yml exec app ls -la /app/Databases/user_databases/
 ```
 
 ## Step 4: Set Guardrails (Practical Defaults)
@@ -255,28 +305,53 @@ If you aren’t sure which permission names map to features, use the OpenAPI doc
 - Review `Databases/security_alerts.log` occasionally.
 - **Bookmark the WebUI** on each person's device so they don't need to remember the URL.
 - **Password management**: Use a family password manager (1Password, Bitwarden) to store each person's credentials. Avoid writing passwords on sticky notes.
-- **Token expiry**: JWTs expire after 24 hours by default. The WebUI handles refresh automatically. For API users, call `/api/v1/auth/refresh` before the token expires.
+- **Token expiry**: Access JWTs expire after 30 minutes by default (`ACCESS_TOKEN_EXPIRE_MINUTES=30`). The WebUI handles refresh automatically. For API users, call `/api/v1/auth/refresh` with the refresh token.
 - **Periodic review**: Once a month, check the admin dashboard for unusual activity or budget overruns on virtual keys.
 
 ## Troubleshooting
 
 ### Reset a user's password
 
-As admin, you can reset any user's password:
+Current AuthNZ endpoints do not expose a direct admin-only password reset route.
+Use one of these supported flows:
+
+1) User knows current password:
 
 ```bash
-curl -s -X POST http://127.0.0.1:8000/api/v1/admin/users/<USER_ID>/reset-password \
-  -H "Authorization: Bearer <ADMIN_JWT>" \
+curl -s -X POST http://127.0.0.1:8000/api/v1/users/change-password \
+  -H "Authorization: Bearer <USER_JWT>" \
   -H "Content-Type: application/json" \
-  -d '{"new_password":"NewSecurePass123!"}'
+  -d '{
+    "current_password":"OldSecurePass123!",
+    "new_password":"NewSecurePass123!"
+  }'
 ```
+
+2) User forgot password (email-based recovery):
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/auth/forgot-password \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alex@example.com"}'
+```
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/auth/reset-password \
+  -H "Content-Type: application/json" \
+  -d '{
+    "token":"<RESET_TOKEN_FROM_EMAIL>",
+    "new_password":"NewSecurePass123!"
+  }'
+```
+
+If email delivery is not configured, `forgot-password` still returns a generic success message but no reset email will be sent.
 
 ### Deactivate / lock an account
 
 If a family member should no longer have access:
 
 ```bash
-curl -s -X PATCH http://127.0.0.1:8000/api/v1/admin/users/<USER_ID> \
+curl -s -X PUT http://127.0.0.1:8000/api/v1/admin/users/<USER_ID> \
   -H "Authorization: Bearer <ADMIN_JWT>" \
   -H "Content-Type: application/json" \
   -d '{"is_active": false}'
@@ -289,7 +364,7 @@ The user will be unable to log in or use existing tokens.
 To force a user to re-authenticate (e.g., if their token may be compromised):
 
 ```bash
-curl -s -X DELETE http://127.0.0.1:8000/api/v1/admin/users/<USER_ID>/sessions \
+curl -s -X POST http://127.0.0.1:8000/api/v1/admin/users/<USER_ID>/sessions/revoke-all \
   -H "Authorization: Bearer <ADMIN_JWT>"
 ```
 
@@ -300,6 +375,63 @@ Ensure `.env` contains all required secrets. See the [Household_Multi_User_Walkt
 ### "Database is locked"
 
 Set `TLDW_SQLITE_WAL_MODE=true` in `.env`. For persistent issues, consider switching to Postgres (see [Multi-User_Postgres_Setup.md](../Server/Multi-User_Postgres_Setup.md)).
+
+## Validated Commands (AuthNZ API-Guide Style)
+
+#### Login (Multi-User Mode)
+`POST /api/v1/auth/login`
+
+Request content type: `application/x-www-form-urlencoded`
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "username=<username>" \
+  --data-urlencode "password=<password>" | python3 -m json.tool
+```
+
+#### Refresh Token
+`POST /api/v1/auth/refresh`
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"<REFRESH_TOKEN>"}' | python3 -m json.tool
+```
+
+#### Create User (Admin)
+`POST /api/v1/admin/users`
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/admin/users \
+  -H "Authorization: Bearer <ADMIN_JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username":"sam",
+    "email":"sam@example.com",
+    "password":"ChangeMe123!",
+    "role":"user",
+    "is_active": true
+  }' | python3 -m json.tool
+```
+
+#### Create Registration Code (Admin)
+`POST /api/v1/admin/registration-codes`
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/admin/registration-codes \
+  -H "Authorization: Bearer <ADMIN_JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"max_uses":1,"expiry_days":7,"role_to_grant":"user"}' | python3 -m json.tool
+```
+
+#### Revoke All Sessions for a User (Admin)
+`POST /api/v1/admin/users/<USER_ID>/sessions/revoke-all`
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/admin/users/<USER_ID>/sessions/revoke-all \
+  -H "Authorization: Bearer <ADMIN_JWT>" | python3 -m json.tool
+```
 
 ## Related Docs
 

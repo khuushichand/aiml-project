@@ -341,6 +341,71 @@ def test_bedrock_count_only_adapter_calls_runtime_count_tokens(monkeypatch):
     assert calls[0][1].get("X-Amz-Content-Sha256")
 
 
+def test_bedrock_commercial_exact_requires_sigv4_for_aws_host(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    monkeypatch.delenv("BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    monkeypatch.delenv("BEDROCK_API_BASE_URL", raising=False)
+    monkeypatch.delenv("BEDROCK_OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("BEDROCK_REGION", raising=False)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.setattr(resolver, "_resolve_bedrock_sigv4_credentials", lambda parser: None)
+
+    config = configparser.ConfigParser()
+    config.add_section("API")
+    config.set("API", "bedrock_region", "us-west-2")
+    config.set("API", "bedrock_api_key", "legacy-bearer-key")
+
+    resolution = resolver.resolve_commercial_exact_tokenizer(
+        "bedrock",
+        "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        strict_mode_effective=True,
+        config_parser=config,
+    )
+
+    assert resolution.available is False
+    assert "sigv4" in str(resolution.error or "").lower()
+
+
+def test_bedrock_count_only_adapter_local_proxy_uses_bearer_without_sigv4(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    calls: list[tuple[str, dict[str, str], dict[str, object]]] = []
+
+    class _FakeResponse:
+        def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    def _fake_post(*, url: str, payload, headers, timeout):  # noqa: ANN001, ARG001
+        calls.append((url, dict(headers), dict(payload)))
+        return _FakeResponse(200, {"inputTokens": 4})
+
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.setattr(resolver, "_http_post", _fake_post)
+
+    adapter = resolver.BedrockCountOnlyHTTPAdapter(
+        base_url="http://127.0.0.1:9000",
+        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        api_key="proxy-key",
+        region="us-west-2",
+        aws_credentials=None,
+    )
+
+    count = adapter.count_tokens("hello")
+    assert count == 4
+    assert calls
+    assert calls[0][1].get("Authorization") == "Bearer proxy-key"
+    assert "X-Amz-Date" not in calls[0][1]
+
+
 def test_resolve_tokenizer_ollama_native_exact_from_config():
     from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
 

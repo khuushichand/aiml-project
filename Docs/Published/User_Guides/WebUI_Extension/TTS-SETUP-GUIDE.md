@@ -3,6 +3,7 @@
 This guide explains how to set up each TTS provider, especially the local models like Higgs, Kokoro, and VibeVoice.
 
 ## Table of Contents
+
 - [Commercial Providers](#commercial-providers)
 - [Local Model Providers](#local-model-providers)
 - [Voice Cloning Setup](#voice-cloning-setup)
@@ -11,12 +12,14 @@ This guide explains how to set up each TTS provider, especially the local models
 ## Commercial Providers
 
 ### OpenAI
+
 ```bash
 # Add to config.txt or environment
 OPENAI_API_KEY=your-api-key-here
 ```
 
 ### ElevenLabs
+
 ```bash
 # Add to config.txt or environment
 ELEVENLABS_API_KEY=your-api-key-here
@@ -29,6 +32,7 @@ ELEVENLABS_API_KEY=your-api-key-here
 Kokoro is a lightweight, high-quality TTS model that runs locally using ONNX runtime.
 
 #### Installation
+
 ```bash
 # Install dependencies
 pip install onnxruntime kokoro-onnx phonemizer
@@ -38,6 +42,7 @@ pip install onnxruntime-gpu
 ```
 
 #### Download Models
+
 ```bash
 # Create model directory
 mkdir -p models/kokoro
@@ -52,6 +57,7 @@ wget https://huggingface.co/kokoro-82m/resolve/main/voices.json -O models/kokoro
 ```
 
 #### Configuration
+
 ```yaml
 # In tts_providers_config.yaml
 kokoro:
@@ -64,6 +70,7 @@ kokoro:
 ```
 
 #### System Requirements
+
 - **Disk Space**: ~800MB for model
 - **RAM**: 2GB minimum
 - **Optional**: espeak-ng for phonemizer (`sudo apt-get install espeak-ng` on Ubuntu)
@@ -73,6 +80,7 @@ kokoro:
 Higgs is a powerful 3B parameter model supporting 50+ languages, music generation, and voice cloning.
 
 #### Installation
+
 ```bash
 # Install dependencies
 pip install transformers torch torchaudio accelerate
@@ -82,6 +90,7 @@ pip install flash-attn --no-build-isolation  # Requires CUDA
 ```
 
 #### Download Models
+
 ```bash
 # Method 1: Automatic download (first run)
 # The model will auto-download on first use (~3GB)
@@ -103,6 +112,7 @@ tokenizer.save_pretrained("./models/higgs")
 ```
 
 #### Configuration
+
 ```yaml
 # In tts_providers_config.yaml
 higgs:
@@ -119,6 +129,7 @@ higgs:
 ```
 
 #### System Requirements
+
 - **Disk Space**: ~6GB for model
 - **RAM**: 8GB minimum
 - **VRAM**: 6GB+ for GPU inference (recommended)
@@ -130,6 +141,7 @@ higgs:
 Chatterbox features unique emotion exaggeration control and voice cloning from Resemble AI.
 
 #### Installation
+
 ```bash
 # Install Chatterbox (when available)
 pip install chatterbox-tts
@@ -141,6 +153,7 @@ pip install -e .
 ```
 
 #### Download Models
+
 ```bash
 # Download model
 mkdir -p models/chatterbox
@@ -148,6 +161,7 @@ huggingface-cli download resemble-ai/chatterbox --local-dir models/chatterbox/
 ```
 
 #### Configuration
+
 ```yaml
 # In tts_providers_config.yaml
 chatterbox:
@@ -165,6 +179,7 @@ chatterbox:
 ```
 
 #### System Requirements
+
 - **Disk Space**: ~3GB for model
 - **RAM**: 6GB minimum
 - **VRAM**: 4GB+ for GPU inference
@@ -176,6 +191,7 @@ chatterbox:
 Dia specializes in multi-speaker dialogue with nonverbal cues.
 
 #### Installation
+
 ```bash
 # Install dependencies
 pip install transformers torch accelerate
@@ -186,6 +202,7 @@ python -m spacy download en_core_web_sm
 ```
 
 #### Download Models
+
 ```bash
 # Download Dia model
 mkdir -p models/dia
@@ -195,6 +212,7 @@ huggingface-cli download nari-labs/dia --local-dir models/dia/
 ```
 
 #### Configuration
+
 ```yaml
 # In tts_providers_config.yaml
 dia:
@@ -208,6 +226,7 @@ dia:
 ```
 
 #### System Requirements
+
 - **Disk Space**: ~3.2GB for model
 - **RAM**: 6GB minimum  
 - **VRAM**: 4GB+ for GPU inference
@@ -218,6 +237,7 @@ dia:
 VibeVoice generates expressive, long-form, multi-speaker conversational audio with spontaneous background music and voice cloning support.
 
 #### Installation
+
 ```bash
 # Recommended: Use NVIDIA Deep Learning Container
 sudo docker run --privileged --gpus all --rm -it nvcr.io/nvidia/pytorch:24.07-py3
@@ -229,12 +249,14 @@ pip install -e .
 ```
 
 #### Models Available
+
 - **VibeVoice-1.5B**: 64K context (~90 min generation)
 - **VibeVoice-7B-Preview**: 32K context (~45 min generation)
 
 Models will auto-download from HuggingFace on first use.
 
 #### Test Installation
+
 ```bash
 # Run Gradio demo for 1.5B model
 python demo/gradio_demo.py --model_path microsoft/VibeVoice-1.5B --share
@@ -256,6 +278,7 @@ python demo/inference_from_file.py \
 ```
 
 #### Configuration
+
 ```yaml
 # In tts_providers_config.yaml
 vibevoice:
@@ -274,10 +297,11 @@ vibevoice:
 ```
 
 #### System Requirements
+
 - **Disk Space**: ~3GB (1.5B) or ~14GB (7B)
 - **RAM**: 8GB minimum (1.5B), 16GB (7B)
 - **VRAM**: 4GB+ (1.5B), 16GB+ (7B)
-- **Features**: 
+- **Features**:
   - Long-form generation (up to 90 min)
   - Multi-speaker (up to 4 distinct voices)
   - Spontaneous background music
@@ -307,7 +331,8 @@ Voice cloning allows you to synthesize speech using a reference voice from an au
    - Minimal background noise
    - Natural speaking pace
 
-2. **Convert Audio Format** (if needed):
+1. **Convert Audio Format** (if needed):
+
 ```bash
 # Convert to WAV with proper sample rate for Higgs/Chatterbox
 ffmpeg -i input.mp3 -ar 24000 -ac 1 output.wav
@@ -319,7 +344,8 @@ ffmpeg -i input.mp3 -ar 22050 -ac 1 output.wav
 ffmpeg -i input.wav -ss 0 -t 10 -ar 24000 output_10s.wav
 ```
 
-3. **Validate Audio Quality**:
+1. **Validate Audio Quality**:
+
 ```python
 import librosa
 import numpy as np
@@ -341,10 +367,17 @@ elif np.max(np.abs(audio)) > 0.95:
 
 ### Using Voice Cloning via API
 
+Set your API token once before running the examples:
+
+```bash
+export API_TOKEN="your_real_api_token"
+```
+
 #### Basic Voice Cloning Request
 
 ```python
 import base64
+import os
 import requests
 
 # Prepare voice reference
@@ -354,7 +387,7 @@ with open("voice_sample.wav", "rb") as f:
 # Make TTS request with voice cloning
 response = requests.post(
     "http://localhost:8000/api/v1/audio/speech",
-    headers={"Authorization": "Bearer your-token"},
+    headers={"Authorization": f"Bearer {os.environ['API_TOKEN']}"},
     json={
         "model": "higgs",  # or "chatterbox", "vibevoice"
         "input": "This text will be spoken in the cloned voice.",
@@ -425,7 +458,7 @@ EOF
 # Send request
 curl -X POST http://localhost:8000/api/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-token" \
+  -H "Authorization: Bearer $API_TOKEN" \
   -d @request.json \
   --output cloned.mp3
 ```
@@ -619,6 +652,7 @@ curl -X POST http://localhost:8000/api/v1/audio/speech \
 For best performance with local models:
 
 1. **Install CUDA** (if using NVIDIA GPU):
+
 ```bash
 # Check CUDA version
 nvidia-smi
@@ -628,12 +662,14 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 ```
 
 2. **Use Mixed Precision**:
+
 ```yaml
 # Enable in config
 use_fp16: true  # or use_bf16 for newer GPUs
 ```
 
 3. **Batch Processing**:
+
 ```yaml
 # For multiple concurrent requests
 batch_size: 4  # Adjust based on VRAM
@@ -645,10 +681,13 @@ For CPU-only systems:
 
 1. **Use ONNX models** (like Kokoro) when possible
 2. **Enable multi-threading**:
+
 ```bash
 export OMP_NUM_THREADS=4  # Adjust to CPU cores
 ```
+
 3. **Use INT8 quantization** (if supported):
+
 ```yaml
 use_int8: true  # Reduces model size and speeds up CPU inference
 ```
@@ -682,6 +721,7 @@ use_int8: true  # Reduces model size and speeds up CPU inference
 ### Debug Mode
 
 Enable detailed logging:
+
 ```yaml
 # In tts_providers_config.yaml
 logging:

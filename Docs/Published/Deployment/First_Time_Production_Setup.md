@@ -40,143 +40,36 @@ Security preflight
 
 ## 3) Option A - Docker Compose (recommended)
 
-The repository ships with a Compose stack for the API + Postgres + Redis.
+The canonical Compose setup commands are maintained in these profile guides:
 
-Step A1 - Clone and prepare env
-```bash
-git clone https://github.com/<your-org>/tldw_server.git
-cd tldw_server
+- Single-user Docker: `Docs/Getting_Started/Profile_Docker_Single_User.md`
+- Multi-user Docker + Postgres: `Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md`
 
-# Copy example env and edit (recommended for Compose)
-cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
+Production guidance for Compose deployments:
 
-# Required values (examples)
-export AUTH_MODE=multi_user
-export JWT_SECRET_KEY="$(openssl rand -base64 64)"
-export DATABASE_URL="postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users"
-
-# Strong single-user key if you use single_user mode instead
-# Generate via the AuthNZ initializer and copy SINGLE_USER_API_KEY into .env
-python -m tldw_Server_API.app.core.AuthNZ.initialize
-
-# Production hardening
-export tldw_production=true
-export ALLOWED_ORIGINS=https://your.domain.com
-```
-
-Step A2 - Bring the stack up
-```bash
-# Build and start (detached)
-docker compose up --build -d
-
-# Check container health
-docker compose ps
-```
-
-The app listens on `:8000` inside the container and is exposed on the host at `:8000` by default.
-Compose note
-- `docker-compose.override.yml` ships with production-leaning defaults and is auto-loaded with `docker-compose.yml`.
-
-Step A3 - First-time setup (optional wizard)
-- The server exposes a local-only setup flow at `/setup` when enabled.
-- Check status: `curl http://127.0.0.1:8000/api/v1/setup/status`
-- If `enabled` and `needs_setup` are true, open `http://127.0.0.1:8000/setup` on the host.
-- Behind a proxy, do not expose `/setup` publicly. If you must reach it remotely on a trusted network, set `TLDW_SETUP_ALLOW_REMOTE=1` temporarily and remove it afterward, and authenticate as an admin (admin role + `system.configure` permission, or the single-user API key).
-
-Step A4 - Add TLS and reverse proxy
-- Terminate TLS at the proxy; forward to `app:8000`.
-- Ensure WebSocket upgrade for `/api/v1/audio/stream/transcribe` and `/api/v1/mcp/*`.
-- See: `Docs/Deployment/Reverse_Proxy_Examples.md` for Nginx/Traefik configs and labels.
-- Caddy example: `Samples/Caddy/Caddyfile` (simple HTTPS reverse proxy to the app).
-
-Step A5 - Verify health
-```bash
-curl -s http://127.0.0.1:8000/health | jq .
-curl -s http://127.0.0.1:8000/ready  | jq .
-# OpenAPI (enable explicitly in prod if desired)
-open http://127.0.0.1:8000/docs
-open http://127.0.0.1:8000/api/v1/config/quickstart
-```
-
-Notes
-- For multi-user production, keep Postgres running via the `postgres` service in the Compose file. Back up its volume.
-- To scale CPU workers: set `UVICORN_WORKERS` via the app environment and rebuild or override in Compose.
-- If you run multiple Uvicorn workers with SQLite, enable sidecar jobs (`TLDW_WORKERS_SIDECAR_MODE=true`) or migrate to Postgres to reduce lock contention.
+- Keep Postgres volumes backed up and tested for restore.
+- Terminate TLS at your reverse proxy and forward to `app:8000`.
+- Ensure WebSocket upgrade support for `/api/v1/audio/stream/transcribe` and `/api/v1/mcp/*`.
+- Configure `ALLOWED_ORIGINS` explicitly for your public domain(s).
 
 ## 4) Option B - Bare-Metal (systemd + Nginx)
 
-Step B1 - System packages
-```bash
-sudo apt-get update
-sudo apt-get install -y python3.11 python3.11-venv ffmpeg nginx curl
-```
+Use the local profile guide for canonical non-Docker setup:
 
-Step B2 - App install
-```bash
-git clone https://github.com/<your-org>/tldw_server.git
-cd tldw_server
-python3.11 -m venv /opt/tldw_server/venv
-source /opt/tldw_server/venv/bin/activate
-pip install -U pip
-pip install -e .
+- `Docs/Getting_Started/Profile_Local_Single_User.md`
 
-cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
-vi .env   # set AUTH_MODE, keys, DATABASE_URL, ALLOWED_ORIGINS, tldw_production=true
+Then apply production controls in this order:
 
-# Initialize AuthNZ DB and seed admin (mode-aware)
-python -m tldw_Server_API.app.core.AuthNZ.initialize
-```
+1. Add process supervision for the API service (systemd/launchd/service manager).
+2. Place a reverse proxy in front of the API with TLS termination.
+3. Lock down CORS origins and upload limits.
+4. Apply backup and restore procedures for your selected database.
 
-Step B3 - Systemd service
-Create `/etc/systemd/system/tldw.service`:
-```ini
-[Unit]
-Description=tldw Server API
-After=network.target
+Reference implementations:
 
-[Service]
-Type=simple
-User=tldw
-Group=tldw
-WorkingDirectory=/opt/tldw_server
-EnvironmentFile=/opt/tldw_server/.env
-Environment="PYTHONPATH=/opt/tldw_server"
-ExecStart=/opt/tldw_server/venv/bin/python -m uvicorn tldw_Server_API.app.main:app \
-  --host 127.0.0.1 --port 8000 --workers 4 --proxy-headers --log-level info
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now tldw
-sudo systemctl status tldw --no-pager
-```
-
-Step B4 - Nginx reverse proxy + TLS
-Use the examples in `Docs/Deployment/Reverse_Proxy_Examples.md` or configure a site:
-```nginx
-server {
-  listen 443 ssl http2;
-  server_name your.domain.com;
-  ssl_certificate     /etc/letsencrypt/live/your.domain.com/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/your.domain.com/privkey.pem;
-  client_max_body_size 200m;
-  proxy_read_timeout   3600;
-  location / {
-    proxy_pass http://127.0.0.1:8000;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;
-  }
-}
-```
+- Reverse proxy examples: `Docs/Deployment/Reverse_Proxy_Examples.md`
+- Sidecar workers: `Docs/Deployment/Sidecar_Workers.md`
+- Postgres migration: `Docs/Deployment/Postgres_Migration_Guide.md`
 
 ## 5) Configuration essentials
 
@@ -205,8 +98,9 @@ curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" http://127.0.0.1:8000/api/v1/llm/pr
 Media test (small file)
 ```bash
 curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  -F "files=@Samples/sample.pdf" \
-  http://127.0.0.1:8000/api/v1/media/process | jq .status
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/sample.pdf"}' \
+  http://127.0.0.1:8000/api/v1/media/add | jq .status
 ```
 
 ## 7) Production checklist (summary)

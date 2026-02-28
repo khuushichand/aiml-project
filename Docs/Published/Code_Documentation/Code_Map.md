@@ -98,7 +98,7 @@ Note: All paths can be overridden by environment variable or `Config_Files/confi
 ## Key Flows
 
 1) Media Ingestion → Chunking → Embedding → RAG Index
-   - Endpoint: `POST /api/v1/media/process` → `core/Ingestion_Media_Processing/*`
+   - Endpoint: `POST /api/v1/media/add` (preferred) and typed `POST /api/v1/media/process-*` routes → `core/Ingestion_Media_Processing/*`
    - Chunking via `core/Chunking/chunker.py` (optionally hierarchical/templates)
    - Embeddings via `core/Embeddings/` → ChromaDB and FTS5 entries in Media DB
 
@@ -133,3 +133,4 @@ Note: All paths can be overridden by environment variable or `Config_Files/confi
 - CORS configured in `main.py` (adjust for deployment)
 - Auth mode and keys set via env or `Config_Files/`
 - Web UI: Next.js client in `apps/tldw-frontend/` interacts with the same API; setup flow served at `/setup`.
+- Self-hosting setup commands are centralized in `Docs/Getting_Started/README.md` and profile guides.

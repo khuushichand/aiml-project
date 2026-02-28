@@ -76,7 +76,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - **Languages**: 30 languages + 22 Chinese dialects (auto-detected)
 - **Best For**: Chinese transcription, high-accuracy multilingual content
 - **Special Features**: Optional word-level timestamps via Forced Aligner
-- **Note**: Requires manual model download. See [Qwen3-ASR Setup Guide](../User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md)
+- **Note**: Requires manual model download. See [Qwen3-ASR Setup Guide](../STT-TTS/QWEN3_ASR_SETUP.md)
 
 ### 6. VibeVoice-ASR
 - **Model**: `vibevoice-asr`, `vibevoice`
@@ -126,7 +126,7 @@ Transcribe audio into text.
 |-----------|------|----------|-------------|
 | file | file | Yes | The audio file to transcribe (default max 25MB; actual limit may vary by quota tier) |
 | model | string | No | Model to use. Supported examples: `whisper-1` (`whisper` alias), raw faster-whisper ids like `large-v3` or `distil-whisper-large-v3`; NVIDIA variants such as `parakeet`, `parakeet-onnx`, `parakeet-mlx`; Canary via `canary`; Qwen via `qwen2audio` or `qwen2audio-*`; Qwen3-ASR via `qwen3-asr-1.7b`, `qwen3-asr-0.6b`, or `qwen3-asr`; VibeVoice via `vibevoice-asr` (default when omitted: `[STT-Settings].default_batch_transcription_model`, shipping default `parakeet-onnx`). |
-| language | string | No | Language code in ISO-639-1 format (e.g., 'en', 'es'). When omitted, Whisper models auto-detect the language and the detected code is included in the JSON response. |
+| language | string | No | Language hint. ISO-639-1 codes are always accepted (for example `en`, `es`). BCP-47 locale hints (for example `en-US`, `pt-BR`) are accepted and normalized per provider: providers that require ISO-style hints receive base codes, providers with locale-capable routing keep locale hints. When omitted, Whisper models auto-detect the language and the detected code is included in the JSON response. |
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 (default: 0) |
@@ -174,6 +174,54 @@ Notes:
 - For `response_format: text|srt|vtt` responses, outputs are simple best-effort formats; precise per-segment timings require JSON.
 - For `response_format: verbose_json`, the response includes `task` and `duration` fields.
 - For Whisper-based models, the underlying `speech_to_text(...)` helper prepends a metadata header (model + detected language) to the first segment. The HTTP API always calls `strip_whisper_metadata_header(...)` before returning JSON/text so clients see only user content. If you use `speech_to_text` directly (e.g., in workflows or custom tools), call `strip_whisper_metadata_header` on segment lists, or `_strip_whisper_metadata_header_from_text` (speech chat) before presenting text to end users.
+
+### Dictation Error Taxonomy
+
+Structured error payloads include:
+- `dictation_error_class`: canonical failure class.
+- `dictation_fallback_allowed`: whether automatic fallback (`auto` strategy) is allowed for that class.
+
+Classes:
+- `permission_denied`
+- `unsupported_api`
+- `auth_error`
+- `quota_error`
+- `provider_unavailable`
+- `model_unavailable` (includes `status: model_downloading`)
+- `transient_failure`
+- `empty_transcript`
+- `unknown_error`
+
+Fallback policy:
+- Auto-fallback allowed: `unsupported_api`, `provider_unavailable`, `model_unavailable`, `transient_failure`.
+- Auto-fallback disallowed: `permission_denied`, `auth_error`, `quota_error`, `empty_transcript`, `unknown_error`.
+
+### Client Dictation Diagnostics (WebUI + Extension)
+
+WebUI `/chat` and extension sidepanel emit a sanitized diagnostics event for dictation strategy transitions:
+- Event name: `tldw:dictation:diagnostics`
+- Purpose: explain mode resolution and fallback behavior without logging sensitive content.
+
+Payload schema:
+
+| Field | Type | Description |
+|---|---|---|
+| `version` | number | Schema version (`1`) |
+| `at` | string | ISO-8601 timestamp |
+| `surface` | string | `playground` or `sidepanel` |
+| `kind` | string | `toggle`, `server_error`, or `server_success` |
+| `requested_mode` | string | `auto`, `server`, `browser`, or `unknown` |
+| `resolved_mode` | string | `server`, `browser`, `unavailable`, or `unknown` |
+| `speech_available` | boolean | Whether dictation is available on this surface |
+| `speech_uses_server` | boolean | Whether current resolved mode routes through server STT |
+| `toggle_intent` | string/null | `start_*`/`stop_*` intent for toggle events |
+| `error_class` | string/null | Dictation taxonomy class for terminal server errors |
+| `fallback_applied` | boolean | Whether auto-fallback was applied after server error |
+| `fallback_reason` | string/null | Error class that triggered fallback, if any |
+
+Privacy contract:
+- Diagnostics payloads never include transcript text, prompt text, raw audio, or binary payloads.
+- Only strategy state and taxonomy metadata are serialized.
 
 Internal STT helpers:
 - `speech_to_text(...)` (file or NumPy input) is the canonical segment-based helper used by media ingestion and offline workers; it returns a list of segments (or `(segments, language)` when requested).
@@ -849,9 +897,9 @@ TTS
 ## Related Documentation
 
 - [API Overview](./API_README.md)
-- [Configuration Guide](../User_Guides/Server/Installation-Setup-Guide.md)
-- [Live Transcription Guide](#live-transcription)
-- [Model Selection Guide](#supported-models)
+- [Configuration Guide](../User_Guides/Configuration.md)
+- [Live Transcription Guide](../User_Guides/Live_Transcription.md)
+- [Model Selection Guide](../User_Guides/Model_Selection.md)
 - For non-JSON responses (`text`, `srt`, `vtt`), `segment=true` is ignored and no `segmentation` is returned.
 - TreeSeg embeddings use the configured embedding service unless `seg_embeddings_provider`/`seg_embeddings_model` overrides are supplied.
 - If you have per-utterance segments from your STT provider, you can call the dedicated segmentation endpoint with those entries for better alignment.

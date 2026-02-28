@@ -128,8 +128,17 @@ Note: System gauges appear when a resource monitor/collector is running; they ar
 - `security_headers_responses_total`: Counter of responses with security headers applied.
 
 ## Circuit Breakers
-- `circuit_breaker_state{service}`: Gauge of state (0=closed, 1=open, 2=half-open).
-- `circuit_breaker_trips_total{service,reason}`: Counter of trips.
+- `circuit_breaker_state{category,service,operation}`: Gauge of state (0=closed, 1=open, 2=half-open).
+- `circuit_breaker_trips_total{category,service,reason}`: Counter of trips.
+- `circuit_breaker_failures_total{category,service,operation,outcome}`: Counter of counted failures.
+- `circuit_breaker_successes_total{category,service,operation}`: Counter of successful calls.
+- `circuit_breaker_timeouts_total{category,service,operation}`: Counter of timeout-classified failures.
+- `circuit_breaker_rejections_total{category,service,operation}`: Counter of rejections while OPEN / HALF_OPEN-limited.
+- `circuit_breaker_persist_conflicts_total{category,service,operation,mutation}`: Counter of optimistic-lock conflicts during shared-state persistence (`operation="persist_conflict"`).
+
+PromQL examples:
+- Conflict hot spots by breaker service (5m): `sum by (service, mutation) (rate(circuit_breaker_persist_conflicts_total[5m]))`
+- Open breakers now: `sum by (category,service) (circuit_breaker_state == 1)`
 
 ## Chat (OpenAI-compatible Chat API)
 - Requests: `chat_requests_total{provider,model,status}`; latency: `chat_request_duration_seconds{provider,model}`.

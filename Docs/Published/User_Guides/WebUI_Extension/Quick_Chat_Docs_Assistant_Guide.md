@@ -6,6 +6,9 @@ This guide covers the Quick Chat Helper assistant modes that were added to impro
 - `Docs Q&A`: asks the backend RAG endpoint for documentation-style answers with citations
 - `Browse Guides`: per-page Tutorials + browsable pre-written Q/A workflow cards
 
+Design rationale and architecture details are documented in
+[`Docs/Design/Quick_Chat_Docs_Assistant.md`](../../Design/Quick_Chat_Docs_Assistant.md).
+
 Primary implementation files:
 
 - `apps/packages/ui/src/components/Common/QuickChatHelper/QuickChatHelperModal.tsx`

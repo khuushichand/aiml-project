@@ -2,6 +2,8 @@
 
 This guide helps you connect your local coding agents (Claude Code, Codex, OpenCode) to tldw_server so you can control them remotely from the web UI.
 
+For Anthropic-specific first-time setup patterns (BYOK + Claude Code/SDK), see `Docs/User_Guides/Integrations_Experiments/Anthropic_ClaudeCode_ClaudeSDK_Setup.md`.
+
 ## What is ACP?
 
 ACP (Agent Client Protocol) lets you control AI coding assistants from your browser. Instead of running Claude Code directly in your terminal, you can:
@@ -424,7 +426,7 @@ This keeps secrets out of config files.
 
 ## Next Steps
 
-- **Technical Reference**: See [MCP Unified Overview](../../MCP/Unified_Overview.md) and [MCP Client Snippets](../../MCP/Unified_Client_Snippets.md)
+- **Technical Reference**: See [Agent Client Protocol](../../Development/Agent_Client_Protocol.md) for detailed API documentation
 - **WebSocket Integration**: Learn about real-time streaming and the WebSocket message protocol
 - **Frontend Development**: Explore the React hooks and Zustand store for building custom UIs
 

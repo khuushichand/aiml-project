@@ -27,7 +27,7 @@ Related documents
 Security preflight
 - Decide auth mode: `single_user` (API key) or `multi_user` (JWT).
 - Generate strong secrets:
-  - API key: `python -m tldw_Server_API.app.core.AuthNZ.initialize` (choose "Generate secure keys")
+  - API key: use the canonical profile guide steps in `Docs/Getting_Started/` for your selected deployment mode.
   - JWT secret: `openssl rand -base64 64`
 - Restrict CORS to your site(s) with `ALLOWED_ORIGINS`.
 - In production, set `tldw_production=true` to mask secrets in logs and harden defaults.

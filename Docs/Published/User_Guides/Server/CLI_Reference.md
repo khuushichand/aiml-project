@@ -12,21 +12,17 @@ As of v0.1.0+, tldw_server uses a **FastAPI-first architecture**. The primary in
 
 ## Starting the Server
 
-```bash
-# Basic development server with auto-reload
-python -m uvicorn tldw_Server_API.app.main:app --reload
+Canonical startup and first-run setup steps are maintained in the self-hosting profile guides.
 
-# Specify host and port
-python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000 --reload
+- Start here: [Self-Hosting Profiles](../../Getting_Started/README.md)
+- Local single-user setup: [Profile_Local_Single_User.md](../../Getting_Started/Profile_Local_Single_User.md)
+- Docker single-user setup: [Profile_Docker_Single_User.md](../../Getting_Started/Profile_Docker_Single_User.md)
+- Docker multi-user + Postgres setup: [Profile_Docker_Multi_User_Postgres.md](../../Getting_Started/Profile_Docker_Multi_User_Postgres.md)
 
-# Production mode (no reload, multiple workers)
-python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000 --workers 4
-```
+After completing one profile guide, use:
 
-**Useful URLs after startup:**
 - API Documentation: `http://127.0.0.1:8000/docs`
 - Quickstart Guide: `http://127.0.0.1:8000/api/v1/config/quickstart`
-- Setup Wizard (if needed): `http://127.0.0.1:8000/setup`
 
 ## Running Tests
 
@@ -109,8 +105,8 @@ curl -s http://127.0.0.1:8000/health
 curl -s http://127.0.0.1:8000/api/v1/llm/providers \
   -H "X-API-KEY: $API_KEY" | jq
 
-# Process media
-curl -X POST http://127.0.0.1:8000/api/v1/media/process \
+# Add media for ingestion
+curl -X POST http://127.0.0.1:8000/api/v1/media/add \
   -H "X-API-KEY: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=VIDEO_ID"}'
@@ -160,7 +156,7 @@ The server uses Loguru for logging. Control verbosity through the config or envi
 ```bash
 # Set log level via environment
 export LOG_LEVEL=DEBUG
-python -m uvicorn tldw_Server_API.app.main:app --reload
+# Start the server using your selected profile guide command sequence
 ```
 
 ### Common Issues

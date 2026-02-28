@@ -3,13 +3,17 @@
 This guide helps first-time users set up and test speech features with tldw_server.
 It covers quick paths for both cloud-hosted and local backends, plus verification steps and troubleshooting.
 
+See design doc: [`Docs/Design/STT_TTS_Audio_API_Design.md`](../../Design/STT_TTS_Audio_API_Design.md) for architecture details, provider priority/retry behavior, auth mode behavior, storage header semantics, and streaming protocol/error handling.
+
 ## TL;DR Choices
+
 - Fastest TTS (hosted): OpenAI TTS — requires `OPENAI_API_KEY`.
 - Local TTS (offline): Kokoro ONNX — requires model files + eSpeak library.
 - Local STT (offline): faster-whisper — requires FFmpeg; optional GPU.
 - Advanced STT (optional): NeMo Parakeet/Canary, Qwen2Audio — larger setup, GPU recommended.
 
 ## Prerequisites
+
 - Python environment with project installed
   - From repo root: `pip install -e .`
 - FFmpeg (required for audio I/O)
@@ -28,21 +32,24 @@ Auth quick note
 ---
 
 ## Option A — OpenAI TTS (Hosted)
+
 Best for immediate results; no local model setup.
 
-1) Provide API key
+1. Provide API key
 - Export `OPENAI_API_KEY` in your shell or add it to `Config_Files/config.txt` (OpenAI section).
 
-2) Verify TTS provider is enabled (optional)
+1. Verify TTS provider is enabled (optional)
 - OpenAI TTS is enabled by default. To confirm or customize, see `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` under `providers.openai`.
 
-3) Test voice catalog
+1. Test voice catalog
+
 ```bash
 curl -s http://127.0.0.1:8000/api/v1/audio/voices/catalog \
   -H "X-API-KEY: $SINGLE_USER_API_KEY" | jq
 ```
 
-4) Generate speech
+1. Generate speech
+
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
   -H "X-API-KEY: $SINGLE_USER_API_KEY" \
@@ -55,9 +62,11 @@ curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
       }' \
   --output out.mp3
 ```
+
 - Play `out.mp3` in your player.
 
-5) (Optional) Return a storage download link in headers
+1. (Optional) Return a storage download link in headers
+
 ```bash
 curl -i -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
   -H "X-API-KEY: $SINGLE_USER_API_KEY" \
@@ -72,6 +81,7 @@ curl -i -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
       }' \
   --output out_saved.mp3
 ```
+
 - Look for `X-Download-Path` and `X-Generated-File-Id` in the response headers.
 - The download path will look like `/api/v1/storage/files/{id}/download`.
 - `return_download_link` only works with `stream: false`.
@@ -84,13 +94,17 @@ Troubleshooting
 ---
 
 ## Option B — Kokoro TTS (Local, ONNX)
+
 Offline TTS using Kokoro ONNX. Good quality and fast on CPU; optional GPU via ONNX Runtime.
 
-1) Install (one command)
+1. Install (one command)
+
 ```bash
 python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
 ```
+
 If you prefer manual steps, install dependencies instead:
+
 ```bash
 # Python packages (CPU)
 pip install onnxruntime kokoro-onnx phonemizer espeak-phonemizer huggingface-hub
@@ -116,13 +130,14 @@ export PHONEMIZER_ESPEAK_LIBRARY=/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
 # set PHONEMIZER_ESPEAK_LIBRARY=C:\\Program Files\\eSpeak NG\\libespeak-ng.dll
 ```
 
-2) Download model files (skipped if you use the installer)
+1. Download model files (skipped if you use the installer)
 - Place files under a `models/` folder at the repo root (example paths below).
 - Recommended sources:
   - ONNX: `onnx-community/Kokoro-82M-v1.0-ONNX-timestamped` (contains `onnx/model.onnx` and a `voices/` directory of voice styles)
   - PyTorch (optional): `hexgrad/Kokoro-82M` (contains `kokoro-v1_0.pth`, `config.json`, and `voices/`)
 
 Examples
+
 ```bash
 # Create a local directory
 mkdir -p models/kokoro
@@ -137,8 +152,9 @@ wget https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX-timestamped/reso
 # Then download the voices/ directory assets from the same repo (or use huggingface-cli above)
 ```
 
-3) Enable and point config to your files (the installer writes defaults under models/kokoro/)
+1. Enable and point config to your files (the installer writes defaults under models/kokoro/)
 - Edit `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`:
+
 ```yaml
 providers:
   kokoro:
@@ -148,16 +164,19 @@ providers:
     voices_json: "models/kokoro/voices"   # use voices directory for v1.0 ONNX
     device: "cpu"    # or "cuda" if using onnxruntime-gpu
 ```
+
 - Optional: move Kokoro earlier in `provider_priority` to prefer it.
 
-4) Restart server and verify
+1. Restart server and verify
+
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --reload
 curl -s http://127.0.0.1:8000/api/v1/audio/voices/catalog \
   -H "X-API-KEY: $SINGLE_USER_API_KEY" | jq '.kokoro'
 ```
 
-5) Generate speech with Kokoro
+1. Generate speech with Kokoro
+
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
   -H "X-API-KEY: $SINGLE_USER_API_KEY" \
@@ -190,6 +209,7 @@ Kokoro supports lightweight “blended” voices and additional custom voice pro
 - **Blend existing voices in a single request** using a mix pattern:
   - Syntax: `voice_id1(weight1)+voice_id2(weight2)+...`
   - Example (2 parts Bella, 1 part Adam):
+
     ```bash
     curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
       -H "X-API-KEY: $SINGLE_USER_API_KEY" \
@@ -202,6 +222,7 @@ Kokoro supports lightweight “blended” voices and additional custom voice pro
           }' \
       --output kokoro_mix.mp3
     ```
+
   - You can mix more voices, for example: `af_bella(3)+am_adam(1)+bf_emma(2)`. The numbers are relative weights (2:1 is the same ratio as 4:2).
 
 - **Add custom Kokoro voices** if you have extra voice profiles from upstream Kokoro tools (e.g., Kokoro‑82M WebUI or other pipelines):
@@ -216,16 +237,20 @@ Kokoro supports lightweight “blended” voices and additional custom voice pro
 ---
 
 ## Option C — faster-whisper STT (Local)
+
 Fast, local transcription compatible with the OpenAI `/audio/transcriptions` API.
 
-1) Install dependencies
+1. Install dependencies
+
 ```bash
 pip install faster-whisper
 # Optional (GPU): pip install torch --index-url https://download.pytorch.org/whl/cu121
 ```
+
 - FFmpeg must be installed (see prerequisites).
 
-2) Transcribe an audio file
+1. Transcribe an audio file
+
 ```bash
 # Replace sample.wav with your file
 curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
@@ -235,12 +260,14 @@ curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
   -F "model=whisper-large-v3" \
   -F "language=en" | jq
 ```
+
 - The `model` value is OpenAI-compatible; the server maps to your configured local backend.
 - For simple text response, set `-H "Accept: text/plain"`.
 
-3) Real-time streaming STT (WebSocket)
+1. Real-time streaming STT (WebSocket)
 - Endpoint: `WS /api/v1/audio/stream/transcribe`
 - Example (with `wscat`):
+
 ```bash
 wscat -c ws://127.0.0.1:8000/api/v1/audio/stream/transcribe \
   -H "X-API-KEY: $SINGLE_USER_API_KEY"
@@ -254,6 +281,7 @@ Troubleshooting
 ---
 
 ## Verifying Setup via WebUI
+
 - Open the Next.js WebUI (`apps/tldw-frontend`) or visit <http://127.0.0.1:8000/api/v1/config/quickstart>.
 - Tabs:
   - Audio → Transcription (STT): upload a short clip and transcribe
@@ -263,6 +291,7 @@ Troubleshooting
 ---
 
 ## Common Errors & Fixes
+
 - 401/403 Unauthorized
   - Use `X-API-KEY` (single-user) or Bearer JWT (multi-user). Check server logs on startup.
 - 404 / Model or voice not found
@@ -279,6 +308,7 @@ Troubleshooting
 ---
 
 ## Tips & Configuration
+
 - Provider priority
   - `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` → `provider_priority`
   - Put your preferred provider first (e.g., `kokoro` before `openai`).
@@ -292,12 +322,14 @@ Troubleshooting
 ---
 
 ## Privacy & Security
+
 - tldw_server is designed for local/self-hosted use. Audio data stays local unless you call hosted APIs (e.g., OpenAI).
 - Never commit API keys; prefer environment variables or `.env`.
 
 ---
 
 ## Appendix — Sample Kokoro YAML Snippet
+
 ```yaml
 provider_priority:
   - kokoro
@@ -323,7 +355,9 @@ If you would like, we can configure a setup checker that validates models, voice
 These providers are supported via adapters. Many require large model downloads and work best with a GPU.
 
 ### ElevenLabs (Hosted)
+
 - Enable in YAML and set `ELEVENLABS_API_KEY`.
+
 ```yaml
 providers:
   elevenlabs:
@@ -331,11 +365,14 @@ providers:
     api_key: ${ELEVENLABS_API_KEY}
     model: "eleven_monolingual_v1"
 ```
+
 - Test: `model: eleven_monolingual_v1`, `voice: rachel` (or a voice from your catalog).
 
 ### Higgs Audio V2 (Local)
+
 - Deps: `pip install torch torchaudio soundfile huggingface_hub`; `pip install git+https://github.com/boson-ai/higgs-audio.git`
 - YAML:
+
 ```yaml
 providers:
   higgs:
@@ -344,11 +381,14 @@ providers:
     tokenizer_path: "bosonai/higgs-audio-v2-tokenizer"
     device: "cuda"
 ```
+
 - Test: `model: higgs`, `voice: narrator`.
 
 ### Dia (Local, dialogue specialist)
+
 - Deps: `pip install torch transformers accelerate safetensors sentencepiece soundfile huggingface_hub`
 - YAML:
+
 ```yaml
 providers:
   dia:
@@ -356,17 +396,22 @@ providers:
     model_path: "nari-labs/dia"
     device: "cuda"
 ```
+
 - Test: `model: dia`, `voice: speaker1`.
 
 ### VibeVoice (Local, expressive multi-speaker)
+
 - Deps: `pip install torch torchaudio sentencepiece soundfile huggingface_hub`
 - Install (official):
+
   ```bash
   git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice
   cd libs/VibeVoice && pip install -e .
   cd ../..
   ```
+
 - YAML:
+
 ```yaml
 providers:
   vibevoice:
@@ -374,11 +419,14 @@ providers:
     auto_download: true
     device: "cuda"  # or mps/cpu
 ```
+
 - Test: `model: vibevoice`, `voice: 1` (speaker index).
 
 ### NeuTTS Air (Local, voice cloning)
+
 - Deps: `pip install neucodec>=0.0.4 librosa phonemizer transformers` (optional streaming: `pip install llama-cpp-python`)
 - YAML:
+
 ```yaml
 providers:
   neutts:
@@ -388,11 +436,14 @@ providers:
     codec_repo: "neuphonic/neucodec"
     codec_device: "cpu"
 ```
+
 - Test: `model: neutts` and provide a base64 `voice_reference` in the JSON body.
 
 ### IndexTTS2 (Local, expressive zero-shot)
+
 - Place checkpoints under `checkpoints/index_tts2/`.
 - YAML:
+
 ```yaml
 providers:
   index_tts:
@@ -401,6 +452,7 @@ providers:
     cfg_path: "checkpoints/index_tts2/config.yaml"
     device: "cuda"
 ```
+
 - Test: `model: index_tts` (some voices require reference audio).
 
 ---
@@ -408,6 +460,7 @@ providers:
 ## Additional STT Backends (Advanced/Optional)
 
 ### NVIDIA NeMo — Parakeet and Canary
+
 - Deps (standard backend): `pip install 'nemo_toolkit[asr]'>=1.23.0`
 - Alternative backends (optional):
   - ONNX: `pip install onnxruntime>=1.16.0 huggingface_hub soundfile librosa numpy`
@@ -417,6 +470,7 @@ providers:
   - Language: set `language=en` (or appropriate code) when known.
 
 ### Qwen2Audio (Local)
+
 - Deps: `pip install torch transformers accelerate soundfile sentencepiece`
 - Optional: use the setup installer to prefetch assets.
 - Usage with `/api/v1/audio/transcriptions`:
@@ -428,5 +482,6 @@ Notes
 ---
 
 ## Model Hints (At-a-Glance)
+
 - TTS models: `tts-1` (OpenAI), `kokoro`, `eleven_monolingual_v1`, `higgs`, `dia`, `vibevoice`, `neutts`, `index_tts`.
 - STT models: `whisper-1` (faster-whisper), `whisper-large-v3` and `*-ct2` variants, `nemo-canary`, `nemo-parakeet-1.1b`, `qwen2audio`, `vibevoice-asr`.
