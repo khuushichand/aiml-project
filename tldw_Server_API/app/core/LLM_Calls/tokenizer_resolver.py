@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import math
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote_plus
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.exceptions import TokenizerUnavailable
@@ -165,11 +167,6 @@ class ProviderNativeTokenizerHTTPAdapter:
         self.timeout_seconds = max(1.0, float(timeout_seconds))
 
     def _request_json(self, paths: tuple[str, ...], payload: dict[str, Any]) -> dict[str, Any]:
-        try:
-            import requests  # type: ignore
-        except Exception as exc:
-            raise TokenizerUnavailable("Provider-native tokenizer HTTP client unavailable") from exc
-
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -178,12 +175,7 @@ class ProviderNativeTokenizerHTTPAdapter:
         for path in paths:
             url = f"{self.base_url}{path}"
             try:
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=self.timeout_seconds,
-                )
+                response = _http_post(url=url, payload=payload, headers=headers, timeout=self.timeout_seconds)
             except Exception as exc:
                 last_error = exc
                 continue
@@ -244,6 +236,10 @@ def _coerce_int(value: Any) -> int | None:
     if isinstance(value, int):
         return int(value)
     if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        if not value.is_integer():
+            return None
         return int(value)
     if isinstance(value, str):
         stripped = value.strip()
@@ -285,22 +281,12 @@ class _HTTPJSONAdapterBase:
         return {"Content-Type": "application/json"}
 
     def _request_json(self, paths: tuple[str, ...], payload: dict[str, Any]) -> dict[str, Any]:
-        try:
-            import requests  # type: ignore
-        except Exception as exc:
-            raise TokenizerUnavailable("Provider tokenizer HTTP client unavailable") from exc
-
         headers = self._headers()
         last_error: Exception | None = None
         for path in paths:
             url = f"{self.base_url}{path}"
             try:
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=self.timeout_seconds,
-                )
+                response = _http_post(url=url, payload=payload, headers=headers, timeout=self.timeout_seconds)
             except Exception as exc:
                 last_error = exc
                 continue
@@ -388,15 +374,10 @@ class GoogleCountOnlyHTTPAdapter:
         )
 
     def count_tokens(self, text: str) -> int:
-        try:
-            import requests  # type: ignore
-        except Exception as exc:
-            raise TokenizerUnavailable("Provider tokenizer HTTP client unavailable") from exc
-
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": self.api_key,
-        }
+        headers = {"Content-Type": "application/json"}
+        header_auth = dict(headers)
+        if self.api_key:
+            header_auth["x-goog-api-key"] = self.api_key
         payload = {
             "contents": [
                 {
@@ -408,37 +389,53 @@ class GoogleCountOnlyHTTPAdapter:
 
         last_error: Exception | None = None
         for url in self._candidate_urls():
-            try:
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=self.timeout_seconds,
-                )
-            except Exception as exc:
-                last_error = exc
-                continue
+            attempts: list[tuple[str, dict[str, str]]] = [(url, header_auth)]
+            if self.api_key:
+                separator = "&" if "?" in url else "?"
+                query_url = f"{url}{separator}key={quote_plus(self.api_key)}"
+                attempts.append((query_url, headers))
 
-            if response.status_code == 404:
-                continue
-            if response.status_code >= 400:
-                raise TokenizerUnavailable(
-                    f"Provider tokenizer endpoint error ({response.status_code})"
-                )
-            try:
-                data = response.json()
-            except Exception as exc:
-                raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid JSON") from exc
-            if not isinstance(data, dict):
-                raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid payload")
+            for attempt_index, (attempt_url, attempt_headers) in enumerate(attempts):
+                try:
+                    response = _http_post(
+                        url=attempt_url,
+                        payload=payload,
+                        headers=attempt_headers,
+                        timeout=self.timeout_seconds,
+                    )
+                except Exception as exc:
+                    last_error = exc
+                    continue
 
-            parsed = _extract_int_value(
-                data,
-                ("totalTokens", "total_tokens", "token_count", "count", "promptTokenCount"),
-            )
-            if parsed is None or parsed < 0:
-                raise TokenizerUnavailable("Google countTokens response missing token count")
-            return int(parsed)
+                if response.status_code == 404:
+                    continue
+
+                # Some Gemini deployments accept API keys only as query params.
+                if (
+                    response.status_code in {401, 403}
+                    and attempt_index == 0
+                    and len(attempts) > 1
+                ):
+                    continue
+
+                if response.status_code >= 400:
+                    raise TokenizerUnavailable(
+                        f"Provider tokenizer endpoint error ({response.status_code})"
+                    )
+                try:
+                    data = response.json()
+                except Exception as exc:
+                    raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid JSON") from exc
+                if not isinstance(data, dict):
+                    raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid payload")
+
+                parsed = _extract_int_value(
+                    data,
+                    ("totalTokens", "total_tokens", "token_count", "count", "promptTokenCount"),
+                )
+                if parsed is None or parsed < 0:
+                    raise TokenizerUnavailable("Google countTokens response missing token count")
+                return int(parsed)
 
         if last_error is not None:
             raise TokenizerUnavailable("Provider tokenizer endpoint unavailable") from last_error
@@ -509,6 +506,14 @@ def strict_token_counting_enabled(default: bool = False) -> bool:
     if env_val is None:
         return bool(default)
     return _truthy(env_val)
+
+
+def _http_post(*, url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> Any:
+    try:
+        import requests  # type: ignore
+    except Exception as exc:
+        raise TokenizerUnavailable("Provider tokenizer HTTP client unavailable") from exc
+    return requests.post(url, json=payload, headers=headers, timeout=timeout)
 
 
 def normalize_provider_for_tokenizer(provider: str) -> str:

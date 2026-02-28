@@ -210,3 +210,43 @@ def test_resolve_tokenizer_metadata_contains_strict_fields(monkeypatch):
     assert metadata["count_accuracy"] == "exact"
     assert metadata["strict_mode_effective"] is False
     assert metadata["tokenizer"] == "tiktoken:cl100k_base"
+
+
+def test_google_count_only_adapter_falls_back_to_query_key_auth(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    class _FakeResponse:
+        def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    def _fake_post(*, url: str, payload, headers, timeout):  # noqa: ANN001, ARG001
+        calls.append((url, dict(headers)))
+        if "?key=test-google-key" in url:
+            return _FakeResponse(200, {"totalTokens": 7})
+        return _FakeResponse(401, {"error": {"message": "invalid key transport"}})
+
+    monkeypatch.setattr(resolver, "_http_post", _fake_post)
+
+    adapter = resolver.GoogleCountOnlyHTTPAdapter(
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        model="gemini-2.5-flash",
+        api_key="test-google-key",
+    )
+
+    count = adapter.count_tokens("hello world")
+    assert count == 7
+    assert any("?key=test-google-key" in url for url, _headers in calls)
+    assert any(headers.get("x-goog-api-key") == "test-google-key" for _url, headers in calls)
+
+
+def test_coerce_int_rejects_non_integral_float():
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    assert resolver._coerce_int(12.5) is None
+    assert resolver._coerce_int(12.0) == 12
