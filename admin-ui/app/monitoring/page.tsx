@@ -59,6 +59,7 @@ import {
   normalizeRecentNotifications,
 } from './notification-utils';
 import { useMonitoringMetricsHistory } from './use-monitoring-metrics-history';
+import { useWatchlistActions } from './use-watchlist-actions';
 import type {
   AlertAssignableUser,
   AlertHistoryEntry,
@@ -73,7 +74,6 @@ import type {
   SystemHealthStatus,
   SystemStatusItem,
   Watchlist,
-  WatchlistDraft,
 } from './types';
 
 const METRIC_CRITICAL_THRESHOLD = 90;
@@ -112,19 +112,8 @@ export default function MonitoringPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [deletingWatchlistId, setDeletingWatchlistId] = useState<string | null>(null);
   const successTimerRef = useRef<number | null>(null);
   const alertStorageHydratedRef = useRef(false);
-
-  // Create watchlist dialog
-  const [showCreateWatchlist, setShowCreateWatchlist] = useState(false);
-  const [newWatchlist, setNewWatchlist] = useState<WatchlistDraft>({
-    name: '',
-    description: '',
-    target: '',
-    type: 'resource',
-    threshold: 80,
-  });
 
   // Notification settings
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
@@ -225,6 +214,22 @@ export default function MonitoringPage() {
     }
   }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, timeRange]);
 
+  const {
+    showCreateWatchlist,
+    setShowCreateWatchlist,
+    newWatchlist,
+    setNewWatchlist,
+    deletingWatchlistId,
+    handleCreateWatchlist,
+    handleDeleteWatchlist,
+  } = useWatchlistActions({
+    apiClient: api,
+    confirm,
+    setError,
+    setSuccess,
+    onReloadRequested: loadData,
+  });
+
   useEffect(() => {
     setAlertRules(readStoredAlertRules());
     setAlertHistory(readStoredAlertHistory());
@@ -277,51 +282,6 @@ export default function MonitoringPage() {
       }
     };
   }, [success]);
-
-  const handleCreateWatchlist = async () => {
-    if (!newWatchlist.name || !newWatchlist.target) {
-      setError('Name and target are required');
-      return;
-    }
-
-    try {
-      setError('');
-      await api.createWatchlist(newWatchlist);
-      setSuccess('Watchlist created successfully');
-      setShowCreateWatchlist(false);
-      setNewWatchlist({ name: '', description: '', target: '', type: 'resource', threshold: 80 });
-      loadData();
-    } catch (err: unknown) {
-      console.error('Failed to create watchlist:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to create watchlist');
-    }
-  };
-
-  const handleDeleteWatchlist = async (watchlist: Watchlist) => {
-    const watchlistId = String(watchlist.id);
-    if (deletingWatchlistId === watchlistId) return;
-    const confirmed = await confirm({
-      title: 'Delete Watchlist',
-      message: `Delete watchlist "${watchlist.name}"?`,
-      confirmText: 'Delete',
-      variant: 'danger',
-      icon: 'delete',
-    });
-    if (!confirmed) return;
-
-    try {
-      setError('');
-      setDeletingWatchlistId(watchlistId);
-      await api.deleteWatchlist(watchlist.id);
-      setSuccess('Watchlist deleted');
-      loadData();
-    } catch (err: unknown) {
-      console.error('Failed to delete watchlist:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to delete watchlist');
-    } finally {
-      setDeletingWatchlistId((prev) => (prev === watchlistId ? null : prev));
-    }
-  };
 
   const appendAlertHistory = (
     alertId: string,
