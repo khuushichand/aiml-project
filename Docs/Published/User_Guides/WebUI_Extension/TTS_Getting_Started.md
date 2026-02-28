@@ -312,7 +312,7 @@ Each section highlights installation, configuration, and a smoke test.
 - **Usage**: best for dialogue transcripts (`Speaker 1:`, `Speaker 2:`). Supports voice cloning with per-speaker references.
 
 ### IndexTTS2
-- **Install/Assets**: place model checkpoints + configs under `checkpoints/index_tts2/`. Follow the adapter instructions in [TTS-README](../../../tldw_Server_API/app/core/TTS/TTS-README.md#indextts2-adapter) for expected filenames.
+- **Install/Assets**: place model checkpoints + configs under `checkpoints/index_tts2/`. Follow the adapter instructions in the project TTS README (`tldw_Server_API/app/core/TTS/TTS-README.md`) for expected filenames.
 - **Config**:
   ```yaml
   providers:

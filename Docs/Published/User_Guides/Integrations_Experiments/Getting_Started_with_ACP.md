@@ -2,7 +2,7 @@
 
 This guide helps you connect your local coding agents (Claude Code, Codex, OpenCode) to tldw_server so you can control them remotely from the web UI.
 
-For Anthropic-specific first-time setup patterns (BYOK + Claude Code/SDK), see `Docs/User_Guides/Integrations_Experiments/Anthropic_ClaudeCode_ClaudeSDK_Setup.md`.
+For Anthropic-specific first-time setup patterns (BYOK + Claude Code/SDK), see [Anthropic ClaudeCode and Claude SDK Setup](./Anthropic_ClaudeCode_ClaudeSDK_Setup.md).
 
 ## What is ACP?
 
@@ -426,7 +426,7 @@ This keeps secrets out of config files.
 
 ## Next Steps
 
-- **Technical Reference**: See [Agent Client Protocol](../../Development/Agent_Client_Protocol.md) for detailed API documentation
+- **Technical Reference**: See [MCP Unified Overview](../../MCP/Unified_Overview.md) for protocol and integration details
 - **WebSocket Integration**: Learn about real-time streaming and the WebSocket message protocol
 - **Frontend Development**: Explore the React hooks and Zustand store for building custom UIs
 

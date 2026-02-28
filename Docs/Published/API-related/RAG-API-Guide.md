@@ -1300,4 +1300,4 @@ class LearningAssistant {
 
 The RAG API provides powerful search and question-answering capabilities with a clean, intuitive interface. Whether you need simple search, conversational Q&A, or advanced research capabilities, the API offers the flexibility and performance for production applications.
 
-For implementation details and extending the RAG module, see the [RAG Developer Guide](../Development/RAG-Developer-Guide.md).
+For implementation details and extending the RAG module, see the [RAG Developer Guide](../Code_Documentation/RAG-Developer-Guide.md).
