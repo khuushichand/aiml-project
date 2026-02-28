@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 import time
-from functools import partial
+from functools import lru_cache, partial
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse
 
@@ -1081,6 +1081,67 @@ _LOCAL_MODEL_CACHE: dict[str, tuple[float, list[str]]] = {}
 OPENROUTER_MODEL_DISCOVERY_TIMEOUT = 5.0  # seconds
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
+_TOKENIZER_PROVIDER_ALIASES: dict[str, str] = {
+    "llama.cpp": "llama",
+    "llama_cpp": "llama",
+    "custom-openai-api": "custom_openai_api",
+    "custom_openai": "custom_openai_api",
+    "custom-openai": "custom_openai_api",
+}
+
+_PROVIDER_NATIVE_TOKENIZER_CONFIG: dict[str, dict[str, str]] = {
+    "llama": {
+        "section": "Local-API",
+        "endpoint_field": "llama_api_IP",
+        "label": "llama.cpp",
+    },
+    "kobold": {
+        "section": "Local-API",
+        "endpoint_field": "kobold_api_IP",
+        "label": "kobold.cpp",
+    },
+    "ooba": {
+        "section": "Local-API",
+        "endpoint_field": "ooba_api_IP",
+        "label": "oobabooga",
+    },
+    "tabby": {
+        "section": "Local-API",
+        "endpoint_field": "tabby_api_IP",
+        "label": "tabbyapi",
+    },
+    "vllm": {
+        "section": "Local-API",
+        "endpoint_field": "vllm_api_IP",
+        "label": "vllm",
+    },
+    "aphrodite": {
+        "section": "Local-API",
+        "endpoint_field": "aphrodite_api_IP",
+        "label": "aphrodite",
+    },
+    "custom_openai_api": {
+        "section": "API",
+        "endpoint_field": "custom_openai_api_ip",
+        "label": "custom-openai-api",
+    },
+}
+
+_NATIVE_TOKENIZER_STRIP_SUFFIXES = (
+    "/api/v1/generate",
+    "/v1/generate",
+    "/api/generate",
+    "/v1/messages/count_tokens",
+    "/v1/messages",
+    "/messages/count_tokens",
+    "/messages",
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/chat/completions",
+    "/completions",
+    "/completion",
+)
+
 
 def _dedupe_preserve_order(values: list[str]) -> list[str]:
     seen = set()
@@ -1254,6 +1315,86 @@ def _truthy(value: Any) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return False
+
+
+def _normalize_provider_for_tokenizer(provider: str) -> str:
+    raw = str(provider or "").strip().lower()
+    if not raw:
+        return ""
+    return _TOKENIZER_PROVIDER_ALIASES.get(raw, raw)
+
+
+def _normalize_native_tokenizer_base_url(base_url: str) -> str:
+    normalized = str(base_url or "").strip().rstrip("/")
+    lowered = normalized.lower()
+    for suffix in _NATIVE_TOKENIZER_STRIP_SUFFIXES:
+        if lowered.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+            break
+    return normalized
+
+
+@lru_cache(maxsize=512)
+def _resolve_tiktoken_tokenizer_name(model: str) -> str | None:
+    if not model or not model.strip():
+        return None
+    try:
+        import tiktoken  # type: ignore
+    except Exception:
+        return None
+    try:
+        encoding = tiktoken.encoding_for_model(model.strip())
+    except Exception:
+        return None
+    name = getattr(encoding, "name", "unknown")
+    return str(name) if name else "unknown"
+
+
+def _resolve_model_tokenizer_support(
+    provider_name: str,
+    model_name: str,
+    config_parser: Any,
+) -> dict[str, Any]:
+    provider_key = _normalize_provider_for_tokenizer(provider_name)
+    native_mapping = _PROVIDER_NATIVE_TOKENIZER_CONFIG.get(provider_key)
+    if native_mapping:
+        section = native_mapping.get("section") or ""
+        endpoint_field = native_mapping.get("endpoint_field") or ""
+        label = native_mapping.get("label") or provider_key
+        if (
+            section
+            and endpoint_field
+            and config_parser.has_section(section)
+            and config_parser.has_option(section, endpoint_field)
+        ):
+            endpoint = config_parser.get(section, endpoint_field, fallback="").strip()
+            base_url = _normalize_native_tokenizer_base_url(endpoint)
+            if endpoint and not endpoint.startswith("<") and base_url:
+                return {
+                    "available": True,
+                    "tokenizer": f"{label}:remote",
+                    "kind": "provider-native",
+                    "source": f"{label}.http.tokenize",
+                    "detokenize": True,
+                }
+
+    tokenizer_name = _resolve_tiktoken_tokenizer_name(model_name)
+    if tokenizer_name:
+        return {
+            "available": True,
+            "tokenizer": f"tiktoken:{tokenizer_name}",
+            "kind": "tiktoken",
+            "source": "tiktoken.encoding_for_model",
+            "detokenize": True,
+        }
+
+    return {
+        "available": False,
+        "tokenizer": None,
+        "kind": None,
+        "source": None,
+        "detokenize": False,
+    }
 
 
 def _build_runtime_context(config_parser: Any) -> dict[str, Any]:
@@ -1655,6 +1796,24 @@ def get_configured_providers(
                     model_name,
                     runtime_context,
                 )
+                tokenizer_support = _resolve_model_tokenizer_support(provider_name, model_name, config_parser)
+                model_info["tokenizer_available"] = bool(tokenizer_support.get("available"))
+                model_info["tokenizer"] = tokenizer_support.get("tokenizer")
+                model_info["tokenizer_kind"] = tokenizer_support.get("kind")
+                model_info["tokenizer_source"] = tokenizer_support.get("source")
+                model_info["detokenize_available"] = bool(tokenizer_support.get("detokenize"))
+
+            tokenizers_by_model = {
+                str(model_info.get("name") or model_info.get("id") or "").strip(): {
+                    "available": bool(model_info.get("tokenizer_available")),
+                    "tokenizer": model_info.get("tokenizer"),
+                    "kind": model_info.get("tokenizer_kind"),
+                    "source": model_info.get("tokenizer_source"),
+                    "detokenize": bool(model_info.get("detokenize_available")),
+                }
+                for model_info in models_info
+                if str(model_info.get("name") or model_info.get("id") or "").strip()
+            }
 
             endpoint_only = provider_info['type'] == 'local' and is_configured and not models
 
@@ -1669,6 +1828,7 @@ def get_configured_providers(
                 'is_configured': is_configured,  # Add configuration status
                 'endpoint_only': endpoint_only,
                 'extra_body_compat': _safe_provider_extra_body_compat(provider_name, runtime_context),
+                'tokenizers': tokenizers_by_model or None,
             }
 
             # Add endpoint for local providers

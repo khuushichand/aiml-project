@@ -11,6 +11,8 @@ def test_action_exposes_required_outputs() -> None:
     for output_name in [
         "backend_changed",
         "frontend_changed",
+        "tldw_frontend_changed",
+        "admin_ui_changed",
         "e2e_changed",
         "security_relevant_changed",
         "coverage_required",

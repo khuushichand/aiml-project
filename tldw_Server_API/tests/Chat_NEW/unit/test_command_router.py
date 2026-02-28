@@ -93,6 +93,161 @@ def test_list_commands_includes_rich_metadata(monkeypatch):
     assert weather_cmd["args"] == ["location"]
 
 
+@pytest.mark.unit
+def test_list_commands_includes_skill_commands_metadata():
+    by_name = {entry["name"]: entry for entry in command_router.list_commands()}
+
+    assert "skills" in by_name
+    assert by_name["skills"]["required_permission"] == "chat.commands.skills"
+    assert by_name["skills"]["usage"] == "/skills [filter]"
+    assert by_name["skills"]["args"] == ["filter"]
+    assert by_name["skills"]["requires_api_key"] is True
+    assert by_name["skills"]["rbac_required"] is True
+
+    assert "skill" in by_name
+    assert by_name["skill"]["required_permission"] == "chat.commands.skill"
+    assert by_name["skill"]["usage"] == "/skill <name> [args]"
+    assert by_name["skill"]["args"] == ["name", "args"]
+    assert by_name["skill"]["requires_api_key"] is True
+    assert by_name["skill"]["rbac_required"] is True
+
+
+@pytest.mark.unit
+def test_filter_skills_for_query_matches_name_description_and_hint():
+    skills = [
+        {"name": "summarize", "description": "Summarize docs", "argument_hint": "<topic>"},
+        {"name": "code-review", "description": "Review code", "argument_hint": None},
+        {"name": "research", "description": "Deep analysis", "argument_hint": "<question>"},
+    ]
+
+    by_name = command_router._filter_skills_for_query(skills, "sum")
+    assert [s["name"] for s in by_name] == ["summarize"]
+
+    by_desc = command_router._filter_skills_for_query(skills, "analysis")
+    assert [s["name"] for s in by_desc] == ["research"]
+
+    by_hint = command_router._filter_skills_for_query(skills, "topic")
+    assert [s["name"] for s in by_hint] == ["summarize"]
+
+
+@pytest.mark.asyncio
+async def test_skills_command_lists_only_invocable_skills(monkeypatch):
+    async def fake_list(ctx, filter_text=None):
+        assert filter_text is None
+        return [
+            {"name": "summarize", "description": "Summarize docs", "argument_hint": "<topic>"},
+            {"name": "code-review", "description": "Review code", "argument_hint": None},
+        ]
+
+    monkeypatch.setattr(command_router, "_list_invocable_skills", fake_list)
+    ctx = command_router.CommandContext(user_id="u1", auth_user_id=1)
+
+    res = await command_router.async_dispatch_command(ctx, "skills", None)
+    assert res.ok
+    assert "summarize" in res.content
+    assert "code-review" in res.content
+    assert res.metadata.get("count") == 2
+
+
+@pytest.mark.asyncio
+async def test_skills_command_applies_filter(monkeypatch):
+    async def fake_list(ctx, filter_text=None):
+        assert filter_text == "sum"
+        return [{"name": "summarize", "description": "Summarize docs", "argument_hint": None}]
+
+    monkeypatch.setattr(command_router, "_list_invocable_skills", fake_list)
+    ctx = command_router.CommandContext(user_id="u1", auth_user_id=1)
+
+    res = await command_router.async_dispatch_command(ctx, "skills", "sum")
+    assert res.ok
+    assert "summarize" in res.content
+    assert res.metadata.get("count") == 1
+
+
+@pytest.mark.asyncio
+async def test_skill_command_requires_name():
+    ctx = command_router.CommandContext(user_id="u1", auth_user_id=1)
+    res = await command_router.async_dispatch_command(ctx, "skill", None)
+    assert not res.ok
+    assert "Usage" in res.content
+
+
+@pytest.mark.asyncio
+async def test_skill_command_executes_inline(monkeypatch):
+    async def fake_exec(ctx, skill_name, skill_args):
+        assert skill_name == "summarize"
+        assert skill_args == "release notes"
+        return {
+            "success": True,
+            "execution_mode": "inline",
+            "rendered_prompt": "Summarized",
+            "fork_output": None,
+        }
+
+    monkeypatch.setattr(command_router, "_execute_skill", fake_exec)
+    ctx = command_router.CommandContext(user_id="u1", auth_user_id=1)
+    res = await command_router.async_dispatch_command(ctx, "skill", "summarize release notes")
+    assert res.ok
+    assert "Summarized" in res.content
+    assert res.metadata.get("execution_mode") == "inline"
+
+
+@pytest.mark.asyncio
+async def test_skill_command_executes_fork(monkeypatch):
+    async def fake_exec(ctx, skill_name, skill_args):
+        return {
+            "success": True,
+            "execution_mode": "fork",
+            "rendered_prompt": "ignored",
+            "fork_output": "Fork result",
+        }
+
+    monkeypatch.setattr(command_router, "_execute_skill", fake_exec)
+    ctx = command_router.CommandContext(user_id="u1", auth_user_id=1)
+    res = await command_router.async_dispatch_command(ctx, "skill", "research-plan q1")
+    assert res.ok
+    assert "Fork result" in res.content
+    assert res.metadata.get("execution_mode") == "fork"
+
+
+@pytest.mark.asyncio
+async def test_skill_command_rejects_non_invocable_skill(monkeypatch):
+    async def fake_exec(ctx, skill_name, skill_args):
+        return {"success": False, "error": "skill_not_invocable"}
+
+    monkeypatch.setattr(command_router, "_execute_skill", fake_exec)
+    ctx = command_router.CommandContext(user_id="u1", auth_user_id=1)
+    res = await command_router.async_dispatch_command(ctx, "skill", "hidden-skill x")
+    assert not res.ok
+    assert "not invocable" in res.content.lower()
+
+
+@pytest.mark.asyncio
+async def test_skill_command_reports_not_found(monkeypatch):
+    async def fake_exec(ctx, skill_name, skill_args):
+        return {"success": False, "error": "skill_not_found"}
+
+    monkeypatch.setattr(command_router, "_execute_skill", fake_exec)
+    ctx = command_router.CommandContext(user_id="u1", auth_user_id=1)
+    res = await command_router.async_dispatch_command(ctx, "skill", "missing-skill x")
+    assert not res.ok
+    assert "not found" in res.content.lower()
+
+
+@pytest.mark.asyncio
+async def test_skill_command_handles_runtime_resolution_exception(monkeypatch):
+    async def fake_resolve(ctx):
+        raise Exception("resolver exploded")
+
+    monkeypatch.setattr(command_router, "_resolve_skills_runtime", fake_resolve)
+    ctx = command_router.CommandContext(user_id="u1", auth_user_id=1)
+
+    res = await command_router.async_dispatch_command(ctx, "skill", "summarize release notes")
+    assert not res.ok
+    assert res.metadata.get("error") == "runtime_error"
+    assert "execution failed" in res.content.lower()
+
+
 @pytest.mark.asyncio
 async def test_rbac_enforcement(monkeypatch):
     # Enable commands and RBAC enforcement

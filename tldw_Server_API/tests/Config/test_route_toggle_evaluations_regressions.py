@@ -117,6 +117,9 @@ def test_route_toggle_ignores_env_overrides_outside_explicit_pytest_runtime(
     )
     monkeypatch.setattr(config_mod, "load_comprehensive_config", lambda: cp)
     monkeypatch.setattr(config_mod, "is_explicit_pytest_runtime", lambda: False)
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TLDW_TEST_MODE", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
     monkeypatch.setenv("ROUTES_STABLE_ONLY", "false")
     monkeypatch.setenv("ROUTES_ENABLE", "benchmarks")
     monkeypatch.setenv("ROUTES_DISABLE", "persona")
@@ -127,3 +130,29 @@ def test_route_toggle_ignores_env_overrides_outside_explicit_pytest_runtime(
     assert "benchmarks" not in policy["enable"]
     assert "persona" not in policy["disable"]
     assert config_mod.route_enabled("benchmarks") is False
+
+
+def test_route_toggle_applies_env_overrides_in_test_mode_without_explicit_pytest_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cp = configparser.ConfigParser()
+    cp.read_string(
+        "\n".join(
+            [
+                "[API-Routes]",
+                "stable_only = true",
+                "disable =",
+                "enable =",
+            ]
+        )
+    )
+    monkeypatch.setattr(config_mod, "load_comprehensive_config", lambda: cp)
+    monkeypatch.setattr(config_mod, "is_explicit_pytest_runtime", lambda: False)
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("ROUTES_DISABLE", "media")
+    monkeypatch.delenv("ROUTES_ENABLE", raising=False)
+
+    policy = config_mod._route_toggle_policy()
+
+    assert "media" in policy["disable"]
+    assert config_mod.route_enabled("media") is False

@@ -13,11 +13,8 @@ import { api } from '@/lib/api-client';
 import {
   buildAlertHistoryEntry,
   buildAlertRuleFromDraft,
-  buildAssignableUsers,
   DEFAULT_ALERT_RULE_DRAFT,
-  ensureTriggeredHistoryEntries,
   isAlertSnoozed,
-  normalizeMonitoringAlertsPayload,
   readStoredAlertHistory,
   readStoredAlertRules,
   resolveSnoozedUntil,
@@ -37,11 +34,15 @@ import {
   type MonitoringTimeRangeOption,
 } from '@/lib/monitoring-metrics';
 import {
-  buildMonitoringSystemStatus,
   measureTimedEndpoint,
   MONITORING_SUBSYSTEMS,
   normalizeMonitoringHealthStatus,
 } from '@/lib/monitoring-health';
+import {
+  fetchMonitoringSettledResults,
+  monitoringLoadResultEntries,
+  resolveMonitoringLoadState,
+} from './load-state-utils';
 import AlertRulesPanel from './components/AlertRulesPanel';
 import AlertsPanel from './components/AlertsPanel';
 import MetricsChart from './components/MetricsChart';
@@ -49,6 +50,18 @@ import MetricsGrid from './components/MetricsGrid';
 import NotificationsPanel from './components/NotificationsPanel';
 import SystemStatusPanel from './components/SystemStatusPanel';
 import WatchlistsPanel from './components/WatchlistsPanel';
+import {
+  escalateAlertSeverity,
+  markAlertAcknowledged,
+  removeAlertById,
+  setAlertAssignment,
+  setAlertSnoozeUntil,
+} from './alert-state-utils';
+import {
+  buildNotificationSettingsUpdate,
+  normalizeNotificationSettings,
+  normalizeRecentNotifications,
+} from './notification-utils';
 import type {
   AlertAssignableUser,
   AlertHistoryEntry,
@@ -57,9 +70,7 @@ import type {
   AlertRuleValidationErrors,
   Metric,
   MetricsHistoryPoint,
-  NotificationChannel,
   NotificationSettings,
-  NotificationSettingsApi,
   RecentNotification,
   SnoozeDurationOption,
   SystemAlert,
@@ -77,12 +88,6 @@ interface HealthMetricsResponse {
 const METRICS_HISTORY_POLL_MS = 5 * 60 * 1000;
 const METRIC_CRITICAL_THRESHOLD = 90;
 const METRIC_WARNING_THRESHOLD = 70;
-const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
-  channels: [],
-  alert_threshold: 'warning',
-  digest_enabled: false,
-  digest_frequency: 'daily',
-};
 const DEFAULT_SYSTEM_STATUS: SystemStatusItem[] = [
   ...MONITORING_SUBSYSTEMS.map((subsystem) => ({
     key: subsystem.key,
@@ -110,212 +115,6 @@ const toDatetimeLocalInputValue = (value: Date): string => {
 
 export const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
   return normalizeMonitoringHealthStatus(status);
-};
-
-const normalizeAlertThreshold = (value?: string): NotificationSettings['alert_threshold'] => {
-  const normalized = typeof value === 'string' ? value.toLowerCase() : '';
-  switch (normalized) {
-    case 'info':
-    case 'warning':
-    case 'error':
-    case 'critical':
-      return normalized as NotificationSettings['alert_threshold'];
-    default:
-      return 'warning';
-  }
-};
-
-const toApiMinSeverity = (value: NotificationSettings['alert_threshold']): string => {
-  if (value === 'info' || value === 'warning' || value === 'critical') {
-    return value;
-  }
-  return 'warning';
-};
-
-const isNotificationSettingsUi = (value: unknown): value is NotificationSettings =>
-  Boolean(value && typeof value === 'object' && Array.isArray((value as NotificationSettings).channels));
-
-const getChannelConfigValue = (channel?: NotificationChannel): string => {
-  if (!channel?.config) return '';
-  const direct = channel.type === 'email' ? channel.config.address : channel.config.url;
-  if (typeof direct === 'string' && direct.trim()) return direct.trim();
-  const first = Object.values(channel.config)[0];
-  return typeof first === 'string' ? first.trim() : '';
-};
-
-const normalizeNotificationSettings = (value: unknown): NotificationSettings => {
-  if (!value || typeof value !== 'object') {
-    return { ...DEFAULT_NOTIFICATION_SETTINGS };
-  }
-
-  if (isNotificationSettingsUi(value)) {
-    const ui = value as NotificationSettings;
-    return {
-      id: ui.id,
-      channels: Array.isArray(ui.channels) ? ui.channels : [],
-      alert_threshold: normalizeAlertThreshold(ui.alert_threshold),
-      digest_enabled: ui.digest_enabled ?? DEFAULT_NOTIFICATION_SETTINGS.digest_enabled,
-      digest_frequency: ui.digest_frequency ?? DEFAULT_NOTIFICATION_SETTINGS.digest_frequency,
-    };
-  }
-
-  const apiValue = value as NotificationSettingsApi;
-  const enabled = apiValue.enabled ?? true;
-  const channels: NotificationChannel[] = [];
-  if (apiValue.email_to && String(apiValue.email_to).trim()) {
-    channels.push({
-      type: 'email',
-      enabled,
-      config: { address: String(apiValue.email_to).trim() },
-    });
-  }
-  if (apiValue.webhook_url && String(apiValue.webhook_url).trim()) {
-    channels.push({
-      type: 'webhook',
-      enabled,
-      config: { url: String(apiValue.webhook_url).trim() },
-    });
-  }
-  return {
-    ...DEFAULT_NOTIFICATION_SETTINGS,
-    channels,
-    alert_threshold: normalizeAlertThreshold(apiValue.min_severity),
-  };
-};
-
-const buildNotificationSettingsUpdate = (settings: NotificationSettings): NotificationSettingsApi => {
-  const channels = settings.channels ?? [];
-  const emailValues = channels
-    .filter((channel) => channel.type === 'email')
-    .map(getChannelConfigValue)
-    .filter((value) => value);
-  const webhookChannel = channels.find(
-    (channel) => channel.type === 'webhook' || channel.type === 'slack' || channel.type === 'discord'
-  );
-  const webhookUrl = getChannelConfigValue(webhookChannel);
-  return {
-    enabled: channels.some((channel) => channel.enabled),
-    min_severity: toApiMinSeverity(settings.alert_threshold),
-    email_to: emailValues.length ? emailValues.join(',') : '',
-    webhook_url: webhookUrl || '',
-  };
-};
-
-const toRecord = (value: unknown): Record<string, unknown> | null =>
-  value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
-
-const pickString = (...values: unknown[]): string | undefined => {
-  for (const value of values) {
-    if (typeof value === 'string' && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
-};
-
-const normalizeRecentNotificationStatus = (value: unknown): RecentNotification['status'] => {
-  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (['sent', 'delivered', 'success', 'ok', 'stored', 'partial'].includes(normalized)) {
-    return 'sent';
-  }
-  if (['failed', 'error'].includes(normalized)) {
-    return 'failed';
-  }
-  return 'pending';
-};
-
-const extractRecentNotificationError = (entry: Record<string, unknown>): string | undefined => {
-  const details = toRecord(entry.details);
-  const directError = pickString(entry.error, details?.error);
-  if (directError) return directError;
-
-  const deliveries = Array.isArray(details?.deliveries) ? details.deliveries : [];
-  for (const deliveryEntry of deliveries) {
-    const delivery = toRecord(deliveryEntry);
-    if (!delivery) continue;
-    const status = pickString(delivery.status)?.toLowerCase();
-    if (status === 'failed' || status === 'error') {
-      return pickString(delivery.error)
-        ?? `Delivery failed for ${pickString(delivery.recipient) ?? 'recipient'}`;
-    }
-  }
-  return undefined;
-};
-
-const normalizeRecentNotificationItem = (value: unknown, index: number): RecentNotification => {
-  const fallbackTimestamp = new Date().toISOString();
-  const entry = toRecord(value);
-  if (!entry) {
-    return {
-      id: `notification-${index}`,
-      channel: 'unknown',
-      message: typeof value === 'string' && value.trim() ? value.trim() : 'Notification event',
-      status: 'pending',
-      timestamp: fallbackTimestamp,
-    };
-  }
-
-  const details = toRecord(entry.details);
-  const timestampRaw = pickString(entry.timestamp, entry.created_at, entry.sent_at, entry.time, entry.occurred_at);
-  const parsedTimestamp = timestampRaw ? new Date(timestampRaw) : null;
-  const timestamp = parsedTimestamp && !Number.isNaN(parsedTimestamp.valueOf())
-    ? parsedTimestamp.toISOString()
-    : fallbackTimestamp;
-
-  const channel = pickString(entry.channel, entry.type, entry.provider) ?? 'unknown';
-  const message = pickString(entry.message, entry.text_snippet, entry.subject, details?.subject, entry.raw)
-    ?? 'Notification event';
-  const severity = pickString(entry.severity, entry.rule_severity);
-
-  return {
-    id: pickString(entry.id, entry.notification_id) ?? `${timestamp}-${channel}-${index}`,
-    channel,
-    message,
-    status: normalizeRecentNotificationStatus(entry.status),
-    timestamp,
-    error: extractRecentNotificationError(entry),
-    severity,
-  };
-};
-
-const normalizeRecentNotifications = (value: unknown): RecentNotification[] => {
-  const payload = toRecord(value);
-  const items = Array.isArray(value)
-    ? value
-    : Array.isArray(payload?.notifications)
-      ? payload.notifications
-      : Array.isArray(payload?.items)
-        ? payload.items
-        : [];
-
-  return items.map((item, index) => normalizeRecentNotificationItem(item, index));
-};
-
-const normalizeWatchlistsPayload = (value: unknown): Watchlist[] => {
-  if (Array.isArray(value)) return value as Watchlist[];
-  if (value && typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    if (Array.isArray(obj.watchlists)) {
-      return obj.watchlists as Watchlist[];
-    }
-  }
-  return [];
-};
-
-const mergeAlertsWithLocalState = (
-  incoming: SystemAlert[],
-  existing: SystemAlert[]
-): SystemAlert[] => {
-  const existingById = new Map(existing.map((alert) => [alert.id, alert]));
-  return incoming.map((alert) => {
-    const prev = existingById.get(alert.id);
-    return {
-      ...alert,
-      assigned_to: prev?.assigned_to ?? alert.assigned_to,
-      snoozed_until: prev?.snoozed_until ?? alert.snoozed_until,
-      metadata: prev?.metadata ?? alert.metadata,
-    };
-  });
 };
 
 export default function MonitoringPage() {
@@ -368,6 +167,8 @@ export default function MonitoringPage() {
   const [assignableUsers, setAssignableUsers] = useState<AlertAssignableUser[]>([]);
   const [showSnoozedAlerts, setShowSnoozedAlerts] = useState(false);
   const [alertHistory, setAlertHistory] = useState<AlertHistoryEntry[]>([]);
+  const alertsRef = useRef<SystemAlert[]>([]);
+  const alertHistoryRef = useRef<AlertHistoryEntry[]>([]);
 
   const loadMetricsHistoryForRange = useCallback(async (
     selectedRange: MonitoringTimeRangeOption,
@@ -440,122 +241,44 @@ export default function MonitoringPage() {
       setError('');
       setNotificationSettingsStatus('pending');
 
-      const [
-        metricsData,
-        watchlistsData,
-        alertsData,
-        healthTimedResult,
-        llmHealthTimedResult,
-        ragHealthTimedResult,
-        ttsHealthTimedResult,
-        sttHealthTimedResult,
-        embeddingsHealthTimedResult,
-        metricsTextData,
-        notificationSettingsData,
-        recentNotificationsData,
-        usersData,
-      ] = await Promise.allSettled([
-        api.getMetrics(),
-        api.getWatchlists(),
-        api.getAlerts(),
-        measureTimedEndpoint(() => api.getHealth()),
-        measureTimedEndpoint(() => api.getLlmHealth()),
-        measureTimedEndpoint(() => api.getRagHealth()),
-        measureTimedEndpoint(() => api.getTtsHealth()),
-        measureTimedEndpoint(() => api.getSttHealth()),
-        measureTimedEndpoint(() => api.getEmbeddingsHealth()),
-        api.getMetricsText(),
-        api.getNotificationSettings(),
-        api.getRecentNotifications(),
-        api.getUsers({ limit: '100' }),
-      ]);
+      const settledResults = await fetchMonitoringSettledResults({
+        apiClient: api,
+        measureTimedRequest: measureTimedEndpoint,
+      });
 
-      [
-        { name: 'metrics', result: metricsData },
-        { name: 'watchlists', result: watchlistsData },
-        { name: 'alerts', result: alertsData },
-        { name: 'health', result: healthTimedResult },
-        { name: 'llmHealth', result: llmHealthTimedResult },
-        { name: 'ragHealth', result: ragHealthTimedResult },
-        { name: 'ttsHealth', result: ttsHealthTimedResult },
-        { name: 'sttHealth', result: sttHealthTimedResult },
-        { name: 'embeddingsHealth', result: embeddingsHealthTimedResult },
-        { name: 'metricsText', result: metricsTextData },
-        { name: 'notificationSettings', result: notificationSettingsData },
-        { name: 'recentNotifications', result: recentNotificationsData },
-        { name: 'users', result: usersData },
-      ].forEach(({ name, result }) => {
+      monitoringLoadResultEntries(settledResults).forEach(({ name, result }) => {
         if (result.status === 'rejected') {
           console.warn(`Failed to load ${name}:`, result.reason);
         }
       });
 
-      // Process notification settings
-      setNotificationSettingsStatus(notificationSettingsData.status);
-      if (notificationSettingsData.status === 'fulfilled') {
-        setNotificationSettings(normalizeNotificationSettings(notificationSettingsData.value));
-      } else {
-        setNotificationSettings(null);
-      }
+      const resolvedState = resolveMonitoringLoadState({
+        settledResults,
+        previousAlerts: alertsRef.current,
+        previousAlertHistory: alertHistoryRef.current,
+        metricWarningThreshold: METRIC_WARNING_THRESHOLD,
+        metricCriticalThreshold: METRIC_CRITICAL_THRESHOLD,
+      });
 
-      // Process recent notifications
-      if (recentNotificationsData.status === 'fulfilled') {
-        setRecentNotifications(normalizeRecentNotifications(recentNotificationsData.value));
-      } else {
-        setRecentNotifications([]);
+      setNotificationSettingsStatus(resolvedState.notificationSettingsStatus);
+      setNotificationSettings(resolvedState.notificationSettings);
+      setRecentNotifications(resolvedState.recentNotifications);
+      if (resolvedState.metrics) {
+        setMetrics(resolvedState.metrics);
       }
-
-      // Process metrics
-      if (metricsData.status === 'fulfilled' && metricsData.value) {
-        const rawMetrics = metricsData.value;
-        const metricsArray: Metric[] = [];
-        if (typeof rawMetrics === 'object') {
-          Object.entries(rawMetrics).forEach(([key, value]) => {
-            if (typeof value === 'number' || typeof value === 'string') {
-              metricsArray.push({
-                name: key,
-                value,
-                status: typeof value === 'number' && value > METRIC_CRITICAL_THRESHOLD
-                  ? 'critical'
-                  : typeof value === 'number' && value > METRIC_WARNING_THRESHOLD
-                    ? 'warning'
-                    : 'healthy',
-              });
-            }
-          });
-        }
-        setMetrics(metricsArray);
+      if (resolvedState.watchlists) {
+        setWatchlists(resolvedState.watchlists);
       }
-
-      // Process watchlists
-      if (watchlistsData.status === 'fulfilled') {
-        setWatchlists(normalizeWatchlistsPayload(watchlistsData.value));
+      if (resolvedState.alerts) {
+        alertsRef.current = resolvedState.alerts;
+        setAlerts(resolvedState.alerts);
       }
-
-      // Process alerts
-      if (alertsData.status === 'fulfilled') {
-        const normalizedAlerts = normalizeMonitoringAlertsPayload(alertsData.value);
-        setAlerts((prev) => mergeAlertsWithLocalState(normalizedAlerts, prev));
-        setAlertHistory((prev) => ensureTriggeredHistoryEntries(prev, normalizedAlerts));
+      if (resolvedState.alertHistory) {
+        alertHistoryRef.current = resolvedState.alertHistory;
+        setAlertHistory(resolvedState.alertHistory);
       }
-
-      // Process assignable users
-      if (usersData.status === 'fulfilled') {
-        setAssignableUsers(buildAssignableUsers(usersData.value));
-      } else {
-        setAssignableUsers([]);
-      }
-
-      setSystemStatus(buildMonitoringSystemStatus({
-        healthResult: healthTimedResult,
-        llmHealthResult: llmHealthTimedResult,
-        ragHealthResult: ragHealthTimedResult,
-        ttsHealthResult: ttsHealthTimedResult,
-        sttHealthResult: sttHealthTimedResult,
-        embeddingsHealthResult: embeddingsHealthTimedResult,
-        metricsSnapshotResult: metricsData,
-        metricsTextResult: metricsTextData,
-      }));
+      setAssignableUsers(resolvedState.assignableUsers);
+      setSystemStatus(resolvedState.systemStatus);
 
       void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);
       setLastUpdated(new Date());
@@ -583,6 +306,14 @@ export default function MonitoringPage() {
   useEffect(() => {
     if (!alertStorageHydratedRef.current) return;
     writeStoredAlertHistory(alertHistory);
+  }, [alertHistory]);
+
+  useEffect(() => {
+    alertsRef.current = alerts;
+  }, [alerts]);
+
+  useEffect(() => {
+    alertHistoryRef.current = alertHistory;
   }, [alertHistory]);
 
   useEffect(() => {
@@ -726,15 +457,7 @@ export default function MonitoringPage() {
     try {
       setError('');
       await api.acknowledgeAlert(alert.id);
-      setAlerts((prev) => prev.map((item) => (
-        item.id === alert.id
-          ? {
-            ...item,
-            acknowledged: true,
-            acknowledged_at: new Date().toISOString(),
-          }
-          : item
-      )));
+      setAlerts((prev) => markAlertAcknowledged(prev, alert.id, new Date().toISOString()));
       appendAlertHistory(alert.id, 'acknowledged', 'Alert acknowledged');
       setSuccess('Alert acknowledged');
       loadData();
@@ -758,7 +481,7 @@ export default function MonitoringPage() {
       setError('');
       await api.dismissAlert(alert.id);
       appendAlertHistory(alert.id, 'dismissed', 'Alert dismissed');
-      setAlerts((prev) => prev.filter((item) => item.id !== alert.id));
+      setAlerts((prev) => removeAlertById(prev, alert.id));
       setSuccess('Alert dismissed');
       loadData();
     } catch (err: unknown) {
@@ -768,11 +491,7 @@ export default function MonitoringPage() {
   };
 
   const handleAssignAlert = (alert: SystemAlert, userId: string) => {
-    setAlerts((prev) => prev.map((item) => (
-      item.id === alert.id
-        ? { ...item, assigned_to: userId || undefined }
-        : item
-    )));
+    setAlerts((prev) => setAlertAssignment(prev, alert.id, userId || undefined));
     const assignedLabel = userId
       ? (assignableUsers.find((user) => user.id === userId)?.label ?? userId)
       : 'Unassigned';
@@ -782,11 +501,7 @@ export default function MonitoringPage() {
 
   const handleSnoozeAlert = (alert: SystemAlert, duration: SnoozeDurationOption) => {
     const snoozedUntil = resolveSnoozedUntil(duration);
-    setAlerts((prev) => prev.map((item) => (
-      item.id === alert.id
-        ? { ...item, snoozed_until: snoozedUntil }
-        : item
-    )));
+    setAlerts((prev) => setAlertSnoozeUntil(prev, alert.id, snoozedUntil));
     appendAlertHistory(alert.id, 'snoozed', `Snoozed for ${duration}`);
     setSuccess(`Alert snoozed for ${duration}`);
   };
@@ -795,11 +510,7 @@ export default function MonitoringPage() {
     if (alert.severity === 'critical') {
       return;
     }
-    setAlerts((prev) => prev.map((item) => (
-      item.id === alert.id
-        ? { ...item, severity: 'critical' }
-        : item
-    )));
+    setAlerts((prev) => escalateAlertSeverity(prev, alert.id));
     appendAlertHistory(alert.id, 'escalated', 'Severity escalated to critical');
     setSuccess('Alert escalated to critical');
   };

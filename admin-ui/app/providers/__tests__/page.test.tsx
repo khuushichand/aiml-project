@@ -57,25 +57,7 @@ vi.mock('@/lib/api-client', () => ({
   },
 }));
 
-type ApiMock = {
-  getLLMProviders: ReturnType<typeof vi.fn>;
-  getUsers: ReturnType<typeof vi.fn>;
-  getOrganizations: ReturnType<typeof vi.fn>;
-  getLLMProviderOverrides: ReturnType<typeof vi.fn>;
-  getLlmUsageSummary: ReturnType<typeof vi.fn>;
-  getLlmUsage: ReturnType<typeof vi.fn>;
-  updateLLMProviderOverride: ReturnType<typeof vi.fn>;
-  deleteLLMProviderOverride: ReturnType<typeof vi.fn>;
-  testLLMProvider: ReturnType<typeof vi.fn>;
-  getUserByokKeys: ReturnType<typeof vi.fn>;
-  getOrgByokKeys: ReturnType<typeof vi.fn>;
-  createUserByokKey: ReturnType<typeof vi.fn>;
-  createOrgByokKey: ReturnType<typeof vi.fn>;
-  deleteUserByokKey: ReturnType<typeof vi.fn>;
-  deleteOrgByokKey: ReturnType<typeof vi.fn>;
-};
-
-const apiMock = api as unknown as ApiMock;
+const apiMock = vi.mocked(api);
 
 beforeEach(() => {
   confirmMock.mockResolvedValue(true);

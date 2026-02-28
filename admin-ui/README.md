@@ -21,13 +21,13 @@ Admin and operations dashboard for `tldw_server`. This UI is intended for sysadm
 
 ### Prerequisites
 
-- Node.js 18+
+- Bun 1.3+
 - `tldw_server` API running (default: `http://localhost:8000`)
 
 ### Install
 
 ```bash
-npm install
+bun install
 ```
 
 ### Environment Variables
@@ -48,10 +48,10 @@ to backend verification.
 ### Run Dev Server
 
 ```bash
-npm run dev
+bun run dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3001`.
 
 ## Authentication
 

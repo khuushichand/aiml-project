@@ -57,16 +57,8 @@ vi.mock('@/lib/api-client', () => ({
   },
 }));
 
-type ApiMock = {
-  getUsers: ReturnType<typeof vi.fn>;
-  createIncident: ReturnType<typeof vi.fn>;
-  updateIncident: ReturnType<typeof vi.fn>;
-  addIncidentEvent: ReturnType<typeof vi.fn>;
-  deleteIncident: ReturnType<typeof vi.fn>;
-};
-
-const apiMock = api as unknown as ApiMock;
-const usePagedResourceMock = usePagedResource as unknown as ReturnType<typeof vi.fn>;
+const apiMock = vi.mocked(api);
+const usePagedResourceMock = vi.mocked(usePagedResource);
 
 beforeEach(() => {
   localStorage.clear();

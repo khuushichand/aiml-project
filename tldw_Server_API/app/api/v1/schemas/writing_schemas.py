@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -130,6 +130,84 @@ class WritingThemeListResponse(BaseModel):
     total: int
 
 
+class WritingDefaultTemplate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    schema_version: int = Field(1, ge=1)
+    is_default: bool = True
+
+
+class WritingDefaultTheme(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    class_name: str | None = None
+    css: str | None = None
+    schema_version: int = Field(1, ge=1)
+    is_default: bool = True
+    order: int = 0
+
+
+class WritingDefaultsResponse(BaseModel):
+    version: int = 1
+    templates: list[WritingDefaultTemplate]
+    themes: list[WritingDefaultTheme]
+
+
+class WritingSnapshotCounts(BaseModel):
+    sessions: int = 0
+    templates: int = 0
+    themes: int = 0
+
+
+class WritingSnapshotSessionItem(BaseModel):
+    id: str | None = None
+    name: str = Field(..., min_length=1, max_length=255)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    schema_version: int = Field(1, ge=1)
+    version_parent_id: str | None = None
+
+
+class WritingSnapshotTemplateItem(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    schema_version: int = Field(1, ge=1)
+    version_parent_id: str | None = None
+    is_default: bool = False
+
+
+class WritingSnapshotThemeItem(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    class_name: str | None = None
+    css: str | None = None
+    schema_version: int = Field(1, ge=1)
+    version_parent_id: str | None = None
+    is_default: bool = False
+    order: int = 0
+
+
+class WritingSnapshotPayload(BaseModel):
+    sessions: list[WritingSnapshotSessionItem] = Field(default_factory=list)
+    templates: list[WritingSnapshotTemplateItem] = Field(default_factory=list)
+    themes: list[WritingSnapshotThemeItem] = Field(default_factory=list)
+
+
+class WritingSnapshotExportResponse(BaseModel):
+    version: int = 1
+    counts: WritingSnapshotCounts
+    sessions: list[WritingSnapshotSessionItem]
+    templates: list[WritingSnapshotTemplateItem]
+    themes: list[WritingSnapshotThemeItem]
+
+
+class WritingSnapshotImportRequest(BaseModel):
+    mode: Literal["merge", "replace"] = "merge"
+    snapshot: WritingSnapshotPayload
+
+
+class WritingSnapshotImportResponse(BaseModel):
+    mode: Literal["merge", "replace"]
+    imported: WritingSnapshotCounts
+
+
 class WritingTokenizeOptions(BaseModel):
     include_strings: bool = Field(True, description="Include decoded token strings")
 
@@ -145,6 +223,9 @@ class WritingTokenizeMeta(BaseModel):
     provider: str
     model: str
     tokenizer: str
+    tokenizer_kind: str | None = None
+    tokenizer_source: str | None = None
+    detokenize_available: bool = False
     input_chars: int
     token_count: int
     warnings: list[str] = Field(default_factory=list)
@@ -164,6 +245,18 @@ class WritingTokenCountRequest(BaseModel):
 
 class WritingTokenCountResponse(BaseModel):
     count: int
+    meta: WritingTokenizeMeta
+
+
+class WritingDetokenizeRequest(BaseModel):
+    provider: str = Field(..., min_length=1, description="Provider name")
+    model: str = Field(..., min_length=1, description="Model name")
+    ids: list[int] = Field(..., min_length=1, description="Token IDs to decode")
+
+
+class WritingDetokenizeResponse(BaseModel):
+    text: str
+    strings: list[str] | None = None
     meta: WritingTokenizeMeta
 
 
@@ -209,6 +302,9 @@ class WritingWordcloudResponse(BaseModel):
 class WritingTokenizerSupport(BaseModel):
     available: bool
     tokenizer: str | None = None
+    kind: str | None = None
+    source: str | None = None
+    detokenize: bool = False
     error: str | None = None
 
 
@@ -222,13 +318,28 @@ class WritingExtraBodyCompat(BaseModel):
     source: str = "catalog+runtime"
 
 
+class WritingTokenProbabilitiesCapabilities(BaseModel):
+    inline_reroll: bool = False
+
+
+class WritingContextCapabilities(BaseModel):
+    author_note_depth_mode: str = "annotation"
+    context_order: bool = False
+    context_budget: bool = False
+
+
 class WritingServerCapabilities(BaseModel):
     sessions: bool
     templates: bool
     themes: bool
+    defaults_catalog: bool = False
+    snapshots: bool = False
     tokenize: bool
+    detokenize: bool = False
     token_count: bool
     wordclouds: bool = False
+    token_probabilities: WritingTokenProbabilitiesCapabilities | None = None
+    context: WritingContextCapabilities | None = None
 
 
 class WritingProviderCapabilities(BaseModel):
@@ -249,6 +360,9 @@ class WritingRequestedCapabilities(BaseModel):
     features: dict[str, bool]
     tokenizer_available: bool
     tokenizer: str | None = None
+    tokenizer_kind: str | None = None
+    tokenizer_source: str | None = None
+    detokenize_available: bool = False
     tokenization_error: str | None = None
     extra_body_compat: WritingExtraBodyCompat | None = None
 

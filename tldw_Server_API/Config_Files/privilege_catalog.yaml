@@ -101,6 +101,71 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/chat-commands-list
+  - id: chat.commands.time
+    description: Invoke the /time chat slash command.
+    resource_tags:
+      - chat
+      - commands
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-commands-time
+  - id: chat.commands.weather
+    description: Invoke the /weather chat slash command.
+    resource_tags:
+      - chat
+      - commands
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-commands-weather
+  - id: chat.commands.skills
+    description: Invoke the /skills chat slash command to discover invocable skills.
+    resource_tags:
+      - chat
+      - commands
+      - skills
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-commands-skills
+  - id: chat.commands.skill
+    description: Invoke the /skill chat slash command to execute an invocable skill.
+    resource_tags:
+      - chat
+      - commands
+      - skills
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-commands-skill
   - id: chat.dictionaries.validate
     description: Validate chat dictionary payloads for schema, regex safety, and template checks.
     resource_tags:
