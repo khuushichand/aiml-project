@@ -81,6 +81,7 @@ class RelationshipDraftResponse(BaseModel):
     relationship_type: WizardRelationshipType
     dependent_visible: bool
     status: Literal["pending", "active", "declined", "revoked"]
+    relationship_id: str | None = None
     created_at: str
     updated_at: str
     model_config = ConfigDict(from_attributes=True)

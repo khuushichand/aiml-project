@@ -2198,6 +2198,32 @@ class GuardianDB:
             finally:
                 conn.close()
 
+    def get_household_member_draft(self, member_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM guardian_household_member_drafts WHERE id = ?",
+                    (member_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row["id"],
+                    "household_draft_id": row["household_draft_id"],
+                    "role": row["role"],
+                    "display_name": row["display_name"],
+                    "user_id": row["user_id"],
+                    "email": row["email"],
+                    "invite_required": bool(row["invite_required"]),
+                    "invite_status": row["invite_status"],
+                    "metadata": self._loads_json_or_default(row["metadata"], None),
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            finally:
+                conn.close()
+
     def create_relationship_draft(
         self,
         household_draft_id: str,
@@ -2266,6 +2292,53 @@ class GuardianDB:
                     }
                     for row in rows
                 ]
+            finally:
+                conn.close()
+
+    def get_relationship_draft(self, relationship_draft_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM guardian_relationship_drafts WHERE id = ?",
+                    (relationship_draft_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row["id"],
+                    "household_draft_id": row["household_draft_id"],
+                    "guardian_member_draft_id": row["guardian_member_draft_id"],
+                    "dependent_member_draft_id": row["dependent_member_draft_id"],
+                    "relationship_type": row["relationship_type"],
+                    "dependent_visible": bool(row["dependent_visible"]),
+                    "status": row["status"],
+                    "relationship_id": row["relationship_id"],
+                    "metadata": self._loads_json_or_default(row["metadata"], None),
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            finally:
+                conn.close()
+
+    def link_relationship_draft(
+        self,
+        relationship_draft_id: str,
+        relationship_id: str,
+        status: str = "pending",
+    ) -> bool:
+        if status not in ("pending", "active", "declined", "revoked"):
+            raise ValueError(f"Invalid relationship draft status: {status}")
+        with self._lock:
+            conn = self._connect()
+            try:
+                result = conn.execute(
+                    """UPDATE guardian_relationship_drafts
+                       SET relationship_id = ?, status = ?, updated_at = ?
+                       WHERE id = ?""",
+                    (relationship_id, status, _utcnow_iso(), relationship_draft_id),
+                )
+                return (result.rowcount or 0) > 0
             finally:
                 conn.close()
 
@@ -2349,6 +2422,33 @@ class GuardianDB:
             finally:
                 conn.close()
 
+    def get_guardrail_plan_draft(self, plan_draft_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM guardian_guardrail_plan_drafts WHERE id = ?",
+                    (plan_draft_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row["id"],
+                    "household_draft_id": row["household_draft_id"],
+                    "dependent_user_id": row["dependent_user_id"],
+                    "relationship_draft_id": row["relationship_draft_id"],
+                    "template_id": row["template_id"],
+                    "overrides": self._loads_json_or_default(row["overrides"], {}),
+                    "status": row["status"],
+                    "materialized_policy_id": row["materialized_policy_id"],
+                    "failure_reason": row["failure_reason"],
+                    "metadata": self._loads_json_or_default(row["metadata"], None),
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            finally:
+                conn.close()
+
     def list_pending_plans_for_relationship_draft(
         self,
         relationship_draft_id: str,
@@ -2361,6 +2461,41 @@ class GuardianDB:
                        WHERE relationship_draft_id = ? AND status = 'queued'
                        ORDER BY created_at ASC""",
                     (relationship_draft_id,),
+                ).fetchall()
+                return [
+                    {
+                        "id": row["id"],
+                        "household_draft_id": row["household_draft_id"],
+                        "dependent_user_id": row["dependent_user_id"],
+                        "relationship_draft_id": row["relationship_draft_id"],
+                        "template_id": row["template_id"],
+                        "overrides": self._loads_json_or_default(row["overrides"], {}),
+                        "status": row["status"],
+                        "materialized_policy_id": row["materialized_policy_id"],
+                        "failure_reason": row["failure_reason"],
+                        "metadata": self._loads_json_or_default(row["metadata"], None),
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                    }
+                    for row in rows
+                ]
+            finally:
+                conn.close()
+
+    def list_pending_plans_for_relationship(
+        self,
+        relationship_id: str,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """SELECT p.*
+                       FROM guardian_guardrail_plan_drafts p
+                       JOIN guardian_relationship_drafts r ON p.relationship_draft_id = r.id
+                       WHERE r.relationship_id = ? AND p.status = 'queued'
+                       ORDER BY p.created_at ASC""",
+                    (relationship_id,),
                 ).fetchall()
                 return [
                     {
