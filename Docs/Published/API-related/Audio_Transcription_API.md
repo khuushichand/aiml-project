@@ -4,6 +4,13 @@
 
 The tldw_server provides a comprehensive audio transcription API that is fully compatible with OpenAI's Audio API while offering additional transcription engines including NVIDIA Nemo models (Canary and Parakeet) for improved performance and flexibility.
 
+## User Guide Map
+
+- [Getting Started — STT and TTS](../User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md) — quickstart for first successful speech requests.
+- [TTS Providers Getting Started](../User_Guides/WebUI_Extension/TTS_Getting_Started.md) — provider selection and first successful synthesis.
+- [TTS Provider Setup Guide](../User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md) — runbook index for deep provider setup/tuning.
+- [Qwen3-ASR Setup Guide](../STT-TTS/QWEN3_ASR_SETUP.md) — Qwen3-ASR model setup details.
+
 ## Auth + Rate Limits
 - Single-user: `X-API-KEY: <key>`
 - Multi-user: `Authorization: Bearer <JWT>`
@@ -76,7 +83,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - **Languages**: 30 languages + 22 Chinese dialects (auto-detected)
 - **Best For**: Chinese transcription, high-accuracy multilingual content
 - **Special Features**: Optional word-level timestamps via Forced Aligner
-- **Note**: Requires manual model download. See [STT/TTS Getting Started](../User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md)
+- **Note**: Requires manual model download. See [Qwen3-ASR Setup Guide](../STT-TTS/QWEN3_ASR_SETUP.md); for end-to-end first run, start with [Getting Started — STT and TTS](../User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md).
 
 ### 6. VibeVoice-ASR
 - **Model**: `vibevoice-asr`, `vibevoice`
