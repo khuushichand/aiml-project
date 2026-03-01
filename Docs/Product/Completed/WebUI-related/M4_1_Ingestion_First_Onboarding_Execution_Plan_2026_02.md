@@ -55,7 +55,7 @@ Ship the first production slice of the M4 journey with explicit guidance through
 - Extended onboarding workflow gate to dual viewport evidence capture:
   - `apps/tldw-frontend/e2e/workflows/onboarding-ingestion-first.spec.ts`
   - Captures desktop + mobile screenshots and JSON summaries under:
-    - `Docs/Product/WebUI/evidence/m4_3_onboarding_<tag>/`
+    - `Docs/Product/Completed/WebUI-related/evidence/README.md`
   - Evidence tag contract:
     - `TLDW_ONBOARDING_EVIDENCE_TAG` (falls back to runtime date stamp when omitted)
 - Added CI-target script entrypoint for M5 UX gates:
@@ -81,7 +81,7 @@ Outcome:
 Test artifact:
 
 - `apps/tldw-frontend/e2e/workflows/onboarding-ingestion-first.spec.ts`
-- `Docs/Product/WebUI/evidence/m4_3_onboarding_<tag>/README.md`
+- `Docs/Product/Completed/WebUI-related/evidence/README.md`
 
 ## 5) M5 Handoff Follow-Up (Remaining)
 

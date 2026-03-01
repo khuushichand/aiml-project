@@ -37,7 +37,7 @@ Establish enforceable design-token and accessibility baselines for core WebUI jo
   - `apps/packages/ui/src/components/Layouts/ChatHeader.tsx`
   - `apps/packages/ui/src/components/Common/ChatSidebar.tsx`
 - Captured full M3.2 desktop/mobile route-matrix evidence set:
-  - `Docs/Product/WebUI/evidence/m3_2_a11y_focus_2026_02_13/`
+  - `Docs/Product/Completed/WebUI-related/evidence/m3_2_a11y_focus_2026_02_13/`
 - Added focus-visible regression assertions for high-frequency non-shell modal controls:
   - `apps/packages/ui/src/components/Common/CommandPalette.tsx`
   - `apps/packages/ui/src/components/Common/__tests__/CommandPalette.shortcuts.test.tsx`

@@ -111,12 +111,12 @@ Automated verification:
 - `bunx playwright test e2e/smoke/m1-2-label-evidence.spec.ts --reporter=line` (2 passed, desktop/mobile evidence capture).
 
 Screenshot evidence:
-- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/desktop-chat.png`
-- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/desktop-prompts.png`
-- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/desktop-settings-tldw.png`
-- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/mobile-chat.png`
-- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/mobile-prompts.png`
-- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/mobile-settings-tldw.png`
+- `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`
+- `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`
+- `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`
+- `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`
+- `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`
+- `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`
 
 ## Change Log
 

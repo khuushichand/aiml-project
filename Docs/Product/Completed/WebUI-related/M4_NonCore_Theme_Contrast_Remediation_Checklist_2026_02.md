@@ -3,8 +3,8 @@
 Status: In Progress (Pre-M4 Technical Tasks Completed)  
 Owner: WebUI + Accessibility  
 Date: February 13, 2026  
-Input Baseline: `Docs/Product/WebUI/M3_1_Design_Token_A11y_Baseline_2026_02.md`  
-Policy Memo: `Docs/Product/WebUI/M3_3_NonCore_Theme_Contrast_HardGate_Decision_2026_02.md`
+Input Baseline: `Docs/Product/Completed/WebUI-related/M3_1_Design_Token_A11y_Baseline_2026_02.md`  
+Policy Memo: `Docs/Product/Completed/WebUI-related/M3_3_NonCore_Theme_Contrast_HardGate_Decision_2026_02.md`
 
 ## 1) Objective
 
