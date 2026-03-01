@@ -59,6 +59,11 @@ jobs:
         run: bunx playwright install --with-deps chromium
         working-directory: apps/tldw-frontend
 
+      - name: Install FFmpeg and PortAudio (Linux)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
+
       - name: Setup Python and server dependencies
         uses: ./.github/actions/setup-python-deps
         with:
@@ -157,6 +162,11 @@ jobs:
       - name: Install Playwright Chromium
         run: bunx playwright install --with-deps chromium
         working-directory: apps/tldw-frontend
+
+      - name: Install FFmpeg and PortAudio (Linux)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
 
       - name: Setup Python and server dependencies
         uses: ./.github/actions/setup-python-deps
