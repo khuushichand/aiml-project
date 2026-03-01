@@ -111,12 +111,7 @@ Automated verification:
 - `bunx playwright test e2e/smoke/m1-2-label-evidence.spec.ts --reporter=line` (2 passed, desktop/mobile evidence capture).
 
 Screenshot evidence:
-- `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`
-- `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`
-- `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`
-- `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`
-- `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`
-- `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`
+- Captured in the February 13 closeout run (`bunx playwright test e2e/smoke/m1-2-label-evidence.spec.ts --reporter=line`); raw screenshot files are not retained in-repo.
 
 ## Change Log
 

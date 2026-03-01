@@ -32,7 +32,7 @@ For each scenario capture:
 
 Store evidence under:
 - `apps/tldw-frontend/test-results/` (automated)
-- `Docs/Product/Completed/WebUI-related/evidence/m1_3_wayfinding/README.md` (manual artifacts)
+- Manual QA notes inline in this script and the linked execution plan (raw screenshot artifacts are not retained in-repo).
 
 ## Scenario A: Settings Active-Route Clarity
 

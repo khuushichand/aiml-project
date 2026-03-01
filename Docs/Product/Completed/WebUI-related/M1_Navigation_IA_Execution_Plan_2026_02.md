@@ -97,7 +97,7 @@ Tracking checklist:
 - [x] Resolve conflicting labels for identical routes.
 - [x] Standardize one preferred term per destination and update components.
 - [x] Validate keyboard shortcut hints match actual behavior (`apps/packages/ui/src/components/Common/__tests__/CommandPalette.shortcuts.test.tsx`).
-- [x] Capture before/after screenshots for unchanged semantics with clearer labeling (`Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`).
+- [x] Capture before/after screenshots for unchanged semantics with clearer labeling (captured during closeout run; raw image artifacts are not retained in-repo).
 
 Progress update (February 12, 2026):
 - Implemented a first pass in tracked files: command palette entries for Knowledge QA and Prompts, Health label normalization, Quick Ingest capitalization cleanup, Chat Dictionaries casing fallback, and explicit settings labels for Research Studio and Model Playground.
@@ -106,7 +106,7 @@ Progress update (February 13, 2026):
 - Completed terminology closeout in route/header/locale mappings, including Research Studio vs Model Playground label-token alignment and Multi-Item Review route label normalization.
 - Added command palette shortcut-hint alignment so pills derive from actual configured/bound shortcuts.
 - Verified closeout via focused smoke (`10 passed`, key-nav + wayfinding), full smoke (`150 passed`), and command palette shortcut unit test (`1 passed`).
-- Captured post-change desktop/mobile evidence screenshots under `Docs/Product/Completed/WebUI-related/evidence/m1_2_label_alignment_2026_02_13/README.md`.
+- Captured post-change desktop/mobile evidence screenshots during closeout (`m1-2-label-evidence.spec.ts`); raw image artifacts are not retained in-repo.
 - Product sign-off recorded for canonical vocabulary in `Docs/Product/Completed/WebUI-related/M1_2_Navigation_Terminology_Triage_2026_02.md`.
 
 Acceptance criteria:

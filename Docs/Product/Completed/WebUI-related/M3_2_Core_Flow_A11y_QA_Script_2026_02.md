@@ -83,7 +83,5 @@ Outcome:
 
 Artifacts:
 
-- `Docs/Product/Completed/WebUI-related/evidence/m3_2_a11y_focus_2026_02_13/README.md`
 - `Docs/Product/Completed/WebUI-related/evidence/m3_2_a11y_focus_2026_02_13/desktop-route-matrix-results.json`
 - `Docs/Product/Completed/WebUI-related/evidence/m3_2_a11y_focus_2026_02_13/mobile-route-matrix-results.json`
-- `Docs/Product/Completed/WebUI-related/evidence/m3_2_a11y_focus_2026_02_13/README.md`
