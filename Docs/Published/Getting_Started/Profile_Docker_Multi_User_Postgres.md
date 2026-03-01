@@ -41,6 +41,10 @@ curl -sS http://127.0.0.1:8000/docs > /dev/null && echo "docs-ok"
 curl -sS http://127.0.0.1:8000/api/v1/config/quickstart
 ```
 
+## Optional Add-ons
+
+- For accelerated speech-to-text, apply [GPU/STT Add-on](./GPU_STT_Addon.md) after this profile is running.
+
 ## Troubleshoot
 
 - If startup fails, verify `DATABASE_URL` points to reachable Postgres.

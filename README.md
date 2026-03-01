@@ -83,12 +83,15 @@ Good fit for:
 
 ## Start Here (Self-Hosting Profiles)
 
-Choose one onboarding path:
+Choose one base onboarding path:
 
 1. [Local single-user](Docs/Getting_Started/Profile_Local_Single_User.md)
 2. [Docker single-user](Docs/Getting_Started/Profile_Docker_Single_User.md)
 3. [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md)
-4. [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md)
+
+Optional add-on:
+
+- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) for accelerated speech-to-text after your base path is working.
 
 
 ## Current Status
