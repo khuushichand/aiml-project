@@ -8,7 +8,7 @@
 **Tests**:
 - New unit tests for the profile helper module.
 - Adjusted/added tests in `tests/RAG_NEW` that exercise at least one profile end-to-end.
-**Status**: Moved to active follow-up plan (`Docs/Plans/IMPLEMENTATION_PLAN_authnz_refactor_remaining_items.md`)
+**Status**: Moved to active follow-up plan (`Docs/Product/Completed/AuthNZ-PRDs_POST_V0_1_TRACKER.md`)
 
 ## Stage 2: Eval Harness & Dataset
 **Goal**: Provide a reproducible evaluation harness for the unified RAG pipeline with a known dataset and clear retrieval/factuality metrics that can be run locally or in CI.
@@ -32,7 +32,7 @@
 **Tests**:
 - Unit tests for cache keying / namespacing behavior.
 - Focused tests for exemplar logging to ensure user/namespace metadata is present and redaction is applied.
-**Status**: Moved to active follow-up plan (`Docs/Plans/IMPLEMENTATION_PLAN_authnz_refactor_remaining_items.md`)
+**Status**: Moved to active follow-up plan (`Docs/Product/Completed/AuthNZ-PRDs_POST_V0_1_TRACKER.md`)
 
 ## Stage 4: Pipeline Refactor & API Cleanups
 **Goal**: Factor the ~2000-line `unified_rag_pipeline` into composable, testable steps with clearer required/optional components, enforced budgets, and a cleaner public API.
@@ -45,7 +45,7 @@
 **Tests**:
 - Existing `tests/RAG_NEW` suites continue to pass.
 - New unit tests for at least one extracted phase (e.g., retrieval or guardrails) to validate behavior in isolation.
-**Status**: Moved to active follow-up plan (`Docs/Plans/IMPLEMENTATION_PLAN_authnz_refactor_remaining_items.md`)
+**Status**: Moved to active follow-up plan (`Docs/Product/Completed/AuthNZ-PRDs_POST_V0_1_TRACKER.md`)
 
 ## Stage 5: AuthNZ Principal Skeleton
 **Goal**: Introduce `AuthPrincipal` / `AuthContext` types and a stable `principal_id` helper as the foundation for the AuthNZ refactor PRDs (Principal-Governance, User-Auth-Deps, User-Unification).
@@ -63,16 +63,16 @@
 ## Stage 6: Resource Governor & AuthNZ v1 Alignment
 **Goal**: Align the ResourceGovernor, claim-first auth dependencies, and AuthNZ user-unification repos with their PRDs for a cohesive v1 baseline.
 **Success Criteria**:
-- `ResourceGovernor` memory/Redis backends, policy loader, and admin/diagnostic endpoints are wired into `tldw_Server_API.app.main`, `tldw_Server_API/app/api/v1/endpoints/resource_governor.py`, and `tldw_Server_API/app/core/Resource_Governance`, with metrics and Redis failover semantics matching `Docs/Product/Resource_Governor_PRD.md`.
+- `ResourceGovernor` memory/Redis backends, policy loader, and admin/diagnostic endpoints are wired into `tldw_Server_API.app.main`, `tldw_Server_API/app/api/v1/endpoints/resource_governor.py`, and `tldw_Server_API/app/core/Resource_Governance`, with metrics and Redis failover semantics matching `Docs/Product/Completed/AuthNZ-Refactor/Resource_Governor_PRD.md`.
 - Simple RG middleware and route-map-based policy resolution protect representative HTTP ingress paths (chat, MCP, SlowAPI facade) behind feature flags, with tests in `tldw_Server_API/tests/Resource_Governance` remaining green.
-- AuthNZ claim-first dependencies (`get_auth_principal`, `require_permissions`, `require_roles`) are the canonical choice for new admin/diagnostic endpoints, and the main surfaces listed in `Docs/Product/User-Auth-Deps-PRD.md` use them with 401/403/200 semantics covered by tests.
-- Single-user bootstrap and the initial AuthNZ repository layer (`AuthnzUsersRepo`, `AuthnzApiKeysRepo`, `AuthnzRbacRepo`, etc.) are the default path in AuthNZ, with both SQLite and Postgres tests covering core flows as described in `Docs/Product/User-Unification-PRD.md`.
+- AuthNZ claim-first dependencies (`get_auth_principal`, `require_permissions`, `require_roles`) are the canonical choice for new admin/diagnostic endpoints, and the main surfaces listed in `Docs/Product/Completed/AuthNZ-Refactor/User-Auth-Deps-PRD.md` use them with 401/403/200 semantics covered by tests.
+- Single-user bootstrap and the initial AuthNZ repository layer (`AuthnzUsersRepo`, `AuthnzApiKeysRepo`, `AuthnzRbacRepo`, etc.) are the default path in AuthNZ, with both SQLite and Postgres tests covering core flows as described in `Docs/Product/Completed/User-Unification-PRD.md`.
 **Tests**:
 - Keep `tests/Resource_Governance/*`, `tests/AuthNZ_Unit/test_auth_principal_*`, `tests/AuthNZ_Unit/*permissions*_claims.py`, `tests/AuthNZ/integration/test_single_user_claims_permissions.py`, and the AuthNZ repo tests passing across SQLite/Postgres backends.
 **Follow-up**:
-- Remaining long-tail adoption work was moved to `Docs/Plans/IMPLEMENTATION_PLAN_authnz_refactor_remaining_items.md`.
-- PRD-specific detail continues in `Docs/Product/AuthNZ-PRDs_IMPLEMENTATION_PLAN.md`.
-**Status**: Complete for v1 baseline; active follow-up tracked in `Docs/Plans/IMPLEMENTATION_PLAN_authnz_refactor_remaining_items.md`
+- Remaining long-tail adoption work was moved to `Docs/Product/Completed/AuthNZ-PRDs_POST_V0_1_TRACKER.md`.
+- PRD-specific detail continues in `Docs/Product/Completed/AuthNZ-Refactor/AuthNZ-PRDs_IMPLEMENTATION_PLAN.md`.
+**Status**: Complete for v1 baseline; active follow-up tracked in `Docs/Product/Completed/AuthNZ-PRDs_POST_V0_1_TRACKER.md`
 
 ## Stage 7: RG v1.1 — Daily Tokens Ledger (Chat + Embeddings)
 **Goal**: Generalize daily token budgeting under ResourceGovernor using `ResourceDailyLedger`, and shadow‑/hard‑enforce tokens‑per‑day for chat and embeddings without breaking legacy behavior.
@@ -109,7 +109,7 @@
 **Tests**:
 - For each module (chat, embeddings, authnz, evals, character‑chat, web‑scraping, audio, workflows), keep/extend parity tests and remove legacy‑path assertions only after flip.
 - Regression suite to ensure no route double‑enforces after shim removal.
-**Status**: Moved to active follow-up plan (`Docs/Plans/IMPLEMENTATION_PLAN_authnz_refactor_remaining_items.md`)
+**Status**: Moved to active follow-up plan (`Docs/Product/Completed/AuthNZ-PRDs_POST_V0_1_TRACKER.md`)
 
 **Notes**:
 - Removed per-module `RG_ENABLE_*` / chat primary flags so RG is controlled by global `RG_ENABLED`/config.
