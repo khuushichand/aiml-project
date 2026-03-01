@@ -39,7 +39,7 @@ Non-functional requirements:
 
 ## Data and Persistence
 - Store generation settings in the character record.
-- Store optional per-chat overrides in per-chat settings and sync using the shared rules in `Docs/Product/Character_Chat_Greeting_Picker_PRD.md`.
+- Store optional per-chat overrides in per-chat settings and sync using the shared rules in `Docs/Product/Completed/Character_Chat_Greeting_Picker_PRD.md`.
 
 ## API and Integration
 - No new endpoints required if character metadata supports custom fields.
