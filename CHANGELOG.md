@@ -81,6 +81,11 @@ and this project adheres to Some kind of Versioning
   - Added/updated bridge regression coverage to validate abstraction-backed notifications event processing behavior.
 - Reminders/notifications review-remediation coverage:
   - Added API/DB regressions for scheduler-managed PATCH field rejection, dismissed-notification list filtering, reminders scheduler failure logging, and snooze reconciliation behavior.
+- Writing Playground Phase-1 UI and diagnostics experience:
+  - Added modular Writing Playground structure components (`WritingPlaygroundShell`, `WritingPlaygroundLibraryPanel`, `WritingPlaygroundEditorPanel`, `WritingPlaygroundInspectorPanel`) with tabbed inspector routing for Generation, Planning, and Diagnostics.
+  - Added dedicated diagnostics UI components (`WritingPlaygroundDiagnosticsPanel`, `WritingPlaygroundResponseInspectorCard`, `WritingPlaygroundTokenInspectorCard`, `WritingPlaygroundWordcloudCard`) with shared diagnostics prop contracts.
+  - Added utility helpers and coverage for diagnostics state summarization and responsive layout classification.
+  - Added extension E2E coverage for inspector tab keyboard navigation and editor-content persistence across tab switches in `apps/extension/tests/e2e/writing-playground-themes-templates.spec.ts`.
 
 ### Changed
 - CI gate classification now computes `coverage_required` via dedicated coverage globs instead of mirroring `backend_changed`, preserving backend gate behavior while allowing workflow-only exclusions.
@@ -132,6 +137,10 @@ and this project adheres to Some kind of Versioning
   - Frontend UX gates now use a stable Bun-based dependency/install + Playwright invocation flow with a single all-pages smoke gate entrypoint.
   - Watchlists extension strict gate flow now preserves explicit launch/target wait timeout controls and aligns with the stable extension-launch helper contract.
   - All-pages smoke gate behavior now follows the stabilized route traversal baseline used by the current release-gate suite.
+- Writing Playground UI interaction behavior:
+  - Moved template/theme/chat-mode and context controls from the Generation inspector view into Planning for clearer IA separation.
+  - Added compact-mode shell grid overrides plus `data-testid` layout markers to improve narrow-layout behavior and regression observability.
+  - Improved inspector keyboard interaction to support Arrow/Home/End traversal with active-tab focus movement.
 
 ### Removed
 - No removals in this session.
@@ -172,6 +181,9 @@ and this project adheres to Some kind of Versioning
 - Fixed strict watchlists no-skip gate regressions caused by stale/undefined local assertions in E2E specs and aligned those checks to deterministic harness behavior.
 - Fixed extension E2E launch instability in CI by removing unsupported forced Playwright channel behavior and retaining explicit timeout override controls in workflow env.
 - Fixed UX smoke gate branch instability by restoring the stabilized all-pages gate command path and traversal behavior expected by current frontend release gates.
+- Fixed Writing Playground diagnostics prop leakage by removing `enabled` from card-prop spreads before passing props into inspector card components.
+- Fixed monitoring metrics-history range interactions to avoid redundant API loads on manual range selection/apply and to avoid interval resets/reloads while editing draft custom-range inputs.
+- Fixed monitoring custom-range UX by clearing range validation errors when users edit custom range start/end values.
 
 
 ## [0.1.24] 2026-02-22
