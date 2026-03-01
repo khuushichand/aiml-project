@@ -1,6 +1,6 @@
 # PRD: Async Chat Tools Fix — Migrate to Async Slash-Command Rate Limiting and Orchestrator
 
-> Tracking issue for the PRD at: `Docs/Design/Async-Chat-Tools-Fix.md`
+> Tracking issue for the PRD at: `Docs/Product/Completed/Async-Chat-Tools-Fix.md`
 
 ## Summary
 Harden slash-command rate limiting and standardize chat orchestration on async paths to eliminate race conditions and reduce drift, using `async_dispatch_command` and the new `achat` orchestrator.
@@ -49,7 +49,7 @@ Harden slash-command rate limiting and standardize chat orchestration on async p
 - Concurrency: 2× per-user RPM (+ jitter) returns rate-limited responses appropriately.
 
 ## References
-- PRD: `Docs/Design/Async-Chat-Tools-Fix.md`
+- PRD: `Docs/Product/Completed/Async-Chat-Tools-Fix.md`
 - Async dispatcher: `tldw_Server_API/app/core/Chat/command_router.py:270`
 - Endpoint migration: `tldw_Server_API/app/api/v1/endpoints/chat.py:1119`
 - Async orchestrator: `tldw_Server_API/app/core/Chat/chat_orchestrator.py` (function `achat`)
@@ -61,5 +61,5 @@ Harden slash-command rate limiting and standardize chat orchestration on async p
 ```bash
 gh issue create \
   --title "PRD: Async Chat Tools Fix — Migrate to Async Slash-Command Rate Limiting and Orchestrator" \
-  --body "Tracking PRD: Docs/Design/Async-Chat-Tools-Fix.md\n\nSee issue file Docs/Issues/Async-Chat-Tools-Fix-Issue.md for tasks and details."
+  --body "Tracking PRD: Docs/Product/Completed/Async-Chat-Tools-Fix.md\n\nSee issue file Docs/Issues/Async-Chat-Tools-Fix-Issue.md for tasks and details."
 ```
