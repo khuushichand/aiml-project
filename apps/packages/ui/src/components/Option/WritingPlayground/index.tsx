@@ -169,6 +169,14 @@ import {
   DEFAULT_THEME_CATALOG,
   buildDuplicateName
 } from "./writing-template-theme-utils"
+import {
+  DEFAULT_WRITING_WORKSPACE_MODE,
+  type WritingWorkspaceMode
+} from "./writing-workspace-mode-utils"
+import {
+  WRITING_WORKSPACE_MODE_STORAGE_KEY,
+  resolveInitialWorkspaceMode
+} from "./writing-workspace-mode-prefs"
 
 const { Title, Paragraph } = Typography
 
@@ -1233,9 +1241,15 @@ export const WritingPlayground = () => {
   const {
     activeSessionId,
     activeSessionName,
+    workspaceMode,
     setActiveSessionId,
-    setActiveSessionName
+    setActiveSessionName,
+    setWorkspaceMode
   } = useWritingPlaygroundStore()
+  const [storedWorkspaceMode, setStoredWorkspaceMode] = useStorage<string>(
+    WRITING_WORKSPACE_MODE_STORAGE_KEY,
+    DEFAULT_WRITING_WORKSPACE_MODE
+  )
   const [selectedModel, setSelectedModel] = useStorage<string>("selectedModel")
   const apiProviderOverride = useStoreChatModelSettings(
     (state) => state.apiProvider
@@ -1250,6 +1264,22 @@ export const WritingPlayground = () => {
       rate: 1,
       voiceURI: null
     })
+  const resolvedWorkspaceMode = React.useMemo(
+    () => resolveInitialWorkspaceMode(storedWorkspaceMode),
+    [storedWorkspaceMode]
+  )
+  React.useEffect(() => {
+    if (workspaceMode === resolvedWorkspaceMode) return
+    setWorkspaceMode(resolvedWorkspaceMode)
+  }, [resolvedWorkspaceMode, setWorkspaceMode, workspaceMode])
+  const handleWorkspaceModeChange = React.useCallback(
+    (nextMode: WritingWorkspaceMode) => {
+      if (workspaceMode === nextMode) return
+      setWorkspaceMode(nextMode)
+      void setStoredWorkspaceMode(nextMode)
+    },
+    [setStoredWorkspaceMode, setWorkspaceMode, workspaceMode]
+  )
   const [createModalOpen, setCreateModalOpen] = React.useState(false)
   const [newSessionName, setNewSessionName] = React.useState("")
   const [sessionImporting, setSessionImporting] = React.useState(false)
@@ -5379,10 +5409,45 @@ export const WritingPlayground = () => {
         activeThemeClassName
       )}>
       {activeThemeCss ? <style>{activeThemeCss}</style> : null}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <Title level={2}>
+            {t("option:writingPlayground.title", "Writing Playground")}
+          </Title>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-text-muted">
+            {t("option:writingPlayground.workspaceModeLabel", "Workspace mode")}
+          </span>
+          <Segmented
+            data-testid="writing-workspace-mode-switch"
+            size="small"
+            value={workspaceMode}
+            onChange={(value) => {
+              handleWorkspaceModeChange(String(value) as WritingWorkspaceMode)
+            }}
+            options={[
+              {
+                value: "draft",
+                label: (
+                  <span data-testid="writing-mode-draft">
+                    {t("option:writingPlayground.modeDraft", "Draft")}
+                  </span>
+                )
+              },
+              {
+                value: "manage",
+                label: (
+                  <span data-testid="writing-mode-manage">
+                    {t("option:writingPlayground.modeManage", "Manage")}
+                  </span>
+                )
+              }
+            ]}
+          />
+        </div>
+      </div>
       <div>
-        <Title level={2}>
-          {t("option:writingPlayground.title", "Writing Playground")}
-        </Title>
         <Paragraph type="secondary">
           {t(
             "option:writingPlayground.subtitle",
@@ -5421,6 +5486,7 @@ export const WritingPlayground = () => {
       {!showOffline && !showUnsupported && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_1fr]">
           <Card
+            data-testid="writing-section-sessions"
             title={t("option:writingPlayground.sessionsTitle", "Sessions")}
             extra={
               <div className="flex items-center gap-2">
