@@ -312,4 +312,30 @@ describe('useMonitoringPageController', () => {
     expect(updater(false)).toBe(true);
     expect(updater(true)).toBe(false);
   });
+
+  it('keeps top-level section prop references stable across rerender when dependencies are unchanged', async () => {
+    const { result, rerender } = renderHook(() => useMonitoringPageController());
+
+    await waitFor(() => {
+      expect(loadData).toHaveBeenCalled();
+    });
+    const initialLoadCalls = loadData.mock.calls.length;
+
+    const headerProps = result.current.headerProps;
+    const feedbackBannersProps = result.current.feedbackBannersProps;
+    const metricsSectionProps = result.current.metricsSectionProps;
+    const managementPanelsProps = result.current.managementPanelsProps;
+    const toggleSnoozed = result.current.managementPanelsProps.alertsPanelProps.onToggleShowSnoozed;
+
+    rerender();
+
+    expect(loadData).toHaveBeenCalledTimes(initialLoadCalls);
+    expect(result.current.headerProps).toBe(headerProps);
+    expect(result.current.feedbackBannersProps).toBe(feedbackBannersProps);
+    expect(result.current.metricsSectionProps).toBe(metricsSectionProps);
+    expect(result.current.managementPanelsProps).toBe(managementPanelsProps);
+    expect(result.current.managementPanelsProps.alertsPanelProps.onToggleShowSnoozed).toBe(
+      toggleSnoozed
+    );
+  });
 });

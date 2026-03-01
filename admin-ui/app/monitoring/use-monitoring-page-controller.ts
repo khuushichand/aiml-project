@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ComponentProps } from 'react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api } from '@/lib/api-client';
 import { isAlertSnoozed } from '@/lib/monitoring-alerts';
@@ -111,9 +111,9 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     onManualRangeLoadSuccess: markMonitoringDataUpdated,
   });
 
-  const handleToggleSeries = (seriesKey: MonitoringMetricSeriesKey) => {
+  const handleToggleSeries = useCallback((seriesKey: MonitoringMetricSeriesKey) => {
     setSeriesVisibility((prev) => toggleMonitoringSeriesVisibility(prev, seriesKey));
-  };
+  }, []);
 
   const {
     error,
@@ -207,22 +207,36 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     void loadData();
   }, [loadData]);
 
-  const activeAlertsCount = alerts.filter(
-    (alert) => !alert.acknowledged && !isAlertSnoozed(alert)
-  ).length;
+  const activeAlertsCount = useMemo(
+    () =>
+      alerts.filter((alert) => !alert.acknowledged && !isAlertSnoozed(alert)).length,
+    [alerts]
+  );
 
-  return {
-    headerProps: {
+  const handleToggleShowSnoozed = useCallback(() => {
+    setShowSnoozedAlerts((prev) => !prev);
+  }, [setShowSnoozedAlerts]);
+
+  const headerProps = useMemo<ComponentProps<typeof MonitoringPageHeader>>(
+    () => ({
       lastUpdated,
       loading,
       onRefresh: loadData,
-    },
-    feedbackBannersProps: {
+    }),
+    [lastUpdated, loading, loadData]
+  );
+
+  const feedbackBannersProps = useMemo<ComponentProps<typeof MonitoringFeedbackBanners>>(
+    () => ({
       error,
       success,
       activeAlertsCount,
-    },
-    metricsSectionProps: {
+    }),
+    [error, success, activeAlertsCount]
+  );
+
+  const metricsSectionProps = useMemo<ComponentProps<typeof MonitoringMetricsSection>>(
+    () => ({
       timeRangeControlsProps: {
         options: MONITORING_TIME_RANGE_OPTIONS,
         timeRange,
@@ -244,8 +258,27 @@ export const useMonitoringPageController = (): MonitoringPageController => {
         metrics,
         loading,
       },
-    },
-    managementPanelsProps: {
+    }),
+    [
+      activeRangeLabel,
+      customRangeEnd,
+      customRangeStart,
+      handleApplyCustomTimeRange,
+      handleSelectTimeRange,
+      handleToggleSeries,
+      loading,
+      metrics,
+      metricsHistory,
+      rangeValidationError,
+      seriesVisibility,
+      setCustomRangeEnd,
+      setCustomRangeStart,
+      timeRange,
+    ]
+  );
+
+  const managementPanelsProps = useMemo<ComponentProps<typeof MonitoringManagementPanels>>(
+    () => ({
       alertRulesPanelProps: {
         rules: alertRules,
         draft: alertRuleDraft,
@@ -261,7 +294,7 @@ export const useMonitoringPageController = (): MonitoringPageController => {
         showSnoozed: showSnoozedAlerts,
         assignableUsers,
         loading,
-        onToggleShowSnoozed: () => setShowSnoozedAlerts((prev) => !prev),
+        onToggleShowSnoozed: handleToggleShowSnoozed,
         onAcknowledge: handleAcknowledgeAlert,
         onDismiss: handleDismissAlert,
         onAssign: handleAssignAlert,
@@ -291,6 +324,48 @@ export const useMonitoringPageController = (): MonitoringPageController => {
       systemStatusPanelProps: {
         systemStatus,
       },
-    },
+    }),
+    [
+      alertHistory,
+      alertRuleDraft,
+      alertRuleValidationErrors,
+      alertRules,
+      alertRulesSaving,
+      alerts,
+      assignableUsers,
+      canSaveNotificationSettings,
+      deletingWatchlistId,
+      handleAcknowledgeAlert,
+      handleAlertRuleDraftChange,
+      handleAssignAlert,
+      handleCreateAlertRule,
+      handleCreateWatchlist,
+      handleDeleteAlertRule,
+      handleDeleteWatchlist,
+      handleDismissAlert,
+      handleEscalateAlert,
+      handleSaveNotificationSettings,
+      handleSnoozeAlert,
+      handleTestNotification,
+      handleToggleShowSnoozed,
+      loading,
+      newWatchlist,
+      notificationSettings,
+      notificationsSaving,
+      recentNotifications,
+      setNewWatchlist,
+      setShowCreateWatchlist,
+      showCreateWatchlist,
+      showSnoozedAlerts,
+      systemStatus,
+      watchlists,
+    ]
+  );
+
+  return {
+    headerProps,
+    feedbackBannersProps,
+    metricsSectionProps,
+    managementPanelsProps,
   };
 };
