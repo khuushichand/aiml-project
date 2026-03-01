@@ -1,3 +1,5 @@
+import { Repo2TxtPage } from "~/components/Option/Repo2Txt"
+
 export default function OptionRepo2TxtRoute() {
-  return <div data-testid="repo2txt-route-root">repo2txt</div>
+  return <Repo2TxtPage />
 }
