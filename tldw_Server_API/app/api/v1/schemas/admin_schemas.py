@@ -1136,6 +1136,7 @@ class RouterAnalyticsMetaOption(BaseModel):
 
     value: str
     label: str
+    key_id: int | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

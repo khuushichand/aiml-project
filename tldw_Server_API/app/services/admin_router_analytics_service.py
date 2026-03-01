@@ -248,6 +248,28 @@ async def _resolve_admin_org_scope(principal: AuthPrincipal, org_id: int | None)
     return org_ids
 
 
+def _append_org_scope_condition(
+    *,
+    is_pg: bool,
+    org_ids: list[int] | None,
+    conditions: list[str],
+    params: list[Any],
+) -> None:
+    if org_ids is None:
+        return
+    if is_pg:
+        conditions.append(
+            f"EXISTS (SELECT 1 FROM org_members om WHERE om.user_id = llm_usage_log.user_id AND om.org_id = ANY(${len(params) + 1}))"  # nosec B608
+        )
+        params.append(org_ids)
+    else:
+        placeholders = ",".join("?" for _ in org_ids)
+        conditions.append(
+            f"EXISTS (SELECT 1 FROM org_members om WHERE om.user_id = llm_usage_log.user_id AND om.org_id IN ({placeholders}))"  # nosec B608
+        )
+        params.extend(org_ids)
+
+
 def _build_usage_where_clause(
     *,
     is_pg: bool,
@@ -293,19 +315,15 @@ def _build_usage_where_clause(
             conditions.append("key_id = ?")
         params.append(int(token_id))
 
-    join_clause = ""
-    if org_ids is not None:
-        join_clause = " JOIN org_members om ON om.user_id = llm_usage_log.user_id"
-        if is_pg:
-            conditions.append(f"om.org_id = ANY(${len(params) + 1})")
-            params.append(org_ids)
-        else:
-            placeholders = ",".join("?" for _ in org_ids)
-            conditions.append(f"om.org_id IN ({placeholders})")
-            params.extend(org_ids)
+    _append_org_scope_condition(
+        is_pg=is_pg,
+        org_ids=org_ids,
+        conditions=conditions,
+        params=params,
+    )
 
     where_clause = " WHERE " + " AND ".join(conditions)
-    return join_clause, where_clause, params
+    return "", where_clause, params
 
 
 def _build_status_data_window(
@@ -367,7 +385,6 @@ async def get_router_analytics_status(
             )
 
         is_pg = _is_postgres_connection(db)
-        _, _ = _resolve_granularity(range_value, granularity), granularity
         join_clause, where_clause, params = _build_usage_where_clause(
             is_pg=is_pg,
             start=window_start,
@@ -546,11 +563,7 @@ async def _fetch_breakdown_rows(
     try:
         rows = await _fetch_rows(db, sql, [*params, limit])
     except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug(
-            "Router analytics breakdown fallback for %s due to query error: %s",
-            dimension_name,
-            exc,
-        )
+        logger.debug("Router analytics breakdown fallback for {} due to query error: {}", dimension_name, exc)
         if is_pg:
             fallback_sql = (  # nosec B608
                 "SELECT "  # nosec B608
@@ -1787,6 +1800,79 @@ async def _fetch_distinct_dimension_values(
     return values
 
 
+async def _fetch_meta_token_options(
+    *,
+    db: Any,
+    is_pg: bool,
+    where_clause: str,
+    params: list[Any],
+) -> list[RouterAnalyticsMetaOption]:
+    token_where_clause = (
+        f"{where_clause} AND llm_usage_log.key_id IS NOT NULL"
+        if where_clause
+        else " WHERE llm_usage_log.key_id IS NOT NULL"
+    )
+
+    try:
+        if is_pg:
+            limit_placeholder = f"${len(params) + 1}"
+            sql = (
+                "SELECT llm_usage_log.key_id AS key_id, "  # nosec B608
+                "COALESCE(NULLIF(TRIM(MAX(llm_usage_log.token_name)), ''), NULLIF(TRIM(MAX(ak.name)), ''), 'key-' || llm_usage_log.key_id::text) AS label "
+                "FROM llm_usage_log LEFT JOIN api_keys ak ON ak.id = llm_usage_log.key_id "
+                f"{token_where_clause} "
+                "GROUP BY llm_usage_log.key_id "
+                "ORDER BY label ASC, llm_usage_log.key_id ASC "
+                f"LIMIT {limit_placeholder}"
+            )
+        else:
+            sql = (
+                "SELECT llm_usage_log.key_id AS key_id, "  # nosec B608
+                "COALESCE(NULLIF(TRIM(MAX(llm_usage_log.token_name)), ''), NULLIF(TRIM(MAX(ak.name)), ''), 'key-' || CAST(llm_usage_log.key_id AS TEXT)) AS label "
+                "FROM llm_usage_log LEFT JOIN api_keys ak ON ak.id = llm_usage_log.key_id "
+                f"{token_where_clause} "
+                "GROUP BY llm_usage_log.key_id "
+                "ORDER BY label ASC, llm_usage_log.key_id ASC LIMIT ?"
+            )
+
+        rows = await _fetch_rows(db, sql, [*params, 500])
+        options: list[RouterAnalyticsMetaOption] = []
+        for row in rows:
+            key_id = _as_int(_row_value(row, "key_id", 0, 0))
+            if key_id <= 0:
+                continue
+            label = _as_text(_row_value(row, "label", 1, f"key-{key_id}"), f"key-{key_id}")
+            options.append(RouterAnalyticsMetaOption(value=str(key_id), label=label, key_id=key_id))
+        return options
+    except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Router analytics meta token names fallback due to query error: {}", exc)
+
+    if is_pg:
+        limit_placeholder = f"${len(params) + 1}"
+        fallback_sql = (
+            "SELECT DISTINCT llm_usage_log.key_id AS key_id "  # nosec B608
+            f"FROM llm_usage_log{token_where_clause} "
+            "ORDER BY llm_usage_log.key_id ASC "
+            f"LIMIT {limit_placeholder}"
+        )
+    else:
+        fallback_sql = (
+            "SELECT DISTINCT llm_usage_log.key_id AS key_id "  # nosec B608
+            f"FROM llm_usage_log{token_where_clause} "
+            "ORDER BY llm_usage_log.key_id ASC LIMIT ?"
+        )
+
+    rows = await _fetch_rows(db, fallback_sql, [*params, 500])
+    options: list[RouterAnalyticsMetaOption] = []
+    for row in rows:
+        key_id = _as_int(_row_value(row, "key_id", 0, 0))
+        if key_id <= 0:
+            continue
+        label = f"key-{key_id}"
+        options.append(RouterAnalyticsMetaOption(value=str(key_id), label=label, key_id=key_id))
+    return options
+
+
 async def get_router_analytics_meta(
     *,
     principal: AuthPrincipal,
@@ -1802,18 +1888,15 @@ async def get_router_analytics_meta(
 
         is_pg = _is_postgres_connection(db)
         join_clause = ""
-        where_clause = ""
         params: list[Any] = []
-
-        if org_ids is not None:
-            join_clause = " JOIN org_members om ON om.user_id = llm_usage_log.user_id"
-            if is_pg:
-                where_clause = f" WHERE om.org_id = ANY(${len(params) + 1})"
-                params.append(org_ids)
-            else:
-                placeholders = ",".join("?" for _ in org_ids)
-                where_clause = f" WHERE om.org_id IN ({placeholders})"
-                params.extend(org_ids)
+        conditions: list[str] = []
+        _append_org_scope_condition(
+            is_pg=is_pg,
+            org_ids=org_ids,
+            conditions=conditions,
+            params=params,
+        )
+        where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
         providers = await _fetch_distinct_dimension_values(
             db=db,
@@ -1831,23 +1914,17 @@ async def get_router_analytics_meta(
             where_clause=where_clause,
             params=params,
         )
-        try:
-            token_names = await _fetch_distinct_dimension_values(
-                db=db,
-                is_pg=is_pg,
-                dimension_expr="COALESCE(NULLIF(TRIM(token_name), ''), 'unknown')",
-                join_clause=join_clause,
-                where_clause=where_clause,
-                params=params,
-            )
-        except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Router analytics meta token names fallback due to query error: %s", exc)
-            token_names = []
+        token_options = await _fetch_meta_token_options(
+            db=db,
+            is_pg=is_pg,
+            where_clause=where_clause,
+            params=params,
+        )
 
         return RouterAnalyticsMetaResponse(
             providers=[RouterAnalyticsMetaOption(value=value, label=value) for value in providers],
             models=[RouterAnalyticsMetaOption(value=value, label=value) for value in models],
-            tokens=[RouterAnalyticsMetaOption(value=value, label=value) for value in token_names],
+            tokens=token_options,
             generated_at=generated_at,
         )
     except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:

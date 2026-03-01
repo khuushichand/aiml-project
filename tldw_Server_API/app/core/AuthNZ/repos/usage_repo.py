@@ -28,7 +28,7 @@ def _sqlite_pool_label(db_pool: DatabasePool) -> str:
     try:
         text = str(raw).strip()
         return text or "unknown"
-    except Exception:
+    except (TypeError, ValueError):
         return "unknown"
 
 

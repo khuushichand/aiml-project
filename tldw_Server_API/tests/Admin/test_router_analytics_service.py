@@ -289,6 +289,25 @@ def _single_user_principal(user_id: int) -> AuthPrincipal:
     )
 
 
+def test_build_usage_where_clause_org_scope_uses_exists_predicate():
+    start = datetime(2026, 3, 1, 10, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 3, 1, 11, 0, tzinfo=timezone.utc)
+    join_clause, where_clause, params = admin_router_analytics_service._build_usage_where_clause(
+        is_pg=False,
+        start=start,
+        end=end,
+        provider=None,
+        model=None,
+        token_id=None,
+        org_ids=[101, 202],
+    )
+
+    assert join_clause == ""
+    assert "EXISTS (SELECT 1 FROM org_members om" in where_clause
+    assert "JOIN org_members" not in where_clause
+    assert params[-2:] == [101, 202]
+
+
 @pytest.mark.asyncio
 async def test_router_analytics_status_and_breakdowns_sqlite(monkeypatch, tmp_path):
     _setup_env(tmp_path)
@@ -354,8 +373,11 @@ async def test_router_analytics_status_and_breakdowns_sqlite(monkeypatch, tmp_pa
     )
     provider_values = {option.value for option in meta.providers}
     token_values = {option.value for option in meta.tokens}
+    token_labels_by_id = {option.key_id: option.label for option in meta.tokens}
     assert {"openai", "groq", "anthropic"} <= provider_values
-    assert {"Admin", "Ops", "unknown"} <= token_values
+    assert {"11", "12", "13"} <= token_values
+    assert token_labels_by_id[11] == "Admin"
+    assert token_labels_by_id[12] == "Ops"
 
 
 @pytest.mark.asyncio

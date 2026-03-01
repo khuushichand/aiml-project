@@ -76,6 +76,7 @@ export type RouterAnalyticsBreakdownsResponse = {
 export type RouterAnalyticsMetaOption = {
   value: string;
   label: string;
+  key_id?: number | null;
 };
 
 export type RouterAnalyticsMetaResponse = {

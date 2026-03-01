@@ -91,11 +91,11 @@
 - Admin-ui usage tests and full vitest suite pass.
 - Bandit scan on touched backend files is clean.
 **Tests**:
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
 - `cd admin-ui && bunx vitest run app/usage/__tests__/page.test.tsx`
 - `cd admin-ui && bunx vitest run`
 - `cd admin-ui && BROWSERSLIST_IGNORE_OLD_DATA=1 BASELINE_BROWSER_MAPPING_IGNORE_OLD_DATA=1 bunx eslint app/usage/page.tsx app/usage/__tests__/page.test.tsx lib/router-analytics-client.ts lib/router-analytics-types.ts lib/api-client.ts`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_quota.json`
+- `source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_quota.json`
 **Status**: Complete
 
 ## Stage 11: Router Analytics Providers Delivery Slice
@@ -118,12 +118,12 @@
 - Admin-ui usage tests and full vitest suite pass.
 - Bandit scan on touched backend files is clean.
 **Tests**:
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
 - `cd admin-ui && bunx vitest run app/usage/__tests__/page.test.tsx`
 - `cd admin-ui && bunx vitest run`
 - `cd admin-ui && bunx eslint app/usage/page.tsx lib/router-analytics-client.ts lib/router-analytics-types.ts`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_providers.json`
+- `source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_providers.json`
 **Status**: Complete
 
 ## Stage 13: Router Analytics Access Delivery Slice
@@ -146,12 +146,12 @@
 - Admin-ui usage tests and full vitest suite pass.
 - Bandit scan on touched backend files is clean.
 **Tests**:
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
 - `cd admin-ui && bunx vitest run app/usage/__tests__/page.test.tsx`
 - `cd admin-ui && bunx vitest run`
 - `cd admin-ui && bunx eslint app/usage/page.tsx app/usage/__tests__/page.test.tsx lib/router-analytics-client.ts lib/router-analytics-types.ts lib/api-client.ts`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_access.json`
+- `source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_access.json`
 **Status**: Complete
 
 ## Stage 15: Router Analytics Network Delivery Slice
@@ -174,12 +174,12 @@
 - Admin-ui usage tests and full vitest suite pass.
 - Bandit scan on touched backend files is clean.
 **Tests**:
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
 - `cd admin-ui && bunx vitest run app/usage/__tests__/page.test.tsx`
 - `cd admin-ui && bunx vitest run`
 - `cd admin-ui && bunx eslint app/usage/page.tsx app/usage/__tests__/page.test.tsx lib/router-analytics-client.ts lib/router-analytics-types.ts lib/api-client.ts`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_network.json`
+- `source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_network.json`
 **Status**: Complete
 
 ## Stage 17: Router Analytics Models Delivery Slice
@@ -202,12 +202,12 @@
 - Admin-ui usage tests and full vitest suite pass.
 - Bandit scan on touched backend files is clean.
 **Tests**:
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
 - `cd admin-ui && bunx vitest run app/usage/__tests__/page.test.tsx`
 - `cd admin-ui && bunx vitest run`
 - `cd admin-ui && bunx eslint app/usage/page.tsx app/usage/__tests__/page.test.tsx lib/router-analytics-client.ts lib/router-analytics-types.ts lib/api-client.ts`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_models.json`
+- `source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_models.json`
 **Status**: Complete
 
 ## Stage 19: Router Analytics Conversations Delivery Slice
@@ -230,12 +230,12 @@
 - Admin-ui usage tests and full vitest suite pass.
 - Bandit scan on touched backend files is clean.
 **Tests**:
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
 - `cd admin-ui && bunx vitest run app/usage/__tests__/page.test.tsx`
 - `cd admin-ui && bunx vitest run`
 - `cd admin-ui && bunx eslint app/usage/page.tsx app/usage/__tests__/page.test.tsx lib/router-analytics-client.ts lib/router-analytics-types.ts lib/api-client.ts`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_conversations.json`
+- `source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_conversations.json`
 **Status**: Complete
 
 ## Stage 21: Router Analytics Log Delivery Slice
@@ -258,10 +258,10 @@
 - Admin-ui usage tests and full vitest suite pass.
 - Bandit scan on touched backend files is clean.
 **Tests**:
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
 - `cd admin-ui && bunx vitest run app/usage/__tests__/page.test.tsx`
 - `cd admin-ui && bunx vitest run`
 - `cd admin-ui && bunx eslint app/usage/page.tsx app/usage/__tests__/page.test.tsx lib/router-analytics-client.ts lib/router-analytics-types.ts lib/api-client.ts`
-- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_log.json`
+- `source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_log.json`
 **Status**: Complete

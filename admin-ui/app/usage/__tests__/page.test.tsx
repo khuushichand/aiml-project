@@ -139,7 +139,10 @@ beforeEach(() => {
   routerClientMock.getRouterAnalyticsMeta.mockResolvedValue({
     providers: [{ value: 'openai', label: 'openai' }, { value: 'groq', label: 'groq' }],
     models: [{ value: 'gpt-4o-mini', label: 'gpt-4o-mini' }, { value: 'llama-3.3-70b', label: 'llama-3.3-70b' }],
-    tokens: [{ value: 'Admin', label: 'Admin' }, { value: 'Ops', label: 'Ops' }],
+    tokens: [
+      { value: '11', label: 'Admin', key_id: 11 },
+      { value: '12', label: 'Ops', key_id: 12 },
+    ],
     ranges: ['realtime', '1h', '8h', '24h', '7d', '30d'],
     granularities: ['1m', '5m', '15m', '1h'],
     generated_at: '2026-03-01T10:30:00Z',
@@ -480,6 +483,21 @@ describe('UsagePage router analytics status shell', () => {
     await waitFor(() => {
       expect(routerClientMock.getRouterAnalyticsStatus).toHaveBeenLastCalledWith(
         expect.objectContaining({ range: '24h' })
+      );
+    });
+  });
+
+  it('uses selected token key id for router analytics filters', async () => {
+    const user = userEvent.setup();
+    render(<UsagePage />);
+
+    await screen.findByRole('heading', { name: 'Usage Stats' });
+    const tokenSelect = screen.getByLabelText('Token');
+    await user.selectOptions(tokenSelect, '12');
+
+    await waitFor(() => {
+      expect(routerClientMock.getRouterAnalyticsStatus).toHaveBeenLastCalledWith(
+        expect.objectContaining({ tokenId: 12 })
       );
     });
   });

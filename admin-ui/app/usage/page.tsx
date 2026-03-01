@@ -154,7 +154,7 @@ export default function UsagePage() {
   const [range, setRange] = useState<RouterAnalyticsRange>('8h');
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
-  const [tokenName, setTokenName] = useState('');
+  const [tokenFilterValue, setTokenFilterValue] = useState('');
 
   const [statusPayload, setStatusPayload] = useState<RouterAnalyticsStatusResponse | null>(null);
   const [breakdownsPayload, setBreakdownsPayload] = useState<RouterAnalyticsBreakdownsResponse | null>(null);
@@ -185,14 +185,13 @@ export default function UsagePage() {
   const [logError, setLogError] = useState<string>('');
   const [refreshTick, setRefreshTick] = useState<number>(0);
 
-  const selectedTokenValue = tokenName && tokenName !== '__all__' ? tokenName : '';
-
   const selectedTokenId = useMemo<number | undefined>(() => {
-    if (!metaPayload || !selectedTokenValue) return undefined;
-    const index = metaPayload.tokens.findIndex((entry) => entry.value === selectedTokenValue);
-    if (index < 0) return undefined;
-    return index + 1;
-  }, [metaPayload, selectedTokenValue]);
+    const rawValue = tokenFilterValue && tokenFilterValue !== '__all__' ? tokenFilterValue : '';
+    if (!rawValue) return undefined;
+    const parsed = Number(rawValue);
+    if (!Number.isInteger(parsed) || parsed <= 0) return undefined;
+    return parsed;
+  }, [tokenFilterValue]);
 
   const statusQuery = useMemo(
     () => ({
@@ -498,8 +497,8 @@ export default function UsagePage() {
                   <Select
                     id="usage-token-filter"
                     aria-label="Token"
-                    value={tokenName || '__all__'}
-                    onChange={(event) => setTokenName(event.target.value === '__all__' ? '' : event.target.value)}
+                    value={tokenFilterValue || '__all__'}
+                    onChange={(event) => setTokenFilterValue(event.target.value === '__all__' ? '' : event.target.value)}
                   >
                     <option value="__all__">All tokens</option>
                     {(metaPayload?.tokens || []).map((entry) => (

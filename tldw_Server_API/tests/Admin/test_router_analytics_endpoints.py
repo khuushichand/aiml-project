@@ -225,6 +225,17 @@ async def test_router_analytics_endpoints_status_breakdowns_meta(monkeypatch, tm
         assert meta_resp.status_code == 200, meta_resp.text
         meta_payload = meta_resp.json()
         assert any(option["value"] == "openai" for option in meta_payload["providers"])
+        ops_option = next(option for option in meta_payload["tokens"] if option["label"] == "Ops")
+        assert ops_option["value"] == "202"
+        assert ops_option["key_id"] == 202
+
+        filtered_status_resp = client.get(
+            "/api/v1/admin/router-analytics/status",
+            params={"range": "1h", "token_id": ops_option["value"]},
+        )
+        assert filtered_status_resp.status_code == 200, filtered_status_resp.text
+        filtered_status_payload = filtered_status_resp.json()
+        assert filtered_status_payload["kpis"]["requests"] == 1
 
         quota_resp = client.get("/api/v1/admin/router-analytics/quota", params={"range": "1h"})
         assert quota_resp.status_code == 200, quota_resp.text
