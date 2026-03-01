@@ -662,7 +662,7 @@ export const adhocEndpointOptions = [
 
 **Step 4: Run test to verify it passes**
 
-Run: `bunx vitest run apps/packages/ui/src/components/Option/Evaluations/tabs/__tests__/RunsTab.benchmark-option.test.tsx`
+Run: `cd apps/packages/ui && bun run vitest run src/components/Option/Evaluations/tabs/__tests__/RunsTab.benchmark-option.test.tsx`
 Expected: PASS.
 
 **Step 5: Commit**
