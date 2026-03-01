@@ -413,10 +413,8 @@ MCTS iteration payload fields (when `type = "optimization_iteration"`):
 `strategy`, `sim_index`, `depth`, `reward`, `best_reward`, `token_spend_so_far`, `trace_summary`.
 
 Reference payloads:
-- `Docs/Examples/PromptStudio/mcts/create_optimization_mcts.json`
-- `Docs/Examples/PromptStudio/mcts/websocket_optimization_iteration_event.json`
-- `Docs/Examples/PromptStudio/mcts/optimization_history_response.json`
 - `Docs/Examples/PromptStudio/mcts/ROLL_OUT_NOTES.md`
+- `Docs/Guides/Prompt_Studio_MCTS_Guide.md`
 
 ## Access Control & Limits
 

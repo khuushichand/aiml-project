@@ -304,7 +304,7 @@ export { myFeatureTutorials } from "./definitions/my-feature"
 - [ ] Tutorial completes and marks as completed
 - [ ] First-visit prompt appears for new users
 - [ ] Replay button works for completed tutorials
-- [ ] Manual QA checklist passes: `Docs/Plans/MANUAL_QA_CHECKLIST_quick_chat_tutorials_section_2026_02_21.md`
+- [ ] Manual QA checklist passes (see the quick-chat tutorial checklist artifacts under `Docs/Plans/`)
 
 ## Route Pattern Matching
 
