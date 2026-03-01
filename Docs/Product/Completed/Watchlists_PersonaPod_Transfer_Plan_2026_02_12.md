@@ -10,7 +10,7 @@ Address the review findings by improving `tldw_server2` watchlists behavior and 
 
 1) API/schema mismatch: `generate_audio` family fields are accepted by `WatchlistOutputCreateRequest` but not honored by `POST /api/v1/watchlists/outputs`.
 
-2) Docs/runbooks drift: migration runbook and API docs include stale or incomplete watchlists guidance.
+2) runbooks drift: migration runbook and API docs include stale or incomplete watchlists guidance.
 
 3) Tooling discoverability gap: no obvious one-command watchlists audio smoke workflow.
 
@@ -21,7 +21,7 @@ Address the review findings by improving `tldw_server2` watchlists behavior and 
 1) API/schema mismatch  
 Covered by: PR1 (completed)
 
-2) Docs/runbooks drift  
+2) runbooks drift  
 Covered by: PR3 (completed)
 
 3) Tooling discoverability gap  

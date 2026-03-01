@@ -72,7 +72,7 @@ Finding IDs: `10.1` through `10.7`
 **Status**: Complete
 - Evidence:
   - Live regions added in `admin-ui/components/dashboard/StatsGrid.tsx`, `admin-ui/app/monitoring/components/SystemStatusPanel.tsx`, `admin-ui/app/monitoring/page.tsx`, and `admin-ui/app/jobs/page.tsx`.
-  - Contrast audit checklist: `Docs/Plans/HCI10_STAGE2_DARK_MODE_CONTRAST_CHECKLIST_2026_02_18.md`.
+  - Contrast audit checklist: `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_hci_10_accessibility.md`.
   - Automated checks: `admin-ui/app/__tests__/dark-mode-contrast.test.ts`, axe smoke checks via `bun run test:a11y`, and updated live-region tests.
 
 ## Stage 3: Table Captions + Icon Button Audit + Focus Management
@@ -99,7 +99,7 @@ Finding IDs: `10.1` through `10.7`
   - `Table` now renders explicit captions when provided and auto-generates sr-only descriptive captions (header summary + row count) when omitted in `admin-ui/components/ui/table.tsx`.
   - Table caption behavior covered by `admin-ui/components/ui/table.test.tsx`.
   - Focus management on route changes implemented in `admin-ui/components/ResponsiveLayout.tsx` and tested in `admin-ui/components/ResponsiveLayout.test.tsx`.
-  - Icon-only button audit gate added in `admin-ui/app/__tests__/icon-button-audit.test.ts`; checklist documented in `Docs/Plans/HCI10_STAGE3_ICON_BUTTON_AUDIT_2026_02_18.md`.
+  - Icon-only button audit gate added in `admin-ui/app/__tests__/icon-button-audit.test.ts`; checklist documented in `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_hci_10_accessibility.md`.
 
 ## Cross-Reference
 

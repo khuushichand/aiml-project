@@ -602,7 +602,7 @@ Should Tickets:
 Milestone Exit Gate:
 
 - [ ] M2 Gate approved with idempotent incremental sync, median lag < 5 minutes in staging, and validated cursor invalidation recovery.
-  Validation Checklist: `Docs/Operations/Email_M2_Gate_Validation_Checklist.md`.
+  Validation Checklist: `Docs/Product/Email_Ingestion_Search_PRD.md`.
 
 ### Milestone M3: Legacy Backfill and Query Optimization (Phase 3)
 
@@ -647,7 +647,7 @@ Should Tickets:
 Milestone Exit Gate:
 
 - [x] M3 Gate approved after production-like load test, cutover rehearsal, and retention/deletion validation.
-  Validation Checklist: `Docs/Operations/Email_M3_Gate_Validation_Checklist.md`.
+  Validation Checklist: `Docs/Product/Email_Ingestion_Search_PRD.md`.
 
 ### Milestone M4: Release Readiness and Documentation
 
@@ -667,13 +667,13 @@ Must Tickets:
 
 - [x] `EMAIL-M4-003` Create production runbook for sync operations and incident response.
   Depends On: `EMAIL-M2-006`, `EMAIL-M2-007`.
-  Deliverables: Ops runbook covering retries, cursor repair, and quota incidents (`Docs/Operations/Email_Sync_Operations_Runbook.md`).
+  Deliverables: Ops runbook covering retries, cursor repair, and quota incidents (`Docs/Product/Email_Ingestion_Search_PRD.md`).
   Acceptance: Runbook published with staging dry-run checklist and concrete incident playbooks; staging execution with live Gmail traffic remains required before final M4 gate closure.
   Validation (2026-02-10): Focused endpoint/worker regression slice passed (`10 passed`) covering source status/sync APIs, cursor recovery (bounded replay/full-backfill-required), label/message-state deltas, retry backoff, retry-budget exhaustion, and large Gmail fixture edge cases.
 
 - [x] `EMAIL-M4-004` Final release checklist and rollback plan.
   Depends On: `EMAIL-M3-004`.
-  Deliverables: Feature-flag rollout sequence and rollback triggers (`Docs/Operations/Email_Release_Checklist_and_Rollback.md`).
+  Deliverables: Feature-flag rollout sequence and rollback triggers (`Docs/Product/Email_Ingestion_Search_PRD.md`).
   Acceptance: Checklist and rollback plan published; backend/SRE/product sign-offs are tracked in the document and required for M4 gate closure.
   Validation (2026-02-10): Rollout phase checklist, objective rollback triggers, and ordered rollback execution steps documented with explicit ownership and sign-off gates.
 

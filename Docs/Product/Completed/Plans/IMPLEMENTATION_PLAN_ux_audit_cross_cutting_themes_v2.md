@@ -188,7 +188,7 @@ This plan covers report-wide issues that affect many routes:
 - Follow-up remediation completed for `ReactMarkdown` warning debt:
   - Root cause fixed by aligning shared markdown dependency resolution to v10 stack and adapting shared wrappers for v10 API (`className` removed from direct `ReactMarkdown` usage).
   - Temporary allowlist `m5-react-defaultprops-warning` removed from `apps/tldw-frontend/e2e/smoke/smoke.setup.ts`.
-  - Remediation record: `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_reactmarkdown_defaultprops_warning_remediation_2026_02_16.md`.
+  - Remediation record: `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_themes_v2.md`.
 - Post-remediation gate revalidation:
   - Focused `/settings/chat` + `/flashcards` smoke: `4 passed`.
   - Stage 5 audited-route release gate: `11 passed`.

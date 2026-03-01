@@ -89,7 +89,7 @@ Finding IDs: `4.1` through `4.5`
   - preserves entry metadata when copying to destination, then bulk-deletes moved source entries.
   - added warnings/summaries for moved, skipped, and failed entry outcomes.
 - Added Stage 3 API contract/design note:
-  - `Docs/Design/WORLD_BOOK_ENTRY_MOVE_API_CONTRACT_2026_02_18.md`
+  - `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_world_books_04_bulk_operations_2026_02_18.md`
   - documents proposed backend move endpoint while current UI uses copy+delete fallback.
 - Added Stage 3 tests:
   - `apps/packages/ui/src/components/Option/WorldBooks/__tests__/WorldBooksManager.bulkOperationsStage3.test.tsx`

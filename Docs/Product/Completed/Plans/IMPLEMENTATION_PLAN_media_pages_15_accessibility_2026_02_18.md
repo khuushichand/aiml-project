@@ -57,7 +57,7 @@ Finding IDs: `15.1` through `15.11`
 **Progress Notes (2026-02-18)**:
 - Added media-page-specific token contrast regression coverage in `apps/packages/ui/src/themes/__tests__/media-pages-accessibility-contrast.stage15.test.ts`.
 - Verified WCAG thresholds for core text/focus pairings across all built-in themes and enforced documented minimum floors.
-- Added audit record with measured worst-case ratios in `Docs/Plans/MEDIA_PAGES_CONTRAST_AUDIT_2026_02_18.md`.
+- Added audit record with measured worst-case ratios in `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_media_pages_15_accessibility_2026_02_18.md`.
 
 ## Stage 4: Accessibility Regression Suite for Existing Strengths
 **Goal**: Protect existing keyboard and semantic wins while new a11y fixes ship.
