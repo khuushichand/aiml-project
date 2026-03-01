@@ -24,6 +24,9 @@ export default defineConfig({
       "tabs",
       "scripting"
     ],
+    host_permissions: [
+      "https://api.github.com/*"
+    ],
     action: {
       default_title: "tldw Assistant",
       default_icon: {
