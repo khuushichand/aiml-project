@@ -1,8 +1,7 @@
 # STT/TTS Audio API Design
 
 Status: Implemented
-Last verified against code: 2026-02-22
-Last verified commit: `915632a97ad41dc7712101612113928dbea6b358`
+Last verified against code: 2026-02-22 (`915632a97ad41dc7712101612113928dbea6b358`)
 
 ## Purpose and scope
 
@@ -18,6 +17,13 @@ It exists so the user guide can point to one implementation-aligned source for:
 - auth mode behavior (single-user and multi-user)
 - storage download-link headers for TTS
 - streaming protocol and error semantics
+
+## Related documents
+
+- [STT_Parakeet_MLX_Parity.md](./STT_Parakeet_MLX_Parity.md) - parity requirements for STT outputs between Parakeet MLX and existing response formats.
+- [2026-02-25-parakeet-onnx-default-transcription-design.md](./2026-02-25-parakeet-onnx-default-transcription-design.md) - default runtime/provider decisions for Parakeet ONNX transcription.
+- [Workspace_Persistence_Architecture.md](./Workspace_Persistence_Architecture.md) - persistence and recovery model used by clients that invoke audio APIs across sessions.
+- [Meeting_Intelligence_API.md](./Meeting_Intelligence_API.md) - downstream consumers of transcript and artifact generation patterns from audio pipelines.
 
 ## Decision summary
 
