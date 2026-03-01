@@ -11,8 +11,8 @@ It combines a baseline metrics tracker and a route-level contract matrix using t
 ## Source of Truth
 
 - Manifest: `/Users/macbook-dev/Documents/GitHub/tldw_server2/ux-audit/screenshots-v2/manifest.json`
-- Audit report: `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/UX_AUDIT_REPORT_v2.md`
-- Route issue references: Section 2 and Section 5 of the audit report.
+- Program oversight summary: `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_overarching_program_oversight_v2_2026_02_16.md`
+- Route issue references: this baseline matrix plus `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_themes_v2.md`.
 
 ## How to Use
 

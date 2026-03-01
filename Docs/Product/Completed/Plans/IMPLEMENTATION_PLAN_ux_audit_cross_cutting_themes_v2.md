@@ -4,7 +4,7 @@
 
 This plan covers report-wide issues that affect many routes:
 
-- Theme 1 through Theme 10 in `Docs/UX_AUDIT_REPORT_v2.md`
+- Theme 1 through Theme 10 summarized in this plan from the v2 baseline artifact set.
 - Section 2 route integrity findings (404 routes, wrong-content routes, misleading redirects)
 - Section 3 console warning/error reductions
 
@@ -23,7 +23,7 @@ This plan covers report-wide issues that affect many routes:
 
 ## Pre-Implementation Validation Checklist
 
-- Coverage alignment confirmed against `Docs/UX_AUDIT_REPORT_v2.md` Theme 1-10 and Section 2/3 findings.
+- Coverage alignment confirmed against this plan's Theme 1-10 set and `Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_stage1_route_matrix_baseline_v2.md`.
 - Audited route source-of-truth is fixed to the v2 manifest and route table (`ux-audit/screenshots-v2/manifest.json` plus Section 2 route list).
 - Baseline metrics captured before code changes:
   - Error overlay prevalence across audited routes
