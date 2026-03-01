@@ -3742,5 +3742,20 @@
   },
   "header_skills": {
     "message": "Skills"
+  },
+  "header_modeRepo2txt": {
+    "message": "Repo2Txt"
+  },
+  "repo2txt_nav": {
+    "message": "Repo2Txt"
+  },
+  "repo2txt_title": {
+    "message": "Repo2Txt"
+  },
+  "repo2txt_description": {
+    "message": "Convert repositories to structured text output."
+  },
+  "repo2txt_generate": {
+    "message": "Generate Output"
   }
 }

@@ -113,7 +113,8 @@
     "connectionCard.connectedCaption": "Chat and tools are now available in Options and the sidepanel.",
     "quickIngestQueuedAria": "{{label}} — {{count}} items queued — click to review and process",
     "writingPlayground": "Writing Playground",
-    "documentWorkspace": "Document Workspace"
+    "documentWorkspace": "Document Workspace",
+    "modeRepo2txt": "Repo2Txt"
   },
   "documentWorkspace": {
     "title": "Document Workspace",
@@ -1309,5 +1310,11 @@
     "nav": "Moderation Playground",
     "title": "Moderation Playground",
     "subtitle": "Family safety controls and server guardrails in one place."
+  },
+  "repo2txt": {
+    "nav": "Repo2Txt",
+    "title": "Repo2Txt",
+    "description": "Convert repositories to structured text output.",
+    "generate": "Generate Output"
   }
 }

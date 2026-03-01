@@ -102,7 +102,8 @@
     "dataTables": "Data Tables",
     "documentWorkspace": "Document Workspace",
     "modelPlayground": "Workspace Playground",
-    "workflowEditor": "Workflow Editor"
+    "workflowEditor": "Workflow Editor",
+    "modeRepo2txt": "Repo2Txt"
   },
   "writingPlayground": {
     "title": "Skriveværksted",
@@ -952,5 +953,11 @@
   },
   "documentWorkspace": {
     "fileUnauthorized": "You don't have permission to access this document."
+  },
+  "repo2txt": {
+    "nav": "Repo2Txt",
+    "title": "Repo2Txt",
+    "description": "Convert repositories to structured text output.",
+    "generate": "Generate Output"
   }
 }
