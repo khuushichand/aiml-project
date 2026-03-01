@@ -35,6 +35,7 @@ from tldw_Server_API.app.core.Moderation.governance_utils import (
     chat_type_matches,
     is_schedule_active,
 )
+from tldw_Server_API.app.core.Moderation.conflict_resolution import resolve_conflicts
 from tldw_Server_API.app.core.Moderation.moderation_service import (
     ModerationPolicy,
     PatternRule,
@@ -270,9 +271,25 @@ class SupervisedPolicyEngine:
         if not compiled_policies:
             return base_policy
 
-        # Merge supervised patterns into the base policy's block_patterns
+        # Merge supervised patterns into the base policy's block_patterns.
+        # When multiple guardians define overlapping rules for a dependent,
+        # apply deterministic strictest-wins conflict resolution per pattern.
+        grouped_policies: dict[str, list[tuple[SupervisedPolicy, re.Pattern, GovernancePolicy | None]]] = {}
+        for pol, regex, gp in compiled_policies:
+            group_key = f"{regex.pattern}|{pol.phase}|{pol.category or 'supervised'}"
+            grouped_policies.setdefault(group_key, []).append((pol, regex, gp))
+
         extra_rules: list[PatternRule] = []
-        for pol, regex, _gp in compiled_policies:
+        for group_key, entries in grouped_policies.items():
+            winner = resolve_conflicts([entry[0] for entry in entries])
+            if winner is None:
+                continue
+
+            selected_entry = next(
+                (entry for entry in entries if entry[0].id == winner.id),
+                entries[0],
+            )
+            pol, regex, _gp = selected_entry
             rule_action = pol.action if pol.action in ("block", "redact", "warn") else "warn"
             extra_rules.append(
                 PatternRule(
@@ -282,6 +299,13 @@ class SupervisedPolicyEngine:
                     categories={pol.category} if pol.category else {"supervised"},
                 )
             )
+            if len(entries) > 1:
+                logger.info(
+                    "Resolved shared-dependent policy conflict for {}: winner={} candidates={}",
+                    group_key,
+                    pol.id,
+                    [entry[0].id for entry in entries],
+                )
 
         merged_patterns = list(base_policy.block_patterns or []) + extra_rules
         return ModerationPolicy(
