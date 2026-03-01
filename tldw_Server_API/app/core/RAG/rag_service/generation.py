@@ -13,9 +13,12 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Optional, Protocol, Union, cast
 
 from loguru import logger
+
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 from .types import Document
 
@@ -136,9 +139,26 @@ Your question: {question}
 
 Let me explain:"""
 
+    @staticmethod
+    @lru_cache(maxsize=64)
+    def _load_rag_prompt_cached(name: str) -> Optional[str]:
+        """Load prompt snippets from rag.prompts.* with a small process cache."""
+        try:
+            prompt_text = load_prompt("rag", name)
+        except Exception as exc:  # noqa: BLE001 - prompt loading must remain best-effort
+            logger.debug(f"Prompt loader failed for rag prompt '{name}': {exc}")
+            return None
+        if isinstance(prompt_text, str) and prompt_text.strip():
+            return prompt_text.strip()
+        return None
+
     @classmethod
     def get_template(cls, name: str) -> str:
         """Get a template by name."""
+        external = cls._load_rag_prompt_cached(name)
+        if external is not None:
+            return external
+
         templates = {
             "default": cls.DEFAULT,
             "detailed": cls.DETAILED,
