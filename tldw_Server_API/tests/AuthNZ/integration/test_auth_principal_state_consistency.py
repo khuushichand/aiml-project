@@ -219,7 +219,6 @@ async def test_multi_user_jwt_and_api_key_status_codes(monkeypatch):
 
     # Force multi-user mode
     monkeypatch.setattr(udh, "is_single_user_mode", lambda: False)
-    monkeypatch.setattr(apr, "is_single_user_mode", lambda: False)
     fake_settings = SimpleNamespace(
         AUTH_MODE="multi_user",
         PII_REDACT_LOGS=False,
