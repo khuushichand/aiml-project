@@ -7,7 +7,7 @@ import contextlib
 import json
 import os
 import time
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -36,6 +36,20 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER, get_api_keys
 from tldw_Server_API.app.core.Audio.error_payloads import _maybe_debug_details
 from tldw_Server_API.app.core.Audio.quota_helpers import EXPECTED_DB_EXC, EXPECTED_REDIS_EXC, _get_failopen_cap_minutes
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    active_streams_count,
+    add_daily_minutes,
+    bytes_to_seconds,
+    can_start_stream,
+    check_daily_minutes_allow,
+    finish_job,
+    finish_stream,
+    get_daily_minutes_used,
+    get_limits_for_user,
+    get_user_tier,
+    heartbeat_stream,
+    increment_jobs_started,
+)
 from tldw_Server_API.app.core.Audio.streaming_service import (
     CHAT_HISTORY_MAX_MESSAGES,
     _audio_ws_authenticate,
@@ -109,56 +123,41 @@ router = APIRouter(
 )
 
 def _audio_shim_attr(name: str):
-    def _is_override(value: Any) -> bool:
-        # Keep default module/package objects as non-overrides; treat externally
-        # supplied test doubles/lambdas as overrides.
-        if value is None or isinstance(value, ModuleType):
-            return False
-        mod_name = getattr(value, "__module__", None)
-        if isinstance(mod_name, str) and mod_name:
-            if mod_name.startswith("tldw_Server_API.tests."):
-                return True
-            return not mod_name.startswith("tldw_Server_API.")
-        return True
-
-    mod_has = False
-    mod_value: Any = None
+    defaults: dict[str, Any] = {
+        "asyncio": asyncio,
+        "_audio_ws_authenticate": _audio_ws_authenticate,
+        "get_metrics_registry": get_metrics_registry,
+        "get_api_keys": get_api_keys,
+        "chat_api_call_async": chat_api_call_async,
+        "UnifiedStreamingTranscriber": UnifiedStreamingTranscriber,
+        "SileroTurnDetector": SileroTurnDetector,
+        "get_tts_service": get_tts_service,
+        "get_chacha_db_for_user_id": get_chacha_db_for_user_id,
+        "get_or_create_character_context": get_or_create_character_context,
+        "get_or_create_conversation": get_or_create_conversation,
+        "can_start_stream": can_start_stream,
+        "finish_stream": finish_stream,
+        "check_daily_minutes_allow": check_daily_minutes_allow,
+        "add_daily_minutes": add_daily_minutes,
+        "bytes_to_seconds": bytes_to_seconds,
+        "heartbeat_stream": heartbeat_stream,
+        "active_streams_count": active_streams_count,
+        "get_daily_minutes_used": get_daily_minutes_used,
+        "get_user_tier": get_user_tier,
+        "get_limits_for_user": get_limits_for_user,
+        "increment_jobs_started": increment_jobs_started,
+        "finish_job": finish_job,
+    }
     try:
-        from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
+        from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
 
-        if hasattr(audio_mod, name):
-            mod_has = True
-            mod_value = getattr(audio_mod, name)
-    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-        mod_has = False
-        mod_value = None
-    from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
-    pkg_dict = getattr(audio_shim, "__dict__", {})
-    pkg_has = name in pkg_dict
-    pkg_value = pkg_dict.get(name) if pkg_has else None
-
-    if pkg_has and mod_has and pkg_value is not mod_value:
-        pkg_override = _is_override(pkg_value)
-        mod_override = _is_override(mod_value)
-        if mod_override and not pkg_override:
-            return mod_value
-        if pkg_override and not mod_override:
-            return pkg_value
-        if mod_override and pkg_override:
-            return mod_value
-
-    if pkg_has:
-        return pkg_value
-    if mod_has:
-        return mod_value
-    try:
         if hasattr(audio_shim, name):
             return getattr(audio_shim, name)
     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         pass
-    if not hasattr(audio_shim, name):
-        raise NameError(name)
-    return getattr(audio_shim, name)
+    if name in defaults:
+        return defaults[name]
+    raise NameError(name)
 
 
 def _shim_asyncio():
