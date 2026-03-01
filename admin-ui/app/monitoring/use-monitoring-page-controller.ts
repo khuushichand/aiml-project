@@ -22,6 +22,7 @@ import { useMonitoringDataLoader } from './use-monitoring-data-loader';
 import { useMonitoringMessages } from './use-monitoring-messages';
 import { useMonitoringMetricsHistory } from './use-monitoring-metrics-history';
 import { useMonitoringManagementPanelsProps } from './use-monitoring-management-panels-props';
+import { useMonitoringMetricsSectionProps } from './use-monitoring-metrics-section-props';
 import { useMonitoringNotificationState } from './use-monitoring-notification-state';
 import { useNotificationActions } from './use-notification-actions';
 import { useWatchlistActions } from './use-watchlist-actions';
@@ -232,47 +233,23 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     [error, success, activeAlertsCount]
   );
 
-  const metricsSectionProps = useMemo<ComponentProps<typeof MonitoringMetricsSection>>(
-    () => ({
-      timeRangeControlsProps: {
-        options: MONITORING_TIME_RANGE_OPTIONS,
-        timeRange,
-        customRangeStart,
-        customRangeEnd,
-        rangeValidationError,
-        onSelectTimeRange: handleSelectTimeRange,
-        onCustomRangeStartChange: setCustomRangeStart,
-        onCustomRangeEndChange: setCustomRangeEnd,
-        onApplyCustomRange: handleApplyCustomTimeRange,
-      },
-      metricsChartProps: {
-        metricsHistory,
-        rangeLabel: activeRangeLabel,
-        seriesVisibility,
-        onToggleSeries: handleToggleSeries,
-      },
-      metricsGridProps: {
-        metrics,
-        loading,
-      },
-    }),
-    [
-      activeRangeLabel,
-      customRangeEnd,
-      customRangeStart,
-      handleApplyCustomTimeRange,
-      handleSelectTimeRange,
-      handleToggleSeries,
-      loading,
-      metrics,
-      metricsHistory,
-      rangeValidationError,
-      seriesVisibility,
-      setCustomRangeEnd,
-      setCustomRangeStart,
-      timeRange,
-    ]
-  );
+  const metricsSectionProps = useMonitoringMetricsSectionProps({
+    options: MONITORING_TIME_RANGE_OPTIONS,
+    timeRange,
+    customRangeStart,
+    customRangeEnd,
+    rangeValidationError,
+    onSelectTimeRange: handleSelectTimeRange,
+    onCustomRangeStartChange: setCustomRangeStart,
+    onCustomRangeEndChange: setCustomRangeEnd,
+    onApplyCustomRange: handleApplyCustomTimeRange,
+    metricsHistory,
+    rangeLabel: activeRangeLabel,
+    seriesVisibility,
+    onToggleSeries: handleToggleSeries,
+    metrics,
+    loading,
+  });
 
   const managementPanelsProps = useMonitoringManagementPanelsProps({
     alertRules,
