@@ -40,12 +40,11 @@ import { useAlertActions } from './use-alert-actions';
 import { useAlertRules } from './use-alert-rules';
 import { useMonitoringAlertState } from './use-monitoring-alert-state';
 import { useMonitoringMessages } from './use-monitoring-messages';
+import { useMonitoringNotificationState } from './use-monitoring-notification-state';
 import { useNotificationActions } from './use-notification-actions';
 import { useWatchlistActions } from './use-watchlist-actions';
 import type {
   Metric,
-  NotificationSettings,
-  RecentNotification,
   SystemHealthStatus,
   SystemStatusItem,
   Watchlist,
@@ -86,9 +85,14 @@ export default function MonitoringPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // Notification settings
-  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
-  const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([]);
-  const [notificationSettingsStatus, setNotificationSettingsStatus] = useState<'pending' | 'fulfilled' | 'rejected'>('pending');
+  const {
+    notificationSettings,
+    setNotificationSettings,
+    recentNotifications,
+    setRecentNotifications,
+    setNotificationSettingsStatus,
+    canSaveNotificationSettings,
+  } = useMonitoringNotificationState();
 
   // Stage 2: Alert rules + enhanced alert management
   const {
@@ -201,6 +205,9 @@ export default function MonitoringPage() {
     setAlerts,
     setAssignableUsers,
     setError,
+    setNotificationSettings,
+    setNotificationSettingsStatus,
+    setRecentNotifications,
     timeRange,
   ]);
 
@@ -243,7 +250,7 @@ export default function MonitoringPage() {
     handleTestNotification,
   } = useNotificationActions({
     apiClient: api,
-    canSave: notificationSettingsStatus === 'fulfilled',
+    canSave: canSaveNotificationSettings,
     setNotificationSettings,
     setRecentNotifications,
     setError,
@@ -433,7 +440,7 @@ export default function MonitoringPage() {
                 recentNotifications={recentNotifications}
                 loading={loading}
                 saving={notificationsSaving}
-                canSave={notificationSettingsStatus === 'fulfilled'}
+                canSave={canSaveNotificationSettings}
                 onSave={handleSaveNotificationSettings}
                 onTest={handleTestNotification}
               />
