@@ -331,6 +331,7 @@ export const HEADER_SHORTCUT_IDS = [
   "knowledge-qa",
   "media",
   "document-workspace",
+  "repo2txt",
   "multi-item-review",
   "content-review",
   "flashcards",
