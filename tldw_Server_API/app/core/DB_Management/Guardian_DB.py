@@ -227,6 +227,77 @@ class EscalationState:
     updated_at: str = ""
 
 
+@dataclass
+class HouseholdDraft:
+    id: str
+    owner_user_id: str
+    name: str
+    mode: str = "family"  # family | institutional
+    status: str = "draft"  # draft | invites_pending | partially_active | active | needs_attention
+    metadata: dict[str, Any] | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
+class HouseholdMemberDraft:
+    id: str
+    household_draft_id: str
+    role: str  # guardian | dependent | caregiver
+    display_name: str
+    user_id: str | None = None
+    email: str | None = None
+    invite_required: bool = True
+    invite_status: str = "pending"
+    metadata: dict[str, Any] | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
+class RelationshipDraft:
+    id: str
+    household_draft_id: str
+    guardian_member_draft_id: str
+    dependent_member_draft_id: str
+    relationship_type: str = "parent"
+    dependent_visible: bool = True
+    status: str = "pending"
+    relationship_id: str | None = None
+    metadata: dict[str, Any] | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
+class GuardrailPlanDraft:
+    id: str
+    household_draft_id: str
+    dependent_user_id: str
+    relationship_draft_id: str
+    template_id: str
+    overrides: dict[str, Any] = field(default_factory=dict)
+    status: str = "queued"  # queued | active | failed
+    materialized_policy_id: str | None = None
+    failure_reason: str | None = None
+    metadata: dict[str, Any] | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
+class ActivationRun:
+    id: str
+    household_draft_id: str
+    relationship_id: str | None = None
+    dependent_user_id: str | None = None
+    plan_draft_id: str | None = None
+    status: str = "queued"  # queued | active | failed
+    detail: str = ""
+    metadata: dict[str, Any] | None = None
+    created_at: str = ""
+
+
 # ── Database class ───────────────────────────────────────────
 
 class GuardianDB:
@@ -437,6 +508,113 @@ class GuardianDB:
                         updated_at TEXT NOT NULL,
                         PRIMARY KEY (rule_id, user_id)
                     );
+
+                    CREATE TABLE IF NOT EXISTS guardian_household_drafts (
+                        id TEXT PRIMARY KEY,
+                        owner_user_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        mode TEXT NOT NULL DEFAULT 'family',
+                        status TEXT NOT NULL DEFAULT 'draft',
+                        metadata TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_ghd_owner
+                        ON guardian_household_drafts(owner_user_id);
+                    CREATE INDEX IF NOT EXISTS idx_ghd_status
+                        ON guardian_household_drafts(status);
+
+                    CREATE TABLE IF NOT EXISTS guardian_household_member_drafts (
+                        id TEXT PRIMARY KEY,
+                        household_draft_id TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        display_name TEXT NOT NULL,
+                        user_id TEXT,
+                        email TEXT,
+                        invite_required INTEGER NOT NULL DEFAULT 1,
+                        invite_status TEXT NOT NULL DEFAULT 'pending',
+                        metadata TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (household_draft_id) REFERENCES guardian_household_drafts(id) ON DELETE CASCADE
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_ghmd_household
+                        ON guardian_household_member_drafts(household_draft_id);
+                    CREATE INDEX IF NOT EXISTS idx_ghmd_role
+                        ON guardian_household_member_drafts(role);
+                    CREATE INDEX IF NOT EXISTS idx_ghmd_user
+                        ON guardian_household_member_drafts(user_id);
+
+                    CREATE TABLE IF NOT EXISTS guardian_relationship_drafts (
+                        id TEXT PRIMARY KEY,
+                        household_draft_id TEXT NOT NULL,
+                        guardian_member_draft_id TEXT NOT NULL,
+                        dependent_member_draft_id TEXT NOT NULL,
+                        relationship_type TEXT NOT NULL DEFAULT 'parent',
+                        dependent_visible INTEGER NOT NULL DEFAULT 1,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        relationship_id TEXT,
+                        metadata TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (household_draft_id) REFERENCES guardian_household_drafts(id) ON DELETE CASCADE,
+                        FOREIGN KEY (guardian_member_draft_id) REFERENCES guardian_household_member_drafts(id) ON DELETE CASCADE,
+                        FOREIGN KEY (dependent_member_draft_id) REFERENCES guardian_household_member_drafts(id) ON DELETE CASCADE,
+                        UNIQUE(household_draft_id, guardian_member_draft_id, dependent_member_draft_id)
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_grd_household
+                        ON guardian_relationship_drafts(household_draft_id);
+                    CREATE INDEX IF NOT EXISTS idx_grd_status
+                        ON guardian_relationship_drafts(status);
+
+                    CREATE TABLE IF NOT EXISTS guardian_guardrail_plan_drafts (
+                        id TEXT PRIMARY KEY,
+                        household_draft_id TEXT NOT NULL,
+                        dependent_user_id TEXT NOT NULL,
+                        relationship_draft_id TEXT NOT NULL,
+                        template_id TEXT NOT NULL,
+                        overrides TEXT NOT NULL DEFAULT '{}',
+                        status TEXT NOT NULL DEFAULT 'queued',
+                        materialized_policy_id TEXT,
+                        failure_reason TEXT,
+                        metadata TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (household_draft_id) REFERENCES guardian_household_drafts(id) ON DELETE CASCADE,
+                        FOREIGN KEY (relationship_draft_id) REFERENCES guardian_relationship_drafts(id) ON DELETE CASCADE
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_ggpd_household
+                        ON guardian_guardrail_plan_drafts(household_draft_id);
+                    CREATE INDEX IF NOT EXISTS idx_ggpd_status
+                        ON guardian_guardrail_plan_drafts(status);
+                    CREATE INDEX IF NOT EXISTS idx_ggpd_relationship
+                        ON guardian_guardrail_plan_drafts(relationship_draft_id);
+
+                    CREATE TABLE IF NOT EXISTS guardian_activation_runs (
+                        id TEXT PRIMARY KEY,
+                        household_draft_id TEXT NOT NULL,
+                        relationship_id TEXT,
+                        dependent_user_id TEXT,
+                        plan_draft_id TEXT,
+                        status TEXT NOT NULL,
+                        detail TEXT NOT NULL DEFAULT '',
+                        metadata TEXT,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (household_draft_id) REFERENCES guardian_household_drafts(id) ON DELETE CASCADE,
+                        FOREIGN KEY (relationship_id) REFERENCES guardian_relationships(id),
+                        FOREIGN KEY (plan_draft_id) REFERENCES guardian_guardrail_plan_drafts(id)
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_gar_household
+                        ON guardian_activation_runs(household_draft_id);
+                    CREATE INDEX IF NOT EXISTS idx_gar_relationship
+                        ON guardian_activation_runs(relationship_id);
+                    CREATE INDEX IF NOT EXISTS idx_gar_plan
+                        ON guardian_activation_runs(plan_draft_id);
                 """)
             finally:
                 conn.close()
@@ -1840,6 +2018,467 @@ class GuardianDB:
                     (str(user_id),),
                 ).fetchall()
                 return [dict(r) for r in rows]
+            finally:
+                conn.close()
+
+    # ── Family Wizard Drafts ─────────────────────────────────
+
+    @staticmethod
+    def _loads_json_or_default(raw_value: str | None, default: Any) -> Any:
+        if not raw_value:
+            return default
+        try:
+            return json.loads(raw_value)
+        except _GUARDIAN_NONCRITICAL_EXCEPTIONS:
+            return default
+
+    def create_household_draft(
+        self,
+        owner_user_id: str,
+        mode: str,
+        name: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        if mode not in ("family", "institutional"):
+            raise ValueError(f"Invalid household mode: {mode}")
+        now = _utcnow_iso()
+        draft_id = _new_id()
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """INSERT INTO guardian_household_drafts
+                    (id, owner_user_id, name, mode, status, metadata, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 'draft', ?, ?, ?)""",
+                    (
+                        draft_id,
+                        str(owner_user_id),
+                        name,
+                        mode,
+                        json.dumps(metadata) if metadata else None,
+                        now,
+                        now,
+                    ),
+                )
+                return draft_id
+            finally:
+                conn.close()
+
+    def get_household_draft(self, draft_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM guardian_household_drafts WHERE id = ?",
+                    (draft_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row["id"],
+                    "owner_user_id": row["owner_user_id"],
+                    "name": row["name"],
+                    "mode": row["mode"],
+                    "status": row["status"],
+                    "metadata": self._loads_json_or_default(row["metadata"], None),
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            finally:
+                conn.close()
+
+    def update_household_draft(self, draft_id: str, **fields: Any) -> bool:
+        allowed_fields = {"name", "mode", "status", "metadata"}
+        updates: list[str] = []
+        params: list[Any] = []
+        for key, value in fields.items():
+            if key not in allowed_fields:
+                continue
+            if key == "mode" and value not in ("family", "institutional"):
+                raise ValueError(f"Invalid household mode: {value}")
+            if key == "metadata":
+                value = json.dumps(value) if value is not None else None
+            updates.append(f"{key} = ?")
+            params.append(value)
+        if not updates:
+            return False
+        updates.append("updated_at = ?")
+        params.append(_utcnow_iso())
+        params.append(draft_id)
+        with self._lock:
+            conn = self._connect()
+            try:
+                result = conn.execute(
+                    f"UPDATE guardian_household_drafts SET {', '.join(updates)} WHERE id = ?",  # nosec B608
+                    params,
+                )
+                return (result.rowcount or 0) > 0
+            finally:
+                conn.close()
+
+    def add_household_member_draft(
+        self,
+        household_draft_id: str,
+        role: str,
+        display_name: str,
+        user_id: str | None = None,
+        email: str | None = None,
+        invite_required: bool = True,
+        invite_status: str = "pending",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        if role not in ("guardian", "dependent", "caregiver"):
+            raise ValueError(f"Invalid member role: {role}")
+        now = _utcnow_iso()
+        member_id = _new_id()
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """INSERT INTO guardian_household_member_drafts
+                    (id, household_draft_id, role, display_name, user_id, email,
+                     invite_required, invite_status, metadata, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        member_id,
+                        household_draft_id,
+                        role,
+                        display_name,
+                        str(user_id) if user_id else None,
+                        email,
+                        int(invite_required),
+                        invite_status,
+                        json.dumps(metadata) if metadata else None,
+                        now,
+                        now,
+                    ),
+                )
+                return member_id
+            finally:
+                conn.close()
+
+    def remove_household_member_draft(self, member_id: str) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                result = conn.execute(
+                    "DELETE FROM guardian_household_member_drafts WHERE id = ?",
+                    (member_id,),
+                )
+                return (result.rowcount or 0) > 0
+            finally:
+                conn.close()
+
+    def list_household_member_drafts(self, household_draft_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """SELECT * FROM guardian_household_member_drafts
+                       WHERE household_draft_id = ?
+                       ORDER BY created_at ASC""",
+                    (household_draft_id,),
+                ).fetchall()
+                return [
+                    {
+                        "id": row["id"],
+                        "household_draft_id": row["household_draft_id"],
+                        "role": row["role"],
+                        "display_name": row["display_name"],
+                        "user_id": row["user_id"],
+                        "email": row["email"],
+                        "invite_required": bool(row["invite_required"]),
+                        "invite_status": row["invite_status"],
+                        "metadata": self._loads_json_or_default(row["metadata"], None),
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                    }
+                    for row in rows
+                ]
+            finally:
+                conn.close()
+
+    def create_relationship_draft(
+        self,
+        household_draft_id: str,
+        guardian_member_draft_id: str,
+        dependent_member_draft_id: str,
+        relationship_type: str = "parent",
+        dependent_visible: bool = True,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        if relationship_type not in ("parent", "legal_guardian", "institutional"):
+            raise ValueError(f"Invalid relationship_type: {relationship_type}")
+        now = _utcnow_iso()
+        relationship_draft_id = _new_id()
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """INSERT INTO guardian_relationship_drafts
+                    (id, household_draft_id, guardian_member_draft_id, dependent_member_draft_id,
+                     relationship_type, dependent_visible, status, relationship_id,
+                     metadata, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, ?)""",
+                    (
+                        relationship_draft_id,
+                        household_draft_id,
+                        guardian_member_draft_id,
+                        dependent_member_draft_id,
+                        relationship_type,
+                        int(dependent_visible),
+                        json.dumps(metadata) if metadata else None,
+                        now,
+                        now,
+                    ),
+                )
+                return relationship_draft_id
+            except sqlite3.IntegrityError as e:
+                raise ValueError(
+                    "Relationship draft already exists for this guardian/dependent pair"
+                ) from e
+            finally:
+                conn.close()
+
+    def list_relationship_drafts(self, household_draft_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """SELECT * FROM guardian_relationship_drafts
+                       WHERE household_draft_id = ?
+                       ORDER BY created_at ASC""",
+                    (household_draft_id,),
+                ).fetchall()
+                return [
+                    {
+                        "id": row["id"],
+                        "household_draft_id": row["household_draft_id"],
+                        "guardian_member_draft_id": row["guardian_member_draft_id"],
+                        "dependent_member_draft_id": row["dependent_member_draft_id"],
+                        "relationship_type": row["relationship_type"],
+                        "dependent_visible": bool(row["dependent_visible"]),
+                        "status": row["status"],
+                        "relationship_id": row["relationship_id"],
+                        "metadata": self._loads_json_or_default(row["metadata"], None),
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                    }
+                    for row in rows
+                ]
+            finally:
+                conn.close()
+
+    def create_guardrail_plan_draft(
+        self,
+        household_draft_id: str,
+        dependent_user_id: str,
+        relationship_draft_id: str,
+        template_id: str,
+        overrides: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        if not template_id:
+            raise ValueError("template_id is required")
+        now = _utcnow_iso()
+        plan_id = _new_id()
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """INSERT INTO guardian_guardrail_plan_drafts
+                    (id, household_draft_id, dependent_user_id, relationship_draft_id,
+                     template_id, overrides, status, materialized_policy_id, failure_reason,
+                     metadata, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, ?, ?, ?)""",
+                    (
+                        plan_id,
+                        household_draft_id,
+                        str(dependent_user_id),
+                        relationship_draft_id,
+                        template_id,
+                        json.dumps(overrides or {}),
+                        json.dumps(metadata) if metadata else None,
+                        now,
+                        now,
+                    ),
+                )
+                return plan_id
+            finally:
+                conn.close()
+
+    def list_guardrail_plan_drafts(
+        self,
+        household_draft_id: str,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                if status:
+                    rows = conn.execute(
+                        """SELECT * FROM guardian_guardrail_plan_drafts
+                           WHERE household_draft_id = ? AND status = ?
+                           ORDER BY created_at ASC""",
+                        (household_draft_id, status),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """SELECT * FROM guardian_guardrail_plan_drafts
+                           WHERE household_draft_id = ?
+                           ORDER BY created_at ASC""",
+                        (household_draft_id,),
+                    ).fetchall()
+                return [
+                    {
+                        "id": row["id"],
+                        "household_draft_id": row["household_draft_id"],
+                        "dependent_user_id": row["dependent_user_id"],
+                        "relationship_draft_id": row["relationship_draft_id"],
+                        "template_id": row["template_id"],
+                        "overrides": self._loads_json_or_default(row["overrides"], {}),
+                        "status": row["status"],
+                        "materialized_policy_id": row["materialized_policy_id"],
+                        "failure_reason": row["failure_reason"],
+                        "metadata": self._loads_json_or_default(row["metadata"], None),
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                    }
+                    for row in rows
+                ]
+            finally:
+                conn.close()
+
+    def list_pending_plans_for_relationship_draft(
+        self,
+        relationship_draft_id: str,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """SELECT * FROM guardian_guardrail_plan_drafts
+                       WHERE relationship_draft_id = ? AND status = 'queued'
+                       ORDER BY created_at ASC""",
+                    (relationship_draft_id,),
+                ).fetchall()
+                return [
+                    {
+                        "id": row["id"],
+                        "household_draft_id": row["household_draft_id"],
+                        "dependent_user_id": row["dependent_user_id"],
+                        "relationship_draft_id": row["relationship_draft_id"],
+                        "template_id": row["template_id"],
+                        "overrides": self._loads_json_or_default(row["overrides"], {}),
+                        "status": row["status"],
+                        "materialized_policy_id": row["materialized_policy_id"],
+                        "failure_reason": row["failure_reason"],
+                        "metadata": self._loads_json_or_default(row["metadata"], None),
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                    }
+                    for row in rows
+                ]
+            finally:
+                conn.close()
+
+    def update_guardrail_plan_draft_status(
+        self,
+        plan_draft_id: str,
+        status: str,
+        materialized_policy_id: str | None = None,
+        failure_reason: str | None = None,
+    ) -> bool:
+        if status not in ("queued", "active", "failed"):
+            raise ValueError(f"Invalid plan status: {status}")
+        with self._lock:
+            conn = self._connect()
+            try:
+                result = conn.execute(
+                    """UPDATE guardian_guardrail_plan_drafts
+                       SET status = ?,
+                           materialized_policy_id = ?,
+                           failure_reason = ?,
+                           updated_at = ?
+                       WHERE id = ?""",
+                    (
+                        status,
+                        materialized_policy_id,
+                        failure_reason,
+                        _utcnow_iso(),
+                        plan_draft_id,
+                    ),
+                )
+                return (result.rowcount or 0) > 0
+            finally:
+                conn.close()
+
+    def record_activation_run(
+        self,
+        household_draft_id: str,
+        relationship_id: str | None,
+        dependent_user_id: str | None,
+        plan_draft_id: str | None,
+        status: str,
+        detail: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        if status not in ("queued", "active", "failed"):
+            raise ValueError(f"Invalid activation status: {status}")
+        run_id = _new_id()
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """INSERT INTO guardian_activation_runs
+                    (id, household_draft_id, relationship_id, dependent_user_id, plan_draft_id,
+                     status, detail, metadata, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        run_id,
+                        household_draft_id,
+                        relationship_id,
+                        str(dependent_user_id) if dependent_user_id else None,
+                        plan_draft_id,
+                        status,
+                        detail,
+                        json.dumps(metadata) if metadata else None,
+                        _utcnow_iso(),
+                    ),
+                )
+                return run_id
+            finally:
+                conn.close()
+
+    def list_activation_runs(
+        self,
+        household_draft_id: str,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """SELECT * FROM guardian_activation_runs
+                       WHERE household_draft_id = ?
+                       ORDER BY created_at DESC
+                       LIMIT ?""",
+                    (household_draft_id, int(limit)),
+                ).fetchall()
+                return [
+                    {
+                        "id": row["id"],
+                        "household_draft_id": row["household_draft_id"],
+                        "relationship_id": row["relationship_id"],
+                        "dependent_user_id": row["dependent_user_id"],
+                        "plan_draft_id": row["plan_draft_id"],
+                        "status": row["status"],
+                        "detail": row["detail"],
+                        "metadata": self._loads_json_or_default(row["metadata"], None),
+                        "created_at": row["created_at"],
+                    }
+                    for row in rows
+                ]
             finally:
                 conn.close()
 
