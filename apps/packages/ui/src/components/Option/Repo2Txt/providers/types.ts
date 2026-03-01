@@ -23,6 +23,7 @@ export type RepoTreeNode = {
   path: string
   type: "blob" | "tree"
   url?: string
+  urlType?: "api" | "directory" | "zip"
   size?: number
   sha?: string
 }
