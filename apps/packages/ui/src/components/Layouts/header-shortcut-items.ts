@@ -33,7 +33,7 @@ import {
   Zap
 } from "lucide-react"
 import type { HeaderShortcutId } from "@/services/settings/ui-settings"
-import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
+import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
 
 export type HeaderShortcutItem = {
   id: HeaderShortcutId
@@ -142,6 +142,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: FileSearch,
         labelKey: "option:header.documentWorkspace",
         labelDefault: "Document Workspace"
+      },
+      {
+        id: "repo2txt",
+        to: REPO2TXT_PATH,
+        icon: FileText,
+        labelKey: "option:repo2txt.nav",
+        labelDefault: "Repo2Txt"
       },
       {
         id: "evaluations",
