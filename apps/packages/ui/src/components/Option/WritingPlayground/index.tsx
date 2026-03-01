@@ -6250,13 +6250,51 @@ export const WritingPlayground = () => {
                                       "option:writingPlayground.promptChunksEmpty",
                                       "No chunks yet."
                                     )}
-                                  </span>
-                                ) : null}
-                              </div>
-                            )
-                        }
-                      ]}
-                    />
+                                  </Paragraph>
+                                ) : (
+                                  <div className="flex flex-col gap-2">
+                                    {promptChunkData.chunks.map((chunk) => (
+                                      <div
+                                        key={chunk.key}
+                                        className="flex flex-col gap-1 rounded-md border border-border bg-surface p-2">
+                                        <Tag
+                                          className="mr-auto"
+                                          color={
+                                            chunk.type === "placeholder"
+                                              ? "gold"
+                                              : "default"
+                                          }>
+                                          {chunk.type === "placeholder"
+                                            ? t(
+                                                "option:writingPlayground.chunkPlaceholder",
+                                                "Placeholder"
+                                              )
+                                            : t(
+                                                "option:writingPlayground.chunkText",
+                                                "Text"
+                                              )}
+                                        </Tag>
+                                        <pre className="m-0 whitespace-pre-wrap break-words font-mono text-xs text-text">
+                                          {chunk.label}
+                                        </pre>
+                                      </div>
+                                    ))}
+                                    {promptChunkData.truncated ? (
+                                      <Paragraph type="secondary" className="!mb-0">
+                                        {t(
+                                          "option:writingPlayground.promptChunksTruncated",
+                                          "Showing first {{count}} chunks.",
+                                          { count: promptChunkData.chunks.length }
+                                        )}
+                                      </Paragraph>
+                                    ) : null}
+                                  </div>
+                                )
+                            }
+                          ]}
+                        />
+                      </div>
+                    ) : null}
                   </div>
                 )
               ) : (

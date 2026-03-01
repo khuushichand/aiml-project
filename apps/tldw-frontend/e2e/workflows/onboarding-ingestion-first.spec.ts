@@ -170,10 +170,6 @@ async function openOnboardingSuccessScreen(
   return needsConnect ? "connected-now" : "already-connected"
 }
 
-async function ensureOnboardingSuccessScreen(page: Page): Promise<void> {
-  await openOnboardingSuccessScreen(page)
-}
-
 async function clickOnboardingCtaAndExpectRoute(
   page: Page,
   ctaTestId: string,
@@ -235,7 +231,6 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       })
 
       const initialConnectState = await openOnboardingSuccessScreen(authedPage)
-      await ensureOnboardingSuccessScreen(authedPage)
       await captureStep(
         authedPage,
         evidenceRows,
@@ -309,7 +304,6 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       )
 
       await openOnboardingSuccessScreen(authedPage)
-      await ensureOnboardingSuccessScreen(authedPage)
 
       await authedPage
         .getByTestId("onboarding-success-ingest")
@@ -336,7 +330,9 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       }
       await expect(quickIngestDialog).toBeHidden({ timeout: 10_000 })
 
-      await ensureOnboardingSuccessScreen(authedPage)
+      await expect(
+        authedPage.getByTestId("onboarding-success-screen")
+      ).toBeVisible({ timeout: 20_000 })
 
       await authedPage.evaluate(() => {
         try {
@@ -346,12 +342,11 @@ test.describe("Onboarding Ingestion-First Journey", () => {
         }
       })
 
-      await authedPage
-        .getByTestId("onboarding-success-chat")
-        .evaluate((el: HTMLElement) => el.click())
-      await expect(authedPage).toHaveURL(/\/chat(?:[/?#].*)?$/, {
-        timeout: 20_000,
-      })
+      await clickOnboardingCtaAndExpectRoute(
+        authedPage,
+        "onboarding-success-chat",
+        /\/chat(?:[/?#].*)?$/
+      )
       await expect(authedPage.getByTestId("chat-input")).toBeVisible({
         timeout: 15_000,
       })
