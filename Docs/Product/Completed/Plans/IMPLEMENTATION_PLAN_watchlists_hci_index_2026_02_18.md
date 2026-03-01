@@ -2,7 +2,9 @@
 
 ## Source Audit
 
-Primary audit document: `Docs/Design/UX_HCI_AUDIT_WATCHLISTS_2026_02_18.md`  
+Primary audit artifacts:
+- `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_watchlists_hci_index_2026_02_18.md`
+- `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_watchlists_hci_findings_remediation_2026_02_19.md`  
 Audit date: `2026-02-18`  
 Route scope: `/watchlists` (Sources, Jobs, Runs, Items, Outputs, Templates, Settings)
 
