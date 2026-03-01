@@ -3,6 +3,11 @@
 This guide helps first-time users set up and test speech features with tldw_server.
 It covers quick paths for both cloud-hosted and local backends, plus verification steps and troubleshooting.
 
+Scope:
+- Use this guide for first successful STT + TTS requests end-to-end.
+- Use [TTS Providers Getting Started](./TTS_Getting_Started.md) to compare providers and setup paths.
+- Use [TTS Provider Setup Guide](./TTS-SETUP-GUIDE.md) for deep provider runbooks and tuning.
+
 See design doc: [`Docs/Design/STT_TTS_Audio_API_Design.md`](../../Design/STT_TTS_Audio_API_Design.md) for architecture details, provider priority/retry behavior, auth mode behavior, storage header semantics, and streaming protocol/error handling.
 
 ## TL;DR Choices

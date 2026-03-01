@@ -5,7 +5,7 @@ This guide helps new operators bring text-to-speech (TTS) online inside `tldw_se
 Scope:
 - Use this page for provider selection and first successful synthesis.
 - Use [Getting Started — STT and TTS](./Getting-Started-STT_and_TTS.md) for quick dual STT+TTS bring-up.
-- Use `Docs/STT-TTS/*` runbooks for deep provider-specific tuning and troubleshooting.
+- Use [TTS Provider Setup Guide](./TTS-SETUP-GUIDE.md) to jump to deep provider runbooks and tuning docs.
 
 ## YAML Quick Start
 
