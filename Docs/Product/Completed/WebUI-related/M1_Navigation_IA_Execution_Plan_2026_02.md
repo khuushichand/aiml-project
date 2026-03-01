@@ -66,11 +66,11 @@ Deliverables:
 - Naming policy for path slugs and route labels.
 
 Tracking checklist:
-- [x] Export current canonical routes from `route-registry.tsx` (captured in `Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md`).
-- [x] Enumerate all alias pages and redirect targets from `pages/` (captured in `Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md`).
-- [x] Confirm canonical-vs-legacy treatment for each route in `page-inventory.ts` (documented in `Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md`).
-- [x] Publish route inventory doc under `Docs/Product/WebUI/` (`Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md`).
-- [x] Add changelog section to track route migrations (`Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md`).
+- [x] Export current canonical routes from `route-registry.tsx` (captured in `Docs/Product/Completed/WebUI-related/M1_1_Canonical_Route_Inventory_2026_02.md`).
+- [x] Enumerate all alias pages and redirect targets from `pages/` (captured in `Docs/Product/Completed/WebUI-related/M1_1_Canonical_Route_Inventory_2026_02.md`).
+- [x] Confirm canonical-vs-legacy treatment for each route in `page-inventory.ts` (documented in `Docs/Product/Completed/WebUI-related/M1_1_Canonical_Route_Inventory_2026_02.md`).
+- [x] Publish route inventory doc under `Docs/Product/WebUI/` (`Docs/Product/Completed/WebUI-related/M1_1_Canonical_Route_Inventory_2026_02.md`).
+- [x] Add changelog section to track route migrations (`Docs/Product/Completed/WebUI-related/M1_1_Canonical_Route_Inventory_2026_02.md`).
 
 Acceptance criteria:
 - Every user-facing route has one canonical destination.
@@ -93,7 +93,7 @@ Deliverables:
 - Translation token cleanup plan for renamed labels.
 
 Tracking checklist:
-- [x] Build cross-surface label matrix for sidebar/header/command/settings (`Docs/Product/WebUI/M1_2_Navigation_Terminology_Triage_2026_02.md`).
+- [x] Build cross-surface label matrix for sidebar/header/command/settings (`Docs/Product/Completed/WebUI-related/M1_2_Navigation_Terminology_Triage_2026_02.md`).
 - [x] Resolve conflicting labels for identical routes.
 - [x] Standardize one preferred term per destination and update components.
 - [x] Validate keyboard shortcut hints match actual behavior (`apps/packages/ui/src/components/Common/__tests__/CommandPalette.shortcuts.test.tsx`).
@@ -107,7 +107,7 @@ Progress update (February 13, 2026):
 - Added command palette shortcut-hint alignment so pills derive from actual configured/bound shortcuts.
 - Verified closeout via focused smoke (`10 passed`, key-nav + wayfinding), full smoke (`150 passed`), and command palette shortcut unit test (`1 passed`).
 - Captured post-change desktop/mobile evidence screenshots under `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/`.
-- Product sign-off recorded for canonical vocabulary in `Docs/Product/WebUI/M1_2_Navigation_Terminology_Triage_2026_02.md`.
+- Product sign-off recorded for canonical vocabulary in `Docs/Product/Completed/WebUI-related/M1_2_Navigation_Terminology_Triage_2026_02.md`.
 
 Acceptance criteria:
 - Same destination has same primary label across all major nav entry points.
@@ -124,7 +124,7 @@ Primary files:
 - `apps/tldw-frontend/components/navigation/RouteRedirect.tsx`
 - `apps/tldw-frontend/pages/404.tsx`
 - `apps/packages/ui/src/components/Layouts/Layout.tsx` (shell-level consistency)
-- `Docs/Product/WebUI/M1_3_Wayfinding_Manual_QA_Script_2026_02.md`
+- `Docs/Product/Completed/WebUI-related/M1_3_Wayfinding_Manual_QA_Script_2026_02.md`
 
 Deliverables:
 - Clear "you are here" affordances in settings and key workspace sections.
@@ -137,7 +137,7 @@ Tracking checklist:
 - [x] Ensure 404 recovery provides primary and secondary pathways (`apps/tldw-frontend/pages/404.tsx`).
 - [x] Add shell-level unknown-route recovery fallback to avoid header-only blank states (`apps/packages/ui/src/routes/app-route.tsx`, `apps/tldw-frontend/extension/routes/app-route.tsx`).
 - [x] Validate focus order and keyboard operation for nav/redirect/recovery controls (`apps/packages/ui/src/components/Layouts/__tests__/settings-layout-focus-order.test.tsx`, `apps/tldw-frontend/__tests__/navigation/route-redirect-component.test.tsx`, `apps/tldw-frontend/__tests__/navigation/not-found-page.test.tsx`).
-- [x] Add route-wayfinding scenarios to smoke and manual QA scripts (`apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`, `Docs/Product/WebUI/M1_3_Wayfinding_Manual_QA_Script_2026_02.md`).
+- [x] Add route-wayfinding scenarios to smoke and manual QA scripts (`apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`, `Docs/Product/Completed/WebUI-related/M1_3_Wayfinding_Manual_QA_Script_2026_02.md`).
 
 Progress update (February 13, 2026):
 - Added explicit active-route matching for nested settings paths, visible current-section indicator, and stronger active-state affordances in settings navigation.
@@ -175,9 +175,9 @@ Tracking checklist:
 - [x] Add weekly rollup helper for alias-source/destination trends (`apps/packages/ui/src/utils/route-alias-telemetry.ts`, `apps/packages/ui/src/utils/__tests__/route-alias-telemetry.test.ts`).
 - [x] Expand smoke checks to assert key nav targets are reachable (`apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`).
 - [x] Add runtime-overlay regression guard to smoke for syntax/runtime crash signatures (`apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`).
-- [x] Capture first weekly alias telemetry rollup (`getRouteAliasTelemetryRollup({ topN: 10 })`) and append to M1.4 snapshot (`Docs/Product/WebUI/M1_4_Route_Health_Snapshot_2026_02_12.md`).
+- [x] Capture first weekly alias telemetry rollup (`getRouteAliasTelemetryRollup({ topN: 10 })`) and append to M1.4 snapshot (`Docs/Product/Completed/WebUI-related/M1_4_Route_Health_Snapshot_2026_02_12.md`).
 - [x] Capture controlled non-zero Week 2 alias telemetry sample via Playwright and persist JSON artifact (`apps/tldw-frontend/e2e/smoke/alias-rollup-capture.spec.ts`, `Docs/Product/WebUI/M1_4_Alias_Rollup_Week2_Controlled_2026_02_13.json`).
-- [x] Publish weekly route health snapshot (`Docs/Product/WebUI/M1_4_Route_Health_Snapshot_2026_02_12.md`).
+- [x] Publish weekly route health snapshot (`Docs/Product/Completed/WebUI-related/M1_4_Route_Health_Snapshot_2026_02_12.md`).
 
 Progress update (February 13, 2026):
 - Added M2-prep route-level boundary contract and applied shared route boundaries across key nav targets (`chat`, `media`, `knowledge`, `notes`, `prompts`, `settings`), then reran focused key-nav + wayfinding smoke (`10 passed`).
@@ -225,8 +225,8 @@ Acceptance criteria:
 ## M1.4 Deprecation Candidates (Prioritized for M2+)
 
 Prioritization inputs:
-- Alias inventory: `Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md`
-- Alias rollups: `Docs/Product/WebUI/M1_4_Route_Health_Snapshot_2026_02_12.md`
+- Alias inventory: `Docs/Product/Completed/WebUI-related/M1_1_Canonical_Route_Inventory_2026_02.md`
+- Alias rollups: `Docs/Product/Completed/WebUI-related/M1_4_Route_Health_Snapshot_2026_02_12.md`
 - Consolidation leverage (families that can be reduced together)
 
 Threshold policy for safe alias retirement:

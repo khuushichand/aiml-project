@@ -5,19 +5,19 @@
 Provide one control plan to oversee implementation sequencing, quality gates, and release readiness for UX Audit v2 remediation plans.
 
 In-scope plan sequence:
-1. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_stage1_route_matrix_baseline_v2.md`
-2. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_settings_pages_v2.md`
+1. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_stage1_route_matrix_baseline_v2.md`
+2. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_settings_pages_v2.md`
 3. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_admin_pages_v2.md`
-4. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_chat_pages_v2.md`
-5. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_audio_speech_pages_v2.md`
-6. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_workspace_playground_pages_v2.md`
-7. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_media_knowledge_pages_v2.md`
-8. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_core_pages_v2.md`
-9. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_interaction_tests_v2.md`
+4. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_chat_pages_v2.md`
+5. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_audio_speech_pages_v2.md`
+6. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_workspace_playground_pages_v2.md`
+7. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_media_knowledge_pages_v2.md`
+8. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_core_pages_v2.md`
+9. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_interaction_tests_v2.md`
 
 Already complete and tracked as closed dependencies:
-- `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_reactmarkdown_defaultprops_warning_remediation_2026_02_16.md`
-- `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_circuit_breaker_distributed_semantics_admin_endpoint_2026_02_16.md`
+- `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_reactmarkdown_defaultprops_warning_remediation_2026_02_16.md`
+- `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_circuit_breaker_distributed_semantics_admin_endpoint_2026_02_16.md`
 
 ## Oversight Model
 

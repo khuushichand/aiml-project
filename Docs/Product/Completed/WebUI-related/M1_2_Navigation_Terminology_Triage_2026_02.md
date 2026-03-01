@@ -4,8 +4,8 @@ Status: Complete (Engineering Closeout)
 Owner: WebUI + Product  
 Milestone: M1.2 (February 18-February 24, 2026)  
 Last Updated: February 13, 2026  
-Related: `Docs/Product/WebUI/M1_Navigation_IA_Execution_Plan_2026_02.md`  
-Related: `Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md`
+Related: `Docs/Product/Completed/WebUI-related/M1_Navigation_IA_Execution_Plan_2026_02.md`  
+Related: `Docs/Product/Completed/WebUI-related/M1_1_Canonical_Route_Inventory_2026_02.md`
 
 ## Purpose
 
