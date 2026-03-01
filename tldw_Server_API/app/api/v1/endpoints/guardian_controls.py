@@ -41,6 +41,9 @@ from tldw_Server_API.app.api.v1.schemas.guardian_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Guardian_DB import GuardianDB
+from tldw_Server_API.app.core.Moderation.family_wizard_materializer import (
+    materialize_pending_plans_for_relationship,
+)
 
 router = APIRouter()
 
@@ -173,11 +176,20 @@ def accept_relationship(
     ok = db.accept_relationship(relationship_id)
     if not ok:
         raise HTTPException(status_code=400, detail="Cannot accept (may already be active or dissolved)")
+    materialization_result = materialize_pending_plans_for_relationship(
+        db=db,
+        relationship_id=relationship_id,
+        actor_user_id=_user_id(user),
+    )
     db.log_action(
         relationship_id=relationship_id,
         actor_user_id=_user_id(user),
         action="relationship_accepted",
-        detail="consent_given",
+        detail=(
+            "consent_given "
+            f"materialized={materialization_result['materialized_count']} "
+            f"failed={materialization_result['failed_count']}"
+        ),
     )
     return DetailResponse(detail="Relationship accepted")
 
