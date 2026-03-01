@@ -1209,6 +1209,7 @@ async def unified_rag_pipeline(
     # ========== MEDIA SEARCH ==========
     enable_image_search: bool = False,
     enable_video_search: bool = False,
+    rag_profile: Optional[Literal["fast", "balanced", "accuracy"]] = None,
 
     # ========== ADDITIONAL PARAMETERS ==========
     **kwargs: Any
@@ -1357,6 +1358,41 @@ async def unified_rag_pipeline(
             result.metadata.update(inbound_meta)
     except TypeError:
         pass
+
+    def _ensure_profile_resolution_metadata() -> dict[str, Any]:
+        profile_resolution = result.metadata.get("profile_resolution")
+        if not isinstance(profile_resolution, dict):
+            profile_resolution = {}
+        profile_resolution.setdefault("requested_profile", rag_profile)
+        profile_resolution.setdefault("applied_profile", rag_profile)
+        profile_resolution.setdefault("effective_overrides_count", 0)
+        if not isinstance(profile_resolution.get("degraded_features"), list):
+            profile_resolution["degraded_features"] = []
+        result.metadata["profile_resolution"] = profile_resolution
+        return profile_resolution
+
+    def _record_profile_degradation(
+        *,
+        component: str,
+        from_value: str,
+        to_value: str,
+        reason: str,
+    ) -> None:
+        profile_resolution = _ensure_profile_resolution_metadata()
+        degraded_features = profile_resolution.get("degraded_features")
+        if not isinstance(degraded_features, list):
+            degraded_features = []
+            profile_resolution["degraded_features"] = degraded_features
+        degraded_features.append(
+            {
+                "component": component,
+                "from": from_value,
+                "to": to_value,
+                "reason": reason,
+            }
+        )
+
+    _ensure_profile_resolution_metadata()
 
     cache_instance = None
     cache_max_size = 1000
@@ -3930,6 +3966,17 @@ async def unified_rag_pipeline(
         # ========== RERANKING ==========
         if enable_reranking and result.documents and reranking_strategy != "none":
             rerank_start = time.time()
+            if (
+                reranking_strategy == "two_tier"
+                and not (create_reranker and RerankingStrategy and RerankingConfig)
+            ):
+                _record_profile_degradation(
+                    component="reranking_strategy",
+                    from_value="two_tier",
+                    to_value="hybrid",
+                    reason="unavailable_dependency",
+                )
+                reranking_strategy = "hybrid"
             try:
                 # --- OTEL: reranking span ---
                 _otel_cm_rk = None
@@ -4027,8 +4074,29 @@ async def unified_rag_pipeline(
                         min_relevance_prob=rerank_min_relevance_prob,
                         sentinel_margin=rerank_sentinel_margin,
                     )
-                    reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
-                    reranked = await _resilient_call("reranking", reranker.rerank, query, result.documents)
+                    try:
+                        reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
+                        reranked = await _resilient_call("reranking", reranker.rerank, query, result.documents)
+                    except Exception:
+                        if reranking_strategy != "two_tier":
+                            raise
+                        _record_profile_degradation(
+                            component="reranking_strategy",
+                            from_value="two_tier",
+                            to_value="hybrid",
+                            reason="runtime_failure",
+                        )
+                        reranking_strategy = "hybrid"
+                        selected_strategy = RerankingStrategy.HYBRID
+                        rerank_config = RerankingConfig(
+                            strategy=selected_strategy,
+                            top_k=rerank_top_k or top_k,
+                            model_name=None,
+                            min_relevance_prob=rerank_min_relevance_prob,
+                            sentinel_margin=rerank_sentinel_margin,
+                        )
+                        reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
+                        reranked = await _resilient_call("reranking", reranker.rerank, query, result.documents)
                     if reranked and hasattr(reranked[0], 'document'):
                         result.documents = [sd.document for sd in reranked[:(rerank_top_k or top_k)]]
                     else:
