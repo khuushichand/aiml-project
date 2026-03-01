@@ -2,6 +2,7 @@
 
 Status: Implemented
 Last verified against code: 2026-02-22
+Last verified commit: `915632a97ad41dc7712101612113928dbea6b358`
 
 ## Purpose and scope
 

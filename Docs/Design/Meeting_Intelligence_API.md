@@ -5,7 +5,7 @@ Design metadata:
 - `moved_to_docs_design`: 2026-02-24
 - `original_location`: `Docs/API-related/Meeting_Intelligence_API.md`
 
-Meeting Intelligence v1 is exposed under ` /api/v1/meetings ` and provides:
+Meeting Intelligence v1 is exposed under `/api/v1/meetings` and provides:
 - Meeting sessions, templates, and artifacts CRUD.
 - Finalization from transcript text to summary/action artifacts.
 - Live updates via SSE and WebSocket.

@@ -9,7 +9,6 @@ https://github.com/anthropics/skills
 https://github.com/squirrelscan/skills
 https://github.com/nextlevelbuilder/ui-ux-pro-max-skill
 https://github.com/callstackincubator/agent-skills
-https://github.com/anthropics/skills
 https://github.com/softaworks/agent-toolkit
 https://github.com/shanraisshan/claude-code-best-practice/blob/main/reports/claude-skills-for-larger-mono-repos.md
 https://github.com/hesreallyhim/awesome-claude-code?tab=readme-ov-file#workflows--knowledge-guides-
@@ -47,7 +46,6 @@ https://www.distillabs.ai/blog/small-expert-agents-from-10-examples?utm_source=g
 https://github.com/kitlangton/Hex
 https://happy.engineering/
 https://yepanywhere.com/subscription-access-approaches.html
-https://github.com/9cb14c1ec0/vibe-manager
 https://github.com/ryoiki-tokuiten/Iterative-Contextual-Refinements
 https://github.com/obra/superpowers
 
@@ -60,7 +58,6 @@ https://openclawsoul.org/openclaw-soul-community.html
 https://github.com/kesslerio/soulcraft-openclaw-skill
 https://docs.openclaw.ai/reference/templates/IDENTITY
 
-https://mariozechner.at/posts/2025-11-30-pi-coding-agent/
 https://github.com/mitsuhiko/agent-stuff/blob/main/pi-extensions/todos.ts
 https://github.com/nicobailon/pi-mcp-adapter
 https://github.com/steipete/mcporter
@@ -74,6 +71,5 @@ https://github.com/backbay-labs/clawdstrike?utm_source=substack&utm_medium=email
 https://gist.github.com/wong2/e0f34aac66caf890a332f7b6f9e2ba8f#todoread
 https://ampcode.com/how-to-build-an-agent
 https://github.com/badlogic/lemmy/tree/main/apps/claude-trace
-
 
 
