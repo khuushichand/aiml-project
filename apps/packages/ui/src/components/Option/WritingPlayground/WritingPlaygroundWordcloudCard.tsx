@@ -2,6 +2,8 @@ import type { FC } from "react"
 import { Alert, Button, Tag } from "antd"
 import type { WordcloudCardProps } from "./WritingPlaygroundDiagnostics.types"
 
+const MAX_WORDCLOUD_WORDS_TO_DISPLAY = 12
+
 export const WritingPlaygroundWordcloudCard: FC<WordcloudCardProps> = ({
   t,
   wordcloudStatus,
@@ -43,7 +45,7 @@ export const WritingPlaygroundWordcloudCard: FC<WordcloudCardProps> = ({
     {wordcloudWords.length > 0 ? (
       <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-background px-2 py-1">
         <div className="flex flex-col gap-1 text-xs">
-          {wordcloudWords.slice(0, 12).map((word) => (
+          {wordcloudWords.slice(0, MAX_WORDCLOUD_WORDS_TO_DISPLAY).map((word) => (
             <div
               key={`${word.text}-${word.weight}`}
               className="flex items-center justify-between gap-2">

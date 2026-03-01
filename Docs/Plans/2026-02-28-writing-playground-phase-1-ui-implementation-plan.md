@@ -25,7 +25,7 @@
 **Tests**:
 - `bunx vitest run ../packages/ui/src/components/Option/WritingPlayground/__tests__/WritingPlayground.phase1-baseline.test.tsx ../packages/ui/src/components/Option/WritingPlayground/__tests__/WritingPlayground.inspector-tabs.test.tsx ../packages/ui/src/components/Option/WritingPlayground/__tests__/writing-diagnostics-utils.test.ts --reporter=verbose`
 - `bunx vitest run ../packages/ui/src/components/Option/WritingPlayground/__tests__`
- - `bunx playwright test tests/e2e/writing-playground-themes-templates.spec.ts --grep "navigates inspector tabs and preserves editor content" --reporter=line` (may skip without real-server env vars)
+- `bunx playwright test tests/e2e/writing-playground-themes-templates.spec.ts --grep "navigates inspector tabs and preserves editor content" --reporter=line` (may skip without real-server env vars)
 **Status**: Complete
 
 ### Completed in this stage
