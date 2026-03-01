@@ -13,7 +13,7 @@ from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmar
 from tldw_Server_API.app.core.Evaluations.benchmark_registry import BenchmarkConfig, get_registry
 from tldw_Server_API.app.core.Evaluations.benchmark_utils import format_benchmark_summary
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
-from tldw_Server_API.cli.utils.async_runner import run_async
+from tldw_Server_API.cli.utils.async_runner import run_async_safely
 from tldw_Server_API.cli.utils.output import (
     print_error,
     print_info,
@@ -110,7 +110,7 @@ def benchmark_info(ctx, benchmark_name):
 @click.argument('benchmark_name')
 @click.option('--model', '-m', help='Model/API to use for evaluation')
 @click.option('--api-key', help='API key for the model')
-@click.option('--limit', '-l', type=int, help='Limit number of samples to evaluate')
+@click.option('--limit', '-l', type=click.IntRange(min=1), help='Limit number of samples to evaluate')
 @click.option('--output', '-o', type=click.Path(), help='Output file for results')
 @click.option('--resume-from', type=click.Path(exists=True), help='Resume from previous results')
 @click.option('--parallel', '-p', type=int, default=4, help='Number of parallel workers')
@@ -187,7 +187,7 @@ def run_benchmark(ctx, benchmark_name, model, api_key, limit, output, resume_fro
             batch = remaining_dataset[i:i+batch_size]
 
             # Evaluate batch
-            batch_results = run_async(_evaluate_batch(
+            batch_results = run_async_safely(_evaluate_batch(
                 batch, evaluator, model or "openai", api_key, parallel
             ))
 
@@ -346,7 +346,8 @@ async def _evaluate_batch(batch: list[dict[str, Any]], evaluator,
             evaluation_prompt=eval_data['evaluation_prompt'],
             input_data=eval_data['input_data'],
             scoring_criteria=eval_data['scoring_criteria'],
-            api_name=model
+            api_name=model,
+            api_key=api_key,
         )
         tasks.append(task)
 

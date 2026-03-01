@@ -12,8 +12,10 @@ import {
   createSpecializedEvaluation,
   getRateLimits,
   getRun,
+  listBenchmarks,
   listRuns,
   listRunsGlobal,
+  runBenchmark,
   type CreateRunPayload,
   type EvaluationRunDetail
 } from "@/services/evaluations"
@@ -99,6 +101,13 @@ export function useRunsListGlobal(params?: {
   return useQuery({
     queryKey: ["evaluations", "runs", "global", params],
     queryFn: () => listRunsGlobal(params)
+  })
+}
+
+export function useBenchmarksCatalog() {
+  return useQuery({
+    queryKey: ["evaluations", "benchmarks"],
+    queryFn: () => listBenchmarks()
   })
 }
 
@@ -273,9 +282,43 @@ export function useAdhocEvaluation() {
   })
 }
 
+export function useRunBenchmark() {
+  const { t } = useTranslation(["evaluations", "common"])
+  const notification = useAntdNotification()
+  const setAdhocResult = useEvaluationsStore((s) => s.setAdhocResult)
+
+  return useMutation({
+    mutationFn: async (payload: {
+      benchmarkName: string
+      body: Record<string, any>
+    }) => ensureOk(await runBenchmark(payload.benchmarkName, payload.body)),
+    onSuccess: (resp: any) => {
+      setAdhocResult(resp?.data || resp)
+      notification.success({
+        message: t("evaluations:runCreateSuccessTitle", {
+          defaultValue: "Run started"
+        }),
+        description: t("evaluations:runCreateSuccessDescription", {
+          defaultValue:
+            "Your evaluation run has started. You can monitor it from the server UI."
+        })
+      })
+    },
+    onError: (error: any) => {
+      notification.error({
+        message: t("evaluations:createErrorTitle", {
+          defaultValue: "Failed to create evaluation"
+        }),
+        description: error?.message
+      })
+    }
+  })
+}
+
 // Adhoc endpoint options
 export const adhocEndpointOptions = [
   { value: "response-quality", label: "response-quality" },
+  { value: "benchmark-run", label: "benchmark-run" },
   { value: "rag", label: "rag" },
   { value: "geval", label: "geval" },
   { value: "propositions", label: "propositions" },

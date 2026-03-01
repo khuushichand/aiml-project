@@ -253,7 +253,8 @@ async def run_benchmark(
                     evaluation_prompt=eval_data['evaluation_prompt'],
                     input_data=eval_data['input_data'],
                     scoring_criteria=eval_data['scoring_criteria'],
-                    api_name=request.api_name
+                    api_name=request.api_name,
+                    api_key=request.api_key,
                 )
                 tasks.append(task)
 
