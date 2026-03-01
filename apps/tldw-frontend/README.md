@@ -57,6 +57,14 @@ bun run dev -- -p 8080
 
 Open [http://localhost:8080](http://localhost:8080) with your browser.
 
+### repo2txt Route
+
+The web app exposes the shared repo2txt options UI at:
+
+- `http://localhost:8080/repo2txt`
+
+This page dynamically renders the shared route from `apps/packages/ui/src/routes/option-repo2txt.tsx`.
+
 Unified streaming (dev)
  - To exercise the unified SSE/WS streaming in the backend, start the API with the dev overlay:
    `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build`
