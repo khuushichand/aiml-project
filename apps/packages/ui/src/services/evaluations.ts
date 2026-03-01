@@ -146,6 +146,14 @@ export type EvaluationWebhook = {
   is_active?: boolean
 }
 
+export type BenchmarkInfo = {
+  name: string
+  description?: string
+  evaluation_type?: string
+  dataset_source?: string
+  metadata?: Record<string, any>
+}
+
 const withIdempotency = (
   key?: string | null
 ): Record<string, string> | undefined => {
@@ -345,6 +353,28 @@ export async function createSpecializedEvaluation(
     path: `/api/v1/evaluations/${endpoint}` as any,
     method: "POST",
     headers: withIdempotency(options?.idempotencyKey),
+    body: payload
+  })
+}
+
+export async function listBenchmarks() {
+  return await apiSend<{
+    object?: "list"
+    data: BenchmarkInfo[]
+    total?: number
+  }>({
+    path: "/api/v1/evaluations/benchmarks" as any,
+    method: "GET"
+  })
+}
+
+export async function runBenchmark(
+  benchmarkName: string,
+  payload: Record<string, any>
+) {
+  return await apiSend({
+    path: `/api/v1/evaluations/benchmarks/${encodeURIComponent(benchmarkName)}/run` as any,
+    method: "POST",
     body: payload
   })
 }

@@ -27,12 +27,11 @@ project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+from tldw_Server_API.app.core.Evaluations.cli.benchmark_cli import benchmark_group
 from tldw_Server_API.cli.commands.config import config_group
 from tldw_Server_API.cli.commands.database import db_group
 from tldw_Server_API.cli.commands.evaluation import eval_group
 from tldw_Server_API.cli.commands.export import export_group
-
-# Import command groups
 from tldw_Server_API.cli.commands.health import health_group
 from tldw_Server_API.cli.commands.testing import test_group
 from tldw_Server_API.cli.commands.users import users_group
@@ -145,6 +144,25 @@ main.add_command(webhook_group, name='webhook')
 main.add_command(test_group, name='test')
 main.add_command(export_group, name='export')
 main.add_command(watchlists_group, name='watchlists')
+main.add_command(benchmark_group, name='benchmark')
+
+
+@main.command(name="list-benchmarks")
+@click.option("--detailed", "-d", is_flag=True, help="Show detailed information")
+@click.option(
+    "--output-format",
+    "-o",
+    type=click.Choice(["table", "json"]),
+    default="table",
+)
+@click.pass_context
+def list_benchmarks_alias(ctx, detailed, output_format):
+    """Compatibility alias for benchmark list."""
+    return ctx.invoke(
+        benchmark_group.commands["list"],
+        detailed=detailed,
+        output_format=output_format,
+    )
 
 
 @main.command()

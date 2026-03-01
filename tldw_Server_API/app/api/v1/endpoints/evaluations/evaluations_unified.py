@@ -678,10 +678,12 @@ async def get_rate_limit_status(
 
 
 from .evaluations_crud import crud_router
+from .evaluations_benchmarks import benchmarks_router
 from .evaluations_datasets import datasets_router
 from .evaluations_rag_pipeline import pipeline_router
 from .evaluations_webhooks import webhooks_router
 
+router.include_router(benchmarks_router)
 router.include_router(pipeline_router)
 router.include_router(datasets_router)
 router.include_router(webhooks_router)

@@ -15,6 +15,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.benchmark_utils import (
     BaseEvaluation,
+    BullshitDetectionEvaluation,
     CodeGenerationEvaluation,
     HonestyEvaluation,
     InstructionFollowingEvaluation,
@@ -74,6 +75,7 @@ class BenchmarkRegistry:
         "code_generation": CodeGenerationEvaluation,
         "instruction_following": InstructionFollowingEvaluation,
         "honesty": HonestyEvaluation,
+        "bullshit_detection": BullshitDetectionEvaluation,
         "simpleqa": None,  # Loaded dynamically
         "function_calling": None,  # To be implemented
         "multi_turn": None,  # To be implemented
@@ -136,6 +138,23 @@ class BenchmarkRegistry:
             ))
         except Exception as e:
             logger.warning(f"Failed to register simpleqa_verified: {e}")
+
+        # Bullshit Benchmark (packaged local snapshot)
+        self.register(BenchmarkConfig(
+            name="bullshit_benchmark",
+            description="Bullshit Benchmark v2 - nonsensical premise detection",
+            evaluation_type="bullshit_detection",
+            dataset_source="builtin://bullshit_benchmark_v2",
+            dataset_format="custom",
+            field_mappings={},
+            evaluation_params={},
+            metadata={
+                "source": "bullshit-benchmark",
+                "snapshot_version": "2.0",
+                "resource_package": "tldw_Server_API.app.core.Evaluations.data.bullshit_benchmark",
+                "resource_file": "questions_v2.json",
+            },
+        ))
 
         # MMLU Pro
         self.register(BenchmarkConfig(

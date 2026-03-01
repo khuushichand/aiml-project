@@ -29,6 +29,8 @@ import {
   useCreateRun,
   useCancelRun,
   useAdhocEvaluation,
+  useBenchmarksCatalog,
+  useRunBenchmark,
   extractMetricsSummary,
   adhocEndpointOptions
 } from "../hooks/useRuns"
@@ -72,6 +74,8 @@ export const RunsTab: React.FC = () => {
     setIsPolling,
     adhocEndpoint,
     setAdhocEndpoint,
+    selectedBenchmark,
+    setSelectedBenchmark,
     adhocPayloadText,
     setAdhocPayloadText,
     adhocResult
@@ -92,6 +96,8 @@ export const RunsTab: React.FC = () => {
     setIsPolling: s.setIsPolling,
     adhocEndpoint: s.adhocEndpoint,
     setAdhocEndpoint: s.setAdhocEndpoint,
+    selectedBenchmark: s.selectedBenchmark,
+    setSelectedBenchmark: s.setSelectedBenchmark,
     adhocPayloadText: s.adhocPayloadText,
     setAdhocPayloadText: s.setAdhocPayloadText,
     adhocResult: s.adhocResult
@@ -113,11 +119,13 @@ export const RunsTab: React.FC = () => {
     enablePolling: false,
     captureQuota: false
   })
+  const { data: benchmarksResp } = useBenchmarksCatalog()
 
   // Mutations
   const createRunMutation = useCreateRun()
   const cancelRunMutation = useCancelRun()
   const adhocMutation = useAdhocEvaluation()
+  const runBenchmarkMutation = useRunBenchmark()
 
   const evaluations = evalListResp?.data?.data || []
   const rateLimits = rateLimitsResp?.data
@@ -125,6 +133,7 @@ export const RunsTab: React.FC = () => {
   const runDetail = runDetailResp?.data
   const compareRunA = compareRunAResp?.data
   const compareRunB = compareRunBResp?.data
+  const benchmarks = benchmarksResp?.data?.data || []
 
   const runMetrics = useMemo(
     () => extractMetricsSummary(runDetail?.results),
@@ -163,6 +172,20 @@ export const RunsTab: React.FC = () => {
       }
     }
   }, [compareRunAId, compareRunBId, runs])
+
+  useEffect(() => {
+    if (adhocEndpoint !== "benchmark-run") return
+    if (selectedBenchmark && benchmarks.some((b) => b.name === selectedBenchmark)) {
+      return
+    }
+    const preferred =
+      benchmarks.find((b) => b.name === "bullshit_benchmark")?.name ||
+      benchmarks[0]?.name ||
+      null
+    if (preferred) {
+      setSelectedBenchmark(preferred)
+    }
+  }, [adhocEndpoint, benchmarks, selectedBenchmark, setSelectedBenchmark])
 
   const handleStartRun = async () => {
     if (!selectedEvalId) return
@@ -208,6 +231,14 @@ export const RunsTab: React.FC = () => {
   const handleAdhocRun = async () => {
     try {
       const parsed = adhocPayloadText ? JSON.parse(adhocPayloadText) : {}
+      if (adhocEndpoint === "benchmark-run") {
+        if (!selectedBenchmark) return
+        await runBenchmarkMutation.mutateAsync({
+          benchmarkName: selectedBenchmark,
+          body: parsed
+        })
+        return
+      }
       await adhocMutation.mutateAsync({ endpoint: adhocEndpoint, body: parsed })
     } catch {
       // Error handled in mutation
@@ -481,6 +512,21 @@ export const RunsTab: React.FC = () => {
               value={adhocEndpoint}
               onChange={(val) => {
                 setAdhocEndpoint(val)
+                if (val === "benchmark-run") {
+                  setAdhocPayloadText(
+                    JSON.stringify(
+                      {
+                        limit: 25,
+                        api_name: "openai",
+                        parallel: 4,
+                        save_results: true
+                      },
+                      null,
+                      2
+                    )
+                  )
+                  return
+                }
                 setAdhocPayloadText(
                   JSON.stringify(
                     val.includes("ocr")
@@ -496,6 +542,25 @@ export const RunsTab: React.FC = () => {
           }
         >
           <Form layout="vertical" size="small">
+            {adhocEndpoint === "benchmark-run" && (
+              <Form.Item
+                label={t("evaluations:benchmarkLabel", {
+                  defaultValue: "Benchmark"
+                })}
+              >
+                <Select
+                  value={selectedBenchmark || undefined}
+                  onChange={(value) => setSelectedBenchmark(value)}
+                  options={benchmarks.map((benchmark) => ({
+                    value: benchmark.name,
+                    label: benchmark.name
+                  }))}
+                  placeholder={t("evaluations:benchmarkPlaceholder", {
+                    defaultValue: "Choose a benchmark"
+                  })}
+                />
+              </Form.Item>
+            )}
             <Form.Item
               label={t("evaluations:runConfigLabel", {
                 defaultValue: "Config (JSON)"
@@ -509,7 +574,7 @@ export const RunsTab: React.FC = () => {
             </Form.Item>
             <Button
               type="primary"
-              loading={adhocMutation.isPending}
+              loading={adhocMutation.isPending || runBenchmarkMutation.isPending}
               onClick={handleAdhocRun}
             >
               {t("evaluations:startRunCta", {

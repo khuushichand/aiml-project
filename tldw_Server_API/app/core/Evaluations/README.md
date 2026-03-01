@@ -139,10 +139,10 @@ pip install -e ".[evals]"
 tldw-evals health
 
 # List available benchmarks
-tldw-evals list-benchmarks
+tldw-evals benchmark list
 
 # Run your first evaluation
-tldw-evals run simple_bench --limit 10
+tldw-evals benchmark run simple_bench --limit 10
 ```
 
 ## 📋 Features
@@ -212,7 +212,7 @@ Support added for a curated SimpleQA Verified dataset stored in the repo at `Hel
 - Usage via CLI or programmatic APIs that reference benchmarks:
 
 ```bash
-tldw-evals run simpleqa_verified --limit 100
+tldw-evals benchmark run simpleqa_verified --limit 100
 ```
 
 Or via the registry programmatically:
@@ -299,16 +299,16 @@ Evaluations/
 
 ```bash
 # Run MMLU Pro with 100 questions
-tldw-evals run mmlu_pro --limit 100 --output mmlu_results.json
+tldw-evals benchmark run mmlu_pro --limit 100 --output mmlu_results.json
 
 # Run with specific API
-tldw-evals run simple_bench --api anthropic --api-key YOUR_KEY
+tldw-evals benchmark run simple_bench --api anthropic --api-key YOUR_KEY
 
 # Resume interrupted evaluation
-tldw-evals run gpqa --resume-from partial.json
+tldw-evals benchmark run gpqa --resume-from partial.json
 
 # Validate benchmark before running
-tldw-evals validate mmlu_pro --samples 5
+tldw-evals benchmark validate mmlu_pro --samples 5
 ```
 
 ### Creating Custom QA Benchmarks
@@ -564,7 +564,7 @@ git push origin feature/new-benchmark
 ```bash
 # Enable debug logging
 export EVALS_DEBUG=1
-tldw-evals run benchmark --log-level DEBUG
+tldw-evals benchmark run benchmark --log-level DEBUG
 ```
 
 ## 📝 License
