@@ -385,3 +385,7 @@ Dockerfiles/Monitoring/secrets/
 # I'm an idiot
 !apps/tldw-frontend/lib/
 !apps/tldw-frontend/lib/**
+/.hypothesis
+/.hypothesis
+/admin-ui/.next
+/admin-ui/.next
