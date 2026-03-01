@@ -38,11 +38,13 @@ export type RagLowConfidenceBehavior = "continue" | "ask" | "decline"
 export type RagNumericFidelityBehavior = "continue" | "ask" | "decline" | "retry"
 export type RagNumericPrecisionMode = "standard" | "strict" | "academic"
 export type RagPresetName = "fast" | "balanced" | "thorough" | "custom"
+export type RagProfile = "fast" | "balanced" | "accuracy" | "none"
 
 export type RagSettings = {
   query: string
   sources: RagSource[]
   strategy: RagStrategy
+  rag_profile: RagProfile
   corpus: string
   index_namespace: string
   search_mode: RagSearchMode
@@ -243,6 +245,7 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   query: "",
   sources: ["media_db", "notes", "characters", "chats"],
   strategy: "standard",
+  rag_profile: "none",
   corpus: "",
   index_namespace: "",
   search_mode: "hybrid",
@@ -518,6 +521,7 @@ export const buildRagSearchRequest = (settings: RagSettings) => {
     generation_prompt,
     user_id,
     session_id,
+    rag_profile,
     ...rest
   } = normalizedSettings
   const options: Record<string, unknown> = {}
@@ -530,6 +534,7 @@ export const buildRagSearchRequest = (settings: RagSettings) => {
   if (generation_model) options.generation_model = generation_model
   if (generation_provider) options.generation_provider = generation_provider
   if (generation_prompt) options.generation_prompt = generation_prompt
+  if (rag_profile && rag_profile !== "none") options.rag_profile = rag_profile
   if (user_id) options.user_id = user_id
   if (session_id) options.session_id = session_id
   const timeoutMs =
@@ -544,7 +549,7 @@ export const buildRagSearchRequest = (settings: RagSettings) => {
 }
 
 export const toRagAdvancedOptions = (settings: RagSettings) => {
-  const { query, search_mode, top_k, enable_generation, enable_citations, sources, ...rest } = settings
+  const { query, search_mode, top_k, enable_generation, enable_citations, sources, rag_profile, ...rest } = settings
   const options: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(rest)) {
     if (value === undefined || value === null) continue
@@ -552,5 +557,6 @@ export const toRagAdvancedOptions = (settings: RagSettings) => {
     if (Array.isArray(value) && value.length === 0) continue
     options[key] = value
   }
+  if (rag_profile && rag_profile !== "none") options.rag_profile = rag_profile
   return options
 }
