@@ -378,12 +378,6 @@ class ConversationRateLimiter:
             },
         }
 
-    async def reset_user_limits(self, user_id: str):
-        """No-op reset (Phase 2 shim: no bucket state to reset)."""
-        _emit_chat_legacy_deprecation("reset_user_limits")
-        logger.info(f"Reset rate limits for user {user_id} (no-op, RG handles enforcement)")
-
-
 # Global rate limiter instance
 _rate_limiter: Optional[ConversationRateLimiter] = None
 _rate_limiter_init_lock = threading.Lock()
