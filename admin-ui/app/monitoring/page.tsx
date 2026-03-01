@@ -11,14 +11,9 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import {
-  buildAlertRuleFromDraft,
-  DEFAULT_ALERT_RULE_DRAFT,
   isAlertSnoozed,
   readStoredAlertHistory,
-  readStoredAlertRules,
-  validateAlertRuleDraft,
   writeStoredAlertHistory,
-  writeStoredAlertRules,
 } from '@/lib/monitoring-alerts';
 import {
   MONITORING_DEFAULT_SERIES_VISIBILITY,
@@ -46,14 +41,12 @@ import SystemStatusPanel from './components/SystemStatusPanel';
 import WatchlistsPanel from './components/WatchlistsPanel';
 import { useMonitoringMetricsHistory } from './use-monitoring-metrics-history';
 import { useAlertActions } from './use-alert-actions';
+import { useAlertRules } from './use-alert-rules';
 import { useNotificationActions } from './use-notification-actions';
 import { useWatchlistActions } from './use-watchlist-actions';
 import type {
   AlertAssignableUser,
   AlertHistoryEntry,
-  AlertRule,
-  AlertRuleDraft,
-  AlertRuleValidationErrors,
   Metric,
   NotificationSettings,
   RecentNotification,
@@ -108,10 +101,6 @@ export default function MonitoringPage() {
   const [notificationSettingsStatus, setNotificationSettingsStatus] = useState<'pending' | 'fulfilled' | 'rejected'>('pending');
 
   // Stage 2: Alert rules + enhanced alert management
-  const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
-  const [alertRuleDraft, setAlertRuleDraft] = useState<AlertRuleDraft>(DEFAULT_ALERT_RULE_DRAFT);
-  const [alertRuleValidationErrors, setAlertRuleValidationErrors] = useState<AlertRuleValidationErrors>({});
-  const [alertRulesSaving, setAlertRulesSaving] = useState(false);
   const [assignableUsers, setAssignableUsers] = useState<AlertAssignableUser[]>([]);
   const [showSnoozedAlerts, setShowSnoozedAlerts] = useState(false);
   const [alertHistory, setAlertHistory] = useState<AlertHistoryEntry[]>([]);
@@ -246,16 +235,22 @@ export default function MonitoringPage() {
     setSuccess,
   });
 
+  const {
+    alertRules,
+    alertRuleDraft,
+    alertRuleValidationErrors,
+    alertRulesSaving,
+    handleAlertRuleDraftChange,
+    handleCreateAlertRule,
+    handleDeleteAlertRule,
+  } = useAlertRules({
+    setSuccess,
+  });
+
   useEffect(() => {
-    setAlertRules(readStoredAlertRules());
     setAlertHistory(readStoredAlertHistory());
     alertStorageHydratedRef.current = true;
   }, []);
-
-  useEffect(() => {
-    if (!alertStorageHydratedRef.current) return;
-    writeStoredAlertRules(alertRules);
-  }, [alertRules]);
 
   useEffect(() => {
     if (!alertStorageHydratedRef.current) return;
@@ -298,30 +293,6 @@ export default function MonitoringPage() {
       }
     };
   }, [success]);
-
-  const handleCreateAlertRule = () => {
-    const validation = validateAlertRuleDraft(alertRuleDraft);
-    if (!validation.valid) {
-      setAlertRuleValidationErrors(validation.errors);
-      return;
-    }
-
-    setAlertRulesSaving(true);
-    try {
-      const newRule = buildAlertRuleFromDraft(alertRuleDraft);
-      setAlertRules((prev) => [newRule, ...prev]);
-      setAlertRuleValidationErrors({});
-      setAlertRuleDraft(DEFAULT_ALERT_RULE_DRAFT);
-      setSuccess('Alert rule added');
-    } finally {
-      setAlertRulesSaving(false);
-    }
-  };
-
-  const handleDeleteAlertRule = (rule: AlertRule) => {
-    setAlertRules((prev) => prev.filter((item) => item.id !== rule.id));
-    setSuccess('Alert rule deleted');
-  };
 
   const activeAlerts = alerts.filter((alert) => !alert.acknowledged && !isAlertSnoozed(alert));
 
@@ -448,10 +419,7 @@ export default function MonitoringPage() {
                 draft={alertRuleDraft}
                 errors={alertRuleValidationErrors}
                 saving={alertRulesSaving}
-                onDraftChange={(draft) => {
-                  setAlertRuleDraft(draft);
-                  setAlertRuleValidationErrors({});
-                }}
+                onDraftChange={handleAlertRuleDraftChange}
                 onCreateRule={handleCreateAlertRule}
                 onDeleteRule={handleDeleteAlertRule}
               />
