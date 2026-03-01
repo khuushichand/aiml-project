@@ -170,6 +170,10 @@ async function openOnboardingSuccessScreen(
   return needsConnect ? "connected-now" : "already-connected"
 }
 
+async function ensureOnboardingSuccessScreen(page: Page): Promise<void> {
+  await openOnboardingSuccessScreen(page)
+}
+
 async function clickOnboardingCtaAndExpectRoute(
   page: Page,
   ctaTestId: string,

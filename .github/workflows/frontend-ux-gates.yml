@@ -34,7 +34,7 @@ jobs:
       TLDW_API_KEY: smoke-ci-key-12345
       TLDW_WEB_URL: http://localhost:8080
       TLDW_WEB_AUTOSTART: 'true'
-      TLDW_WEB_CMD: bun run dev -- -p 8080
+      TLDW_WEB_CMD: bun run dev -- --webpack -p 8080
       TLDW_ONBOARDING_EVIDENCE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
@@ -138,7 +138,7 @@ jobs:
       TLDW_API_KEY: smoke-ci-key-12345
       TLDW_WEB_URL: http://localhost:8080
       TLDW_WEB_AUTOSTART: 'true'
-      TLDW_WEB_CMD: bun run dev -- -p 8080
+      TLDW_WEB_CMD: bun run dev -- --webpack -p 8080
       TLDW_SMOKE_HARD_GATE: '1'
 
     steps:
