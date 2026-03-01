@@ -153,6 +153,23 @@ Let me explain:"""
         return None
 
     @classmethod
+    async def warm_template_async(cls, name: str) -> None:
+        """Preload a template off the event loop for async request paths."""
+        if not isinstance(name, str):
+            return
+        normalized_name = name.strip()
+        if not normalized_name:
+            return
+        try:
+            await asyncio.to_thread(cls._load_rag_prompt_cached, normalized_name)
+        except Exception as exc:  # noqa: BLE001 - warmup remains best-effort
+            logger.debug(
+                "Prompt warmup failed for rag prompt '{}': {}",
+                normalized_name,
+                exc,
+            )
+
+    @classmethod
     def get_template(cls, name: str) -> str:
         """Get a template by name."""
         external = cls._load_rag_prompt_cached(name)
@@ -522,6 +539,10 @@ async def generate_response(context: Any, **kwargs) -> Any:
     # Override with kwargs
     config_dict.update(kwargs)
 
+    prompt_name = config_dict.get("prompt_template", "default")
+    if isinstance(prompt_name, str):
+        await PromptTemplates.warm_template_async(prompt_name)
+
     # Create generator
     generator = create_generator(config_dict)
 
@@ -577,6 +598,7 @@ class AnswerGenerator:
             prompt_template=(prompt_template or "default"),
             system_prompt=self.system_prompt,
         )
+        await PromptTemplates.warm_template_async(gcfg.prompt_template)
         gen = LLMGenerator(gcfg)
 
         # Create a tiny context holder compatible with BaseGenerator expectations
@@ -600,6 +622,10 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
 
     # Override with kwargs
     config_dict.update(kwargs)
+
+    prompt_name = config_dict.get("prompt_template", "default")
+    if isinstance(prompt_name, str):
+        await PromptTemplates.warm_template_async(prompt_name)
 
     # Create generator
     generator = create_generator(config_dict)

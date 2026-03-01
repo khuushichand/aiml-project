@@ -2019,56 +2019,93 @@ async def unified_search_stream_endpoint(
                 await _run_streaming_retrieval()
 
             # If strategy=agentic, assemble ephemeral chunk and emit plan + spans first
-            if getattr(request, 'strategy', 'standard') == 'agentic':
+            strategy_value = str(
+                effective_payload.get("strategy", getattr(request, "strategy", "standard"))
+            ).strip().lower()
+            if strategy_value == "agentic":
                 try:
+                    def _payload_bool(name: str, fallback: bool = False) -> bool:
+                        return bool(effective_payload.get(name, getattr(request, name, fallback)))
+
+                    def _payload_int(name: str, fallback: int) -> int:
+                        raw = effective_payload.get(name, getattr(request, name, fallback))
+                        try:
+                            return int(raw)
+                        except (TypeError, ValueError):
+                            return fallback
+
+                    def _payload_float(name: str, fallback: float) -> float:
+                        raw = effective_payload.get(name, getattr(request, name, fallback))
+                        try:
+                            return float(raw)
+                        except (TypeError, ValueError):
+                            return fallback
+
                     # Run agentic assembly without generation
                     a_cfg = AgenticConfig(
-                        top_k_docs=int(getattr(request, 'agentic_top_k_docs', 3) or 3),
-                        window_chars=int(getattr(request, 'agentic_window_chars', 1200) or 1200),
-                        max_tokens_read=int(getattr(request, 'agentic_max_tokens_read', 6000) or 6000),
-                        max_tool_calls=int(getattr(request, 'agentic_max_tool_calls', 8) or 8),
+                        top_k_docs=max(1, _payload_int("agentic_top_k_docs", 3)),
+                        window_chars=max(200, _payload_int("agentic_window_chars", 1200)),
+                        max_tokens_read=max(500, _payload_int("agentic_max_tokens_read", 6000)),
+                        max_tool_calls=max(1, _payload_int("agentic_max_tool_calls", 8)),
                         extractive_only=True,
                         quote_spans=True,
-                        enable_tools=bool(getattr(request, 'agentic_enable_tools', False)),
-                        use_llm_planner=bool(getattr(request, 'agentic_use_llm_planner', False)),
-                        time_budget_sec=(getattr(request, 'agentic_time_budget_sec', None)),
-                        cache_ttl_sec=int(getattr(request, 'agentic_cache_ttl_sec', 600) or 600),
-                        debug_trace=bool(getattr(request, 'agentic_debug_trace', False) or request.debug_mode),
-                        enable_query_decomposition=bool(getattr(request, 'agentic_enable_query_decomposition', False)),
-                        subgoal_max=int(getattr(request, 'agentic_subgoal_max', 3) or 3),
-                        enable_semantic_within=bool(getattr(request, 'agentic_enable_semantic_within', True)),
-                        enable_section_index=bool(getattr(request, 'agentic_enable_section_index', True)),
-                        prefer_structural_anchors=bool(getattr(request, 'agentic_prefer_structural_anchors', True)),
-                        enable_table_support=bool(getattr(request, 'agentic_enable_table_support', True)),
-                        agentic_enable_vlm_late_chunking=bool(getattr(request, 'agentic_enable_vlm_late_chunking', False)),
-                        agentic_vlm_backend=getattr(request, 'agentic_vlm_backend', None),
-                        agentic_vlm_detect_tables_only=bool(getattr(request, 'agentic_vlm_detect_tables_only', True)),
-                        agentic_vlm_max_pages=getattr(request, 'agentic_vlm_max_pages', None),
-                        agentic_vlm_late_chunk_top_k_docs=int(getattr(request, 'agentic_vlm_late_chunk_top_k_docs', 2) or 2),
-                        agentic_use_provider_embeddings_within=bool(getattr(request, 'agentic_use_provider_embeddings_within', False)),
-                        agentic_provider_embedding_model_id=getattr(request, 'agentic_provider_embedding_model_id', None),
+                        enable_tools=_payload_bool("agentic_enable_tools", False),
+                        use_llm_planner=_payload_bool("agentic_use_llm_planner", False),
+                        time_budget_sec=effective_payload.get(
+                            "agentic_time_budget_sec",
+                            getattr(request, "agentic_time_budget_sec", None),
+                        ),
+                        cache_ttl_sec=max(1, _payload_int("agentic_cache_ttl_sec", 600)),
+                        debug_trace=_payload_bool("agentic_debug_trace", False)
+                        or _payload_bool("debug_mode", getattr(request, "debug_mode", False)),
+                        enable_query_decomposition=_payload_bool("agentic_enable_query_decomposition", False),
+                        subgoal_max=max(1, _payload_int("agentic_subgoal_max", 3)),
+                        enable_semantic_within=_payload_bool("agentic_enable_semantic_within", True),
+                        enable_section_index=_payload_bool("agentic_enable_section_index", True),
+                        prefer_structural_anchors=_payload_bool("agentic_prefer_structural_anchors", True),
+                        enable_table_support=_payload_bool("agentic_enable_table_support", True),
+                        agentic_enable_vlm_late_chunking=_payload_bool("agentic_enable_vlm_late_chunking", False),
+                        agentic_vlm_backend=effective_payload.get(
+                            "agentic_vlm_backend",
+                            getattr(request, "agentic_vlm_backend", None),
+                        ),
+                        agentic_vlm_detect_tables_only=_payload_bool("agentic_vlm_detect_tables_only", True),
+                        agentic_vlm_max_pages=effective_payload.get(
+                            "agentic_vlm_max_pages",
+                            getattr(request, "agentic_vlm_max_pages", None),
+                        ),
+                        agentic_vlm_late_chunk_top_k_docs=max(
+                            1, _payload_int("agentic_vlm_late_chunk_top_k_docs", 2)
+                        ),
+                        agentic_use_provider_embeddings_within=_payload_bool(
+                            "agentic_use_provider_embeddings_within", False
+                        ),
+                        agentic_provider_embedding_model_id=effective_payload.get(
+                            "agentic_provider_embedding_model_id",
+                            getattr(request, "agentic_provider_embedding_model_id", None),
+                        ),
                     )
                     ares = await agentic_rag_pipeline(
                         query=request.query,
-                        sources=request.sources,
+                        sources=effective_payload.get("sources", request.sources),
                         media_db=media_db,
                         chacha_db=chacha_db,
                         media_db_path=(media_db.db_path if media_db else None),
                         notes_db_path=(chacha_db.db_path if chacha_db else None),
                         character_db_path=(chacha_db.db_path if chacha_db else None),
                         kanban_db_path=kanban_db_path,
-                        search_mode=request.search_mode,
-                        fts_level=request.fts_level,
-                        hybrid_alpha=request.hybrid_alpha,
-                        top_k=request.top_k,
-                        min_score=request.min_score,
+                        search_mode=effective_payload.get("search_mode", request.search_mode),
+                        fts_level=effective_payload.get("fts_level", request.fts_level),
+                        hybrid_alpha=_payload_float("hybrid_alpha", request.hybrid_alpha),
+                        top_k=max(1, _payload_int("top_k", request.top_k or 10)),
+                        min_score=_payload_float("min_score", request.min_score or 0.0),
                         index_namespace=index_namespace,
                         agentic=a_cfg,
                         enable_generation=False,
                         enable_citations=False,
                         include_chunk_citations=False,
-                        debug_mode=request.debug_mode,
-                        explain_only=bool(getattr(request, 'explain_only', False)),
+                        debug_mode=_payload_bool("debug_mode", request.debug_mode),
+                        explain_only=_payload_bool("explain_only", getattr(request, "explain_only", False)),
                     )
                     # Emit plan + spans
                     plan = ares.metadata.get('agentic_metrics', {}) if isinstance(ares.metadata, dict) else {}

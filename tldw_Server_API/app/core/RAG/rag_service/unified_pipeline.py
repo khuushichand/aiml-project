@@ -4077,9 +4077,13 @@ async def unified_rag_pipeline(
                     try:
                         reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
                         reranked = await _resilient_call("reranking", reranker.rerank, query, result.documents)
-                    except Exception:
+                    except Exception as rerank_exc:
                         if reranking_strategy != "two_tier":
                             raise
+                        logger.warning(
+                            "Two-tier reranker failed at runtime; degrading to hybrid strategy: {}",
+                            rerank_exc,
+                        )
                         _record_profile_degradation(
                             component="reranking_strategy",
                             from_value="two_tier",

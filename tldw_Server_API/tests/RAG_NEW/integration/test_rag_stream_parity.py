@@ -1,3 +1,8 @@
+"""Integration coverage for `/rag/search/stream` profile and event parity."""
+
+from collections.abc import Iterator
+from typing import Any
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -10,14 +15,17 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(autouse=True)
-def _set_test_mode_env(monkeypatch):
+def _set_test_mode_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("RAG_DEFAULT_LLM_PROVIDER", "test-provider")
     monkeypatch.setenv("RAG_DEFAULT_LLM_MODEL", "default-model")
 
 
 @pytest.fixture()
-def client_with_stream_overrides(monkeypatch, auth_headers):
+def client_with_stream_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    auth_headers: dict[str, str],
+) -> Iterator[TestClient]:
     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
 
@@ -52,7 +60,10 @@ def client_with_stream_overrides(monkeypatch, auth_headers):
     fastapi_app.dependency_overrides.clear()
 
 
-def test_rag_streaming_parity_generation_and_hybrid_sources(monkeypatch, client_with_stream_overrides):
+def test_rag_streaming_parity_generation_and_hybrid_sources(
+    monkeypatch: pytest.MonkeyPatch,
+    client_with_stream_overrides: TestClient,
+) -> None:
 
 
     from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
@@ -76,7 +87,7 @@ def test_rag_streaming_parity_generation_and_hybrid_sources(monkeypatch, client_
                 )
             ]
 
-    async def fake_generate_streaming_response(context, **kwargs):  # noqa: ANN001
+    async def fake_generate_streaming_response(context: Any, **kwargs: Any) -> Any:
         captured["generation_config"] = context.config.get("generation")
 
         async def _gen():
@@ -124,7 +135,10 @@ def test_rag_streaming_parity_generation_and_hybrid_sources(monkeypatch, client_
     assert generation_config["streaming"] is True
 
 
-def test_rag_streaming_generation_provider_override(monkeypatch, client_with_stream_overrides):
+def test_rag_streaming_generation_provider_override(
+    monkeypatch: pytest.MonkeyPatch,
+    client_with_stream_overrides: TestClient,
+) -> None:
     import tldw_Server_API.app.api.v1.endpoints.rag_unified as rag_ep
 
     captured = {"generation_config": None}
@@ -146,7 +160,7 @@ def test_rag_streaming_generation_provider_override(monkeypatch, client_with_str
                 )
             ]
 
-    async def fake_generate_streaming_response(context, **kwargs):  # noqa: ANN001
+    async def fake_generate_streaming_response(context: Any, **kwargs: Any) -> Any:
         captured["generation_config"] = context.config.get("generation")
 
         async def _gen():
@@ -178,14 +192,17 @@ def test_rag_streaming_generation_provider_override(monkeypatch, client_with_str
     assert generation_config["model"] == "llama-3.3-70b-versatile"
 
 
-def test_rag_streaming_emits_research_progress_before_generation(monkeypatch, client_with_stream_overrides):
+def test_rag_streaming_emits_research_progress_before_generation(
+    monkeypatch: pytest.MonkeyPatch,
+    client_with_stream_overrides: TestClient,
+) -> None:
     import asyncio
     from types import SimpleNamespace
 
     from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
     import tldw_Server_API.app.api.v1.endpoints.rag_unified as rag_ep
 
-    async def _fake_unified_pipeline(**kwargs):  # noqa: ANN001
+    async def _fake_unified_pipeline(**kwargs: Any) -> Any:
         callback = kwargs.get("research_progress_callback")
         if callback:
             await callback(SimpleNamespace(event_type="research_reasoning", data={"step": 1, "text": "plan"}))
@@ -218,7 +235,7 @@ def test_rag_streaming_emits_research_progress_before_generation(monkeypatch, cl
             total_time=0.0,
         )
 
-    async def _fake_generate_streaming_response(context, **kwargs):  # noqa: ANN001
+    async def _fake_generate_streaming_response(context: Any, **kwargs: Any) -> Any:
         async def _gen():
             yield "stream token"
 
@@ -267,11 +284,14 @@ def test_rag_streaming_emits_research_progress_before_generation(monkeypatch, cl
     assert types.index("research_complete") < types.index("delta")
 
 
-def test_rag_streaming_preserves_delta_and_claim_events(monkeypatch, client_with_stream_overrides):
+def test_rag_streaming_preserves_delta_and_claim_events(
+    monkeypatch: pytest.MonkeyPatch,
+    client_with_stream_overrides: TestClient,
+) -> None:
     from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
     import tldw_Server_API.app.api.v1.endpoints.rag_unified as rag_ep
 
-    async def _fake_unified_pipeline(**kwargs):  # noqa: ANN001
+    async def _fake_unified_pipeline(**kwargs: Any) -> Any:
         return rag_ep.UnifiedSearchResult(
             documents=[
                 Document(
@@ -295,7 +315,7 @@ def test_rag_streaming_preserves_delta_and_claim_events(monkeypatch, client_with
             total_time=0.0,
         )
 
-    async def _fake_generate_streaming_response(context, **kwargs):  # noqa: ANN001
+    async def _fake_generate_streaming_response(context: Any, **kwargs: Any) -> Any:
         context.metadata = {}
 
         async def _gen():
@@ -336,7 +356,10 @@ def test_rag_streaming_preserves_delta_and_claim_events(monkeypatch, client_with
     assert final_events[0].get("claim_count") == 2
 
 
-def test_rag_streaming_profile_defaults_affect_generation_config(monkeypatch, client_with_stream_overrides):
+def test_rag_streaming_profile_defaults_affect_generation_config(
+    monkeypatch: pytest.MonkeyPatch,
+    client_with_stream_overrides: TestClient,
+) -> None:
     import tldw_Server_API.app.api.v1.endpoints.rag_unified as rag_ep
 
     captured = {"generation_config": None}
@@ -358,7 +381,7 @@ def test_rag_streaming_profile_defaults_affect_generation_config(monkeypatch, cl
                 )
             ]
 
-    async def fake_generate_streaming_response(context, **kwargs):  # noqa: ANN001
+    async def fake_generate_streaming_response(context: Any, **kwargs: Any) -> Any:
         captured["generation_config"] = context.config.get("generation")
 
         async def _gen():
@@ -390,7 +413,10 @@ def test_rag_streaming_profile_defaults_affect_generation_config(monkeypatch, cl
     assert generation_config["prompt_template"] == "multi_hop_compact"
 
 
-def test_rag_streaming_profile_fast_applies_instruction_prompt(monkeypatch, client_with_stream_overrides):
+def test_rag_streaming_profile_fast_applies_instruction_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    client_with_stream_overrides: TestClient,
+) -> None:
     import tldw_Server_API.app.api.v1.endpoints.rag_unified as rag_ep
 
     captured = {"generation_config": None}
@@ -412,7 +438,7 @@ def test_rag_streaming_profile_fast_applies_instruction_prompt(monkeypatch, clie
                 )
             ]
 
-    async def fake_generate_streaming_response(context, **kwargs):  # noqa: ANN001
+    async def fake_generate_streaming_response(context: Any, **kwargs: Any) -> Any:
         captured["generation_config"] = context.config.get("generation")
 
         async def _gen():
@@ -441,3 +467,72 @@ def test_rag_streaming_profile_fast_applies_instruction_prompt(monkeypatch, clie
     assert generation_config is not None
     assert generation_config["max_tokens"] == 440
     assert generation_config["prompt_template"] == "instruction_tuned"
+
+
+def test_rag_streaming_agentic_path_uses_profile_resolved_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    client_with_stream_overrides: TestClient,
+) -> None:
+    from types import SimpleNamespace
+
+    from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
+    import tldw_Server_API.app.api.v1.endpoints.rag_unified as rag_ep
+
+    captured: dict[str, Any] = {"agentic_kwargs": None}
+
+    class StubRetriever:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.retrievers = {}
+
+        async def retrieve(self, query: str, **kwargs: Any) -> list[Document]:
+            return [
+                Document(
+                    id="doc-1",
+                    content="Context content",
+                    metadata={"title": "Doc"},
+                    source=DataSource.MEDIA_DB,
+                    score=0.9,
+                )
+            ]
+
+    async def fake_agentic_rag_pipeline(**kwargs: Any) -> Any:
+        captured["agentic_kwargs"] = kwargs
+        return SimpleNamespace(
+            documents=[
+                Document(
+                    id="agentic-doc-1",
+                    content="Agentic context",
+                    metadata={"title": "Agentic"},
+                    source=DataSource.MEDIA_DB,
+                    score=0.95,
+                )
+            ],
+            metadata={"agentic_metrics": {"steps": 1}, "provenance": []},
+        )
+
+    async def fake_generate_streaming_response(context: Any, **kwargs: Any) -> Any:
+        async def _gen():
+            yield "chunk"
+
+        context.stream_generator = _gen()
+        context.metadata = {"streaming": True}
+        return context
+
+    monkeypatch.setattr(rag_ep, "MultiDatabaseRetriever", StubRetriever)
+    monkeypatch.setattr(rag_ep, "agentic_rag_pipeline", fake_agentic_rag_pipeline)
+    monkeypatch.setattr(rag_ep, "generate_streaming_response", fake_generate_streaming_response)
+
+    payload = {
+        "query": "Agentic profile defaults parity",
+        "strategy": "agentic",
+        "rag_profile": "fast",
+        "enable_generation": True,
+    }
+
+    with client_with_stream_overrides.stream("POST", "/api/v1/rag/search/stream", json=payload) as resp:
+        assert resp.status_code == 200
+        next(resp.iter_lines(), None)
+
+    agentic_kwargs = captured["agentic_kwargs"]
+    assert agentic_kwargs is not None
+    assert agentic_kwargs["top_k"] == 6
