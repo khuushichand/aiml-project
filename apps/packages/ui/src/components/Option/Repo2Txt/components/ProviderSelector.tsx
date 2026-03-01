@@ -1,4 +1,5 @@
 import type { ChangeEvent } from "react"
+import { useTranslation } from "react-i18next"
 
 type ProviderKind = "github" | "local" | null
 
@@ -17,9 +18,19 @@ const handleFileSelection = (
   callback: (files: FileList) => void | Promise<void>
 ) => {
   const files = event.target.files
-  if (!files || files.length === 0) return
-  void callback(files)
+  if (!files || files.length === 0) {
+    event.target.value = ""
+    return
+  }
+  void Promise.resolve(callback(files)).finally(() => {
+    event.target.value = ""
+  })
 }
+
+const directoryPickerAttributes = {
+  webkitdirectory: "",
+  directory: ""
+} as Record<string, string>
 
 export function ProviderSelector({
   provider,
@@ -30,10 +41,14 @@ export function ProviderSelector({
   onLoadGithub,
   onLocalFilesSelected
 }: ProviderSelectorProps) {
+  const { t } = useTranslation(["option"])
+
   return (
     <section className="space-y-3">
       <header>
-        <h2 className="text-sm font-semibold">Source Provider</h2>
+        <h2 className="text-sm font-semibold">
+          {t("option:repo2txt.providerTitle", { defaultValue: "Source Provider" })}
+        </h2>
       </header>
 
       <div className="flex items-center gap-2">
@@ -43,7 +58,7 @@ export function ProviderSelector({
           aria-pressed={provider === "github"}
           onClick={() => onSelectProvider("github")}
         >
-          GitHub
+          {t("option:repo2txt.providerGithub", { defaultValue: "GitHub" })}
         </button>
         <button
           type="button"
@@ -51,7 +66,7 @@ export function ProviderSelector({
           aria-pressed={provider === "local"}
           onClick={() => onSelectProvider("local")}
         >
-          Local
+          {t("option:repo2txt.providerLocal", { defaultValue: "Local" })}
         </button>
       </div>
 
@@ -61,7 +76,9 @@ export function ProviderSelector({
             type="url"
             value={githubUrl}
             onChange={(event) => onGithubUrlChange(event.target.value)}
-            placeholder="https://github.com/owner/repo"
+            placeholder={t("option:repo2txt.githubPlaceholder", {
+              defaultValue: "https://github.com/owner/repo"
+            })}
             className="min-w-[260px] flex-1 rounded border px-3 py-1.5 text-sm"
           />
           <button
@@ -70,20 +87,32 @@ export function ProviderSelector({
             onClick={() => void onLoadGithub()}
             disabled={busy || githubUrl.trim().length === 0}
           >
-            Load Source
+            {t("option:repo2txt.loadSource", { defaultValue: "Load Source" })}
           </button>
         </div>
       )}
 
       {provider === "local" && (
-        <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
           <label className="inline-flex cursor-pointer items-center gap-2 rounded border px-3 py-1.5 text-sm">
-            <span>Choose Directory / Zip</span>
+            <span>{t("option:repo2txt.chooseDirectory", { defaultValue: "Choose Directory" })}</span>
             <input
               type="file"
+              data-testid="repo2txt-local-directory-input"
               className="hidden"
               onChange={(event) => handleFileSelection(event, onLocalFilesSelected)}
               multiple
+              {...directoryPickerAttributes}
+            />
+          </label>
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded border px-3 py-1.5 text-sm">
+            <span>{t("option:repo2txt.chooseZip", { defaultValue: "Choose Zip" })}</span>
+            <input
+              type="file"
+              data-testid="repo2txt-local-zip-input"
+              className="hidden"
+              onChange={(event) => handleFileSelection(event, onLocalFilesSelected)}
+              accept=".zip,application/zip"
             />
           </label>
         </div>

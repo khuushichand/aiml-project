@@ -18,21 +18,21 @@
 **Step 1: Create isolated branch/worktree**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2
+cd <repo_root>
 git worktree add -b codex/repo2txt-v1 ../tldw_server2-repo2txt
 ```
 
-Expected: new worktree at `/Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt` on branch `codex/repo2txt-v1`.
+Expected: new worktree at `<repo_worktree>` on branch `codex/repo2txt-v1`.
 
 **Step 2: Run baseline verification in the new worktree**
 
 Run:
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt && bun install
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/routes/__tests__/sidepanel-persona-locale-keys.test.ts src/tutorials/__tests__/locale-mirror.test.ts
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/tldw-frontend && bun run compile
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && bun run compile
+cd <repo_worktree> && bun install
+cd <repo_worktree>/apps/packages/ui && bunx vitest run src/routes/__tests__/sidepanel-persona-locale-keys.test.ts src/tutorials/__tests__/locale-mirror.test.ts
+cd <repo_worktree>/apps/tldw-frontend && bun run compile
+cd <repo_worktree>/apps/extension && bun run compile
 ```
 
 Expected: baseline is green (or existing failures are recorded before feature work starts).
@@ -49,7 +49,7 @@ No commit (setup-only task).
 
 From Task 1 onward, run all commands from:
 
-- `/Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt`
+- `<repo_worktree>`
 
 ### Task 1: Add route skeleton and failing route test
 
@@ -83,7 +83,7 @@ describe("repo2txt option route", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/routes/__tests__/option-repo2txt.route.test.tsx`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/routes/__tests__/option-repo2txt.route.test.tsx`
 
 Expected: FAIL with route not found or missing test id.
 
@@ -115,14 +115,14 @@ const OptionRepo2Txt = lazy(() => import("./option-repo2txt"))
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/routes/__tests__/option-repo2txt.route.test.tsx`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/routes/__tests__/option-repo2txt.route.test.tsx`
 
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt
+cd <repo_worktree>
 git add apps/packages/ui/src/routes/option-repo2txt.tsx apps/packages/ui/src/routes/route-registry.tsx apps/packages/ui/src/routes/route-paths.ts apps/packages/ui/src/routes/__tests__/option-repo2txt.route.test.tsx
 git commit -m "feat(ui): add repo2txt route scaffold"
 ```
@@ -153,7 +153,7 @@ describe("Repo2TxtPage", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/__tests__/Repo2TxtPage.smoke.test.tsx`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/__tests__/Repo2TxtPage.smoke.test.tsx`
 
 Expected: FAIL with missing component/module.
 
@@ -172,14 +172,14 @@ export function Repo2TxtPage() {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/__tests__/Repo2TxtPage.smoke.test.tsx`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/__tests__/Repo2TxtPage.smoke.test.tsx`
 
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt
+cd <repo_worktree>
 git add apps/packages/ui/src/components/Option/Repo2Txt apps/packages/ui/src/routes/option-repo2txt.tsx
 git commit -m "feat(ui): add repo2txt page shell"
 ```
@@ -211,7 +211,7 @@ describe("GitHubProvider", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/providers/__tests__/GitHubProvider.test.ts`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/providers/__tests__/GitHubProvider.test.ts`
 
 Expected: FAIL with missing provider module.
 
@@ -226,14 +226,14 @@ export class GitHubProvider extends BaseProvider {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/providers/__tests__/GitHubProvider.test.ts`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/providers/__tests__/GitHubProvider.test.ts`
 
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt
+cd <repo_worktree>
 git add apps/packages/ui/src/components/Option/Repo2Txt/providers
 git commit -m "feat(ui): port repo2txt github provider"
 ```
@@ -263,7 +263,7 @@ describe("LocalProvider", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/providers/__tests__/LocalProvider.test.ts`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/providers/__tests__/LocalProvider.test.ts`
 
 Expected: FAIL with missing LocalProvider.
 
@@ -278,14 +278,14 @@ export class LocalProvider extends BaseProvider {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/providers/__tests__/LocalProvider.test.ts`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/providers/__tests__/LocalProvider.test.ts`
 
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt
+cd <repo_worktree>
 git add apps/packages/ui/src/components/Option/Repo2Txt/providers/LocalProvider.ts apps/packages/ui/src/components/Option/Repo2Txt/providers/__tests__/LocalProvider.test.ts
 git commit -m "feat(ui): port repo2txt local provider"
 ```
@@ -315,7 +315,7 @@ describe("repo2txt file tree slice", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/store/__tests__/fileTreeSlice.test.ts`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/store/__tests__/fileTreeSlice.test.ts`
 
 Expected: FAIL with missing store module.
 
@@ -332,14 +332,14 @@ export const createRepo2TxtStore = () => create<Repo2TxtState>()(
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/store/__tests__/fileTreeSlice.test.ts`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/store/__tests__/fileTreeSlice.test.ts`
 
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt
+cd <repo_worktree>
 git add apps/packages/ui/src/components/Option/Repo2Txt/store
 git commit -m "feat(ui): add repo2txt file tree state"
 ```
@@ -372,7 +372,7 @@ describe("Formatter", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/formatter/__tests__/Formatter.test.ts`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/formatter/__tests__/Formatter.test.ts`
 
 Expected: FAIL with missing formatter module.
 
@@ -388,14 +388,14 @@ export class Formatter {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/formatter/__tests__/Formatter.test.ts`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/formatter/__tests__/Formatter.test.ts`
 
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt
+cd <repo_worktree>
 git add apps/packages/ui/src/components/Option/Repo2Txt/formatter apps/packages/ui/src/components/Option/Repo2Txt/workers
 git commit -m "feat(ui): add repo2txt formatter and tokenizer worker"
 ```
@@ -431,7 +431,7 @@ describe("Repo2TxtPage flow", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/__tests__/Repo2TxtPage.flow.test.tsx`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/__tests__/Repo2TxtPage.flow.test.tsx`
 
 Expected: FAIL due to missing UI contract.
 
@@ -444,14 +444,14 @@ Expected: FAIL due to missing UI contract.
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/__tests__/Repo2TxtPage.flow.test.tsx`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Option/Repo2Txt/__tests__/Repo2TxtPage.flow.test.tsx`
 
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt
+cd <repo_worktree>
 git add apps/packages/ui/src/components/Option/Repo2Txt
 git commit -m "feat(ui): wire repo2txt page interactions"
 ```
@@ -487,7 +487,7 @@ describe("Header shortcuts repo2txt entry", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Layouts/__tests__/HeaderShortcuts.test.tsx`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Layouts/__tests__/HeaderShortcuts.test.tsx`
 
 Expected: FAIL because repo2txt entry does not exist.
 
@@ -501,14 +501,14 @@ Expected: FAIL because repo2txt entry does not exist.
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/components/Layouts/__tests__/HeaderShortcuts.test.tsx`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/components/Layouts/__tests__/HeaderShortcuts.test.tsx`
 
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt
+cd <repo_worktree>
 git add apps/packages/ui/src/routes/route-registry.tsx apps/packages/ui/src/components/Layouts/header-shortcut-items.ts apps/packages/ui/src/services/settings/ui-settings.ts apps/packages/ui/src/components/Layouts/__tests__/HeaderShortcuts.test.tsx
 git commit -m "feat(ui): expose repo2txt in options navigation"
 ```
@@ -563,7 +563,7 @@ describe("repo2txt locale keys", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/routes/__tests__/repo2txt-locale-keys.test.ts`
+Run: `cd <repo_worktree>/apps/packages/ui && bunx vitest run src/routes/__tests__/repo2txt-locale-keys.test.ts`
 
 Expected: FAIL because repo2txt keys are missing.
 
@@ -579,8 +579,8 @@ Expected: FAIL because repo2txt keys are missing.
 Run locale sync/coverage checks:
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && bun run locales:sync option.json
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && bun run check:i18n:coverage
+cd <repo_worktree>/apps/extension && bun run locales:sync option.json
+cd <repo_worktree>/apps/extension && bun run check:i18n:coverage
 ```
 
 **Step 4: Run test to verify it passes**
@@ -588,9 +588,9 @@ cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && b
 Run:
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && bun run locales:sync option.json
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && bun run check:i18n:coverage
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/routes/__tests__/repo2txt-locale-keys.test.ts src/routes/__tests__/sidepanel-persona-locale-keys.test.ts src/tutorials/__tests__/locale-mirror.test.ts
+cd <repo_worktree>/apps/extension && bun run locales:sync option.json
+cd <repo_worktree>/apps/extension && bun run check:i18n:coverage
+cd <repo_worktree>/apps/packages/ui && bunx vitest run src/routes/__tests__/repo2txt-locale-keys.test.ts src/routes/__tests__/sidepanel-persona-locale-keys.test.ts src/tutorials/__tests__/locale-mirror.test.ts
 ```
 
 Expected: PASS.
@@ -598,7 +598,7 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt
+cd <repo_worktree>
 git add apps/packages/ui/src/assets/locale apps/packages/ui/src/public/_locales apps/packages/ui/src/routes/__tests__/repo2txt-locale-keys.test.ts
 git commit -m "feat(ui): add repo2txt locale keys and parity guard"
 ```
@@ -625,7 +625,7 @@ describe("web repo2txt page", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/tldw-frontend && bunx vitest run __tests__/pages/repo2txt.test.tsx`
+Run: `cd <repo_worktree>/apps/tldw-frontend && bunx vitest run __tests__/pages/repo2txt.test.tsx`
 
 Expected: FAIL because page file is missing.
 
@@ -638,14 +638,14 @@ export default dynamic(() => import("@/routes/option-repo2txt"), { ssr: false })
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/tldw-frontend && bunx vitest run __tests__/pages/repo2txt.test.tsx`
+Run: `cd <repo_worktree>/apps/tldw-frontend && bunx vitest run __tests__/pages/repo2txt.test.tsx`
 
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt
+cd <repo_worktree>
 git add apps/tldw-frontend/pages/repo2txt.tsx apps/tldw-frontend/__tests__/pages/repo2txt.test.tsx apps/tldw-frontend/pages/_app.tsx
 git commit -m "feat(web): add repo2txt route wrapper"
 ```
@@ -706,8 +706,8 @@ test("sidepanel repo2txt affordance opens options link-out", async () => {
 Run:
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && bun run build:chrome
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && bun run test:e2e tests/e2e/repo2txt-options.spec.ts tests/e2e/repo2txt-sidepanel-linkout.spec.ts
+cd <repo_worktree>/apps/extension && bun run build:chrome
+cd <repo_worktree>/apps/extension && bun run test:e2e tests/e2e/repo2txt-options.spec.ts tests/e2e/repo2txt-sidepanel-linkout.spec.ts
 ```
 
 Expected: FAIL when route wiring or sidepanel behavior is incomplete.
@@ -728,8 +728,8 @@ Expected: FAIL when route wiring or sidepanel behavior is incomplete.
 Run:
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && bun run build:chrome
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && bun run test:e2e tests/e2e/repo2txt-options.spec.ts tests/e2e/repo2txt-sidepanel-linkout.spec.ts
+cd <repo_worktree>/apps/extension && bun run build:chrome
+cd <repo_worktree>/apps/extension && bun run test:e2e tests/e2e/repo2txt-options.spec.ts tests/e2e/repo2txt-sidepanel-linkout.spec.ts
 ```
 
 Expected: PASS.
@@ -737,7 +737,7 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt
+cd <repo_worktree>
 git add apps/extension/wxt.config.ts apps/extension/tests/e2e/repo2txt-options.spec.ts apps/extension/tests/e2e/repo2txt-sidepanel-linkout.spec.ts
 git commit -m "feat(extension): verify repo2txt options route and sidepanel link-out"
 ```
@@ -760,13 +760,13 @@ Add one short "repo2txt route" note in each relevant doc.
 Run:
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/routes/__tests__/option-repo2txt.route.test.tsx src/components/Option/Repo2Txt/**/*.test.ts* src/components/Layouts/__tests__/HeaderShortcuts.test.tsx
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/packages/ui && bunx vitest run src/routes/__tests__/repo2txt-locale-keys.test.ts src/routes/__tests__/sidepanel-persona-locale-keys.test.ts src/tutorials/__tests__/locale-mirror.test.ts
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/tldw-frontend && bunx vitest run __tests__/pages/repo2txt.test.tsx
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/tldw-frontend && bun run compile
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && bun run compile
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && bun run build:chrome
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt/apps/extension && bun run test:e2e tests/e2e/repo2txt-options.spec.ts tests/e2e/repo2txt-sidepanel-linkout.spec.ts
+cd <repo_worktree>/apps/packages/ui && bunx vitest run src/routes/__tests__/option-repo2txt.route.test.tsx src/components/Option/Repo2Txt/**/*.test.ts* src/components/Layouts/__tests__/HeaderShortcuts.test.tsx
+cd <repo_worktree>/apps/packages/ui && bunx vitest run src/routes/__tests__/repo2txt-locale-keys.test.ts src/routes/__tests__/sidepanel-persona-locale-keys.test.ts src/tutorials/__tests__/locale-mirror.test.ts
+cd <repo_worktree>/apps/tldw-frontend && bunx vitest run __tests__/pages/repo2txt.test.tsx
+cd <repo_worktree>/apps/tldw-frontend && bun run compile
+cd <repo_worktree>/apps/extension && bun run compile
+cd <repo_worktree>/apps/extension && bun run build:chrome
+cd <repo_worktree>/apps/extension && bun run test:e2e tests/e2e/repo2txt-options.spec.ts tests/e2e/repo2txt-sidepanel-linkout.spec.ts
 ```
 
 Expected: all PASS with no typecheck errors.
@@ -784,7 +784,7 @@ Run the same verification command set; expected all PASS.
 **Step 5: Commit**
 
 ```bash
-cd /Users/macbook-dev/Documents/GitHub/tldw_server2-repo2txt
+cd <repo_worktree>
 git add apps/DEVELOPMENT.md apps/tldw-frontend/README.md apps/extension/README.md
 git commit -m "docs: document repo2txt options route"
 ```

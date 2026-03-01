@@ -57,7 +57,13 @@ export class LocalProvider extends BaseProvider {
       }
       for (let i = 0; i < options.files.length; i++) {
         const file = options.files[i]
-        const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+        const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath
+        const path = relativePath || file.name
+        if (!relativePath && this.fileMap.has(path)) {
+          throw new Error(
+            `Duplicate filename without directory context: ${path}. Use directory picker or zip source to preserve paths.`
+          )
+        }
         this.fileMap.set(path, file)
       }
       return

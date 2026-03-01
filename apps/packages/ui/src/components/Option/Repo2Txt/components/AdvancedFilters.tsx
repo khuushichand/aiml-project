@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next"
+
 type AdvancedFiltersProps = {
   filterText: string
   onFilterTextChange: (value: string) => void
@@ -11,19 +13,29 @@ export function AdvancedFilters({
   totalCount,
   selectedCount
 }: AdvancedFiltersProps) {
+  const { t } = useTranslation(["option"])
+
   return (
     <section className="space-y-2">
       <header className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold">Filters</h3>
+        <h3 className="text-sm font-semibold">
+          {t("option:repo2txt.filters", { defaultValue: "Filters" })}
+        </h3>
         <span className="text-xs text-text-subtle">
-          {selectedCount}/{totalCount} selected
+          {t("option:repo2txt.selectedCount", {
+            defaultValue: "{{selected}}/{{total}} selected",
+            selected: selectedCount,
+            total: totalCount
+          })}
         </span>
       </header>
       <input
         type="search"
         value={filterText}
         onChange={(event) => onFilterTextChange(event.target.value)}
-        placeholder="Filter files"
+        placeholder={t("option:repo2txt.filterFiles", {
+          defaultValue: "Filter files"
+        })}
         className="w-full rounded border px-3 py-1.5 text-sm"
       />
     </section>

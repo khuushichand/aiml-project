@@ -50,5 +50,18 @@ export const createFileTreeSlice: StateCreator<
       nodes,
       selectedPaths
     })
+  },
+  togglePath: (path) => {
+    set((state) => {
+      const nextSelected = new Set(state.selectedPaths)
+      if (nextSelected.has(path)) {
+        nextSelected.delete(path)
+      } else {
+        nextSelected.add(path)
+      }
+      return {
+        selectedPaths: nextSelected
+      }
+    })
   }
 })

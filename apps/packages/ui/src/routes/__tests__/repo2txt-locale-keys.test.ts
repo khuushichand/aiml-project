@@ -8,6 +8,18 @@ const REQUIRED_KEYS = [
   "repo2txt.title",
   "repo2txt.description",
   "repo2txt.generate",
+  "repo2txt.providerTitle",
+  "repo2txt.providerGithub",
+  "repo2txt.providerLocal",
+  "repo2txt.loadSource",
+  "repo2txt.chooseDirectory",
+  "repo2txt.chooseZip",
+  "repo2txt.filters",
+  "repo2txt.filterFiles",
+  "repo2txt.output",
+  "repo2txt.copy",
+  "repo2txt.download",
+  "repo2txt.outputPreviewAria",
   "header.modeRepo2txt"
 ] as const
 

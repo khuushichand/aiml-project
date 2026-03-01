@@ -1,3 +1,4 @@
+import { encode } from "gpt-tokenizer"
 import type {
   ProgressResponse,
   TokenizeFileRequest,
@@ -9,9 +10,14 @@ type TokenizerMessage = TokenizeResponse | ProgressResponse
 type MessageHandler = (payload: TokenizerMessage) => void
 
 const estimateTokens = (text: string): number => {
-  const normalized = String(text || "").trim()
-  if (!normalized) return 0
-  return normalized.split(/\s+/).length
+  const normalized = String(text || "")
+  const trimmed = normalized.trim()
+  if (!trimmed) return 0
+  try {
+    return encode(trimmed).length
+  } catch {
+    return trimmed.split(/\s+/).length
+  }
 }
 
 export class TokenizerWorker {

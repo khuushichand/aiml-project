@@ -1,3 +1,5 @@
+import { encode } from "gpt-tokenizer"
+
 export type TokenizeFileRequest = {
   path: string
   content: string
@@ -25,9 +27,20 @@ export type TokenizeResponse = {
 }
 
 const estimateTokens = (text: string): number => {
-  const normalized = String(text || "").trim()
-  if (!normalized) return 0
-  return normalized.split(/\s+/).length
+  const normalized = String(text || "")
+  const trimmed = normalized.trim()
+  if (!trimmed) return 0
+  try {
+    return encode(trimmed).length
+  } catch {
+    return trimmed.split(/\s+/).length
+  }
+}
+
+const countLines = (text: string): number => {
+  const normalized = String(text || "")
+  if (normalized.length === 0) return 0
+  return normalized.split("\n").length
 }
 
 self.onmessage = (event: MessageEvent<TokenizeRequest>) => {
@@ -54,7 +67,7 @@ self.onmessage = (event: MessageEvent<TokenizeRequest>) => {
       results.push({
         path: item.path,
         tokenCount: fileTokens,
-        lineCount: String(item.content || "").split("\n").length
+        lineCount: countLines(item.content)
       })
 
       const progressPayload: ProgressResponse = {
