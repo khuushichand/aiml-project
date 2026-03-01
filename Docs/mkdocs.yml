@@ -240,7 +240,7 @@ nav:
       - Overview: User_Guides/index.md
       - Server:
           - Setup & Authentication:
-              - Installation & Setup: User_Guides/Server/Installation-Setup-Guide.md
+              - Self-Hosting Profiles: Getting_Started/README.md
               - Authentication Setup: User_Guides/Server/Authentication_Setup.md
               - Multi-User Postgres Setup: User_Guides/Server/Multi-User_Postgres_Setup.md
               - Multi-User SQLite Setup: User_Guides/Server/Multi-User_SQLite_Setup.md

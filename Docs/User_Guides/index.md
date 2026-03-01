@@ -8,7 +8,7 @@ This section is organized by product surface so you can quickly find the right d
 
 ### Setup and Authentication
 
-- [Installation & Setup](Server/Installation-Setup-Guide.md)
+- [Self-Hosting Profiles](../Getting_Started/README.md)
 - [Authentication Setup](Server/Authentication_Setup.md)
 - [Multi-User Postgres Setup](Server/Multi-User_Postgres_Setup.md)
 - [Multi-User SQLite Setup](Server/Multi-User_SQLite_Setup.md)

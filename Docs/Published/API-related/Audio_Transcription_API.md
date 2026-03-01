@@ -897,7 +897,7 @@ TTS
 ## Related Documentation
 
 - [API Overview](./API_README.md)
-- [Configuration Guide](../User_Guides/Server/Installation-Setup-Guide.md)
+- [Self-Hosting Profiles](../Getting_Started/README.md)
 - [Live Transcription Guide](#live-transcription)
 - [Model Selection Guide](#supported-models)
 - For non-JSON responses (`text`, `srt`, `vtt`), `segment=true` is ignored and no `segmentation` is returned.
