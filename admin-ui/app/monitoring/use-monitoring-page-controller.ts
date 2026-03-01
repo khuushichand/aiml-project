@@ -21,6 +21,7 @@ import { useMonitoringDashboardState } from './use-monitoring-dashboard-state';
 import { useMonitoringDataLoader } from './use-monitoring-data-loader';
 import { useMonitoringMessages } from './use-monitoring-messages';
 import { useMonitoringMetricsHistory } from './use-monitoring-metrics-history';
+import { useMonitoringManagementPanelsProps } from './use-monitoring-management-panels-props';
 import { useMonitoringNotificationState } from './use-monitoring-notification-state';
 import { useNotificationActions } from './use-notification-actions';
 import { useWatchlistActions } from './use-watchlist-actions';
@@ -213,10 +214,6 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     [alerts]
   );
 
-  const handleToggleShowSnoozed = useCallback(() => {
-    setShowSnoozedAlerts((prev) => !prev);
-  }, [setShowSnoozedAlerts]);
-
   const headerProps = useMemo<ComponentProps<typeof MonitoringPageHeader>>(
     () => ({
       lastUpdated,
@@ -277,90 +274,41 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     ]
   );
 
-  const managementPanelsProps = useMemo<ComponentProps<typeof MonitoringManagementPanels>>(
-    () => ({
-      alertRulesPanelProps: {
-        rules: alertRules,
-        draft: alertRuleDraft,
-        errors: alertRuleValidationErrors,
-        saving: alertRulesSaving,
-        onDraftChange: handleAlertRuleDraftChange,
-        onCreateRule: handleCreateAlertRule,
-        onDeleteRule: handleDeleteAlertRule,
-      },
-      alertsPanelProps: {
-        alerts,
-        history: alertHistory,
-        showSnoozed: showSnoozedAlerts,
-        assignableUsers,
-        loading,
-        onToggleShowSnoozed: handleToggleShowSnoozed,
-        onAcknowledge: handleAcknowledgeAlert,
-        onDismiss: handleDismissAlert,
-        onAssign: handleAssignAlert,
-        onSnooze: handleSnoozeAlert,
-        onEscalate: handleEscalateAlert,
-      },
-      watchlistsPanelProps: {
-        watchlists,
-        loading,
-        showCreateWatchlist,
-        setShowCreateWatchlist,
-        newWatchlist,
-        setNewWatchlist,
-        onCreate: handleCreateWatchlist,
-        onDelete: handleDeleteWatchlist,
-        deletingWatchlistId,
-      },
-      notificationsPanelProps: {
-        settings: notificationSettings,
-        recentNotifications,
-        loading,
-        saving: notificationsSaving,
-        canSave: canSaveNotificationSettings,
-        onSave: handleSaveNotificationSettings,
-        onTest: handleTestNotification,
-      },
-      systemStatusPanelProps: {
-        systemStatus,
-      },
-    }),
-    [
-      alertHistory,
-      alertRuleDraft,
-      alertRuleValidationErrors,
-      alertRules,
-      alertRulesSaving,
-      alerts,
-      assignableUsers,
-      canSaveNotificationSettings,
-      deletingWatchlistId,
-      handleAcknowledgeAlert,
-      handleAlertRuleDraftChange,
-      handleAssignAlert,
-      handleCreateAlertRule,
-      handleCreateWatchlist,
-      handleDeleteAlertRule,
-      handleDeleteWatchlist,
-      handleDismissAlert,
-      handleEscalateAlert,
-      handleSaveNotificationSettings,
-      handleSnoozeAlert,
-      handleTestNotification,
-      handleToggleShowSnoozed,
-      loading,
-      newWatchlist,
-      notificationSettings,
-      notificationsSaving,
-      recentNotifications,
-      setNewWatchlist,
-      setShowCreateWatchlist,
-      showCreateWatchlist,
-      showSnoozedAlerts,
-      systemStatus,
-      watchlists,
-    ]
-  );
+  const managementPanelsProps = useMonitoringManagementPanelsProps({
+    alertRules,
+    alertRuleDraft,
+    alertRuleValidationErrors,
+    alertRulesSaving,
+    handleAlertRuleDraftChange,
+    handleCreateAlertRule,
+    handleDeleteAlertRule,
+    alerts,
+    alertHistory,
+    showSnoozedAlerts,
+    setShowSnoozedAlerts,
+    assignableUsers,
+    loading,
+    handleAcknowledgeAlert,
+    handleDismissAlert,
+    handleAssignAlert,
+    handleSnoozeAlert,
+    handleEscalateAlert,
+    watchlists,
+    showCreateWatchlist,
+    setShowCreateWatchlist,
+    newWatchlist,
+    setNewWatchlist,
+    handleCreateWatchlist,
+    handleDeleteWatchlist,
+    deletingWatchlistId,
+    notificationSettings,
+    recentNotifications,
+    notificationsSaving,
+    canSaveNotificationSettings,
+    handleSaveNotificationSettings,
+    handleTestNotification,
+    systemStatus,
+  });
 
   return {
     headerProps,
