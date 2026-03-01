@@ -56,7 +56,7 @@ try:
 except (ImportError, ModuleNotFoundError):  # pragma: no cover - optional in minimal profiles
     RGRequest = None  # type: ignore[assignment]
 
-try:  # Align HTTP 413 compatibility with legacy endpoint module
+try:  # Align HTTP 413 compatibility across FastAPI/Starlette versions
     HTTP_413_TOO_LARGE = status.HTTP_413_CONTENT_TOO_LARGE
 except AttributeError:  # Starlette < 0.27
     HTTP_413_TOO_LARGE = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
@@ -1219,9 +1219,9 @@ def _resolve_ingestion_file_validator(media_mod: Any | None) -> Any:
     """
     Resolve the shared file validator instance used by media ingestion flows.
 
-    Prefer the modular endpoint shim (for tests that monkeypatch
-    `endpoints.media.file_validator_instance`) and fall back to the core
-    dependency singleton.
+    Prefer the endpoint-exported validator patchpoint (for tests that
+    monkeypatch `endpoints.media.file_validator_instance`) and fall back to
+    the core dependency singleton.
     """
     try:
         from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (  # type: ignore  # noqa: E501
@@ -1878,8 +1878,8 @@ def determine_add_media_final_status(results: list[dict[str, Any]]) -> int:
     """
     Determine the overall HTTP status code for `/media/add` responses.
 
-    Mirrors the legacy `_determine_final_status` behaviour while living
-    in the core ingestion module.
+    Mirrors the previous endpoint-local `_determine_final_status` behavior
+    while living in the core ingestion module.
     """
     if not results:
         # This case should ideally be handled earlier if no inputs were valid.
@@ -2384,7 +2384,7 @@ async def add_media_orchestrate(
             except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as auto_err:
                 logger.warning("Auto-apply chunking template failed: {}", auto_err)
 
-            # Even if not used directly here, preserve the legacy call
+            # Even if not used directly here, preserve the existing call
             # to common options preparation to keep side effects/logging.
             _prepare_common_options(form_data, chunking_options_dict)
 
@@ -2856,10 +2856,9 @@ async def persist_primary_av_item(
     Persist a single audio/video item processed by the /add orchestration.
 
     This helper lifts the DB write + claims persistence logic used by
-    `_process_batch_media` so it can be reused and eventually migrated
-    out of the legacy endpoint module entirely.
+    `_process_batch_media` so it can be reused from the core ingestion module.
     """
-    # Match legacy guard: only attempt DB writes when we have a DB path,
+    # Match historical guard: only attempt DB writes when we have a DB path,
     # client id, and a successful or warning status.
     if not (db_path and client_id and process_result.get("status") in ["Success", "Warning"]):
         return
@@ -2883,7 +2882,7 @@ async def persist_primary_av_item(
         )
     final_keywords_list = sorted(combined_keywords)
 
-    # Use original input ref for default title to match legacy.
+    # Use original input ref for default title to match previous endpoint behavior.
     default_title = FilePath(str(original_input_ref)).stem if original_input_ref else "Untitled"
 
     title_for_db = metadata_for_db.get(
@@ -2892,7 +2891,7 @@ async def persist_primary_av_item(
     )
     author_for_db = metadata_for_db.get("author", getattr(form_data, "author", None))
 
-    # When there is no content, mirror legacy behavior: skip DB writes but
+    # When there is no content, mirror prior behavior: skip DB writes but
     # still persist claims (with media_id=None) and update db_message/db_id.
     if not content_for_db:
         process_result["db_message"] = "DB persistence skipped (no content)."
@@ -3298,9 +3297,8 @@ async def process_batch_media(
     """
     Core implementation of the audio/video batch processing helper used by `/media/add`.
 
-    This function mirrors the legacy `_process_batch_media` behaviour while living
-    in the core ingestion module so it can be reused independently of the legacy
-    endpoint file.
+    This function mirrors the previous endpoint-local `_process_batch_media`
+    behavior while living in the core ingestion module for shared reuse.
     """
     combined_results: list[dict[str, Any]] = []
     all_processing_sources = urls + uploaded_file_paths
@@ -4069,8 +4067,8 @@ async def process_document_like_item(
     document-like items (PDF, generic documents/JSON, ebooks, and emails)
     used by the `/media/add` endpoint.
 
-    This mirrors the behaviour of the legacy `_process_document_like_item`
-    implementation while living in the core ingestion module.
+    This mirrors the behavior of the previous endpoint-local
+    `_process_document_like_item` implementation while living in core.
     """
     # Resolve media-module exports when available so validator monkeypatching
     # (`endpoints.media.file_validator_instance`) continues to apply.
@@ -4400,7 +4398,7 @@ async def process_document_like_item(
                 raise ValueError("Document processing requires a file path.")
             import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs  # type: ignore  # noqa: E501
 
-            # Prefer the shimmed `media.process_document_content` so
+            # Prefer endpoint-exported `media.process_document_content` so
             # tests can patch it; fall back to the core implementation.
             if _media_mod is not None:
                 try:
@@ -4817,7 +4815,7 @@ async def persist_doc_item_and_children(
 ) -> None:
     """
     Persist a single document/email item (and any children) produced by the /add
-    orchestration, mirroring the legacy post-processing DB logic.
+    orchestration, mirroring the previous post-processing DB logic.
     """
     content_for_db = final_result.get("content", "")
     analysis_for_db = final_result.get("summary") or final_result.get("analysis")

@@ -102,8 +102,8 @@ def prepare_chunking_options_dict(form_data: Any) -> dict[str, Any] | None:
     """
     Prepare the dictionary of chunking options based on form data.
 
-    This is extracted from `_legacy_media._prepare_chunking_options_dict`
-    so it can be reused by core ingestion helpers and modular endpoints.
+    This is extracted from the former endpoint-local chunking helper so it
+    can be reused by core ingestion helpers and modular endpoints.
     """
     if not getattr(form_data, "perform_chunking", False):
         logging.info("Chunking disabled.")
@@ -384,8 +384,8 @@ def prepare_common_options(
     """
     Prepare the dictionary of common processing options for ingestion.
 
-    Extracted from `_legacy_media._prepare_common_options` to share
-    behavior between the legacy and modular `/media/add` paths.
+    Extracted from the prior endpoint-local helper to share behavior
+    between `/media/add` code paths.
     """
     return {
         "keywords": getattr(form_data, "keywords", []),
