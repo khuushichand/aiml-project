@@ -9,6 +9,7 @@
 
 import argparse
 import getpass
+import os
 import secrets
 import sys
 from datetime import datetime
@@ -42,6 +43,20 @@ def _build_user_db(db_path: str) -> UserDatabase:
         sqlite_path=str(Path(db_path)),
     )
     return UserDatabase(config=sqlite_config, client_id="migration_script")
+
+
+def _write_registration_codes_file(codes_file: Path, content: str) -> None:
+    """Write registration codes with owner-only permissions when supported."""
+    if os.name == "posix":
+        fd = os.open(codes_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as file_obj:
+            file_obj.write(content)
+        # Enforce 0o600 even if an existing file or umask affected the initial mode.
+        os.chmod(codes_file, 0o600)
+        return
+
+    with open(codes_file, "w", encoding="utf-8") as file_obj:
+        file_obj.write(content)
 
 ########################################################################################################################
 # Migration Functions
@@ -100,9 +115,10 @@ def create_admin_user(user_db: UserDatabase, password_service: PasswordService) 
             email=email,
             password_hash=password_hash,
             role='admin',
-            is_verified=True,
             created_by_migration=True
         )
+        if not user_db.update_user(user_id, is_verified=True):
+            raise RuntimeError("Admin user created but failed to mark as verified")
 
         print(f"\n✅ Admin user '{username}' created successfully (ID: {user_id})")
 
@@ -153,14 +169,13 @@ def generate_registration_codes(user_db: UserDatabase, admin_id: int, count: int
 
         # Save codes to file
         codes_file = Path("registration_codes.txt")
-        with open(codes_file, "w") as f:
-            f.write(f"Registration Codes (Generated on {datetime.now().isoformat()})\n")
-            f.write("="*60 + "\n\n")
-            for i, code in enumerate(codes, 1):
-                f.write(f"Code {i}: {code}\n")
-            f.write("\n" + "="*60 + "\n")
-            f.write("Each code is valid for 30 days and can be used once.\n")
-            f.write("Share these codes with users who need to register.\n")
+        file_content = [f"Registration Codes (Generated on {datetime.now().isoformat()})\n", "="*60 + "\n\n"]
+        for i, code in enumerate(codes, 1):
+            file_content.append(f"Code {i}: {code}\n")
+        file_content.append("\n" + "="*60 + "\n")
+        file_content.append("Each code is valid for 30 days and can be used once.\n")
+        file_content.append("Share these codes with users who need to register.\n")
+        _write_registration_codes_file(codes_file, "".join(file_content))
 
         print(f"📄 Codes saved to: {codes_file.absolute()}")
 
@@ -267,32 +282,30 @@ def verify_migration(user_db: UserDatabase) -> None:
     print("MIGRATION VERIFICATION")
     print("="*60)
 
-    conn = user_db.get_connection()
-
     # Check users
-    cursor = conn.execute("SELECT COUNT(*) as count FROM users")
-    user_count = cursor.fetchone()['count']
+    users_result = user_db.backend.execute("SELECT COUNT(*) as count FROM users")
+    user_count = users_result.rows[0]['count'] if users_result.rows else 0
     print(f"\n✅ Users in database: {user_count}")
 
     # Check roles
-    cursor = conn.execute("SELECT COUNT(*) as count FROM roles")
-    role_count = cursor.fetchone()['count']
+    roles_result = user_db.backend.execute("SELECT COUNT(*) as count FROM roles")
+    role_count = roles_result.rows[0]['count'] if roles_result.rows else 0
     print(f"✅ Roles configured: {role_count}")
 
     # Check permissions
-    cursor = conn.execute("SELECT COUNT(*) as count FROM permissions")
-    perm_count = cursor.fetchone()['count']
+    permissions_result = user_db.backend.execute("SELECT COUNT(*) as count FROM permissions")
+    perm_count = permissions_result.rows[0]['count'] if permissions_result.rows else 0
     print(f"✅ Permissions defined: {perm_count}")
 
     # Check admin user
-    cursor = conn.execute("""
+    admins_result = user_db.backend.execute("""
         SELECT u.username
         FROM users u
         JOIN user_roles ur ON u.id = ur.user_id
         JOIN roles r ON ur.role_id = r.id
         WHERE r.name = 'admin'
     """)
-    admins = cursor.fetchall()
+    admins = admins_result.rows
 
     if admins:
         print(f"✅ Admin users: {', '.join([a['username'] for a in admins])}")
@@ -361,8 +374,7 @@ def main():
         admin_info = create_admin_user(user_db, password_service)
     else:
         # Get existing admin
-        conn = user_db.get_connection()
-        cursor = conn.execute("""
+        existing_admin_result = user_db.backend.execute("""
             SELECT u.id, u.username
             FROM users u
             JOIN user_roles ur ON u.id = ur.user_id
@@ -370,7 +382,7 @@ def main():
             WHERE r.name = 'admin'
             LIMIT 1
         """)
-        row = cursor.fetchone()
+        row = existing_admin_result.rows[0] if existing_admin_result.rows else None
         if row:
             admin_info = {'id': row['id'], 'username': row['username']}
             print(f"\n✅ Using existing admin: {admin_info['username']}")
