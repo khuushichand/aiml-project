@@ -284,6 +284,8 @@ errors.log
 !Docs/Monitoring/claims_grafana_dashboard.json
 !Docs/Development/schema/embeddings_registry.json
 !Docs/Development/schema/embeddings_v1.schema.json
+!Docs/Evals/samples/*.json
+!Docs/Examples/PromptStudio/mcts/*.json
 !admin-ui/package.json
 all_summaries.txt
 all_transcriptions.json
