@@ -3,7 +3,9 @@ from pathlib import Path
 
 def test_readme_tts_onboarding_path_points_to_webui_extension() -> None:
     text = Path("README.md").read_text()
+    assert "Docs/User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md" in text
     assert "Docs/User_Guides/WebUI_Extension/TTS_Getting_Started.md" in text
+    assert "Docs/User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md" in text
     assert "Docs/User_Guides/TTS_Getting_Started.md" not in text
 
 

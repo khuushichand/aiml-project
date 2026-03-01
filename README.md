@@ -1041,7 +1041,9 @@ Run locally
 - Distribution strategy (API + WebUI): `Docs/Development/Packaging_and_Distribution_Strategy.md`
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
 - Deployment/Monitoring: `Docs/Published/Deployment/First_Time_Production_Setup.md`, `Docs/Published/Deployment/Reverse_Proxy_Examples.md`, `Docs/Deployment/Monitoring/`
-- TTS onboarding: `Docs/User_Guides/WebUI_Extension/TTS_Getting_Started.md` – hosted/local provider setup, verification, and troubleshooting
+- Speech quickstart (STT + TTS): `Docs/User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md`
+- TTS provider onboarding: `Docs/User_Guides/WebUI_Extension/TTS_Getting_Started.md`
+- TTS deep runbooks index: `Docs/User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md`
 - Design notes (WIP features): `Docs/Design/` - e.g., `Docs/Design/Custom_Scrapers_Router.md`
 
 ### Resource Governor Config
