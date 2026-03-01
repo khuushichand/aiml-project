@@ -1026,6 +1026,135 @@ class LLMTopSpendersResponse(BaseModel):
 
 #######################################################################################################################
 #
+# Router Analytics Schemas
+
+RouterAnalyticsRange = Literal["realtime", "1h", "8h", "24h", "7d", "30d"]
+RouterAnalyticsGranularity = Literal["1m", "5m", "15m", "1h"]
+
+
+class RouterAnalyticsRangeQuery(BaseModel):
+    """Shared query parameters for router analytics endpoints."""
+
+    range: RouterAnalyticsRange = "8h"
+    org_id: int | None = Field(None, ge=1)
+    provider: str | None = None
+    model: str | None = None
+    token_id: int | None = Field(None, ge=1)
+    granularity: RouterAnalyticsGranularity | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsDataWindow(BaseModel):
+    """Effective data window used for an analytics response."""
+
+    start: datetime
+    end: datetime
+    range: RouterAnalyticsRange
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsSeriesPoint(BaseModel):
+    """Single timeseries point for status chart rendering."""
+
+    ts: datetime
+    provider: str | None = None
+    model: str | None = None
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    avg_latency_ms: float | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsBreakdownRow(BaseModel):
+    """Shared row shape for breakdown tables."""
+
+    key: str
+    label: str | None = None
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    errors: int = 0
+    avg_latency_ms: float | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsStatusKpis(BaseModel):
+    """KPI cards displayed in the router analytics status tab."""
+
+    requests: int = 0
+    prompt_tokens: int = 0
+    generated_tokens: int = 0
+    total_tokens: int = 0
+    avg_latency_ms: float | None = None
+    avg_gen_toks_per_s: float | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsStatusResponse(BaseModel):
+    """Payload for /admin/router-analytics/status."""
+
+    kpis: RouterAnalyticsStatusKpis
+    series: list[RouterAnalyticsSeriesPoint] = Field(default_factory=list)
+    providers_available: int = 0
+    providers_online: int = 0
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsBreakdownsResponse(BaseModel):
+    """Payload for /admin/router-analytics/status/breakdowns."""
+
+    providers: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    models: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    token_names: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    remote_ips: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    user_agents: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsMetaOption(BaseModel):
+    """Reusable metadata option entry."""
+
+    value: str
+    label: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsMetaResponse(BaseModel):
+    """Payload for /admin/router-analytics/meta."""
+
+    providers: list[RouterAnalyticsMetaOption] = Field(default_factory=list)
+    models: list[RouterAnalyticsMetaOption] = Field(default_factory=list)
+    tokens: list[RouterAnalyticsMetaOption] = Field(default_factory=list)
+    ranges: list[RouterAnalyticsRange] = Field(default_factory=lambda: ["realtime", "1h", "8h", "24h", "7d", "30d"])
+    granularities: list[RouterAnalyticsGranularity] = Field(default_factory=lambda: ["1m", "5m", "15m", "1h"])
+    generated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
 # Tool Permission Schemas (MCP Integration)
 
 class ToolPermissionCreateRequest(BaseModel):
