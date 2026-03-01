@@ -115,7 +115,14 @@ The parity contract is mandatory:
 4. Same empty/loading/error pattern language.
 5. Same save/generation status chip behavior.
 
-Allowed differences are limited to responsive sizing and constrained-width adaptations in extension. Ordering and semantics cannot diverge.
+Allowed responsive differences are:
+
+1. Panel width ratios and breakpoints.
+2. Collapse-into-drawer/sheet behavior on narrow viewports.
+3. Control compaction (icon-only with tooltip) when width is constrained.
+4. Stacking behavior of multi-column layouts on mobile widths.
+
+Component order and action semantics remain invariant across surfaces.
 
 ## 7. Interaction Model Details
 
@@ -130,6 +137,16 @@ Allowed differences are limited to responsive sizing and constrained-width adapt
    - Mode selection
    - Key panel collapse states
    - Editor submode
+5. Hard requirement:
+   - No loss of unsaved input when switching between Draft and Manage within the same session.
+   - This includes in-progress editor text and in-progress form edits in visible controls.
+
+### 7.1 Mode Precedence
+
+1. First visit (no stored preference): open in `Draft`.
+2. Returning visit (valid stored preference): stored mode wins (`stored mode > default Draft`).
+3. Invalid or missing persisted value: normalize to `Draft`.
+4. Future releases must not silently overwrite a valid persisted mode.
 
 ## 8. Data Flow and State Design
 
@@ -164,8 +181,10 @@ Both webui and extension must consume this single registry to prevent drift.
 
 ## 10.1 Success Criteria
 
-1. New user can select/create session and generate in under 60 seconds on both surfaces.
-2. Draft mode visibly reduces control density versus current workspace.
+1. Timed flow script:
+   - A scripted first-run flow (create/select session -> type prompt -> generate) completes in <= 60 seconds at p95 on both surfaces in CI-like conditions.
+2. Control-density delta:
+   - Draft mode renders at least 35% fewer visible interactive controls above the fold than the baseline (current pre-redesign workspace), measured at the same viewport and seed data.
 3. Manage mode retains full advanced functionality.
 4. Webui and extension match visual parity contract.
 
@@ -181,6 +200,17 @@ Both webui and extension must consume this single registry to prevent drift.
    - same section ids/order across both surfaces
    - same shortcuts and labels
    - same capability-gating semantics
+
+## 10.3 Accessibility Acceptance Criteria
+
+1. Focus management:
+   - Switching modes keeps keyboard focus in a deterministic, visible location (mode switch or first heading in target mode).
+2. Keyboard operation:
+   - Mode switching and all Draft core actions are fully keyboard-operable with no pointer requirement.
+3. Screen reader announcements:
+   - Mode changes announce the active mode and major region change through an accessible live-region pattern.
+4. Hidden-region behavior:
+   - Mode-hidden regions are removed from tab order and not exposed as active controls to assistive technology.
 
 ## 11. Rollout Plan
 
