@@ -2819,7 +2819,7 @@ async def get_world_book_statistics(
         average_priority = sum(priorities) / len(priorities) if priorities else 0.0
 
         total_content_length = sum(len(e.content) for e in entries)
-        estimated_tokens = service._estimate_tokens(" ".join(e.content for e in entries))
+        estimated_tokens = service.count_tokens(" ".join(e.content for e in entries))
 
         return WorldBookStatistics(
             world_book_id=world_book_id,

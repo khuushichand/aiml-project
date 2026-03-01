@@ -2093,14 +2093,6 @@ class WorldBookService:
         self._entry_cache = BoundedDict(MAX_ENTRY_CACHE_SIZE)
         self._book_cache = BoundedDict(MAX_BOOK_CACHE_SIZE)
 
-    def _estimate_tokens(self, text: str) -> int:
-        """
-        Estimate token count for text.
-
-        Simple approximation: 1 token ≈ 4 characters or 0.75 words
-        """
-        return max(len(text) // 4, len(text.split()) * 3 // 4)
-
     def get_statistics(self, world_book_id: Optional[int] = None) -> dict[str, Any]:
         """
         Get world book usage statistics.
