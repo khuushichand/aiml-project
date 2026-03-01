@@ -79,17 +79,9 @@ class RateLimiter:
         """Return best-effort usage info (RG does not currently expose per-key usage here)."""
         return {}
 
-    async def reset(self, key: str) -> None:
-        """No-op reset (RG handles its own storage)."""
-        return None
-
     async def shutdown(self) -> None:
         """No background tasks to shutdown (kept for compatibility)."""
         return None
-
-    def get_category_limiter(self, category: str) -> str:
-        """Return category label for compatibility with older call sites."""
-        return category
 
 
 _rate_limiter: RateLimiter | None = None
