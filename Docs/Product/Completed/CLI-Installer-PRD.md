@@ -216,12 +216,8 @@
 ### Implementation Plan
 
 - Plan files:
-  - `Docs/Plans/IMPLEMENTATION_PLAN_cli_installer_env_merge.md`
-  - `Docs/Plans/IMPLEMENTATION_PLAN_cli_installer_db_init.md`
-  - `Docs/Plans/IMPLEMENTATION_PLAN_cli_installer_stage5_providers_mcp.md`
-  - `Docs/Plans/IMPLEMENTATION_PLAN_cli_installer_stage6_doctor.md`
-  - `Docs/Plans/IMPLEMENTATION_PLAN_cli_installer_stage7_ci_docs.md`
-  - `Docs/Plans/IMPLEMENTATION_PLAN_cli_installer_agent_mode_prd.md`
+  - `Docs/Product/Completed/CLI-Installer-PRD.md` (env merge, DB init, providers+MCP, doctor, CI/docs stages)
+  - `Docs/Product/CLI-Installer-Agent-Mode-PRD.md` (agent mode scope and rollout)
 
 ## Stage 1: Scaffold + Packaging
 **Goal**: Ship a packaged CLI skeleton with core commands, safe file ops, and JSON output.
