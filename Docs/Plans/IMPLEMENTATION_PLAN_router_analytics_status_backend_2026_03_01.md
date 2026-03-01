@@ -49,3 +49,24 @@
 - `python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
 - `python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/endpoints/admin/__init__.py -f json -o /tmp/bandit_router_analytics_status_backend.json`
 **Status**: Complete
+
+## Stage 7: Admin-UI Status Tab Migration to Router Analytics API
+**Goal**: Replace legacy `/usage` page data plumbing with new router analytics aggregate endpoints while keeping a thin frontend layer.
+**Success Criteria**:
+- `admin-ui/app/usage/page.tsx` renders a status-first shell (tabs, KPI cards, timeline, breakdown tables).
+- Frontend calls `GET /admin/router-analytics/status`, `/status/breakdowns`, and `/meta` via `api-client` + thin router analytics client wrappers.
+- Non-status tabs render placeholder content for staged rollout.
+**Tests**:
+- `admin-ui/app/usage/__tests__/page.test.tsx`
+**Status**: Complete
+
+## Stage 8: Frontend Verification
+**Goal**: Validate touched admin-ui scope and ensure frontend quality gates pass for the delivery slice.
+**Success Criteria**:
+- Usage page tests pass against new router analytics shell.
+- Touched frontend files pass targeted lint.
+- Any verification constraints are documented when tooling prerequisites are absent.
+**Tests**:
+- `cd admin-ui && bunx vitest run app/usage/__tests__/page.test.tsx`
+- `cd admin-ui && BROWSERSLIST_IGNORE_OLD_DATA=1 BASELINE_BROWSER_MAPPING_IGNORE_OLD_DATA=1 bunx eslint app/usage/page.tsx app/usage/__tests__/page.test.tsx lib/router-analytics-client.ts lib/router-analytics-types.ts lib/api-client.ts`
+**Status**: Complete

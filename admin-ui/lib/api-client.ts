@@ -684,6 +684,18 @@ export const api = {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/admin/llm-usage/top-spenders${queryParams ? `?${queryParams}` : ''}`);
   },
+  getRouterAnalyticsStatus: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/router-analytics/status${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getRouterAnalyticsStatusBreakdowns: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/router-analytics/status/breakdowns${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getRouterAnalyticsMeta: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/router-analytics/meta${queryParams ? `?${queryParams}` : ''}`);
+  },
 
   // ============================================
   // Resource Governor
