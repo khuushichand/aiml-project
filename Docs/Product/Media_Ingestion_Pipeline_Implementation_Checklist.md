@@ -6,13 +6,12 @@ Scope: Remaining delivery for advanced automation, artifact generation, quality 
 
 ## How to Use
 - Treat this as the execution companion to `Docs/Product/Media_Ingestion_Pipeline_PRD.md` (remaining scope only).
-- Use `Docs/Product/Completed/Media_Ingestion_Pipeline_Completed_PRD.md` and `Docs/Product/Completed/Media_Ingestion_Pipeline_Completed_Checklist.md` for shipped scope.
+- Use `Docs/Product/Completed/Media_Ingestion_Pipeline_Completed_PRD.md` for shipped scope.
 - Deliver each item with tests and doc updates in the same PR when practical.
 
 ## Completed Scope (Archived)
 - Foundations through Stage 2 plus initial Stage 3 streaming transcript persistence are archived in:
   - `Docs/Product/Completed/Media_Ingestion_Pipeline_Completed_PRD.md`
-  - `Docs/Product/Completed/Media_Ingestion_Pipeline_Completed_Checklist.md`
 
 ## Remaining Checklist Items
 
