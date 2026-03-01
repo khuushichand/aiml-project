@@ -4,7 +4,7 @@
 
 This artifact operationalizes Stage 1 pre-implementation validation for:
 
-- `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_themes_v2.md`
+- `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_themes_v2.md`
 
 It combines a baseline metrics tracker and a route-level contract matrix using the full audited route manifest.
 
