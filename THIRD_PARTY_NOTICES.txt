@@ -7,8 +7,8 @@ authors, license types, and pointers to the
 original license text.  It does not cover transitive dependencies installed at
 build time via pip or npm; consult pyproject.toml and package.json for those.
 
-Project: tldw_server
-Project license: GNU General Public License v3.0 (GPL-3.0-or-later)
+Host project: tldw_server
+Host project license: GNU General Public License v3.0 (GPL-3.0-or-later)
 
 All bundled components below are listed with their own licenses and are used in
 a manner compatible with the project license.
@@ -77,6 +77,15 @@ a manner compatible with the project license.
                   (includes focus-visible polyfill and escape-html, both MIT)
    License text : https://opensource.org/licenses/MIT
    URL          : https://github.com/squidfunk/mkdocs-material
+
+9. repo2txt (ported/adapted modules)
+   Author/Year : Abin Thomas and repo2txt contributors
+   License      : MIT
+   Files        : apps/packages/ui/src/components/Option/Repo2Txt/
+                  (Repo2TxtPage.tsx, components/*, formatter/*, providers/*,
+                   store/*, workers/*)
+   License text : https://opensource.org/licenses/MIT
+   URL          : https://github.com/abinthomasonline/repo2txt
 
 -------------------------------------------------------------------------------
 END OF THIRD-PARTY NOTICES

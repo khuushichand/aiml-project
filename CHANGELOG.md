@@ -27,6 +27,8 @@ and this project adheres to Some kind of Versioning
   - `apps/DEVELOPMENT.md`
   - `apps/tldw-frontend/README.md`
   - `apps/extension/README.md`
+- Added third-party notice attribution for upstream `repo2txt` (project + MIT license) in:
+  - `THIRD_PARTY_NOTICES.txt`
 - Added extension compile tsconfig and entrypoint module declarations:
   - `apps/extension/tsconfig.compile.json`
   - `apps/extension/types/tldw-ui-entries.d.ts`
