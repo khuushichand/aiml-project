@@ -15,21 +15,30 @@ GUIDE_DIRS = (
     REPO_ROOT / "Docs/Published/Deployment",
     REPO_ROOT / "Docs/Published/Monitoring",
 )
+GUIDE_FILES = (
+    REPO_ROOT / "Helper_Scripts/Samples/Grafana/README.md",
+)
 DOC_PATH_PATTERN = re.compile(r"Docs/[A-Za-z0-9_./-]+")
 
 
 def _collect_missing_paths() -> list[tuple[str, str]]:
     missing: list[tuple[str, str]] = []
+    markdown_files: list[Path] = []
     for root in GUIDE_DIRS:
         if not root.exists():
             continue
-        for guide_file in sorted(root.rglob("*.md")):
-            text = guide_file.read_text(encoding="utf-8")
-            for match in DOC_PATH_PATTERN.finditer(text):
-                raw_path = match.group(0).rstrip("`),.:;")
-                candidate = REPO_ROOT / raw_path
-                if not candidate.exists():
-                    missing.append((str(guide_file.relative_to(REPO_ROOT)), raw_path))
+        markdown_files.extend(sorted(root.rglob("*.md")))
+    for guide_file in GUIDE_FILES:
+        if guide_file.exists():
+            markdown_files.append(guide_file)
+
+    for guide_file in markdown_files:
+        text = guide_file.read_text(encoding="utf-8")
+        for match in DOC_PATH_PATTERN.finditer(text):
+            raw_path = match.group(0).rstrip("`),.:;")
+            candidate = REPO_ROOT / raw_path
+            if not candidate.exists():
+                missing.append((str(guide_file.relative_to(REPO_ROOT)), raw_path))
     return sorted(set(missing))
 
 
