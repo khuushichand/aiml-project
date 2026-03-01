@@ -283,6 +283,7 @@ errors.log
 !Docs/Deployment/sidecar_workers_manifest.json
 !Docs/Monitoring/claims_grafana_dashboard.json
 !Docs/Monitoring/http_client_grafana_dashboard.json
+!Docs/Deployment/Monitoring/Grafana_Streaming_Basics.json
 !Docs/Development/schema/embeddings_registry.json
 !Docs/Development/schema/embeddings_v1.schema.json
 !Docs/Evals/samples/*.json
