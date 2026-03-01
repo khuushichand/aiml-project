@@ -4,7 +4,7 @@ from __future__ import annotations
 Video-specific batch helper for the /process-videos endpoint.
 
 This module lifts the core "call video library + merge results" logic out of
-`_legacy_media.process_videos_endpoint` while preserving behavior. The HTTP
+the former endpoint-local video handler while preserving behavior. The HTTP
 layer (status codes, request/response models) remains in the endpoint module.
 """
 
@@ -32,7 +32,7 @@ async def run_video_batch(
     Execute the video processing library and merge results with file errors.
 
     This function mirrors the logic originally embedded in
-    `_legacy_media.process_videos_endpoint`:
+    the previous endpoint-local video handler:
       - builds `video_args` from the form data,
       - calls `process_videos` in a thread executor,
       - merges its output with any prior file-handling errors,

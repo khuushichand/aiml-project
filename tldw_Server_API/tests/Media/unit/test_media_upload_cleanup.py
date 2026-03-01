@@ -6,9 +6,10 @@ import pytest
 from loguru import logger
 
 
-# Unit-test the internal save/upload utility to exercise cleanup paths.
-from tldw_Server_API.app.api.v1.endpoints.media import _save_uploaded_files
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
+from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
+    save_uploaded_files,
+)
 
 
 class DummyUploadFile:
@@ -42,7 +43,7 @@ async def test_save_uploaded_files_empty_file_cleanup_logs(tmp_media_dir, capsys
     sink_id = logger.add(lambda m: print(m, end=""))
     try:
         files = [DummyUploadFile("empty.txt", b"")]
-        processed, errors = await _save_uploaded_files(
+        processed, errors = await save_uploaded_files(
             files,
             tmp_media_dir,
             validator=file_validator_instance,
@@ -61,7 +62,7 @@ async def test_save_uploaded_files_empty_file_cleanup_logs(tmp_media_dir, capsys
 @pytest.mark.asyncio
 async def test_save_uploaded_files_write_failure_cleanup(tmp_media_dir, monkeypatch):
     # Force aiofiles.open to raise OSError to exercise the write-error cleanup path
-    import tldw_Server_API.app.api.v1.endpoints.media as media_mod
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing as input_sourcing_mod
 
     class _FailOpen:
         def __init__(self, *a, **kw):
@@ -77,10 +78,10 @@ async def test_save_uploaded_files_write_failure_cleanup(tmp_media_dir, monkeypa
 
         return _FailOpen()
 
-    monkeypatch.setattr(media_mod.aiofiles, "open", _fake_open, raising=True)
+    monkeypatch.setattr(input_sourcing_mod.aiofiles, "open", _fake_open, raising=True)
 
     files = [DummyUploadFile("code.py", b"print('x')\n")]
-    processed, errors = await _save_uploaded_files(
+    processed, errors = await save_uploaded_files(
         files,
         tmp_media_dir,
         validator=file_validator_instance,

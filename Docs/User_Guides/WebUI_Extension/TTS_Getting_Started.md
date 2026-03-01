@@ -2,6 +2,11 @@
 
 This guide helps new operators bring text-to-speech (TTS) online inside `tldw_server`. It walks through the supported providers (cloud + local), required dependencies, configuration files, and verification commands so you can decide which adapter to enable and confirm it works end to end.
 
+Scope:
+- Use this page for provider selection and first successful synthesis.
+- Use [Getting Started — STT and TTS](./Getting-Started-STT_and_TTS.md) for quick dual STT+TTS bring-up.
+- Use [TTS Provider Setup Guide](./TTS-SETUP-GUIDE.md) to jump to deep provider runbooks and tuning docs.
+
 ## YAML Quick Start
 
 Minimal configuration to get going. Save to `tldw_Server_API/Config_Files/tts_providers_config.yaml` (canonical location; alternate config roots are supported).
@@ -79,18 +84,18 @@ Installer flags:
 
 | Provider | Type | Install / Extras | Voice Cloning | Reference |
 | --- | --- | --- | --- | --- |
-| OpenAI `tts-1` | Hosted API | `OPENAI_API_KEY` | No | [Getting Started](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting-Started-STT_and_TTS.md#option-a-openai-tts-hosted) |
-| ElevenLabs | Hosted API | `ELEVENLABS_API_KEY` | Yes (via ElevenLabs voices) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#commercial-providers) |
-| Kokoro ONNX | Local ONNX | `pip install -e ".[TTS_kokoro_onnx]"` + `espeak-ng` | No | [Getting Started](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting-Started-STT_and_TTS.md#option-b-kokoro-tts-local-onnx) |
-| NeuTTS Air | Local hybrid | `pip install -e ".[TTS_neutts]"` + `espeak-ng` | **Required** (reference audio + text) | [NeuTTS Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/NEUTTS_TTS_SETUP.md) |
-| Chatterbox | Local PyTorch | `pip install -e ".[TTS_chatterbox]"` (+ `.[TTS_chatterbox_lang]` for multilingual) | Yes (5–20 s) | [Chatterbox Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/CHATTERBOX_SETUP.md) |
-| VibeVoice | Local PyTorch | `pip install -e ".[TTS_vibevoice]"` + clone [VibeVoice](https://github.com/microsoft/VibeVoice) | Yes (3–30 s) | [VibeVoice Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/VIBEVOICE_GETTING_STARTED.md) |
-| Higgs Audio V2 | Local PyTorch | `pip install -e ".[TTS_higgs]"` + install `bosonai/higgs-audio` | Yes (3–10 s) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#higgs-audio-v2-setup) |
-| Dia | Local PyTorch | `pip install torch transformers accelerate nltk spacy` | Yes (dialogue prompts) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#dia-setup) |
+| OpenAI `tts-1` | Hosted API | `OPENAI_API_KEY` | No | [Getting Started](./Getting-Started-STT_and_TTS.md#option-a-openai-tts-hosted) |
+| ElevenLabs | Hosted API | `ELEVENLABS_API_KEY` | Yes (via ElevenLabs voices) | [TTS Setup Guide](../../STT-TTS/TTS-SETUP-GUIDE.md#commercial-providers) |
+| Kokoro ONNX | Local ONNX | `pip install -e ".[TTS_kokoro_onnx]"` + `espeak-ng` | No | [Getting Started](./Getting-Started-STT_and_TTS.md#option-b-kokoro-tts-local-onnx) |
+| NeuTTS Air | Local hybrid | `pip install -e ".[TTS_neutts]"` + `espeak-ng` | **Required** (reference audio + text) | [NeuTTS Runbook](../../STT-TTS/NEUTTS_TTS_SETUP.md) |
+| Chatterbox | Local PyTorch | `pip install -e ".[TTS_chatterbox]"` (+ `.[TTS_chatterbox_lang]` for multilingual) | Yes (5–20 s) | [Chatterbox Runbook](../../STT-TTS/CHATTERBOX_SETUP.md) |
+| VibeVoice | Local PyTorch | `pip install -e ".[TTS_vibevoice]"` + clone [VibeVoice](https://github.com/microsoft/VibeVoice) | Yes (3–30 s) | [VibeVoice Guide](../../STT-TTS/VIBEVOICE_GETTING_STARTED.md) |
+| Higgs Audio V2 | Local PyTorch | `pip install -e ".[TTS_higgs]"` + install `bosonai/higgs-audio` | Yes (3–10 s) | [TTS Setup Guide](../../STT-TTS/TTS-SETUP-GUIDE.md#higgs-audio-v2-setup) |
+| Dia | Local PyTorch | `pip install torch transformers accelerate nltk spacy` | Yes (dialogue prompts) | [TTS Setup Guide](../../STT-TTS/TTS-SETUP-GUIDE.md#dia-setup) |
 | IndexTTS2 | Local PyTorch | Download checkpoints to `checkpoints/index_tts2/` | Yes (zero-shot, 12 GB+ VRAM) | [TTS README](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-README.md#indextts2-adapter) |
-| PocketTTS | Local ONNX | `pip install -e ".[TTS_pocket_tts]"` | **Required** (reference audio) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#pockettts-onnx-setup) |
-| LuxTTS | Local PyTorch | Follow LuxTTS runbook (manual install + clone `LuxTTS` repo) | Yes (48kHz ZipVoice) | [LuxTTS Setup](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/LUXTTS_TTS_SETUP.md) |
-| Qwen3-TTS | Local PyTorch | Install `qwen-tts` + deps (see setup section) | Yes (CustomVoice, multi-lang) | [Qwen3-TTS Setup](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#qwen3-tts-setup) |
+| PocketTTS | Local ONNX | `pip install -e ".[TTS_pocket_tts]"` | **Required** (reference audio) | [TTS Setup Guide](../../STT-TTS/TTS-SETUP-GUIDE.md#pockettts-onnx-setup) |
+| LuxTTS | Local PyTorch | Follow LuxTTS runbook (manual install + clone `LuxTTS` repo) | Yes (48kHz ZipVoice) | [LuxTTS Setup](../../STT-TTS/LUXTTS_TTS_SETUP.md) |
+| Qwen3-TTS | Local PyTorch | Install `qwen-tts` + deps (see setup section) | Yes (CustomVoice, multi-lang) | [Qwen3-TTS Setup](../../STT-TTS/TTS-SETUP-GUIDE.md#qwen3-tts-setup) |
 | Echo-TTS | Local PyTorch | `pip install -e ".[TTS_echo_tts]"` (CUDA only) | **Required** (reference audio) | [TTS README](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-README.md#echotts-adapter) |
 
 > Tip: Keep cloud providers (`openai`, `elevenlabs`) high in `provider_priority` for instant results, and add local fallbacks underneath.
@@ -246,7 +251,7 @@ Each section highlights installation, configuration, and a smoke test.
       codec_device: "cpu"
   ```
 - **Voice cloning**: every request must include a base64 `voice_reference` clip (3–15 s) plus `extra_params.reference_text` that exactly matches the spoken content.
-- **Verify**: use the sample curl from [NeuTTS Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/NEUTTS_TTS_SETUP.md) and confirm the WAV plays back.
+- **Verify**: use the sample curl from [NeuTTS Runbook](../../STT-TTS/NEUTTS_TTS_SETUP.md) and confirm the WAV plays back.
 
 ### Chatterbox
 - **Install**: `pip install -e ".[TTS_chatterbox]"`; add `.[TTS_chatterbox_lang]` if you plan to enable `use_multilingual`. If the runtime still reports missing `chatterbox`, install upstream with `pip install chatterbox-tts` (or from source).
@@ -262,7 +267,7 @@ Each section highlights installation, configuration, and a smoke test.
       target_latency_ms: 200
   ```
 - **Voice cloning**: send `voice_reference` (5–20 s, 24 kHz) and optional `emotion` + `emotion_intensity` to tune delivery.
-- **Reference**: see [Chatterbox Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/CHATTERBOX_SETUP.md) for streaming examples and troubleshooting.
+- **Reference**: see [Chatterbox Runbook](../../STT-TTS/CHATTERBOX_SETUP.md) for streaming examples and troubleshooting.
 
 ### VibeVoice
 - **Install**: `pip install -e ".[TTS_vibevoice]"`; clone the upstream repo into `libs/VibeVoice` and `pip install -e .` there. Optional: `bitsandbytes`, `flash-attn`, `ninja` for CUDA optimizations.
@@ -280,7 +285,7 @@ Each section highlights installation, configuration, and a smoke test.
         "1": "en-Alice_woman"
   ```
 - **Voice cloning**: drop samples into `voices_dir`, upload via API, or send `voice_reference`. Use `extra_params.speakers_to_voices` to map scripted speakers to files or uploaded IDs.
-- **Reference**: [VibeVoice Getting Started](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/VIBEVOICE_GETTING_STARTED.md).
+- **Reference**: [VibeVoice Getting Started](../../STT-TTS/VIBEVOICE_GETTING_STARTED.md).
 
 ### Higgs Audio V2
 - **Install**: `pip install -e ".[TTS_higgs]"` and install the upstream repo (`git clone https://github.com/boson-ai/higgs-audio && pip install -e .`).
@@ -295,7 +300,7 @@ Each section highlights installation, configuration, and a smoke test.
       use_fp16: true
   ```
 - **Voice cloning**: accepts 3–10 s voice samples at 24 kHz (WAV/MP3/FLAC). Include `voice_reference` + `voice` = `"clone"`.
-- **Reference**: [Higgs section](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#higgs-audio-v2-setup).
+- **Reference**: [Higgs section](../../STT-TTS/TTS-SETUP-GUIDE.md#higgs-audio-v2-setup).
 
 ### Dia
 - **Install**: `pip install torch torchaudio transformers accelerate nltk spacy` plus `python -m spacy download en_core_web_sm`.
@@ -437,8 +442,8 @@ All env vars above are documented in `Env_Vars.md`.
 ---
 
 ## Additional Resources
-- [TTS-SETUP-GUIDE](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md) — exhaustive installer for every backend.
-- [Getting-Started-STT_and_TTS](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting-Started-STT_and_TTS.md) — fast-start for OpenAI + Kokoro + STT.
+- [TTS-SETUP-GUIDE](../../STT-TTS/TTS-SETUP-GUIDE.md) — exhaustive installer for every backend.
+- [Getting-Started-STT_and_TTS](./Getting-Started-STT_and_TTS.md) — fast-start for OpenAI + Kokoro + STT.
 - [TTS-VOICE-CLONING](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-VOICE-CLONING.md) — in-depth reference requirements per provider.
 - [TTS-DEPLOYMENT](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-DEPLOYMENT.md) — GPU sizing, smoke tests, and monitoring.
 

@@ -8,7 +8,7 @@ This section is organized by product surface so you can quickly find the right d
 
 ### Setup and Authentication
 
-- [Installation & Setup](Server/Installation-Setup-Guide.md)
+- [Self-Hosting Profiles](../Getting_Started/README.md)
 - [Authentication Setup](Server/Authentication_Setup.md)
 - [Multi-User Postgres Setup](Server/Multi-User_Postgres_Setup.md)
 - [Multi-User SQLite Setup](Server/Multi-User_SQLite_Setup.md)
@@ -55,9 +55,9 @@ This section is organized by product surface so you can quickly find the right d
 
 ### Audio, Voice, and Media UX
 
-- [Getting Started: STT and TTS](WebUI_Extension/Getting-Started-STT_and_TTS.md)
-- [TTS Getting Started](WebUI_Extension/TTS_Getting_Started.md)
-- [TTS Setup Guide](WebUI_Extension/TTS-SETUP-GUIDE.md)
+- [Getting Started: STT and TTS (Quickstart)](WebUI_Extension/Getting-Started-STT_and_TTS.md)
+- [TTS Providers Getting Started](WebUI_Extension/TTS_Getting_Started.md)
+- [TTS Setup Guide (Runbook Index)](WebUI_Extension/TTS-SETUP-GUIDE.md)
 - [PocketTTS Voice Cloning Guide](WebUI_Extension/PocketTTS_Voice_Cloning_Guide.md)
 - [EPUB Reader Guide](WebUI_Extension/EPUB_Reader_Guide.md)
 - [Image Generation Setup](WebUI_Extension/Image_Generation_Setup.md)

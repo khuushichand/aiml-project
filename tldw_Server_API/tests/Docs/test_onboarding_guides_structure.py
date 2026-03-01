@@ -13,9 +13,12 @@ def test_each_profile_has_required_sections() -> None:
         text = Path(guide).read_text()
         for heading in REQUIRED:
             assert heading in text
+        assert "## Optional Add-ons" in text
+        assert "GPU/STT Add-on" in text
 
 
 def test_gpu_addon_has_prereq_verify_troubleshoot() -> None:
     text = Path("Docs/Getting_Started/GPU_STT_Addon.md").read_text()
     for heading in ["## Prerequisites", "## Verify", "## Troubleshoot"]:
         assert heading in text
+    assert "not a standalone setup guide" in text

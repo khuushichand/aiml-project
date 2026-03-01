@@ -1453,25 +1453,6 @@ async def get_current_active_user(
     return current_user
 
 
-async def get_user_org_policy(
-    db: Any = Depends(get_db_transaction),  # noqa: B008
-    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: dict[str, Any] | None = None,  # compat arg for legacy call sites/tests
-) -> dict[str, Any]:
-    """
-    Deprecated compatibility shim for user-dict org policy lookups.
-
-    New code should prefer ``get_org_policy_from_principal``. This helper
-    now delegates to the claim-first resolver so org policy resolution stays
-    consistent across all authentication flows.
-    """
-    _ = current_user
-    return await get_org_policy_from_principal(
-        db=db,
-        principal=principal,
-    )
-
-
 async def _load_org_policy(db: Any, org_id: int) -> dict[str, Any]:
     """
     Internal helper to load an organization policy with consistent error handling.
@@ -1505,8 +1486,8 @@ async def get_org_policy_from_principal(
     2. Synthetic org_id=1 for explicit single-user principals (subject=single_user).
     3. HTTP 400 when no organization can be resolved.
 
-    This helper is the principal-first counterpart to ``get_user_org_policy`` and
-    is intended for new code paths that already depend on ``get_auth_principal``.
+    This helper is intended for code paths that already depend on
+    ``get_auth_principal``.
     """
     def _should_use_synthetic_single_user_org(p: AuthPrincipal) -> bool:
         """
@@ -1580,49 +1561,6 @@ def _principal_has_admin_claims(principal: AuthPrincipal | None) -> bool:
     if "admin" in roles:
         return True
     return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
-
-
-async def get_optional_current_user(
-    request: Request,
-    response: Response,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    session_manager: SessionManager = Depends(get_session_manager_dep),
-    db_pool: DatabasePool = Depends(get_db_pool),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-) -> Optional[dict[str, Any]]:
-    """
-    Legacy shim - do not use in new code.
-
-    Get current user if authenticated, None otherwise.
-
-    This is useful for endpoints that have different behavior
-    for authenticated vs unauthenticated users
-
-    Args:
-        request: FastAPI request object
-        response: FastAPI response object
-        credentials: Optional bearer token
-        session_manager: Session manager instance
-        db_pool: Database pool instance
-        x_api_key: Optional API key from X-API-KEY header
-
-    Returns:
-        User dictionary if authenticated, None otherwise
-    """
-    if not credentials and not x_api_key:
-        return None
-
-    try:
-        return await get_current_user(
-            request=request,
-            response=response,
-            credentials=credentials,  # may be None if authenticating via X-API-KEY only
-            session_manager=session_manager,
-            db_pool=db_pool,
-            x_api_key=x_api_key,
-        )
-    except HTTPException:
-        return None
 
 
 #######################################################################################################################
@@ -1715,22 +1653,33 @@ def _consume_auth_deps_fallback_rate_token(
         return True, 0
 
 
-async def check_rate_limit(request: Request, rate_limiter=None) -> None:
-    """General ingress compatibility shim with fail-closed fallback enforcement."""
-    _ = rate_limiter
-    if _rg_enabled_for_request(request):
-        return
-
-    endpoint = request.url.path if getattr(request, "url", None) else "unknown"
-
-    principal = None
+def _auth_deps_request_principal(request: Request) -> AuthPrincipal | None:
+    """Best-effort principal lookup from request state."""
     try:
         ctx = getattr(request.state, "auth", None)
         if isinstance(ctx, AuthContext):
-            principal = ctx.principal
+            return ctx.principal
     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
-        principal = None
+        return None
+    return None
 
+
+async def _enforce_auth_deps_ingress_guard(
+    *,
+    request: Request,
+    dependency: str,
+    endpoint: str,
+    fallback_limit_env: str,
+    fallback_window_env: str,
+    fallback_limit_default: int,
+    fallback_window_default: float,
+    limit_exceeded_detail: str,
+) -> None:
+    """Apply fail-closed ingress fallback limits when RG policy metadata is absent."""
+    if _rg_enabled_for_request(request):
+        return
+
+    principal = _auth_deps_request_principal(request)
     if is_single_user_principal(principal):
         return
 
@@ -1742,18 +1691,19 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
         return
 
     try:
-        fallback_limit = _read_non_negative_int_env("AUTH_DEPS_FALLBACK_RATE_LIMIT", 120)
-        fallback_window = _read_non_negative_float_env("AUTH_DEPS_FALLBACK_RATE_WINDOW_SECONDS", 60.0)
+        fallback_limit = _read_non_negative_int_env(fallback_limit_env, fallback_limit_default)
+        fallback_window = _read_non_negative_float_env(fallback_window_env, fallback_window_default)
         identifier = _auth_deps_rate_limit_identifier(request, endpoint)
         allowed, retry_after = _consume_auth_deps_fallback_rate_token(
-            dependency="check_rate_limit",
+            dependency=dependency,
             identifier=identifier,
             limit=fallback_limit,
             window_seconds=fallback_window,
         )
     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
-            "Auth dependency check_rate_limit fallback enforcement failed (endpoint={}): {}",
+            "Auth dependency {} fallback enforcement failed (endpoint={}): {}",
+            dependency,
             endpoint,
             exc,
         )
@@ -1765,64 +1715,41 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded for endpoint: {endpoint}",
+            detail=limit_exceeded_detail,
             headers={"Retry-After": str(retry_after)},
         )
+
+
+async def check_rate_limit(request: Request, rate_limiter=None) -> None:
+    """General ingress rate-limit guard with fail-closed fallback enforcement."""
+    _ = rate_limiter
+    endpoint = request.url.path if getattr(request, "url", None) else "unknown"
+    await _enforce_auth_deps_ingress_guard(
+        request=request,
+        dependency="check_rate_limit",
+        endpoint=endpoint,
+        fallback_limit_env="AUTH_DEPS_FALLBACK_RATE_LIMIT",
+        fallback_window_env="AUTH_DEPS_FALLBACK_RATE_WINDOW_SECONDS",
+        fallback_limit_default=120,
+        fallback_window_default=60.0,
+        limit_exceeded_detail=f"Rate limit exceeded for endpoint: {endpoint}",
+    )
 
 
 async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
-    """Auth ingress compatibility shim with fail-closed fallback enforcement."""
+    """Auth endpoint ingress rate-limit guard with fail-closed fallback enforcement."""
     _ = rate_limiter
-    if _rg_enabled_for_request(request):
-        return
-
     endpoint = request.url.path if getattr(request, "url", None) else "auth"
-
-    principal = None
-    try:
-        ctx = getattr(request.state, "auth", None)
-        if isinstance(ctx, AuthContext):
-            principal = ctx.principal
-    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
-        principal = None
-
-    if is_single_user_principal(principal):
-        return
-
-    # Claim-first governor hook (primarily for test invariants)
-    await get_auth_governor()
-
-    # In test mode, bypass rate limiting entirely for deterministic tests.
-    if _is_test_mode():
-        return
-
-    try:
-        fallback_limit = _read_non_negative_int_env("AUTH_DEPS_AUTH_FALLBACK_RATE_LIMIT", 30)
-        fallback_window = _read_non_negative_float_env("AUTH_DEPS_AUTH_FALLBACK_RATE_WINDOW_SECONDS", 60.0)
-        identifier = _auth_deps_rate_limit_identifier(request, endpoint)
-        allowed, retry_after = _consume_auth_deps_fallback_rate_token(
-            dependency="check_auth_rate_limit",
-            identifier=identifier,
-            limit=fallback_limit,
-            window_seconds=fallback_window,
-        )
-    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(
-            "Auth dependency check_auth_rate_limit fallback enforcement failed (endpoint={}): {}",
-            endpoint,
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Rate limiting temporarily unavailable",
-        ) from exc
-
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Auth rate limit exceeded for endpoint: {endpoint}",
-            headers={"Retry-After": str(retry_after)},
-        )
+    await _enforce_auth_deps_ingress_guard(
+        request=request,
+        dependency="check_auth_rate_limit",
+        endpoint=endpoint,
+        fallback_limit_env="AUTH_DEPS_AUTH_FALLBACK_RATE_LIMIT",
+        fallback_window_env="AUTH_DEPS_AUTH_FALLBACK_RATE_WINDOW_SECONDS",
+        fallback_limit_default=30,
+        fallback_window_default=60.0,
+        limit_exceeded_detail=f"Auth rate limit exceeded for endpoint: {endpoint}",
+    )
 
 
 # ---------------------------------------------------------------------------------

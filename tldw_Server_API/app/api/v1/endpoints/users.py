@@ -57,7 +57,7 @@ from tldw_Server_API.app.api.v1.utils.profile_errors import (
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.database import (
     get_db_pool,
-    is_postgres_backend as _is_postgres_backend_core,
+    is_postgres_backend,
 )
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
@@ -201,15 +201,6 @@ def _extract_affected_rows(execute_result: Any) -> int | None:
             except ValueError:
                 return None
     return None
-
-
-async def is_postgres_backend() -> bool:
-    """
-    Compatibility shim for unit tests that monkeypatch backend detection.
-
-    New code should call ``core.AuthNZ.database.is_postgres_backend`` directly.
-    """
-    return await _is_postgres_backend_core()
 
 
 async def _fetch_password_hash_for_user(db: Any, user_id: int) -> str | None:

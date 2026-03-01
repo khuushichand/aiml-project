@@ -42,14 +42,11 @@ async def test_playwright_guard_fallback(monkeypatch):
 
 async def test_cookie_manager_accepts_name_value(tmp_path):
     manager = CookieManager(storage_path=tmp_path / "cookies.json")
-    try:
-        manager.add_cookies("example.com", [{"name": "foo", "value": "bar"}])
-        scraper = EnhancedWebScraper(config={})
-        scraper.cookie_manager = manager
-        cookies = scraper._build_cookie_map(
-            "https://example.com",
-            custom_cookies=[{"name": "baz", "value": "qux"}],
-        )
-        assert cookies == {"foo": "bar", "baz": "qux"}
-    finally:
-        await manager.close_all()
+    manager.add_cookies("example.com", [{"name": "foo", "value": "bar"}])
+    scraper = EnhancedWebScraper(config={})
+    scraper.cookie_manager = manager
+    cookies = scraper._build_cookie_map(
+        "https://example.com",
+        custom_cookies=[{"name": "baz", "value": "qux"}],
+    )
+    assert cookies == {"foo": "bar", "baz": "qux"}

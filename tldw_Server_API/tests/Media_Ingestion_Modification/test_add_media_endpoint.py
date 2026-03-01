@@ -1162,7 +1162,10 @@ def test_add_media_multiple_failures_and_success_pdf(
 
     # --- Apply Patch Manually using Context Manager, passing the mock as 'new' ---
     # The variable 'mock_target_within_context' will now also refer to 'mock_processor'
-    with patch("tldw_Server_API.app.api.v1.endpoints.media._process_document_like_item", new=mock_processor) as mock_target_within_context:
+    with patch(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.persistence.process_document_like_item",
+        new=mock_processor,
+    ) as mock_target_within_context:
 
         # --- Form and File Data ---
         form_data = create_add_media_form_data(media_type="pdf", urls=[VALID_PDF_URL, URL_404])
@@ -1247,13 +1250,13 @@ def test_add_media_multiple_failures_and_success_pdf(
 
 # === Error Handling Tests ===
 
-@patch("tldw_Server_API.app.api.v1.endpoints.media._save_uploaded_files", new_callable=AsyncMock)
+@patch("tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing.save_uploaded_files", new_callable=AsyncMock)
 def test_add_media_file_save_error(mock_save_files, test_api_client, db_session, create_upload_file, dummy_headers): # Added db_session
     """Test an error during the file saving stage."""
     if not SAMPLE_AUDIO_PATH.exists(): pytest.skip(f"Test file not found: {SAMPLE_AUDIO_PATH}")
 
     file_tuple = create_upload_file(SAMPLE_AUDIO_PATH)
-    # Simulate _save_uploaded_files returning only errors
+    # Simulate file save helper returning only errors
     mock_save_files.return_value = (
         [], # No successfully saved files
         [{"original_filename": SAMPLE_AUDIO_PATH.name, "input_ref": SAMPLE_AUDIO_PATH.name, "status": "Error", "error": "Failed to save uploaded file: Disk full (OSError)"}] # List of errors
@@ -1265,7 +1268,7 @@ def test_add_media_file_save_error(mock_save_files, test_api_client, db_session,
         ADD_MEDIA_ENDPOINT,
         data=form_data,
         # IMPORTANT: Still need to pass *something* to 'files' for FastAPI to know it's multipart,
-        # even though our mock will intercept _save_uploaded_files.
+        # even though our mock will intercept file saving.
         # Pass the original tuple, the mock prevents actual saving.
         files={"files": file_tuple},
         headers=dummy_headers

@@ -1,5 +1,4 @@
 import asyncio
-import warnings
 import httpx
 import pytest
 
@@ -7,43 +6,41 @@ from tldw_Server_API.app.core.Local_LLM.http_utils import (
     request_json,
     redact_cmd_args,
     wait_for_http_ready,
-    LocalHTTPStatusError,
 )
+from tldw_Server_API.app.core.exceptions import JSONDecodeError
 
 
-class FakeClient:
-    def __init__(self):
-        self.calls = 0
+def _build_client(status_codes: list[int], payload: dict | None = None) -> tuple[httpx.AsyncClient, dict[str, int]]:
+    call_count = {"n": 0}
 
-    async def request(self, method, url, json=None, headers=None):
-        self.calls += 1
-        req = httpx.Request(method, url)
-        if self.calls == 1:
-            resp = httpx.Response(500, request=req, text="server error")
-            # Mimic status without raising; request_json should retry on 5xx
-            return resp
-        return httpx.Response(200, request=req, json={"ok": True})
+    def _handler(request: httpx.Request) -> httpx.Response:
+        idx = min(call_count["n"], len(status_codes) - 1)
+        status_code = status_codes[idx]
+        call_count["n"] += 1
+        if status_code >= 400:
+            return httpx.Response(status_code, request=request, text="server error")
+        return httpx.Response(status_code, request=request, json=payload or {"ok": True})
+
+    transport = httpx.MockTransport(_handler)
+    return httpx.AsyncClient(transport=transport), call_count
 
 
 @pytest.mark.asyncio
 async def test_request_json_retries_on_5xx():
-    client = FakeClient()
-    # Suppress deprecation warning for FakeClient
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
+    client, call_count = _build_client([500, 200], payload={"ok": True})
+    async with client:
         data = await request_json(client, "GET", "http://x/y", retries=1, backoff=0)
     assert data["ok"] is True
-    assert client.calls == 2
+    assert call_count["n"] == 2
 
 
 @pytest.mark.asyncio
 async def test_request_json_retries_zero_makes_single_attempt():
-    client = FakeClient()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        with pytest.raises(LocalHTTPStatusError):
+    client, call_count = _build_client([500])
+    async with client:
+        with pytest.raises(JSONDecodeError):
             await request_json(client, "GET", "http://x/y", retries=0, backoff=0)
-    assert client.calls == 1
+    assert call_count["n"] == 1
 
 
 # --- Tests for redact_cmd_args improvements ---
@@ -181,12 +178,12 @@ async def test_wait_for_http_ready_rejects_5xx(monkeypatch):
     assert result is False
 
 
-# --- Test for deprecation warning on non-AsyncClient ---
+class _FakeClient:
+    pass
 
 
 @pytest.mark.asyncio
-async def test_request_json_deprecation_warning():
-    """Test that using non-AsyncClient emits a deprecation warning."""
-    client = FakeClient()
-    with pytest.warns(DeprecationWarning, match="non-httpx.AsyncClient.*deprecated"):
-        await request_json(client, "GET", "http://x/y", retries=1, backoff=0)
+async def test_request_json_rejects_non_httpx_client():
+    """request_json should enforce httpx.AsyncClient inputs."""
+    with pytest.raises(TypeError, match="httpx.AsyncClient"):
+        await request_json(_FakeClient(), "GET", "http://x/y", retries=1, backoff=0)

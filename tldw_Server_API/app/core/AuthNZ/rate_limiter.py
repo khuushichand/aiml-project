@@ -107,10 +107,6 @@ class RateLimiter:
         tracker = self._get_lockout_tracker()
         await tracker.reset_failed_attempts(identifier, attempt_type=attempt_type)
 
-    async def reset_rate_limit(self, identifier: str, endpoint: str | None = None) -> None:
-        """No-op reset for legacy rate limit counters (deprecated)."""
-        return None
-
     async def get_usage_stats(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"rate_limit_source": "resource_governor"}
 

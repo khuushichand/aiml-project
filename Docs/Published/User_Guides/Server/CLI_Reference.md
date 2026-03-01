@@ -170,7 +170,7 @@ export LOG_LEVEL=DEBUG
 
 ## See Also
 
-- [Installation & Setup Guide](../Server/Installation-Setup-Guide.md)
+- [Self-Hosting Profiles](../../Getting_Started/README.md)
 - [Authentication Setup](../Server/Authentication_Setup.md)
 - [API Documentation](../../API-related/API_README.md)
 - [TTS Getting Started](../WebUI_Extension/TTS_Getting_Started.md)

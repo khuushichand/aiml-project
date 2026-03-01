@@ -2913,7 +2913,11 @@ async def delete_note_attachment(
         if not file_path.exists() or not file_path.is_file():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
 
-        metadata_path = _attachment_metadata_path(file_path)
+        metadata_path = _attachment_metadata_path(file_path).resolve(strict=False)
+        try:
+            metadata_path.relative_to(attachment_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment metadata path") from exc
         file_path.unlink(missing_ok=False)
         if metadata_path.exists():
             metadata_path.unlink(missing_ok=True)

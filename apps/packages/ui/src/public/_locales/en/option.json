@@ -3152,6 +3152,21 @@
   "writingPlayground_editorEmptyPreview": {
     "message": "Nothing to preview yet."
   },
+  "writingPlayground_workspaceModeLabel": {
+    "message": "Workspace mode"
+  },
+  "writingPlayground_modeDraft": {
+    "message": "Draft"
+  },
+  "writingPlayground_modeManage": {
+    "message": "Manage"
+  },
+  "writingPlayground_draftQuickControls": {
+    "message": "Quick controls"
+  },
+  "writingPlayground_manageSettings": {
+    "message": "Manage settings"
+  },
   "writingPlayground_settingsTitle": {
     "message": "Settings"
   },

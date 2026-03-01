@@ -117,7 +117,7 @@ class TestAddMediaEndpoint:
         guard that requires `.html` to be present in `allowed_extensions`.
         """
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-        from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+        from tldw_Server_API.app.core.Ingestion_Media_Processing import download_utils
         from tldw_Server_API.app.main import app
 
         app.dependency_overrides[get_media_db_for_user] = lambda: media_database
@@ -144,8 +144,8 @@ class TestAddMediaEndpoint:
             return downloaded_path
 
         monkeypatch.setattr(
-            media_mod,
-            "_download_url_async",
+            download_utils,
+            "download_url_async",
             _fake_download_url_async,
             raising=True,
         )

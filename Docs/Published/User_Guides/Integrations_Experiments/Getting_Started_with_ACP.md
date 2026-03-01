@@ -40,7 +40,7 @@ The flow:
 
 Before starting, ensure you have:
 
-- **tldw_server running** - See [Installation & Setup Guide](../Server/Installation-Setup-Guide.md)
+- **tldw_server running** - See [Self-Hosting Profiles](../../Getting_Started/README.md)
 - **Go 1.22+** - Required for building tldw-agent ([go.dev/dl](https://go.dev/dl))
 - **Claude Code installed** - Or another ACP-compatible agent
 - **Anthropic API key** - For Claude Code (get one at [console.anthropic.com](https://console.anthropic.com))

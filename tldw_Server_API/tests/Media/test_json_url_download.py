@@ -4,6 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
+    download_url_async,
+)
+
 
 pytestmark = pytest.mark.unit
 
@@ -58,10 +62,8 @@ class _FakeAsyncClient:
 @pytest.mark.asyncio
 async def test_download_url_json_content_type(tmp_path):
     # Simulate URL without extension, rely on Content-Type: application/json
-    from tldw_Server_API.app.api.v1.endpoints.media import _download_url_async
-
     client = _FakeAsyncClient(headers={"content-type": "application/json"}, body=b'{"k":1}')
-    out_path = await _download_url_async(
+    out_path = await download_url_async(
         client=client,
         url="https://example.org/data",  # no extension
         target_dir=tmp_path,
@@ -77,14 +79,12 @@ async def test_download_url_json_content_type(tmp_path):
 @pytest.mark.asyncio
 async def test_download_url_json_content_disposition(tmp_path):
     # Simulate Content-Disposition: filename="file.json" when URL has no extension
-    from tldw_Server_API.app.api.v1.endpoints.media import _download_url_async
-
     hdrs = {
         "content-type": "application/octet-stream",
         "content-disposition": 'attachment; filename="file.json"',
     }
     client = _FakeAsyncClient(headers=hdrs, body=b'{"v":2}')
-    out_path = await _download_url_async(
+    out_path = await download_url_async(
         client=client,
         url="https://cdn.example.org/download?id=abc",
         target_dir=tmp_path,
@@ -100,15 +100,13 @@ async def test_download_url_json_content_disposition(tmp_path):
 @pytest.mark.asyncio
 async def test_download_url_rejects_dotdot_filename(tmp_path):
     # Reject path traversal attempts via Content-Disposition filename
-    from tldw_Server_API.app.api.v1.endpoints.media import _download_url_async
-
     hdrs = {
         "content-type": "application/json",
         "content-disposition": 'attachment; filename=".."',
     }
     client = _FakeAsyncClient(headers=hdrs, body=b'{"v":3}')
     with pytest.raises(ValueError):
-        await _download_url_async(
+        await download_url_async(
             client=client,
             url="https://example.org/download",
             target_dir=tmp_path,

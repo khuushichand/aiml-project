@@ -172,7 +172,9 @@ class TestMediaEndpointContextualIntegration:
             "contextual_llm_model": "gpt-3.5-turbo"
         }
 
-        with patch('tldw_Server_API.app.api.v1.endpoints.media._save_uploaded_files') as mock_upload:
+        with patch(
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing.save_uploaded_files"
+        ) as mock_upload:
             with patch('tldw_Server_API.app.api.v1.endpoints.media.process_document_content') as mock_process:
                 mock_upload.return_value = (["/tmp/test.txt"], [])  # nosec B108
                 mock_process.return_value = {"success": True, "media_id": 124}
@@ -214,17 +216,26 @@ class TestMediaEndpointContextualIntegration:
             "enable_contextual_chunking": "true"
         }
 
-        # Mock the appropriate processing function based on media type
-        process_func = {
-            "document": "process_document_content",
-            "pdf": "process_pdf_task",
-            "ebook": "process_epub",
-            "video": "process_videos",
-            "audio": "process_audio_files"
-        }.get(media_type, "process_document_content")
+        # Mock the appropriate processing function based on media type.
+        # For video/audio, patch the orchestrator-level batch helper to avoid
+        # importing heavyweight STT/transcription dependencies during tests.
+        process_target = {
+            "document": "tldw_Server_API.app.api.v1.endpoints.media.process_document_content",
+            "pdf": "tldw_Server_API.app.api.v1.endpoints.media.process_pdf_task",
+            "ebook": "tldw_Server_API.app.api.v1.endpoints.media.process_epub",
+            "video": "tldw_Server_API.app.core.Ingestion_Media_Processing.persistence.process_batch_media",
+            "audio": "tldw_Server_API.app.core.Ingestion_Media_Processing.persistence.process_batch_media",
+        }.get(
+            media_type,
+            "tldw_Server_API.app.api.v1.endpoints.media.process_document_content",
+        )
 
-        with patch(f'tldw_Server_API.app.api.v1.endpoints.media.{process_func}') as mock_process:
-            mock_process.return_value = {"success": True, "media_id": 125}
+        patch_kwargs = {"new_callable": AsyncMock} if media_type in {"video", "audio"} else {}
+        with patch(process_target, **patch_kwargs) as mock_process:
+            if media_type in {"video", "audio"}:
+                mock_process.return_value = [{"status": "Success", "media_id": 125}]
+            else:
+                mock_process.return_value = {"success": True, "media_id": 125}
 
             response = test_client.post(
                 "/api/v1/media/add",
@@ -265,7 +276,10 @@ class TestMediaEndpointContextualIntegration:
                 p = Path(str(target_dir)) / (Path(url).name or "test.pdf")
                 p.write_text("dummy content")
                 return p
-            with patch('tldw_Server_API.app.api.v1.endpoints.media._download_url_async', side_effect=_fake_download_url_async):
+            with patch(
+                "tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils.download_url_async",
+                side_effect=_fake_download_url_async,
+            ):
                 response = test_client.post(
                     "/api/v1/media/add",
                     data=form_data,

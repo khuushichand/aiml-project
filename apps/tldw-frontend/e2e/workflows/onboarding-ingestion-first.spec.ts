@@ -205,6 +205,7 @@ test.describe("Onboarding Ingestion-First Journey", () => {
           JSON.stringify({
             serverUrl: cfg.serverUrl,
             authMode: "single-user",
+            // lgtm[js/clear-text-storage-sensitive-data] synthetic CI key only
             apiKey: cfg.apiKey,
           })
         )

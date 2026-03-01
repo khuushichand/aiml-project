@@ -613,7 +613,7 @@ async def create_session(
                 content={
                     "error": {
                         "code": "policy_unsupported",
-                        "message": str(e),
+                        "message": "Sandbox policy is unsupported for the requested runtime.",
                         "details": {
                             "runtime": rt,
                             "requirement": requirement,
@@ -1104,12 +1104,12 @@ async def start_run(
             suggestions = _runtime_unavailable_suggestions(rt)
             reasons = list(getattr(e, "reasons", []) or [])
             return JSONResponse(status_code=503, content={
-                "error": {
-                    "code": "runtime_unavailable",
-                    "message": str(e),
-                    "details": {"runtime": rt, "available": False, "suggested": suggestions, "reasons": reasons}
-                }
-            })
+                    "error": {
+                        "code": "runtime_unavailable",
+                        "message": "The requested runtime is currently unavailable.",
+                        "details": {"runtime": rt, "available": False, "suggested": suggestions, "reasons": reasons}
+                    }
+                })
         if isinstance(e, SandboxPolicy.PolicyUnsupported):
             rt = _runtime_name_from_policy_exception(e)
             requirement = str(getattr(e, "requirement", "unknown"))
@@ -1119,7 +1119,7 @@ async def start_run(
                 content={
                     "error": {
                         "code": "policy_unsupported",
-                        "message": str(e),
+                        "message": "Sandbox policy is unsupported for the requested runtime.",
                         "details": {
                             "runtime": rt,
                             "requirement": requirement,

@@ -1,0 +1,153 @@
+// @vitest-environment jsdom
+
+import { render, screen } from "@testing-library/react"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
+import { RunsTab } from "../RunsTab"
+
+const storeState = {
+  selectedEvalId: null as string | null,
+  setSelectedEvalId: vi.fn(),
+  selectedRunId: null as string | null,
+  setSelectedRunId: vi.fn(),
+  runConfigText: "",
+  setRunConfigText: vi.fn(),
+  datasetOverrideText: "",
+  setDatasetOverrideText: vi.fn(),
+  runIdempotencyKey: "run-idem-1",
+  regenerateRunIdempotencyKey: vi.fn(),
+  quotaSnapshot: null as any,
+  setQuotaSnapshot: vi.fn(),
+  isPolling: false,
+  setIsPolling: vi.fn(),
+  adhocEndpoint: "benchmark-run",
+  setAdhocEndpoint: vi.fn(),
+  selectedBenchmark: "bullshit_benchmark" as string | null,
+  setSelectedBenchmark: vi.fn(),
+  adhocPayloadText: "{}",
+  setAdhocPayloadText: vi.fn(),
+  adhocResult: null as any
+}
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (
+      key: string,
+      defaultValueOrOptions?:
+        | string
+        | {
+            defaultValue?: string
+            id?: string
+          }
+    ) => {
+      if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
+      if (defaultValueOrOptions?.defaultValue) return defaultValueOrOptions.defaultValue
+      return key
+    }
+  })
+}))
+
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => ({
+    invalidateQueries: vi.fn()
+  })
+}))
+
+vi.mock("../../hooks/useRuns", () => {
+  return {
+    useRateLimits: () => ({ data: null, isLoading: false, isError: false }),
+    useRunsList: () => ({
+      data: { data: { data: [] } },
+      isLoading: false,
+      isError: false
+    }),
+    useRunDetail: () => ({ data: null, isLoading: false, isError: false }),
+    useCreateRun: () => ({ mutateAsync: vi.fn(), isPending: false }),
+    useCancelRun: () => ({ mutateAsync: vi.fn(), isPending: false }),
+    useAdhocEvaluation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+    useRunBenchmark: () => ({ mutateAsync: vi.fn(), isPending: false }),
+    extractMetricsSummary: () => [],
+    useBenchmarksCatalog: () => ({
+      data: { data: { data: [{ name: "bullshit_benchmark", description: "Bullshit" }] } },
+      isLoading: false,
+      isError: false
+    }),
+    adhocEndpointOptions: [
+      { value: "response-quality", label: "response-quality" },
+      { value: "benchmark-run", label: "benchmark-run" }
+    ]
+  }
+})
+
+vi.mock("../../hooks/useEvaluations", () => ({
+  useEvaluationsList: () => ({ data: { data: { data: [] } } })
+}))
+
+vi.mock("@/store/evaluations", () => ({
+  useEvaluationsStore: (selector: (state: typeof storeState) => unknown) =>
+    selector(storeState)
+}))
+
+vi.mock("../../components", () => ({
+  CopyButton: () => null,
+  JsonEditor: ({
+    value,
+    onChange
+  }: {
+    value?: string
+    onChange?: (next: string) => void
+  }) => (
+    <textarea
+      data-testid="json-editor"
+      value={value || ""}
+      onChange={(e) => onChange?.(e.target.value)}
+    />
+  ),
+  EvaluationsBreadcrumb: () => null,
+  MetricsChart: () => null,
+  PollingIndicator: () => null,
+  RateLimitsWidget: () => null,
+  RunComparisonView: () => null,
+  StatusBadge: () => null
+}))
+
+if (!(globalThis as any).ResizeObserver) {
+  ;(globalThis as any).ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+}
+
+describe("RunsTab benchmark run mode", () => {
+  const originalMatchMedia = window.matchMedia
+
+  beforeAll(() => {
+    if (typeof window.matchMedia !== "function") {
+      Object.defineProperty(window, "matchMedia", {
+        writable: true,
+        value: vi.fn().mockImplementation((query: string) => ({
+          matches: false,
+          media: query,
+          onchange: null,
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn()
+        }))
+      })
+    }
+  })
+
+  afterAll(() => {
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: originalMatchMedia
+    })
+  })
+
+  it("shows bullshit_benchmark in benchmark selector when benchmark-run mode is selected", async () => {
+    render(<RunsTab />)
+    expect(await screen.findByText("bullshit_benchmark")).toBeInTheDocument()
+  })
+})

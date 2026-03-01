@@ -12,18 +12,13 @@ pytestmark = pytest.mark.asyncio
 
 async def test_cookie_manager_stores_and_returns_cookies(tmp_path):
     manager = CookieManager(storage_path=tmp_path / "cookies.json")
-
-    try:
-        manager.add_cookies(
-            "example.com",
-            [{"name": "foo", "value": "bar"}, {"token": "abc"}],
-        )
-        cookies = manager.get_cookies("https://example.com/some/path")
-        assert cookies == [{"name": "foo", "value": "bar"}, {"token": "abc"}]
-        assert manager.get_cookies("https://other.example") is None
-
-    finally:
-        await manager.close_all()
+    manager.add_cookies(
+        "example.com",
+        [{"name": "foo", "value": "bar"}, {"name": "session", "value": "trace-id"}],
+    )
+    cookies = manager.get_cookies("https://example.com/some/path")
+    assert cookies == [{"name": "foo", "value": "bar"}, {"name": "session", "value": "trace-id"}]
+    assert manager.get_cookies("https://other.example") is None
 
 
 async def test_process_web_scraping_endpoint_receives_custom_headers():

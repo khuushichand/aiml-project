@@ -63,14 +63,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,  # pragma: no cover
     get_document_version,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
-    download_url_async as _download_url_async,
-)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager as CoreTempDirManager,
-)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
-    save_uploaded_files as core_save_uploaded_files,
 )
 _smart_download = _optional_import_attr(
     "tldw_Server_API.app.core.Utils.Utils",
@@ -152,7 +146,6 @@ for _module_name in _MEDIA_ENDPOINT_MODULES:
 
 
 # Helpers/exported patch points
-_save_uploaded_files = core_save_uploaded_files
 TempDirManager = CoreTempDirManager
 
 
@@ -270,8 +263,6 @@ process_epub = getattr(books, "process_epub", None)
 
 __all__ = [
     "router",
-    "_download_url_async",
-    "_save_uploaded_files",
     "_validate_inputs",
     "TempDirManager",
     "cache",

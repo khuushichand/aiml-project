@@ -1,7 +1,6 @@
 # audio_tokenizer.py
 # Description: Audio tokenizer encode/decode endpoints.
 import io
-from types import ModuleType
 from typing import Any, Optional
 
 import numpy as np
@@ -20,6 +19,8 @@ from tldw_Server_API.app.core.Audio.tokenizer_service import (
     _decode_base64_payload,
     _enforce_payload_limit,
     _enforce_payload_size,
+    _get_qwen3_tokenizer_settings,
+    _load_qwen3_tokenizer,
     _normalize_tokens,
     _read_audio_from_bytes,
     _resolve_tokenizer_frame_rate,
@@ -41,52 +42,20 @@ router = APIRouter(
 
 
 def _audio_shim_attr(name: str):
-    def _is_override(value: Any) -> bool:
-        if value is None or isinstance(value, ModuleType):
-            return False
-        mod_name = getattr(value, "__module__", None)
-        if isinstance(mod_name, str) and mod_name:
-            return not mod_name.startswith("tldw_Server_API.")
-        return True
-
-    mod_has = False
-    mod_value: Any = None
+    defaults: dict[str, Any] = {
+        "_get_qwen3_tokenizer_settings": _get_qwen3_tokenizer_settings,
+        "_load_qwen3_tokenizer": _load_qwen3_tokenizer,
+    }
     try:
-        from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
+        from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
 
-        if hasattr(audio_mod, name):
-            mod_has = True
-            mod_value = getattr(audio_mod, name)
-    except Exception:
-        mod_has = False
-        mod_value = None
-    from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
-    pkg_dict = getattr(audio_shim, "__dict__", {})
-    pkg_has = name in pkg_dict
-    pkg_value = pkg_dict.get(name) if pkg_has else None
-
-    if pkg_has and mod_has and pkg_value is not mod_value:
-        pkg_override = _is_override(pkg_value)
-        mod_override = _is_override(mod_value)
-        if mod_override and not pkg_override:
-            return mod_value
-        if pkg_override and not mod_override:
-            return pkg_value
-        if mod_override and pkg_override:
-            return mod_value
-
-    if pkg_has:
-        return pkg_value
-    if mod_has:
-        return mod_value
-    try:
         if hasattr(audio_shim, name):
             return getattr(audio_shim, name)
     except Exception as resolve_error:
-        _ = resolve_error  # best-effort shim resolution; fallback path below
-    if not hasattr(audio_shim, name):
-        raise NameError(name)
-    return getattr(audio_shim, name)
+        _ = resolve_error  # best-effort shim resolution; default map below
+    if name in defaults:
+        return defaults[name]
+    raise NameError(name)
 
 
 @router.post(

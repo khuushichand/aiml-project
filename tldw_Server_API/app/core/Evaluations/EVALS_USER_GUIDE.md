@@ -47,12 +47,12 @@ tldw-evals health
 
 2. **List available benchmarks:**
 ```bash
-tldw-evals list-benchmarks --detailed
+tldw-evals benchmark list --detailed
 ```
 
 3. **Run your first evaluation:**
 ```bash
-tldw-evals run simple_bench --limit 10
+tldw-evals benchmark run simple_bench --limit 10
 ```
 
 ## Available Benchmarks
@@ -83,29 +83,29 @@ tldw-evals run simple_bench --limit 10
 
 ```bash
 # Run a benchmark with default settings
-tldw-evals run mmlu_pro
+tldw-evals benchmark run mmlu_pro
 
 # Limit the number of samples
-tldw-evals run mmlu_pro --limit 100
+tldw-evals benchmark run mmlu_pro --limit 100
 
 # Save results to file
-tldw-evals run mmlu_pro --output results.json
+tldw-evals benchmark run mmlu_pro --output results.json
 
 # Use a specific API/model
-tldw-evals run simple_bench --api anthropic --api-key YOUR_KEY
+tldw-evals benchmark run simple_bench --api anthropic --api-key YOUR_KEY
 ```
 
 ### Advanced Options
 
 ```bash
 # Resume from previous run
-tldw-evals run mmlu_pro --resume-from partial_results.json
+tldw-evals benchmark run mmlu_pro --resume-from partial_results.json
 
 # Run with parallel processing
-tldw-evals run simple_bench --parallel 8
+tldw-evals benchmark run simple_bench --parallel 8
 
 # Validate benchmark before running
-tldw-evals validate mmlu_pro --samples 5
+tldw-evals benchmark validate mmlu_pro --samples 5
 ```
 
 ### Using Different APIs
@@ -114,16 +114,16 @@ The module supports multiple LLM providers:
 
 ```bash
 # OpenAI (default)
-tldw-evals run benchmark_name --api openai
+tldw-evals benchmark run benchmark_name --api openai
 
 # Anthropic
-tldw-evals run benchmark_name --api anthropic
+tldw-evals benchmark run benchmark_name --api anthropic
 
 # Local models
-tldw-evals run benchmark_name --api local-llm
+tldw-evals benchmark run benchmark_name --api local-llm
 
 # Custom OpenAI-compatible endpoint
-tldw-evals run benchmark_name --api custom --endpoint https://your-api.com
+tldw-evals benchmark run benchmark_name --api custom --endpoint https://your-api.com
 ```
 
 ## Creating Custom QA Benchmarks
@@ -161,7 +161,7 @@ evaluation_params:
 
 4. **Run your benchmark:**
 ```bash
-tldw-evals run my_benchmark
+tldw-evals benchmark run my_benchmark
 ```
 
 ### Method 2: Using Python Helper
@@ -183,7 +183,7 @@ QADatasetBuilder.save_dataset(dataset, "my_benchmark.json")
 
 ```bash
 # Register a custom benchmark
-tldw-evals register my_benchmark \
+tldw-evals benchmark register my_benchmark \
   --config configs/my_benchmark.yaml \
   --source data/questions.json \
   --type qa_evaluation
@@ -197,13 +197,13 @@ WordBench analyzes next-token predictions and their probability distributions.
 
 ```bash
 # Use example prompts
-tldw-evals run wordbench
+tldw-evals benchmark run wordbench
 
 # Use custom prompts file
-tldw-evals run wordbench --prompts my_prompts.txt
+tldw-evals benchmark run wordbench --prompts my_prompts.txt
 
 # Analyze specific prompts
-echo "The sky is" | tldw-evals run wordbench --stdin
+echo "The sky is" | tldw-evals benchmark run wordbench --stdin
 ```
 
 ### Understanding WordBench Output
@@ -287,10 +287,10 @@ tldw-evals export results.json --format csv --output results.csv
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `list-benchmarks` | List available benchmarks | `tldw-evals list-benchmarks -d` |
-| `run` | Run a benchmark | `tldw-evals run mmlu_pro` |
-| `validate` | Validate benchmark configuration | `tldw-evals validate my_benchmark` |
-| `register` | Register custom benchmark | `tldw-evals register name --config file.yaml` |
+| `benchmark list` | List available benchmarks | `tldw-evals benchmark list -d` |
+| `benchmark run` | Run a benchmark | `tldw-evals benchmark run mmlu_pro` |
+| `benchmark validate` | Validate benchmark configuration | `tldw-evals benchmark validate my_benchmark` |
+| `benchmark register` | Register custom benchmark | `tldw-evals benchmark register name --config file.yaml` |
 | `health` | Check system health | `tldw-evals health` |
 
 ### Global Options
@@ -330,7 +330,7 @@ cat > knowledge_test.json << 'EOF'
 EOF
 
 # Run the test
-tldw-evals run qa_evaluation --source knowledge_test.json
+tldw-evals benchmark run qa_evaluation --source knowledge_test.json
 ```
 
 ### Example 2: Category-Based Analysis
@@ -352,8 +352,8 @@ print(f"Science performance: {metrics['by_category']['science']['average']:.1%}"
 
 ```bash
 # Run same benchmark on different models
-tldw-evals run simple_bench --api openai --output openai_results.json
-tldw-evals run simple_bench --api anthropic --output anthropic_results.json
+tldw-evals benchmark run simple_bench --api openai --output openai_results.json
+tldw-evals benchmark run simple_bench --api anthropic --output anthropic_results.json
 
 # Compare results
 tldw-evals compare openai_results.json anthropic_results.json
@@ -389,13 +389,13 @@ evaluation_params:
 export OPENAI_API_KEY=your_key
 
 # Or pass directly
-tldw-evals run benchmark --api-key your_key
+tldw-evals benchmark run benchmark --api-key your_key
 ```
 
 **Issue: "Dataset not loading"**
 ```bash
 # Validate dataset format
-tldw-evals validate my_benchmark --samples 3
+tldw-evals benchmark validate my_benchmark --samples 3
 
 # Check file path
 ls -la data/my_questions.json
@@ -410,27 +410,27 @@ ls -la data/my_questions.json
 **Issue: "Out of memory"**
 ```bash
 # Reduce batch size
-tldw-evals run benchmark --parallel 1 --limit 50
+tldw-evals benchmark run benchmark --parallel 1 --limit 50
 
 # Process in chunks
-tldw-evals run benchmark --limit 100 --save-progress
+tldw-evals benchmark run benchmark --limit 100 --save-progress
 ```
 
 ### Getting Help
 
 1. **Check logs:**
 ```bash
-tldw-evals run benchmark --log-level DEBUG
+tldw-evals benchmark run benchmark --log-level DEBUG
 ```
 
 2. **Validate configuration:**
 ```bash
-tldw-evals validate benchmark_name
+tldw-evals benchmark validate benchmark_name
 ```
 
 3. **Test with small sample:**
 ```bash
-tldw-evals run benchmark --limit 5 --log-level DEBUG
+tldw-evals benchmark run benchmark --limit 5 --log-level DEBUG
 ```
 
 4. **Report issues:**

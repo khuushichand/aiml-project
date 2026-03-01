@@ -125,10 +125,6 @@ class UserRateLimiter:
             "rate_limit_source": "resource_governor",
         }
 
-    def reset_user(self, user_id: str) -> None:
-        """No-op reset (Phase 2 shim: no state to reset)."""
-        _emit_embeddings_legacy_deprecation("reset_user")
-
     def get_statistics(self) -> dict[str, any]:
         """Return static statistics (no request tracking)."""
         return {

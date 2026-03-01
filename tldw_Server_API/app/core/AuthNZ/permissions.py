@@ -166,19 +166,6 @@ def check_role(user: User, role: str) -> bool:
         return False
 
 
-def is_single_user_mode_cached() -> bool:
-    """
-    Thin wrapper for settings.is_single_user_mode used by older tests.
-
-    Exposed as a module-level helper so monkeypatching in unit tests can
-    control single-user behavior without reaching into settings directly.
-    """
-    try:
-        return is_single_user_mode()
-    except Exception as exc:
-        logger.debug("is_single_user_mode_cached: failed to resolve mode: {}", exc)
-        return False
-
 def check_any_permission(user: User, permissions: list[str]) -> bool:
     """
     Check if a user has any of the specified permissions.
