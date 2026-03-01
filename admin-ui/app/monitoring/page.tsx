@@ -4,8 +4,6 @@ import { useEffect, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
@@ -28,6 +26,7 @@ import MetricsChart from './components/MetricsChart';
 import MetricsGrid from './components/MetricsGrid';
 import NotificationsPanel from './components/NotificationsPanel';
 import SystemStatusPanel from './components/SystemStatusPanel';
+import TimeRangeControls from './components/TimeRangeControls';
 import WatchlistsPanel from './components/WatchlistsPanel';
 import { useMonitoringDataLoader } from './use-monitoring-data-loader';
 import { useMonitoringDashboardState } from './use-monitoring-dashboard-state';
@@ -283,59 +282,17 @@ export default function MonitoringPage() {
               </Alert>
             )}
 
-            <div className="mb-4 rounded-lg border border-border/80 bg-muted/10 p-4">
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium">Time Range</span>
-                {MONITORING_TIME_RANGE_OPTIONS.map((option) => (
-                  <Button
-                    key={option.value}
-                    type="button"
-                    size="sm"
-                    variant={timeRange === option.value ? 'secondary' : 'outline'}
-                    onClick={() => { void handleSelectTimeRange(option.value); }}
-                    data-testid={`monitoring-time-range-${option.value}`}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
-              </div>
-              {timeRange === 'custom' && (
-                <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
-                  <div className="space-y-1">
-                    <Label htmlFor="customRangeStart">Custom Start</Label>
-                    <Input
-                      id="customRangeStart"
-                      type="datetime-local"
-                      value={customRangeStart}
-                      onChange={(event) => {
-                        setCustomRangeStart(event.target.value);
-                      }}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="customRangeEnd">Custom End</Label>
-                    <Input
-                      id="customRangeEnd"
-                      type="datetime-local"
-                      value={customRangeEnd}
-                      onChange={(event) => {
-                        setCustomRangeEnd(event.target.value);
-                      }}
-                    />
-                  </div>
-                  <Button
-                    type="button"
-                    onClick={() => { void handleApplyCustomTimeRange(); }}
-                    data-testid="monitoring-time-range-apply-custom"
-                  >
-                    Apply
-                  </Button>
-                </div>
-              )}
-              {rangeValidationError && (
-                <p className="mt-2 text-sm text-destructive">{rangeValidationError}</p>
-              )}
-            </div>
+            <TimeRangeControls
+              options={MONITORING_TIME_RANGE_OPTIONS}
+              timeRange={timeRange}
+              customRangeStart={customRangeStart}
+              customRangeEnd={customRangeEnd}
+              rangeValidationError={rangeValidationError}
+              onSelectTimeRange={handleSelectTimeRange}
+              onCustomRangeStartChange={setCustomRangeStart}
+              onCustomRangeEndChange={setCustomRangeEnd}
+              onApplyCustomRange={handleApplyCustomTimeRange}
+            />
 
             <MetricsChart
               metricsHistory={metricsHistory}
