@@ -18,9 +18,13 @@ from typing import Any
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent.parent.parent.parent))
 
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    BackendType,
+    DatabaseConfig,
+)
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.username_utils import normalize_admin_username
-from tldw_Server_API.app.core.DB_Management.UserDatabase import UserDatabase
+from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import UserDatabase
 
 
 def _default_users_db_path() -> Path:
@@ -29,6 +33,15 @@ def _default_users_db_path() -> Path:
         return Path(get_project_root()) / "Databases" / "users.db"
     except Exception:
         return Path("Databases") / "users.db"
+
+
+def _build_user_db(db_path: str) -> UserDatabase:
+    """Create a UserDatabase using the backend-aware v2 configuration path."""
+    sqlite_config = DatabaseConfig(
+        backend_type=BackendType.SQLITE,
+        sqlite_path=str(Path(db_path)),
+    )
+    return UserDatabase(config=sqlite_config, client_id="migration_script")
 
 ########################################################################################################################
 # Migration Functions
@@ -335,7 +348,7 @@ def main():
     print(f"\n📂 Initializing user database at: {args.db_path}")
 
     try:
-        user_db = UserDatabase(args.db_path, client_id="migration_script")
+        user_db = _build_user_db(args.db_path)
         password_service = PasswordService()
         print("✅ Database initialized successfully")
     except Exception as e:
