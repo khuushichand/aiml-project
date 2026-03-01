@@ -113,10 +113,10 @@ describe("OutputPreviewDrawer audio support", () => {
     })
 
     expect(serviceMocks.downloadWatchlistOutputBinary).not.toHaveBeenCalled()
-    expect(screen.getByTestId("output-preview-provenance")).toHaveTextContent(
+    expect(await screen.findByTestId("output-preview-provenance")).toHaveTextContent(
       "Monitor #7 • Run #9 • Artifact: Markdown"
     )
-    expect(screen.getByText("# Briefing")).toBeInTheDocument()
+    expect(await screen.findByText("# Briefing")).toBeInTheDocument()
   })
 
   it("restores focus to the launch control when the drawer closes", async () => {
