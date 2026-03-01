@@ -1,6 +1,7 @@
 export const CHAT_PATH = "/chat"
 export const WORKSPACE_PLAYGROUND_PATH = "/workspace-playground"
 export const DOCUMENT_WORKSPACE_PATH = "/document-workspace"
+export const REPO2TXT_PATH = "/repo2txt"
 
 export const LOREBOOK_DEBUG_FOCUS = "lorebook-debug"
 

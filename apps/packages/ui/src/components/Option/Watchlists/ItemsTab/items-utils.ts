@@ -380,13 +380,13 @@ export const sortItemsForReader = (
 
 export const stripHtmlToText = (value: string): string => {
   return value
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style\s*>/gi, " ")
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script\s*>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&")
     .replace(/\s+/g, " ")
     .trim()
 }

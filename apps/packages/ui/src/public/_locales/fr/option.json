@@ -2671,5 +2671,89 @@
   },
   "header_workflowEditor": {
     "message": "Workflow Editor"
+  },
+  "header_modeRepo2txt": {
+    "message": "Repo2Txt"
+  },
+  "repo2txt_nav": {
+    "message": "Repo2Txt"
+  },
+  "repo2txt_title": {
+    "message": "Repo2Txt"
+  },
+  "repo2txt_description": {
+    "message": "Convert repositories to structured text output."
+  },
+  "repo2txt_generate": {
+    "message": "Generate Output"
+  },
+  "repo2txt_providerTitle": {
+    "message": "Source Provider"
+  },
+  "repo2txt_providerGithub": {
+    "message": "GitHub"
+  },
+  "repo2txt_providerLocal": {
+    "message": "Local"
+  },
+  "repo2txt_githubPlaceholder": {
+    "message": "https://github.com/owner/repo"
+  },
+  "repo2txt_loadSource": {
+    "message": "Load Source"
+  },
+  "repo2txt_chooseDirectory": {
+    "message": "Choose Directory"
+  },
+  "repo2txt_chooseZip": {
+    "message": "Choose Zip"
+  },
+  "repo2txt_filters": {
+    "message": "Filters"
+  },
+  "repo2txt_selectedCount": {
+    "message": "{{selected}}/{{total}} selected"
+  },
+  "repo2txt_filterFiles": {
+    "message": "Filter files"
+  },
+  "repo2txt_output": {
+    "message": "Output"
+  },
+  "repo2txt_copy": {
+    "message": "Copy"
+  },
+  "repo2txt_download": {
+    "message": "Download"
+  },
+  "repo2txt_outputPreviewAria": {
+    "message": "Repo2txt output preview"
+  },
+  "repo2txt_errors_invalidGithubUrl": {
+    "message": "Enter a valid GitHub repository URL."
+  },
+  "repo2txt_errors_loadGithub": {
+    "message": "Failed to load GitHub repository."
+  },
+  "repo2txt_errors_loadLocal": {
+    "message": "Failed to load local files."
+  },
+  "repo2txt_errors_generate": {
+    "message": "Failed to generate output."
+  },
+  "repo2txt_status_loadedTree": {
+    "message": "Loaded {{count}} file tree entries."
+  },
+  "repo2txt_status_loadedLocal": {
+    "message": "Loaded {{count}} local files."
+  },
+  "repo2txt_status_selectAtLeastOne": {
+    "message": "Select at least one file to generate output."
+  },
+  "repo2txt_status_fetchingFiles": {
+    "message": "Fetching files ({{completed}}/{{total}})..."
+  },
+  "repo2txt_status_generated": {
+    "message": "Generated output for {{count}} files ({{tokenCount}} tokens)."
   }
 }

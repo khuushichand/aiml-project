@@ -101,7 +101,8 @@
     "dataTables": "Data Tables",
     "documentWorkspace": "Document Workspace",
     "modelPlayground": "Workspace Playground",
-    "workflowEditor": "Workflow Editor"
+    "workflowEditor": "Workflow Editor",
+    "modeRepo2txt": "Repo2Txt"
   },
   "writingPlayground": {
     "title": "Taller de escritura",
@@ -953,5 +954,38 @@
   },
   "documentWorkspace": {
     "fileUnauthorized": "You don't have permission to access this document."
+  },
+  "repo2txt": {
+    "nav": "Repo2Txt",
+    "title": "Repo2Txt",
+    "description": "Convert repositories to structured text output.",
+    "generate": "Generate Output",
+    "providerTitle": "Source Provider",
+    "providerGithub": "GitHub",
+    "providerLocal": "Local",
+    "githubPlaceholder": "https://github.com/owner/repo",
+    "loadSource": "Load Source",
+    "chooseDirectory": "Choose Directory",
+    "chooseZip": "Choose Zip",
+    "filters": "Filters",
+    "selectedCount": "{{selected}}/{{total}} selected",
+    "filterFiles": "Filter files",
+    "output": "Output",
+    "copy": "Copy",
+    "download": "Download",
+    "outputPreviewAria": "Repo2txt output preview",
+    "errors": {
+      "invalidGithubUrl": "Enter a valid GitHub repository URL.",
+      "loadGithub": "Failed to load GitHub repository.",
+      "loadLocal": "Failed to load local files.",
+      "generate": "Failed to generate output."
+    },
+    "status": {
+      "loadedTree": "Loaded {{count}} file tree entries.",
+      "loadedLocal": "Loaded {{count}} local files.",
+      "selectAtLeastOne": "Select at least one file to generate output.",
+      "fetchingFiles": "Fetching files ({{completed}}/{{total}})...",
+      "generated": "Generated output for {{count}} files ({{tokenCount}} tokens)."
+    }
   }
 }
