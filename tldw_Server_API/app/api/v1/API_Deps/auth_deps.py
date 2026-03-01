@@ -1582,49 +1582,6 @@ def _principal_has_admin_claims(principal: AuthPrincipal | None) -> bool:
     return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
-async def get_optional_current_user(
-    request: Request,
-    response: Response,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    session_manager: SessionManager = Depends(get_session_manager_dep),
-    db_pool: DatabasePool = Depends(get_db_pool),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-) -> Optional[dict[str, Any]]:
-    """
-    Legacy shim - do not use in new code.
-
-    Get current user if authenticated, None otherwise.
-
-    This is useful for endpoints that have different behavior
-    for authenticated vs unauthenticated users
-
-    Args:
-        request: FastAPI request object
-        response: FastAPI response object
-        credentials: Optional bearer token
-        session_manager: Session manager instance
-        db_pool: Database pool instance
-        x_api_key: Optional API key from X-API-KEY header
-
-    Returns:
-        User dictionary if authenticated, None otherwise
-    """
-    if not credentials and not x_api_key:
-        return None
-
-    try:
-        return await get_current_user(
-            request=request,
-            response=response,
-            credentials=credentials,  # may be None if authenticating via X-API-KEY only
-            session_manager=session_manager,
-            db_pool=db_pool,
-            x_api_key=x_api_key,
-        )
-    except HTTPException:
-        return None
-
-
 #######################################################################################################################
 #
 # Rate Limiting Dependencies
