@@ -872,7 +872,7 @@ Finding IDs: `11.1` through `11.8`
 **Status**: Complete
 **Progress Notes (2026-02-18)**:
 - Added end-user documentation for templates, category/tags organization, keyboard shortcuts, and regex helper examples in:
-  - `Docs/User_Guides/Chat_Dictionaries_Guide.md`
+  - `Docs/User_Guides/WebUI_Extension/Chat_Dictionaries_Guide.md`
 - Documented composition precedence contract and version-history retention policy in:
   - `Docs/Design/CHAT_DICTIONARY_SHARING_COMPOSITION_ROADMAP_2026_02_18.md`
 - Added rollout checklist with feature flags and migration guards in:

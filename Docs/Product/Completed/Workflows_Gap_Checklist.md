@@ -1,6 +1,6 @@
 # Workflows PRD Gap Checklist
 
-Source of truth: `Docs/Product/Workflows_PRD.md` (legacy UI excluded).
+Source of truth: `Docs/Product/Completed/Workflows_PRD.md` (legacy UI excluded).
 
 - [x] LLM step type separate from prompt (adapter + registry + validation); Owner: Backend/LLM; Tests: unit adapter + integration sync/async
 - [x] Enforce assigned reviewer for approvals (admin override allowed); Owner: AuthNZ/API; Tests: integration approve/reject (assigned ok, owner deny, admin ok)
