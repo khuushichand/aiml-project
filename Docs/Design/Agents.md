@@ -71,5 +71,3 @@ https://github.com/backbay-labs/clawdstrike?utm_source=substack&utm_medium=email
 https://gist.github.com/wong2/e0f34aac66caf890a332f7b6f9e2ba8f#todoread
 https://ampcode.com/how-to-build-an-agent
 https://github.com/badlogic/lemmy/tree/main/apps/claude-trace
-
-

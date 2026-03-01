@@ -7,8 +7,8 @@ Intended for use as a quick pre-commit hook; compiles provided files only.
 from __future__ import annotations
 
 import argparse
-import os
 import py_compile
+import tempfile
 from pathlib import Path
 from typing import Iterator
 import sys
@@ -53,7 +53,8 @@ def main(argv: list[str]) -> int:
     failures = 0
     for path in _iter_python_files(args.paths):
         try:
-            py_compile.compile(str(path), cfile=os.devnull, doraise=True)
+            with tempfile.NamedTemporaryFile(suffix=".pyc", delete=True) as temp_pyc:
+                py_compile.compile(str(path), cfile=temp_pyc.name, doraise=True)
         except py_compile.PyCompileError as exc:
             failures += 1
             msg = exc.msg or str(exc)
