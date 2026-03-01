@@ -18,10 +18,12 @@
      - `app/api/v1/endpoints/users.py` similar compatibility helper
    - Why low risk: intended for monkeypatching in tests; not part of public API contract.
    - Work needed: update tests patching legacy symbols before removal.
+   - Status: completed in phase 2 (direct core import, shim wrappers removed).
 
 3. `app/core/Local_LLM/http_utils.py` fake-client compatibility path
    - Why low risk: explicitly marked deprecated/testing-only shim.
    - Work needed: convert remaining fake-client tests to `httpx.AsyncClient`-compatible stubs.
+   - Status: completed in phase 2 (non-`httpx` fallback removed; tests migrated to `httpx.MockTransport`).
 
 ### Tier 2: Medium risk removals (require staged migration)
 1. MCP single-user API-key compatibility shim
@@ -55,4 +57,3 @@
 1. Finish Tier 1 shims in small PRs with direct test updates.
 2. For each Tier 2 item, add cutover flag + telemetry, then remove shim after one release cycle.
 3. Treat Tier 3 as coordinated RG-completion effort, not opportunistic cleanup.
-
