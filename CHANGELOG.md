@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
 
+## [0.1.26] 2026-03-01
+
+### Added
+
+- repo2txt V1 integration across shared UI, web, and extension options surfaces:
+  - Added shared options route scaffold and route wiring for `/repo2txt`.
+  - Added repo2txt page shell and interaction flow in shared UI.
+  - Added GitHub provider support for repo2txt generation.
+  - Added local file/folder provider support for repo2txt generation.
+  - Added repo2txt file-tree state slice for selection/exclusion behavior.
+  - Added repo2txt formatter and tokenizer worker pipeline.
+  - Added locale keys and parity guard coverage for repo2txt copy.
+  - Added Next.js wrapper route at `apps/tldw-frontend/pages/repo2txt.tsx`.
+  - Added extension E2E coverage for options route loading and sidepanel link-out behavior:
+    - `apps/extension/tests/e2e/repo2txt-options.spec.ts`
+    - `apps/extension/tests/e2e/repo2txt-sidepanel-linkout.spec.ts`
+- Added repo2txt discoverability in the launcher/shortcuts modal.
+- Added docs coverage for repo2txt route behavior in:
+  - `apps/DEVELOPMENT.md`
+  - `apps/tldw-frontend/README.md`
+  - `apps/extension/README.md`
+- Added extension compile tsconfig and entrypoint module declarations:
+  - `apps/extension/tsconfig.compile.json`
+  - `apps/extension/types/tldw-ui-entries.d.ts`
+
+### Changed
+
+- Extension compile script now targets explicit config:
+  - `apps/extension/package.json` `compile` now uses `tsc --noEmit -p tsconfig.compile.json`.
+- Frontend compile script now uses webpack build path for deterministic completion in this environment:
+  - `apps/tldw-frontend/package.json` `compile` now uses `next build --webpack` before token-sync verification.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed extension compile command failure caused by missing local `tsconfig.json` in `apps/extension`.
+- Fixed frontend compile gate stalling under Turbopack in this environment by switching compile verification to webpack build mode.
+
+
 ## [0.1.25] 2026-02-X
 
 ### Added
