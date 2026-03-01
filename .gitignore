@@ -271,6 +271,7 @@ errors.log
 # Data files
 *.csv
 *.json
+!tldw_Server_API/app/core/Evaluations/data/bullshit_benchmark/questions_v2.json
 !apps/package.json
 !apps/extension/package.json
 !apps/packages/voice-assistant-sdk/package.json

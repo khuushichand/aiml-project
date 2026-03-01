@@ -264,6 +264,33 @@ class TestCustomMetrics:
             assert results[1]["score"] == 0.90  # 9.0 / 10
             assert results[2]["score"] == 0.78  # 7.8 / 10
 
+    @pytest.mark.asyncio
+    async def test_evaluate_custom_metric_generates_model_response(self, evaluation_manager):
+        """Test that placeholder model responses are generated before scoring."""
+        with patch('asyncio.to_thread', new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.side_effect = [
+                "Synthetic model answer",
+                '{"score": 7.5, "explanation": "Generated answer was mostly correct"}',
+            ]
+
+            result = await evaluation_manager.evaluate_custom_metric(
+                metric_name="bullshit_detection",
+                description="Detect nonsense handling",
+                evaluation_prompt="Question: {question}\nModel Response: {response}",
+                input_data={"question": "What is 2+2?", "response": "{model_response}"},
+                scoring_criteria={"detection": "Score 0-10"},
+                api_name="openai",
+            )
+
+            assert abs(result["score"] - 0.75) < 0.001
+            assert mock_to_thread.call_count == 2
+
+            first_call = mock_to_thread.call_args_list[0]
+            assert "What is 2+2?" in str(first_call.args[2])
+
+            second_call = mock_to_thread.call_args_list[1]
+            assert "Synthetic model answer" in str(second_call.args[2])
+
 
 @pytest.mark.unit
 class TestEvaluationComparison:
