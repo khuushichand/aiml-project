@@ -115,7 +115,7 @@ async def test_process_document_like_item_url_post_download_validation_rejected(
     def _should_not_process(*_args: Any, **_kwargs: Any):
         raise AssertionError("processor should not run when URL validation fails")
 
-    monkeypatch.setattr(media_endpoints, "_download_url_async", _fake_download_url_async, raising=True)
+    monkeypatch.setattr(download_utils, "download_url_async", _fake_download_url_async, raising=True)
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Security.url_validation.assert_url_safe",
         lambda _url: None,
@@ -197,7 +197,7 @@ async def test_process_document_like_item_url_post_download_validation_success_p
     async def _fake_extract_claims_if_requested(*_args: Any, **_kwargs: Any):
         return None
 
-    monkeypatch.setattr(media_endpoints, "_download_url_async", _fake_download_url_async, raising=True)
+    monkeypatch.setattr(download_utils, "download_url_async", _fake_download_url_async, raising=True)
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Security.url_validation.assert_url_safe",
         lambda _url: None,
@@ -276,7 +276,7 @@ async def test_process_document_like_item_document_url_passes_html_xml_allowlist
     async def _fake_extract_claims_if_requested(*_args: Any, **_kwargs: Any):
         return None
 
-    monkeypatch.setattr(media_endpoints, "_download_url_async", _fake_download_url_async, raising=True)
+    monkeypatch.setattr(download_utils, "download_url_async", _fake_download_url_async, raising=True)
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Security.url_validation.assert_url_safe",
         lambda _url: None,
@@ -325,8 +325,6 @@ async def test_process_document_like_item_email_archive_url_uses_archive_content
     tmp_path,
     monkeypatch,
 ):
-    from tldw_Server_API.app.api.v1.endpoints import media as media_endpoints
-
     url = "https://example.com/emails.zip"
     downloaded_file = tmp_path / "emails.zip"
     downloaded_file.write_bytes(b"fake zip bytes")
@@ -344,8 +342,8 @@ async def test_process_document_like_item_email_archive_url_uses_archive_content
         )
 
     monkeypatch.setattr(
-        media_endpoints,
-        "_download_url_async",
+        download_utils,
+        "download_url_async",
         _fake_download_url_async,
         raising=True,
     )

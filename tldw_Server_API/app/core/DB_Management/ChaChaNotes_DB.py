@@ -39,6 +39,7 @@ changes in the `sync_log` and in individual records.
 import json  # noqa: E402
 import re  # noqa: E402
 import sqlite3  # noqa: E402
+import tempfile  # noqa: E402
 import threading  # noqa: E402
 import uuid  # noqa: E402
 from configparser import ConfigParser  # noqa: E402
@@ -82,6 +83,7 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (  # noq
     transform_sqlite_query_for_postgres,
 )
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend  # noqa: E402
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths  # noqa: E402
 
 #
 ########################################################################################################################
@@ -2894,6 +2896,62 @@ UPDATE db_schema_version
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
 
+    @staticmethod
+    def _path_is_within(path: Path, base: Path) -> bool:
+        try:
+            path.relative_to(base)
+            return True
+        except ValueError:
+            return False
+
+    @classmethod
+    def _sqlite_allowed_roots(cls) -> tuple[Path, ...]:
+        roots: list[Path] = [Path(tempfile.gettempdir()).resolve(strict=False), Path.cwd().resolve(strict=False)]
+        try:
+            roots.append(DatabasePaths.get_user_db_base_dir().resolve(strict=False))
+        except _CHACHA_NONCRITICAL_EXCEPTIONS:
+            pass
+
+        unique_roots: list[Path] = []
+        seen: set[str] = set()
+        for root in roots:
+            marker = str(root)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            unique_roots.append(root)
+        return tuple(unique_roots)
+
+    @classmethod
+    def _resolve_sqlite_db_path(cls, db_path: str | Path) -> tuple[bool, Path]:
+        if isinstance(db_path, Path):
+            raw_path = db_path
+            is_memory = False
+        else:
+            raw_text = str(db_path).strip()
+            is_memory = raw_text == ":memory:"
+            raw_path = Path(raw_text) if raw_text else Path(str(db_path))
+
+        if is_memory:
+            return True, Path(":memory:")
+
+        raw_text = str(raw_path)
+        if "\x00" in raw_text:
+            raise CharactersRAGDBError("Database path contains invalid null byte.")
+
+        candidate = raw_path.expanduser()
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        resolved_path = candidate.resolve(strict=False)
+
+        allowed_roots = cls._sqlite_allowed_roots()
+        if not any(cls._path_is_within(resolved_path, root) for root in allowed_roots):
+            allowed_display = ", ".join(str(root) for root in allowed_roots)
+            raise CharactersRAGDBError(
+                f"Database path must be under an approved root directory: {allowed_display}"
+            )
+        return False, resolved_path
+
     def __init__(
         self,
         db_path: str | Path,
@@ -2921,12 +2979,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                   a critical error.
             SchemaError: If schema migration or versioning issues occur.
         """
-        if isinstance(db_path, Path):
-            resolved_path = db_path.resolve()
-            is_memory = False
-        else:
-            is_memory = db_path == ':memory:'
-            resolved_path = Path(db_path).resolve() if not is_memory else Path(":memory:")
+        is_memory, resolved_path = self._resolve_sqlite_db_path(db_path)
 
         self.is_memory_db = is_memory
         self.db_path = resolved_path
@@ -2943,11 +2996,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self.is_memory_db = False
 
         if self.backend_type == BackendType.SQLITE and not self.is_memory_db:
+            db_parent = self.db_path.parent.resolve(strict=False)
+            allowed_roots = self._sqlite_allowed_roots()
+            if not any(self._path_is_within(db_parent, root) for root in allowed_roots):
+                raise CharactersRAGDBError(  # noqa: TRY003
+                    f"Rejected SQLite directory outside approved roots: {db_parent}"
+                )
             try:
-                self.db_path.parent.mkdir(parents=True, exist_ok=True)
+                db_parent.mkdir(parents=True, exist_ok=True)
             except OSError as e:
                 raise CharactersRAGDBError(  # noqa: TRY003
-                    f"Failed to create database directory {self.db_path.parent}: {e}"
+                    f"Failed to create database directory {db_parent}: {e}"
                 ) from e
 
         logger.info(

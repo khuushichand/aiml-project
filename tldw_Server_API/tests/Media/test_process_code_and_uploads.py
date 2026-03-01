@@ -54,13 +54,15 @@ def test_process_code_js_codechunk(client_with_single_user):
 @pytest.mark.asyncio
 async def test_save_uploaded_files_extension_candidates_tar_gz(tmp_path, monkeypatch):
     # Call internal helper to validate multi-suffix support (.tar.gz)
-    from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
+        save_uploaded_files,
+    )
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
 
     content = b"fake tar gz content"
     up = UploadFile(filename="archive.tar.gz", file=io.BytesIO(content))
 
-    saved, errors = await media_mod._save_uploaded_files(
+    saved, errors = await save_uploaded_files(
         files=[up],
         temp_dir=tmp_path,
         validator=FileValidator(),

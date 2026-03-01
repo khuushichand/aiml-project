@@ -10,6 +10,9 @@ def test_readme_start_here_links_to_profile_index() -> None:
 
 def test_getting_started_index_lists_all_profiles() -> None:
     text = Path("Docs/Getting_Started/README.md").read_text()
+    assert "Choose exactly one base setup profile" in text
+    assert "Canonical base profiles" in text
+    assert "Optional add-ons" in text
     for label in [
         "Local single-user",
         "Docker single-user",

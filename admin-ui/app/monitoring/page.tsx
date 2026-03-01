@@ -1,27 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import {
-  buildAlertHistoryEntry,
-  buildAlertRuleFromDraft,
-  DEFAULT_ALERT_RULE_DRAFT,
-  isAlertSnoozed,
-  readStoredAlertHistory,
-  readStoredAlertRules,
-  resolveSnoozedUntil,
-  validateAlertRuleDraft,
-  writeStoredAlertHistory,
-  writeStoredAlertRules,
-} from '@/lib/monitoring-alerts';
+import { isAlertSnoozed } from '@/lib/monitoring-alerts';
 import {
   MONITORING_DEFAULT_SERIES_VISIBILITY,
   toggleMonitoringSeriesVisibility,
@@ -30,50 +17,30 @@ import {
   type MonitoringTimeRangeOption,
 } from '@/lib/monitoring-metrics';
 import {
-  measureTimedEndpoint,
   MONITORING_SUBSYSTEMS,
   normalizeMonitoringHealthStatus,
 } from '@/lib/monitoring-health';
-import {
-  fetchMonitoringSettledResults,
-  monitoringLoadResultEntries,
-  resolveMonitoringLoadState,
-} from './load-state-utils';
 import AlertRulesPanel from './components/AlertRulesPanel';
 import AlertsPanel from './components/AlertsPanel';
 import MetricsChart from './components/MetricsChart';
 import MetricsGrid from './components/MetricsGrid';
 import NotificationsPanel from './components/NotificationsPanel';
 import SystemStatusPanel from './components/SystemStatusPanel';
+import TimeRangeControls from './components/TimeRangeControls';
 import WatchlistsPanel from './components/WatchlistsPanel';
-import {
-  escalateAlertSeverity,
-  markAlertAcknowledged,
-  removeAlertById,
-  setAlertAssignment,
-  setAlertSnoozeUntil,
-} from './alert-state-utils';
-import {
-  buildNotificationSettingsUpdate,
-  normalizeNotificationSettings,
-  normalizeRecentNotifications,
-} from './notification-utils';
+import { useMonitoringDataLoader } from './use-monitoring-data-loader';
+import { useMonitoringDashboardState } from './use-monitoring-dashboard-state';
 import { useMonitoringMetricsHistory } from './use-monitoring-metrics-history';
+import { useAlertActions } from './use-alert-actions';
+import { useAlertRules } from './use-alert-rules';
+import { useMonitoringAlertState } from './use-monitoring-alert-state';
+import { useMonitoringMessages } from './use-monitoring-messages';
+import { useMonitoringNotificationState } from './use-monitoring-notification-state';
+import { useNotificationActions } from './use-notification-actions';
+import { useWatchlistActions } from './use-watchlist-actions';
 import type {
-  AlertAssignableUser,
-  AlertHistoryEntry,
-  AlertRule,
-  AlertRuleDraft,
-  AlertRuleValidationErrors,
-  Metric,
-  NotificationSettings,
-  RecentNotification,
-  SnoozeDurationOption,
-  SystemAlert,
   SystemHealthStatus,
   SystemStatusItem,
-  Watchlist,
-  WatchlistDraft,
 } from './types';
 
 const METRIC_CRITICAL_THRESHOLD = 90;
@@ -101,51 +68,49 @@ export const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
 
 export default function MonitoringPage() {
   const confirm = useConfirm();
-  const [metrics, setMetrics] = useState<Metric[]>([]);
-  const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
-  const [alerts, setAlerts] = useState<SystemAlert[]>([]);
+  const {
+    metrics,
+    setMetrics,
+    watchlists,
+    setWatchlists,
+    systemStatus,
+    setSystemStatus,
+    loading,
+    setLoading,
+    lastUpdated,
+    markMonitoringDataUpdated,
+  } = useMonitoringDashboardState({
+    initialSystemStatus: DEFAULT_SYSTEM_STATUS,
+  });
   const [seriesVisibility, setSeriesVisibility] = useState<MonitoringMetricsSeriesVisibility>(
     MONITORING_DEFAULT_SERIES_VISIBILITY
   );
-  const [systemStatus, setSystemStatus] = useState<SystemStatusItem[]>(DEFAULT_SYSTEM_STATUS);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [deletingWatchlistId, setDeletingWatchlistId] = useState<string | null>(null);
-  const successTimerRef = useRef<number | null>(null);
-  const alertStorageHydratedRef = useRef(false);
-
-  // Create watchlist dialog
-  const [showCreateWatchlist, setShowCreateWatchlist] = useState(false);
-  const [newWatchlist, setNewWatchlist] = useState<WatchlistDraft>({
-    name: '',
-    description: '',
-    target: '',
-    type: 'resource',
-    threshold: 80,
-  });
 
   // Notification settings
-  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
-  const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([]);
-  const [notificationsSaving, setNotificationsSaving] = useState(false);
-  const [notificationSettingsStatus, setNotificationSettingsStatus] = useState<'pending' | 'fulfilled' | 'rejected'>('pending');
+  const {
+    notificationSettings,
+    setNotificationSettings,
+    recentNotifications,
+    setRecentNotifications,
+    setNotificationSettingsStatus,
+    canSaveNotificationSettings,
+  } = useMonitoringNotificationState();
 
   // Stage 2: Alert rules + enhanced alert management
-  const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
-  const [alertRuleDraft, setAlertRuleDraft] = useState<AlertRuleDraft>(DEFAULT_ALERT_RULE_DRAFT);
-  const [alertRuleValidationErrors, setAlertRuleValidationErrors] = useState<AlertRuleValidationErrors>({});
-  const [alertRulesSaving, setAlertRulesSaving] = useState(false);
-  const [assignableUsers, setAssignableUsers] = useState<AlertAssignableUser[]>([]);
-  const [showSnoozedAlerts, setShowSnoozedAlerts] = useState(false);
-  const [alertHistory, setAlertHistory] = useState<AlertHistoryEntry[]>([]);
-  const alertsRef = useRef<SystemAlert[]>([]);
-  const alertHistoryRef = useRef<AlertHistoryEntry[]>([]);
+  const {
+    alerts,
+    setAlerts,
+    alertsRef,
+    assignableUsers,
+    setAssignableUsers,
+    showSnoozedAlerts,
+    setShowSnoozedAlerts,
+    alertHistory,
+    setAlertHistory,
+    alertHistoryRef,
+  } = useMonitoringAlertState();
 
-  const handleManualRangeLoadSuccess = useCallback(() => {
-    setLastUpdated(new Date());
-  }, []);
+  const handleManualRangeLoadSuccess = markMonitoringDataUpdated;
 
   const {
     metricsHistory,
@@ -168,302 +133,97 @@ export default function MonitoringPage() {
     setSeriesVisibility((prev) => toggleMonitoringSeriesVisibility(prev, seriesKey));
   };
 
-  const loadData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError('');
-      setNotificationSettingsStatus('pending');
+  const {
+    error,
+    setError,
+    success,
+    setSuccess,
+  } = useMonitoringMessages();
 
-      const settledResults = await fetchMonitoringSettledResults({
-        apiClient: api,
-        measureTimedRequest: measureTimedEndpoint,
-      });
+  const { loadData } = useMonitoringDataLoader({
+    alertsRef,
+    alertHistoryRef,
+    customRangeStart,
+    customRangeEnd,
+    timeRange,
+    loadMetricsHistoryForRange,
+    markMonitoringDataUpdated,
+    setLoading,
+    setError,
+    setNotificationSettingsStatus,
+    setNotificationSettings,
+    setRecentNotifications,
+    setMetrics,
+    setWatchlists,
+    setAlerts,
+    setAlertHistory,
+    setAssignableUsers,
+    setSystemStatus,
+    metricWarningThreshold: METRIC_WARNING_THRESHOLD,
+    metricCriticalThreshold: METRIC_CRITICAL_THRESHOLD,
+  });
 
-      monitoringLoadResultEntries(settledResults).forEach(({ name, result }) => {
-        if (result.status === 'rejected') {
-          console.warn(`Failed to load ${name}:`, result.reason);
-        }
-      });
+  const {
+    showCreateWatchlist,
+    setShowCreateWatchlist,
+    newWatchlist,
+    setNewWatchlist,
+    deletingWatchlistId,
+    handleCreateWatchlist,
+    handleDeleteWatchlist,
+  } = useWatchlistActions({
+    apiClient: api,
+    confirm,
+    setError,
+    setSuccess,
+    onReloadRequested: loadData,
+  });
 
-      const resolvedState = resolveMonitoringLoadState({
-        settledResults,
-        previousAlerts: alertsRef.current,
-        previousAlertHistory: alertHistoryRef.current,
-        metricWarningThreshold: METRIC_WARNING_THRESHOLD,
-        metricCriticalThreshold: METRIC_CRITICAL_THRESHOLD,
-      });
+  const {
+    handleAcknowledgeAlert,
+    handleDismissAlert,
+    handleAssignAlert,
+    handleSnoozeAlert,
+    handleEscalateAlert,
+  } = useAlertActions({
+    apiClient: api,
+    confirm,
+    setAlerts,
+    setAlertHistory,
+    setError,
+    setSuccess,
+    onReloadRequested: loadData,
+    assignableUsers,
+  });
 
-      setNotificationSettingsStatus(resolvedState.notificationSettingsStatus);
-      setNotificationSettings(resolvedState.notificationSettings);
-      setRecentNotifications(resolvedState.recentNotifications);
-      if (resolvedState.metrics) {
-        setMetrics(resolvedState.metrics);
-      }
-      if (resolvedState.watchlists) {
-        setWatchlists(resolvedState.watchlists);
-      }
-      if (resolvedState.alerts) {
-        alertsRef.current = resolvedState.alerts;
-        setAlerts(resolvedState.alerts);
-      }
-      if (resolvedState.alertHistory) {
-        alertHistoryRef.current = resolvedState.alertHistory;
-        setAlertHistory(resolvedState.alertHistory);
-      }
-      setAssignableUsers(resolvedState.assignableUsers);
-      setSystemStatus(resolvedState.systemStatus);
+  const {
+    notificationsSaving,
+    handleSaveNotificationSettings,
+    handleTestNotification,
+  } = useNotificationActions({
+    apiClient: api,
+    canSave: canSaveNotificationSettings,
+    setNotificationSettings,
+    setRecentNotifications,
+    setError,
+    setSuccess,
+  });
 
-      void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);
-      setLastUpdated(new Date());
-    } catch (err: unknown) {
-      console.error('Failed to load monitoring data:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to load monitoring data');
-      setNotificationSettingsStatus('rejected');
-      setNotificationSettings(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, timeRange]);
+  const {
+    alertRules,
+    alertRuleDraft,
+    alertRuleValidationErrors,
+    alertRulesSaving,
+    handleAlertRuleDraftChange,
+    handleCreateAlertRule,
+    handleDeleteAlertRule,
+  } = useAlertRules({
+    setSuccess,
+  });
 
   useEffect(() => {
-    setAlertRules(readStoredAlertRules());
-    setAlertHistory(readStoredAlertHistory());
-    alertStorageHydratedRef.current = true;
-  }, []);
-
-  useEffect(() => {
-    if (!alertStorageHydratedRef.current) return;
-    writeStoredAlertRules(alertRules);
-  }, [alertRules]);
-
-  useEffect(() => {
-    if (!alertStorageHydratedRef.current) return;
-    writeStoredAlertHistory(alertHistory);
-  }, [alertHistory]);
-
-  useEffect(() => {
-    alertsRef.current = alerts;
-  }, [alerts]);
-
-  useEffect(() => {
-    alertHistoryRef.current = alertHistory;
-  }, [alertHistory]);
-
-  useEffect(() => {
-    loadData();
+    void loadData();
   }, [loadData]);
-
-  useEffect(() => {
-    if (!success) {
-      if (successTimerRef.current !== null) {
-        window.clearTimeout(successTimerRef.current);
-        successTimerRef.current = null;
-      }
-      return;
-    }
-
-    if (successTimerRef.current !== null) {
-      window.clearTimeout(successTimerRef.current);
-    }
-    successTimerRef.current = window.setTimeout(() => {
-      setSuccess('');
-      successTimerRef.current = null;
-    }, 4000);
-
-    return () => {
-      if (successTimerRef.current !== null) {
-        window.clearTimeout(successTimerRef.current);
-        successTimerRef.current = null;
-      }
-    };
-  }, [success]);
-
-  const handleCreateWatchlist = async () => {
-    if (!newWatchlist.name || !newWatchlist.target) {
-      setError('Name and target are required');
-      return;
-    }
-
-    try {
-      setError('');
-      await api.createWatchlist(newWatchlist);
-      setSuccess('Watchlist created successfully');
-      setShowCreateWatchlist(false);
-      setNewWatchlist({ name: '', description: '', target: '', type: 'resource', threshold: 80 });
-      loadData();
-    } catch (err: unknown) {
-      console.error('Failed to create watchlist:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to create watchlist');
-    }
-  };
-
-  const handleDeleteWatchlist = async (watchlist: Watchlist) => {
-    const watchlistId = String(watchlist.id);
-    if (deletingWatchlistId === watchlistId) return;
-    const confirmed = await confirm({
-      title: 'Delete Watchlist',
-      message: `Delete watchlist "${watchlist.name}"?`,
-      confirmText: 'Delete',
-      variant: 'danger',
-      icon: 'delete',
-    });
-    if (!confirmed) return;
-
-    try {
-      setError('');
-      setDeletingWatchlistId(watchlistId);
-      await api.deleteWatchlist(watchlist.id);
-      setSuccess('Watchlist deleted');
-      loadData();
-    } catch (err: unknown) {
-      console.error('Failed to delete watchlist:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to delete watchlist');
-    } finally {
-      setDeletingWatchlistId((prev) => (prev === watchlistId ? null : prev));
-    }
-  };
-
-  const appendAlertHistory = (
-    alertId: string,
-    action: AlertHistoryEntry['action'],
-    details: string,
-    actor?: string
-  ) => {
-    setAlertHistory((prev) => [
-      buildAlertHistoryEntry(alertId, action, details, { actor }),
-      ...prev,
-    ]);
-  };
-
-  const handleCreateAlertRule = () => {
-    const validation = validateAlertRuleDraft(alertRuleDraft);
-    if (!validation.valid) {
-      setAlertRuleValidationErrors(validation.errors);
-      return;
-    }
-
-    setAlertRulesSaving(true);
-    try {
-      const newRule = buildAlertRuleFromDraft(alertRuleDraft);
-      setAlertRules((prev) => [newRule, ...prev]);
-      setAlertRuleValidationErrors({});
-      setAlertRuleDraft(DEFAULT_ALERT_RULE_DRAFT);
-      setSuccess('Alert rule added');
-    } finally {
-      setAlertRulesSaving(false);
-    }
-  };
-
-  const handleDeleteAlertRule = (rule: AlertRule) => {
-    setAlertRules((prev) => prev.filter((item) => item.id !== rule.id));
-    setSuccess('Alert rule deleted');
-  };
-
-  const handleAcknowledgeAlert = async (alert: SystemAlert) => {
-    try {
-      setError('');
-      await api.acknowledgeAlert(alert.id);
-      setAlerts((prev) => markAlertAcknowledged(prev, alert.id, new Date().toISOString()));
-      appendAlertHistory(alert.id, 'acknowledged', 'Alert acknowledged');
-      setSuccess('Alert acknowledged');
-      loadData();
-    } catch (err: unknown) {
-      console.error('Failed to acknowledge alert:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to acknowledge alert');
-    }
-  };
-
-  const handleDismissAlert = async (alert: SystemAlert) => {
-    const confirmed = await confirm({
-      title: 'Dismiss Alert',
-      message: 'Dismiss this alert?',
-      confirmText: 'Dismiss',
-      variant: 'warning',
-      icon: 'warning',
-    });
-    if (!confirmed) return;
-
-    try {
-      setError('');
-      await api.dismissAlert(alert.id);
-      appendAlertHistory(alert.id, 'dismissed', 'Alert dismissed');
-      setAlerts((prev) => removeAlertById(prev, alert.id));
-      setSuccess('Alert dismissed');
-      loadData();
-    } catch (err: unknown) {
-      console.error('Failed to dismiss alert:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to dismiss alert');
-    }
-  };
-
-  const handleAssignAlert = (alert: SystemAlert, userId: string) => {
-    setAlerts((prev) => setAlertAssignment(prev, alert.id, userId || undefined));
-    const assignedLabel = userId
-      ? (assignableUsers.find((user) => user.id === userId)?.label ?? userId)
-      : 'Unassigned';
-    appendAlertHistory(alert.id, 'assigned', `Assigned to ${assignedLabel}`);
-    setSuccess(userId ? 'Alert assigned' : 'Alert unassigned');
-  };
-
-  const handleSnoozeAlert = (alert: SystemAlert, duration: SnoozeDurationOption) => {
-    const snoozedUntil = resolveSnoozedUntil(duration);
-    setAlerts((prev) => setAlertSnoozeUntil(prev, alert.id, snoozedUntil));
-    appendAlertHistory(alert.id, 'snoozed', `Snoozed for ${duration}`);
-    setSuccess(`Alert snoozed for ${duration}`);
-  };
-
-  const handleEscalateAlert = (alert: SystemAlert) => {
-    if (alert.severity === 'critical') {
-      return;
-    }
-    setAlerts((prev) => escalateAlertSeverity(prev, alert.id));
-    appendAlertHistory(alert.id, 'escalated', 'Severity escalated to critical');
-    setSuccess('Alert escalated to critical');
-  };
-
-  const handleSaveNotificationSettings = async (settings: NotificationSettings) => {
-    if (notificationSettingsStatus !== 'fulfilled') {
-      return false;
-    }
-    try {
-      setNotificationsSaving(true);
-      setError('');
-      const payload = buildNotificationSettingsUpdate(settings);
-      const updated = await api.updateNotificationSettings(payload as unknown as Record<string, unknown>);
-      setNotificationSettings(normalizeNotificationSettings(updated));
-      setSuccess('Notification settings saved');
-      return true;
-    } catch (err: unknown) {
-      console.error('Failed to save notification settings:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to save notification settings');
-      return false;
-    } finally {
-      setNotificationsSaving(false);
-    }
-  };
-
-  const handleTestNotification = async (
-    payload?: {
-      message?: string;
-      severity?: string;
-    },
-  ) => {
-    try {
-      setError('');
-      await api.testNotification(payload ?? {});
-      setSuccess('Test notification sent');
-      // Reload recent notifications
-      try {
-        const data = await api.getRecentNotifications();
-        setRecentNotifications(normalizeRecentNotifications(data));
-      } catch {
-        // Ignore reload errors
-      }
-    } catch (err: unknown) {
-      console.error('Failed to send test notification:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to send test notification');
-    }
-  };
 
   const activeAlerts = alerts.filter((alert) => !alert.acknowledged && !isAlertSnoozed(alert));
 
@@ -522,59 +282,17 @@ export default function MonitoringPage() {
               </Alert>
             )}
 
-            <div className="mb-4 rounded-lg border border-border/80 bg-muted/10 p-4">
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium">Time Range</span>
-                {MONITORING_TIME_RANGE_OPTIONS.map((option) => (
-                  <Button
-                    key={option.value}
-                    type="button"
-                    size="sm"
-                    variant={timeRange === option.value ? 'secondary' : 'outline'}
-                    onClick={() => { void handleSelectTimeRange(option.value); }}
-                    data-testid={`monitoring-time-range-${option.value}`}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
-              </div>
-              {timeRange === 'custom' && (
-                <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
-                  <div className="space-y-1">
-                    <Label htmlFor="customRangeStart">Custom Start</Label>
-                    <Input
-                      id="customRangeStart"
-                      type="datetime-local"
-                      value={customRangeStart}
-                      onChange={(event) => {
-                        setCustomRangeStart(event.target.value);
-                      }}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="customRangeEnd">Custom End</Label>
-                    <Input
-                      id="customRangeEnd"
-                      type="datetime-local"
-                      value={customRangeEnd}
-                      onChange={(event) => {
-                        setCustomRangeEnd(event.target.value);
-                      }}
-                    />
-                  </div>
-                  <Button
-                    type="button"
-                    onClick={() => { void handleApplyCustomTimeRange(); }}
-                    data-testid="monitoring-time-range-apply-custom"
-                  >
-                    Apply
-                  </Button>
-                </div>
-              )}
-              {rangeValidationError && (
-                <p className="mt-2 text-sm text-destructive">{rangeValidationError}</p>
-              )}
-            </div>
+            <TimeRangeControls
+              options={MONITORING_TIME_RANGE_OPTIONS}
+              timeRange={timeRange}
+              customRangeStart={customRangeStart}
+              customRangeEnd={customRangeEnd}
+              rangeValidationError={rangeValidationError}
+              onSelectTimeRange={handleSelectTimeRange}
+              onCustomRangeStartChange={setCustomRangeStart}
+              onCustomRangeEndChange={setCustomRangeEnd}
+              onApplyCustomRange={handleApplyCustomTimeRange}
+            />
 
             <MetricsChart
               metricsHistory={metricsHistory}
@@ -590,10 +308,7 @@ export default function MonitoringPage() {
                 draft={alertRuleDraft}
                 errors={alertRuleValidationErrors}
                 saving={alertRulesSaving}
-                onDraftChange={(draft) => {
-                  setAlertRuleDraft(draft);
-                  setAlertRuleValidationErrors({});
-                }}
+                onDraftChange={handleAlertRuleDraftChange}
                 onCreateRule={handleCreateAlertRule}
                 onDeleteRule={handleDeleteAlertRule}
               />
@@ -635,7 +350,7 @@ export default function MonitoringPage() {
                 recentNotifications={recentNotifications}
                 loading={loading}
                 saving={notificationsSaving}
-                canSave={notificationSettingsStatus === 'fulfilled'}
+                canSave={canSaveNotificationSettings}
                 onSave={handleSaveNotificationSettings}
                 onTest={handleTestNotification}
               />

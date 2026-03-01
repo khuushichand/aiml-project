@@ -96,6 +96,22 @@ type DirectQuickIngestTracker = ReturnType<
 const directQuickIngestSessionTrackers = new Map<string, DirectQuickIngestTracker>()
 const directQuickIngestCancelledSessions = new Set<string>()
 
+const buildDirectSessionSuffix = (): string => {
+  try {
+    if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function") {
+      return globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 8)
+    }
+    if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.getRandomValues === "function") {
+      const bytes = new Uint8Array(4)
+      globalThis.crypto.getRandomValues(bytes)
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+    }
+  } catch {
+    // Fall through to timestamp suffix below.
+  }
+  return Date.now().toString(36).slice(-8)
+}
+
 const ensureDirectSessionTracker = (
   sessionId: string | undefined
 ): DirectQuickIngestTracker | undefined => {
@@ -615,7 +631,7 @@ export const startQuickIngestSession = async (
   // so session-native callers can still establish a run identity.
   return {
     ok: true,
-    sessionId: `qi-direct-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    sessionId: `qi-direct-${Date.now()}-${buildDirectSessionSuffix()}`
   }
 }
 

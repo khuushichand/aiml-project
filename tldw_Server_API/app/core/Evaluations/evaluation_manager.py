@@ -478,12 +478,33 @@ class EvaluationManager:
         evaluation_prompt: str,
         input_data: dict[str, Any],
         scoring_criteria: dict[str, Any],
-        api_name: str = "openai"
+        api_name: str = "openai",
+        api_key: Optional[str] = None,
     ) -> dict[str, Any]:
         """Evaluate using custom metric definition"""
+        runtime_input_data = dict(input_data)
+        if self._contains_model_response_placeholder(runtime_input_data):
+            model_response = await self._generate_model_response(
+                input_data=runtime_input_data,
+                api_name=api_name,
+                api_key=api_key,
+            )
+            if isinstance(model_response, str) and model_response.startswith("Error:"):
+                logger.error(f"Model response generation failed for metric '{metric_name}': {model_response}")
+                return {
+                    "metric_name": metric_name,
+                    "score": 0.0,
+                    "explanation": model_response,
+                    "raw_output": None,
+                }
+            runtime_input_data = {
+                key: (model_response if value == "{model_response}" else value)
+                for key, value in runtime_input_data.items()
+            }
+
         # Format the evaluation prompt with input data
         formatted_prompt = evaluation_prompt
-        for key, value in input_data.items():
+        for key, value in runtime_input_data.items():
             formatted_prompt = formatted_prompt.replace(f"{{{key}}}", str(value))
 
         # Add scoring criteria to prompt
@@ -495,9 +516,9 @@ class EvaluationManager:
             response = await asyncio.to_thread(
                 analyze,
                 api_name,
-                json.dumps(input_data),
+                json.dumps(runtime_input_data),
                 full_prompt,
-                "",
+                api_key,
                 temp=0.3,
                 system_message="You are an expert evaluator. Provide scores and detailed explanations."
             )
@@ -569,6 +590,94 @@ class EvaluationManager:
                 "explanation": f"Evaluation failed: {str(e)}",
                 "raw_output": None
             }
+
+    @staticmethod
+    def _contains_model_response_placeholder(input_data: dict[str, Any]) -> bool:
+        return any(value == "{model_response}" for value in input_data.values())
+
+    @staticmethod
+    def _build_model_response_prompt(input_data: dict[str, Any]) -> str:
+        visible = {
+            key: value
+            for key, value in input_data.items()
+            if value != "{model_response}"
+        }
+
+        question = visible.get("question")
+        if question:
+            choices = visible.get("choices")
+            if choices:
+                return (
+                    f"Question:\n{question}\n\n"
+                    f"Choices:\n{choices}\n\n"
+                    "Answer the question directly."
+                )
+            return str(question)
+
+        instruction = visible.get("instruction")
+        if instruction:
+            constraints = visible.get("constraints")
+            if constraints:
+                return (
+                    f"Instruction:\n{instruction}\n\n"
+                    f"Constraints:\n{constraints}\n\n"
+                    "Provide the best compliant response."
+                )
+            return str(instruction)
+
+        problem = visible.get("problem")
+        if problem:
+            language = visible.get("language")
+            test_cases = visible.get("test_cases")
+            extra = ""
+            if language:
+                extra += f"\nTarget language: {language}"
+            if test_cases:
+                extra += f"\nTests:\n{test_cases}"
+            return f"Programming task:\n{problem}{extra}\n\nProvide a complete solution."
+
+        query = visible.get("query")
+        if query:
+            return str(query)
+
+        prompt = visible.get("prompt")
+        if prompt:
+            return str(prompt)
+
+        if visible:
+            try:
+                serialized = json.dumps(visible)
+            except (TypeError, ValueError):
+                serialized = str(visible)
+            return (
+                "Use the following task context to provide the best possible answer:\n"
+                f"{serialized}"
+            )
+
+        return "Provide a helpful and accurate response."
+
+    async def _generate_model_response(
+        self,
+        *,
+        input_data: dict[str, Any],
+        api_name: str,
+        api_key: Optional[str],
+    ) -> str:
+        prompt = self._build_model_response_prompt(input_data)
+        response = await asyncio.to_thread(
+            analyze,
+            api_name,
+            prompt,
+            None,
+            api_key,
+            temp=0.2,
+            system_message=(
+                "You are a helpful assistant. Respond directly to the task."
+            ),
+        )
+        if isinstance(response, str):
+            return response.strip()
+        return str(response)
 
     def _calculate_trends(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         """Calculate metric trends over time"""

@@ -1,6 +1,7 @@
 # GPU/STT Add-on
 
 Use this add-on when your selected profile needs GPU acceleration for speech-to-text workflows.
+This is not a standalone setup guide. Complete one base profile first, then apply this add-on.
 
 ## Prerequisites
 

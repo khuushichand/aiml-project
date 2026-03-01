@@ -20,7 +20,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_datab
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 
-# Keep legacy imports for fallback
+# Keep fallback imports for compatibility mode
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
     recursive_scrape,
     scrape_and_summarize_multiple,
@@ -71,9 +71,9 @@ def _collect_fallback_unsupported_controls(
     score_threshold: Optional[float],
 ) -> list[str]:
     """
-    Return controls that cannot be honored by the legacy fallback implementation.
+    Return controls that cannot be honored by the fallback implementation.
 
-    Legacy behavior is intentionally conservative:
+    Fallback behavior is intentionally conservative:
     - Recursive fallback only supports the default BFS-like traversal.
     - URL-level/sitemap/individual fallback do not support advanced crawl controls.
     - score_threshold is only meaningfully supported when > 0.0.
@@ -169,7 +169,7 @@ async def process_web_scraping_task(
       Forwarded as-is to the enhanced service and used for session keying.
 
     Fallback behaviour:
-    - When the enhanced service is unavailable, a legacy implementation is used.
+    - When the enhanced service is unavailable, a compatibility implementation is used.
     - The fallback path validates advanced crawl controls and returns explicit
       `400` errors for unsupported options instead of silently ignoring them.
     - Fallback responses include `engine="legacy_fallback"` and
@@ -265,13 +265,13 @@ async def process_web_scraping_task(
         import traceback
         logging.exception(f"Enhanced scraping service failed: {str(e)}")
         logging.exception(f"Full traceback: {traceback.format_exc()}")
-        logging.warning("Falling back to legacy implementation")
+        logging.warning("Falling back to compatibility implementation")
         fallback_context = _build_fallback_context(
             fallback_error=e,
             scrape_method=scrape_method,
         )
 
-        # Fallback to legacy implementation
+        # Fallback implementation path
         try:
             unsupported_controls = _collect_fallback_unsupported_controls(
                 scrape_method=scrape_method,
@@ -320,7 +320,7 @@ async def process_web_scraping_task(
                 # { url, title, content, extraction_successful, ... }
                 recursive_kwargs: dict[str, Any] = {
                     "base_url": url_input,
-                    # Legacy fallback has no config-driven default resolution.
+                    # Fallback path has no config-driven default resolution.
                     # Keep historical behavior when explicit value is unavailable.
                     "max_pages": max_pages if max_pages is not None else 10,
                     "max_depth": max_depth,
@@ -329,7 +329,7 @@ async def process_web_scraping_task(
                     "custom_cookies": custom_cookies,
                 }
                 # Only override user-agent if explicitly provided, otherwise keep
-                # the legacy default inside recursive_scrape.
+                # the default behavior inside recursive_scrape.
                 if user_agent:
                     recursive_kwargs["user_agent"] = user_agent
 
@@ -337,7 +337,7 @@ async def process_web_scraping_task(
             else:
                 raise ValueError(f"Unknown scrape method: {scrape_method}")
 
-            # 1b) Apply predictable max_pages cap for legacy methods that do not
+            # 1b) Apply predictable max_pages cap for fallback methods that do not
             # natively support page-count control.
             if (
                 max_pages is not None
@@ -564,7 +564,7 @@ async def ingest_web_content_orchestrate(
     async def maybe_summarize_one(article: dict[str, Any]) -> dict[str, Any]:
         """
         Shared summarization helper for sitemap/individual scraping.
-        Mirrors the legacy `_legacy_media.ingest_web_content` behaviour.
+        Mirrors the previous ingest_web_content summarization behavior.
         """
         if not getattr(request, "perform_analysis", False):
             article["analysis"] = None
@@ -596,7 +596,7 @@ async def ingest_web_content_orchestrate(
     def parse_cookies() -> Optional[list[dict[str, Any]]]:
         """
         Parse cookies from the request when `use_cookies` is enabled.
-        Mirrors the legacy JSON parsing + 400 semantics, but ensures that
+        Mirrors prior JSON parsing + 400 semantics, but ensures that
         malformed or incorrectly-typed cookie payloads yield a 400 instead
         of bubbling up as a 500 error.
         """
@@ -776,7 +776,7 @@ async def ingest_web_content_orchestrate(
                     r["analysis"] = r.get("summary")
 
             return articles
-        except Exception as exc:  # pragma: no cover - propagate for legacy handler
+        except Exception as exc:  # pragma: no cover - propagate for fallback handler
             logging.exception(f"Enhanced URL Level crawl failed: {exc}")
             raise
 
@@ -848,9 +848,9 @@ async def ingest_web_content_orchestrate(
                     r["analysis"] = r.get("summary")
 
             return articles
-        except Exception as exc:  # pragma: no cover - propagate for legacy handler
+        except Exception as exc:  # pragma: no cover - propagate for fallback handler
             logging.exception(f"Enhanced recursive crawl failed: {exc}")
             raise
 
-    # Other methods (or unrecognized) still handled in `_legacy_media`.
+    # Other methods (or unrecognized) are handled by caller fallback logic.
     return None

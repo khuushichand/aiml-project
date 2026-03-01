@@ -255,11 +255,7 @@ async def process_ebooks_endpoint(
                 'Attempting to download {} EPUB URL(s) asynchronously...',
                 len(form_data.urls),
             )
-            download_url_async = getattr(
-                media_mod,
-                "_download_url_async",
-                core_download_url_async,
-            )
+            download_url_async = core_download_url_async
             download_tasks = [
                 download_url_async(
                     client=None,

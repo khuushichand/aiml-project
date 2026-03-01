@@ -42,6 +42,7 @@ interface FormState {
   runIdempotencyKey: string
   evalIdempotencyKey: string
   adhocEndpoint: string
+  selectedBenchmark: string | null
   adhocPayloadText: string
   adhocResult: any
 }
@@ -92,6 +93,7 @@ interface FormActions {
   setRunIdempotencyKey: (key: string) => void
   setEvalIdempotencyKey: (key: string) => void
   setAdhocEndpoint: (endpoint: string) => void
+  setSelectedBenchmark: (benchmark: string | null) => void
   setAdhocPayloadText: (text: string) => void
   setAdhocResult: (result: any) => void
   regenerateRunIdempotencyKey: () => void
@@ -176,6 +178,7 @@ const initialFormState: FormState = {
   runIdempotencyKey: generateUUID(),
   evalIdempotencyKey: generateUUID(),
   adhocEndpoint: "response-quality",
+  selectedBenchmark: null,
   adhocPayloadText: JSON.stringify(
     { input: "Sample text", reference: "Expected reply" },
     null,
@@ -242,6 +245,7 @@ export const useEvaluationsStore = createWithEqualityFn<EvaluationsState>()((set
   setRunIdempotencyKey: (runIdempotencyKey) => set({ runIdempotencyKey }),
   setEvalIdempotencyKey: (evalIdempotencyKey) => set({ evalIdempotencyKey }),
   setAdhocEndpoint: (adhocEndpoint) => set({ adhocEndpoint }),
+  setSelectedBenchmark: (selectedBenchmark) => set({ selectedBenchmark }),
   setAdhocPayloadText: (adhocPayloadText) => set({ adhocPayloadText }),
   setAdhocResult: (adhocResult) => set({ adhocResult }),
   regenerateRunIdempotencyKey: () => set({ runIdempotencyKey: generateUUID() }),

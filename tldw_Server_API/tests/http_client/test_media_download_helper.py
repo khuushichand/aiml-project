@@ -4,7 +4,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tldw_Server_API.app.api.v1.endpoints.media import _download_url_async
+from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
+    download_url_async,
+)
 
 
 class _MockTransport(httpx.MockTransport):
@@ -39,20 +41,9 @@ async def test_download_url_async_pdf_success(tmp_path, monkeypatch):
     monkeypatch.setattr(hc, "create_client", _mk_client, raising=True)
     monkeypatch.setattr(hc, "create_async_client", _mk_async_client, raising=True)
 
-    # Ensure the adownload used by media module does not bypass our transport
-    import tldw_Server_API.app.api.v1.endpoints.media as media_mod
-
-    async def _fake_adownload(**kwargs):
-        dest = Path(kwargs.get("dest"))
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(b"%PDF-1.4test")
-        return dest
-
-    monkeypatch.setattr(media_mod, "_m_adownload", _fake_adownload, raising=True)
-
     monkeypatch.setenv("EGRESS_ALLOWLIST", "example.com")
     async with httpx.AsyncClient(transport=transport) as client:
-        out_path = await _download_url_async(
+        out_path = await download_url_async(
             client=client,
             url=url,
             target_dir=Path(tmp_path),
@@ -95,7 +86,7 @@ async def test_download_url_async_reject_non_pdf(tmp_path, monkeypatch):
     monkeypatch.setenv("EGRESS_ALLOWLIST", "example.com")
     async with httpx.AsyncClient(transport=transport) as client:
         with pytest.raises(ValueError):
-            await _download_url_async(
+            await download_url_async(
                 client=client,
                 url=url,
                 target_dir=Path(tmp_path),
@@ -123,7 +114,7 @@ async def test_download_url_async_rejects_oversize(tmp_path, monkeypatch):
     monkeypatch.setenv("EGRESS_ALLOWLIST", "example.com")
     async with httpx.AsyncClient(transport=transport) as client:
         with pytest.raises(ValueError):
-            await _download_url_async(
+            await download_url_async(
                 client=client,
                 url=url,
                 target_dir=Path(tmp_path),
@@ -163,7 +154,7 @@ async def test_download_url_async_accepts_tar_gz(tmp_path, monkeypatch):
     monkeypatch.setenv("EGRESS_ALLOWLIST", "example.com")
 
     async with httpx.AsyncClient(transport=transport) as client:
-        out_path = await _download_url_async(
+        out_path = await download_url_async(
             client=client,
             url=url,
             target_dir=Path(tmp_path),

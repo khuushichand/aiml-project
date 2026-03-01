@@ -122,11 +122,11 @@ Representative route-to-basics mapping:
 Primary tests:
 
 - `apps/packages/ui/src/components/Common/QuickChatHelper/__tests__/docs-rag-profile.test.ts`
-  - validates strict profile defaults, media ID scoping, route-aware augmentation, and tuning branches.
+  - covers strict profile defaults, media ID scoping, route-aware augmentation, and tuning branches.
 - `apps/packages/ui/src/components/Common/QuickChatHelper/__tests__/workflow-guides.test.ts`
-  - validates route normalization, workflow filtering, recommendation behavior, and JSON validation.
+  - checks route normalization, workflow filtering, recommendation behavior, and JSON validation.
 - `apps/packages/ui/src/components/Common/QuickChatHelper/__tests__/rag-response.test.ts`
-  - validates reference formatting, no-context fallback, and suggested-pages composition.
+  - verifies reference formatting, no-context fallback, and suggested-pages composition.
 
 Validation expectations:
 

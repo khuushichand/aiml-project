@@ -188,7 +188,7 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
-# Generated static docs output
+# Generated static docs output (nested Docs/Docs/site path is intentional for published snapshots)
 /Docs/Docs/site/
 
 
@@ -271,6 +271,7 @@ errors.log
 # Data files
 *.csv
 *.json
+!tldw_Server_API/app/core/Evaluations/data/bullshit_benchmark/questions_v2.json
 !apps/package.json
 !apps/extension/package.json
 !apps/packages/voice-assistant-sdk/package.json
@@ -381,7 +382,3 @@ Dockerfiles/Monitoring/secrets/
 /ux-audit
 /apps/tldw-frontend/ux-audit-v3
 /.worktrees/
-
-# I'm an idiot
-!apps/tldw-frontend/lib/
-!apps/tldw-frontend/lib/**

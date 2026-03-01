@@ -18,11 +18,11 @@ def test_compat_patchpoints_module_removed():
     assert not module_path.exists()
 
 
-def test_media_module_keeps_direct_patchpoints():
+def test_media_module_drops_legacy_patchpoints():
     from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
-    assert callable(getattr(media_mod, "_download_url_async", None))
-    assert callable(getattr(media_mod, "_save_uploaded_files", None))
+    assert not hasattr(media_mod, "_download_url_async")
+    assert not hasattr(media_mod, "_save_uploaded_files")
 
 
 def test_web_scraping_endpoint_resolves_task_without_compat_module():

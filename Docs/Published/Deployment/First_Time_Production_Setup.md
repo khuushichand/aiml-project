@@ -11,7 +11,7 @@ Related documents
 - Sidecar workers (systemd/launchd): `Docs/Deployment/Sidecar_Workers.md`
 - Metrics and Grafana: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
 - Environment variables reference: `Env_Vars.md`
-- General installation (local/dev): `Docs/Published/User_Guides/Server/Installation-Setup-Guide.md`
+- General installation (local/dev): `Docs/Getting_Started/README.md`
 - Production hardening checklist: `Docs/Published/User_Guides/Server/Production_Hardening_Checklist.md`
 
 ## 1) Prerequisites

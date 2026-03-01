@@ -8,7 +8,7 @@ def detect_code_language(filename: str) -> str:
     """
     Infer a language label from the file extension.
 
-    Mirrors the legacy `_detect_code_language` helper in `_legacy_media`.
+    Mirrors the previous endpoint-local `_detect_code_language` behavior.
     """
     ext = Path(filename).suffix.lower()
     return {
@@ -48,7 +48,7 @@ def read_text_safe(path: Path) -> str:
     """
     Read text from a file path using UTF-8 with a Latin-1 fallback.
 
-    Mirrors the legacy `_read_text_safe` helper in `_legacy_media`.
+    Mirrors the previous endpoint-local `_read_text_safe` behavior.
     """
     try:
         return path.read_text(encoding="utf-8")
@@ -65,7 +65,7 @@ def chunk_code_lines(
     """
     Simple line-based chunking used as a fallback for code processing.
 
-    Mirrors the legacy `_chunk_code_lines` helper in `_legacy_media`.
+    Mirrors the previous endpoint-local `_chunk_code_lines` behavior.
     """
     lines = text.splitlines()
     chunks: list[dict[str, Any]] = []

@@ -40,8 +40,24 @@ type QuickIngestSession = {
   abortControllers: Set<AbortController>
 }
 
+const secureSessionSuffix = (): string => {
+  try {
+    if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function") {
+      return globalThis.crypto.randomUUID().replace(/-/g, "")
+    }
+    if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.getRandomValues === "function") {
+      const bytes = new Uint8Array(8)
+      globalThis.crypto.getRandomValues(bytes)
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+    }
+  } catch {
+    // Fall back to timestamp-only suffix below.
+  }
+  return Date.now().toString(36)
+}
+
 const defaultSessionId = () =>
-  `qi-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  `qi-${Date.now()}-${secureSessionSuffix().slice(0, 16)}`
 
 export const createQuickIngestSessionRuntime = (deps: RuntimeDeps) => {
   const sessions = new Map<string, QuickIngestSession>()
