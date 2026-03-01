@@ -183,8 +183,10 @@ Both webui and extension must consume this single registry to prevent drift.
 
 1. Timed flow script:
    - A scripted first-run flow (create/select session -> type prompt -> generate) completes in <= 60 seconds at p95 on both surfaces in CI-like conditions.
+   - p95 is computed from a fixed sample set of 5 prompts in the parity E2E flow.
 2. Control-density delta:
    - Draft mode renders at least 35% fewer visible interactive controls above the fold than the baseline (current pre-redesign workspace), measured at the same viewport and seed data.
+   - Baseline count is recorded from pre-redesign UI and provided to parity checks via `TLDW_WRITING_CONTROL_BASELINE_COUNT`.
 3. Manage mode retains full advanced functionality.
 4. Webui and extension match visual parity contract.
 

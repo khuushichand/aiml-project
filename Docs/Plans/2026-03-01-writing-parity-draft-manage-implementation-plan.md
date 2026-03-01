@@ -649,12 +649,12 @@ Expected: PASS.
 
 ```bash
 cd apps/extension && bunx playwright test tests/e2e/writing-playground-mode-parity.spec.ts --grep "timed first generation" --reporter=line
-cd apps/extension && bunx playwright test tests/e2e/writing-playground-mode-parity.spec.ts --grep "control density delta" --reporter=line
+cd apps/extension && TLDW_WRITING_CONTROL_BASELINE_COUNT=<pre_redesign_count> bunx playwright test tests/e2e/writing-playground-mode-parity.spec.ts --grep "control density delta" --reporter=line
 ```
 
 Expected:
-- timed first-generation path <= 60s at p95 for test sample set.
-- draft mode control count delta >= 35% reduction vs recorded baseline.
+- timed first-generation path <= 60s at p95 for a 5-prompt scripted sample set.
+- draft mode control count delta >= 35% reduction vs recorded pre-redesign baseline supplied via `TLDW_WRITING_CONTROL_BASELINE_COUNT`.
 
 **Step 4: Run frontend lint on touched scopes**
 
