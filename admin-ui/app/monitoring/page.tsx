@@ -35,6 +35,7 @@ import MetricsGrid from './components/MetricsGrid';
 import NotificationsPanel from './components/NotificationsPanel';
 import SystemStatusPanel from './components/SystemStatusPanel';
 import WatchlistsPanel from './components/WatchlistsPanel';
+import { useMonitoringDashboardState } from './use-monitoring-dashboard-state';
 import { useMonitoringMetricsHistory } from './use-monitoring-metrics-history';
 import { useAlertActions } from './use-alert-actions';
 import { useAlertRules } from './use-alert-rules';
@@ -44,10 +45,8 @@ import { useMonitoringNotificationState } from './use-monitoring-notification-st
 import { useNotificationActions } from './use-notification-actions';
 import { useWatchlistActions } from './use-watchlist-actions';
 import type {
-  Metric,
   SystemHealthStatus,
-  SystemStatusItem,
-  Watchlist,
+  SystemStatusItem
 } from './types';
 
 const METRIC_CRITICAL_THRESHOLD = 90;
@@ -75,14 +74,23 @@ export const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
 
 export default function MonitoringPage() {
   const confirm = useConfirm();
-  const [metrics, setMetrics] = useState<Metric[]>([]);
-  const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
+  const {
+    metrics,
+    setMetrics,
+    watchlists,
+    setWatchlists,
+    systemStatus,
+    setSystemStatus,
+    loading,
+    setLoading,
+    lastUpdated,
+    markMonitoringDataUpdated,
+  } = useMonitoringDashboardState({
+    initialSystemStatus: DEFAULT_SYSTEM_STATUS,
+  });
   const [seriesVisibility, setSeriesVisibility] = useState<MonitoringMetricsSeriesVisibility>(
     MONITORING_DEFAULT_SERIES_VISIBILITY
   );
-  const [systemStatus, setSystemStatus] = useState<SystemStatusItem[]>(DEFAULT_SYSTEM_STATUS);
-  const [loading, setLoading] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // Notification settings
   const {
@@ -108,9 +116,7 @@ export default function MonitoringPage() {
     alertHistoryRef,
   } = useMonitoringAlertState();
 
-  const handleManualRangeLoadSuccess = useCallback(() => {
-    setLastUpdated(new Date());
-  }, []);
+  const handleManualRangeLoadSuccess = markMonitoringDataUpdated;
 
   const {
     metricsHistory,
@@ -186,7 +192,7 @@ export default function MonitoringPage() {
       setSystemStatus(resolvedState.systemStatus);
 
       void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);
-      setLastUpdated(new Date());
+      markMonitoringDataUpdated();
     } catch (err: unknown) {
       console.error('Failed to load monitoring data:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to load monitoring data');
@@ -201,13 +207,18 @@ export default function MonitoringPage() {
     customRangeEnd,
     customRangeStart,
     loadMetricsHistoryForRange,
+    markMonitoringDataUpdated,
     setAlertHistory,
     setAlerts,
     setAssignableUsers,
     setError,
+    setLoading,
+    setMetrics,
     setNotificationSettings,
     setNotificationSettingsStatus,
     setRecentNotifications,
+    setSystemStatus,
+    setWatchlists,
     timeRange,
   ]);
 
