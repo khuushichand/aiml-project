@@ -14,7 +14,7 @@
     "build:edge": "cross-env TARGET=chrome wxt build -b edge && node scripts/verify-shared-token-sync.mjs --target edge-mv3",
     "zip": "bun run locales:sync && cross-env TARGET=chrome wxt zip",
     "zip:firefox": "bun run locales:sync && cross-env TARGET=firefox wxt zip -b firefox",
-    "compile": "tsc --noEmit",
+    "compile": "tsc --noEmit -p tsconfig.compile.json",
     "verify:openapi": "node scripts/verify-openapi-client-paths.mjs",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",

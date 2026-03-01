@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "jsx": "react-jsx",
+    "types": ["node"]
+  },
+  "include": [
+    "wxt.config.ts",
+    "playwright.config.ts",
+    "entrypoints/**/*.ts",
+    "entrypoints/**/*.tsx",
+    "types/**/*.d.ts"
+  ],
+  "exclude": [
+    ".output",
+    "node_modules",
+    "tests"
+  ]
+}
