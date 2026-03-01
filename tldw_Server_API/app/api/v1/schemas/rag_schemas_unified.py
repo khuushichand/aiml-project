@@ -69,6 +69,11 @@ class UnifiedRAGRequest(BaseModel):
         description="Pipeline strategy: standard (pre-chunked) or agentic (query-time synthetic chunk)",
         example="agentic",
     )
+    rag_profile: Optional[Literal["fast", "balanced", "accuracy"]] = Field(
+        default=None,
+        description="Switchable profile defaults applied at request handling time",
+        example="balanced",
+    )
 
     if model_validator is not None:
         @model_validator(mode="before")
@@ -960,7 +965,7 @@ class UnifiedRAGRequest(BaseModel):
     max_generation_tokens: int = Field(
         default=500,
         ge=50,
-        le=2000,
+        le=4000,
         description="Maximum tokens for generated answer",
         example=500
     )
@@ -1843,7 +1848,7 @@ class UnifiedBatchRequest(BaseModel):
     generation_model: Optional[str] = Field(default=None)
     generation_provider: Optional[str] = Field(default=None)
     generation_prompt: Optional[str] = Field(default=None)
-    max_generation_tokens: int = Field(default=500, ge=50, le=2000)
+    max_generation_tokens: int = Field(default=500, ge=50, le=4000)
     # Search Agent / Round 2 enhancements
     enable_suggestions: bool = Field(default=False)
     num_suggestions: int = Field(default=5, ge=1, le=10)
