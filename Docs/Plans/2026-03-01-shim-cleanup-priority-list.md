@@ -30,6 +30,7 @@
    - Target: `app/api/v1/endpoints/mcp_unified_endpoint.py`
    - Risk: single-user deployments may rely on current fallback behavior.
    - Migration path: enforce claim-first/API-key-manager path behind feature flag, then flip default.
+   - Status: in progress; removed test-only `is_single_user_mode` alias shim and switched to canonical `_authnz_is_single_user_mode`, while preserving current fallback behavior.
 
 2. Audio package-level compatibility shim exports
    - Target: `app/api/v1/endpoints/audio/__init__.py` and `_audio_shim_attr` callers.

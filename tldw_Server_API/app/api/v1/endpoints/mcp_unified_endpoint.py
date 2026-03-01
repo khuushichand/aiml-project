@@ -66,9 +66,6 @@ _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS = (
     ipaddress.NetmaskValueError,
 )
 
-# Test compatibility alias: some MCP auth tests monkeypatch this symbol.
-is_single_user_mode = _authnz_is_single_user_mode
-
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
 
@@ -179,8 +176,7 @@ def _should_use_single_user_api_key_compat() -> bool:
     if flag in {"0", "false", "off"}:
         return False
     try:
-        single_mode_fn = globals().get("is_single_user_mode")
-        single_mode = bool(single_mode_fn()) if callable(single_mode_fn) else False
+        single_mode = bool(_authnz_is_single_user_mode())
         return bool(is_single_user_profile_mode() or single_mode)
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
