@@ -6,12 +6,12 @@ Owner: Codex + project maintainer
 
 ## 1. Objective
 
-Integrate `repo2txt` into the shared tldw UI as a new options/web page that is available in both:
+Integrate `repo2txt` into the shared tldw UI as a new options/web page available in both:
 
 - `apps/tldw-frontend` (web app)
 - `apps/extension` options experience (via shared UI routes)
 
-for a V1 that supports:
+for a V1 that includes:
 
 - source providers: GitHub + Local (directory/zip)
 - output experience: preview + copy + download
@@ -34,7 +34,7 @@ and explicitly does not include sidepanel in-panel rendering for V1.
 
 ## 4. Approaches Considered
 
-## Approach A (Recommended): Shared-core port into `@tldw/ui`
+### Approach A (Recommended): Shared-core port into `@tldw/ui`
 
 Port repo2txt core logic and selected components into `apps/packages/ui/src`, then expose through route registry.
 
@@ -48,7 +48,7 @@ Cons:
 
 - More upfront adaptation work than simple wrapping
 
-## Approach B: Embedded micro-app (iframe/static bundle)
+### Approach B: Embedded micro-app (iframe/static bundle)
 
 Ship repo2txt as a separately built app and embed.
 
@@ -62,7 +62,7 @@ Cons:
 - Styling/session/auth disjointness
 - Weaker integration with route/nav/testing conventions
 
-## Approach C: Full source transplant with minimal adaptation
+### Approach C: Full source transplant with minimal adaptation
 
 Copy most of repo2txt app directly into shared UI and patch until it compiles.
 
@@ -104,13 +104,19 @@ using existing dynamic-import wrapper pattern (`ssr: false`) to import shared ro
 
 ## 5.3 Navigation surfaces (options/web only)
 
-Add route discoverability to selected options/web surfaces:
+Add route discoverability to required options/web surfaces:
 
 - header shortcuts data (launcher)
 - mode selector “More” menu (or equivalent quick access surface)
-- optional settings/workspace navigation grouping if desired for persistent access
+- settings/workspace navigation grouping for persistent access
 
-V1 intentionally omits sidepanel route integration.
+V1 intentionally omits sidepanel in-panel route integration.
+If a sidepanel affordance is added in V1, it must open the options route (`/options.html#/repo2txt`) as a link-out and must not render repo2txt inside sidepanel.
+
+## 5.4 Localization baseline
+
+All repo2txt user-facing strings should be introduced through existing locale namespaces (for example `option.json`) rather than hard-coded copy.
+English keys are required for V1, and non-English locale files should include matching keys per existing locale parity conventions in this repo.
 
 ## 6. Component and Module Design
 
@@ -191,19 +197,28 @@ Keep it isolated from broader tldw global stores for V1 to reduce coupling risk.
 
 - Route appears in chosen options/web navigation surfaces
 - No sidepanel in-panel exposure in V1
+- Sidepanel affordance (if present) opens options `/repo2txt` as link-out
 
 ## 9.4 Manual validation
 
 - Web: `/repo2txt` GitHub export and local export
 - Extension options: equivalent flow parity
 - Copy and download outputs match expected content and counters
+- Sidepanel affordance (if present) opens options `/repo2txt` rather than rendering in sidepanel
+
+## 9.5 i18n validation
+
+- New repo2txt locale keys exist in English locale files
+- Locale key presence/parity checks pass for non-English locale files impacted by V1
 
 ## 10. Acceptance Criteria (V1)
 
 1. Options/web page exists and is reachable in both web and extension options contexts.
 2. GitHub + Local providers work end-to-end.
 3. Output preview, copy, and download work with token/line counts.
-4. No regressions in existing shared routing and navigation behavior.
+4. If sidepanel exposes repo2txt, it opens the options route as link-out (no sidepanel in-panel render).
+5. New repo2txt user-facing strings are locale-key based and covered by locale parity checks.
+6. No regressions in existing shared routing and navigation behavior.
 
 ## 11. Follow-on Phases (Post-V1)
 
@@ -213,4 +228,3 @@ Potential V2+ items:
 - sidepanel launcher shortcuts that open options route directly
 - tldw handoffs (send output to chat/workspace, optional knowledge ingestion)
 - deeper visual unification with tldw design system if needed
-
