@@ -116,6 +116,11 @@ const closeModal = async (modal: Locator) => {
   await expect(modal).toBeHidden()
 }
 
+const switchWorkspaceMode = async (page: Page, mode: "draft" | "manage") => {
+  const modeTestId = mode === "manage" ? "writing-mode-manage" : "writing-mode-draft"
+  await page.getByTestId(modeTestId).click()
+}
+
 const createSession = async (page: Page, name: string) => {
   await page.getByRole("button", { name: /New session/i }).click()
   const modal = page.getByRole("dialog", { name: /New session/i })
@@ -255,6 +260,7 @@ test.describe("Writing Playground themes + templates", () => {
         .slice(2, 6)}`
       const sessionName = `E2E Writing Session ${unique}`
       await createSession(page, sessionName)
+      await switchWorkspaceMode(page, "manage")
 
       await page.getByRole("button", { name: /Manage templates/i }).click()
       const modal = page.getByRole("dialog", { name: /Manage templates/i })
@@ -345,6 +351,7 @@ test.describe("Writing Playground themes + templates", () => {
         .slice(2, 6)}`
       const sessionName = `E2E Writing Theme ${unique}`
       await createSession(page, sessionName)
+      await switchWorkspaceMode(page, "manage")
 
       await page.getByRole("button", { name: /Manage themes/i }).click()
       const modal = page.getByRole("dialog", { name: /Manage themes/i })

@@ -5445,6 +5445,14 @@ export const WritingPlayground = () => {
               }
             ]}
           />
+          <span
+            aria-live="polite"
+            className="sr-only"
+            data-testid="writing-mode-live-region">
+            {workspaceMode === "draft"
+              ? t("option:writingPlayground.modeDraft", "Draft")
+              : t("option:writingPlayground.modeManage", "Manage")}
+          </span>
         </div>
       </div>
       <div>
