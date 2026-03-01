@@ -27,7 +27,7 @@ from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
     estimate_claims_tokens,
     resolve_claims_job_budget,
 )
-from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
+from tldw_Server_API.app.core.RAG.rag_service.types import (
     ClaimType,
     Document,
     MatchLevel,

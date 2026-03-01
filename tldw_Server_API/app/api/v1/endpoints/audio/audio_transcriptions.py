@@ -7,12 +7,12 @@ import os
 import re
 import tempfile
 from pathlib import Path as PathLib
-from types import ModuleType
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from loguru import logger
+import soundfile as sf
 from starlette import status
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, require_token_scope
@@ -34,6 +34,16 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 from tldw_Server_API.app.core.testing import is_test_mode
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    add_daily_minutes,
+    can_start_job,
+    check_daily_minutes_allow,
+    finish_job,
+    get_job_heartbeat_interval_seconds,
+    get_limits_for_user,
+    heartbeat_jobs,
+    increment_jobs_started,
+)
 
 router = APIRouter(
     tags=["Audio"],
@@ -66,54 +76,27 @@ _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS = (
 
 
 def _audio_shim_attr(name: str):
-    def _is_override(value: Any) -> bool:
-        if value is None or isinstance(value, ModuleType):
-            return False
-        mod_name = getattr(value, "__module__", None)
-        if isinstance(mod_name, str) and mod_name:
-            if mod_name.startswith("tldw_Server_API.tests."):
-                return True
-            return not mod_name.startswith("tldw_Server_API.")
-        return True
-
-    mod_has = False
-    mod_value: Any = None
+    defaults: dict[str, Any] = {
+        "check_daily_minutes_allow": check_daily_minutes_allow,
+        "add_daily_minutes": add_daily_minutes,
+        "get_job_heartbeat_interval_seconds": get_job_heartbeat_interval_seconds,
+        "heartbeat_jobs": heartbeat_jobs,
+        "get_limits_for_user": get_limits_for_user,
+        "can_start_job": can_start_job,
+        "increment_jobs_started": increment_jobs_started,
+        "finish_job": finish_job,
+        "sf": sf,
+    }
     try:
-        from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
+        from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
 
-        if hasattr(audio_mod, name):
-            mod_has = True
-            mod_value = getattr(audio_mod, name)
-    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
-        mod_has = False
-        mod_value = None
-    from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
-    pkg_dict = getattr(audio_shim, "__dict__", {})
-    pkg_has = name in pkg_dict
-    pkg_value = pkg_dict.get(name) if pkg_has else None
-
-    if pkg_has and mod_has and pkg_value is not mod_value:
-        pkg_override = _is_override(pkg_value)
-        mod_override = _is_override(mod_value)
-        if mod_override and not pkg_override:
-            return mod_value
-        if pkg_override and not mod_override:
-            return pkg_value
-        if mod_override and pkg_override:
-            return mod_value
-
-    if pkg_has:
-        return pkg_value
-    if mod_has:
-        return mod_value
-    try:
         if hasattr(audio_shim, name):
             return getattr(audio_shim, name)
     except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
         pass
-    if not hasattr(audio_shim, name):
-        raise NameError(name)
-    return getattr(audio_shim, name)
+    if name in defaults:
+        return defaults[name]
+    raise NameError(name)
 
 
 async def _check_daily_minutes_allow(user_id: int, minutes: float):
@@ -203,15 +186,20 @@ def _normalize_timed_segments(raw_segments: Optional[list[dict[str, Any]]]) -> l
     for segment in raw_segments:
         if not isinstance(segment, dict):
             continue
-        text = str(segment.get("text") or "").strip()
+        text_raw = segment.get("text")
+        if text_raw is None:
+            text_raw = segment.get("Text")
+        text = str(text_raw or "").strip()
         if not text:
             continue
+        start_raw = segment.get("start_seconds", segment.get("start", 0.0))
         try:
-            start = float(segment.get("start_seconds", 0.0) or 0.0)
+            start = float(start_raw or 0.0)
         except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
             start = 0.0
+        end_raw = segment.get("end_seconds", segment.get("end", start))
         try:
-            end = float(segment.get("end_seconds", start) or start)
+            end = float(end_raw or start)
         except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
             end = start
         if end < start:

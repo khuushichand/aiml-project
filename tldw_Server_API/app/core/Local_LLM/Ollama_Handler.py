@@ -53,7 +53,6 @@ _OLLAMA_REQUEST_EXCEPTIONS = (
     TimeoutError,
     NetworkError,
     RetryExhaustedError,
-    http_utils.LocalHTTPStatusError,
 )
 
 _OLLAMA_PSUTIL_EXCEPTIONS = _OLLAMA_NONCRITICAL_EXCEPTIONS

@@ -140,17 +140,6 @@ def _get_websearch_circuit_breaker(fail_threshold: int = 3, reset_after_s: float
     )
 
 
-def _make_simple_circuit_breaker(fail_threshold: int = 3, reset_after_s: float = 30.0):
-    """Deprecated: use _get_websearch_circuit_breaker instead."""
-    import warnings
-    warnings.warn(
-        "_make_simple_circuit_breaker is deprecated, use _get_websearch_circuit_breaker",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _get_websearch_circuit_breaker(fail_threshold, reset_after_s)
-
-
 def _close_response(resp: Any) -> None:
     close = getattr(resp, "close", None)
     if callable(close):

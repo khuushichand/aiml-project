@@ -74,18 +74,5 @@ async def test_get_org_policy_from_principal_ignores_legacy_flag_and_stays_princ
     assert "no organization memberships" in err.detail
 
 
-@pytest.mark.asyncio
-async def test_get_user_org_policy_delegates_to_principal(monkeypatch):
-    sentinel = {"org_id": 99, "source": "delegate"}
-
-    async def _fake_get_org_policy_from_principal(db=None, principal=None):
-        return sentinel
-
-    monkeypatch.setattr(auth_deps, "get_org_policy_from_principal", _fake_get_org_policy_from_principal)
-
-    result = await auth_deps.get_user_org_policy(
-        db=None,
-        principal=_principal(org_ids=[]),
-        current_user={"id": 1, "is_active": True, "is_verified": True},
-    )
-    assert result == sentinel
+def test_get_user_org_policy_shim_removed() -> None:
+    assert not hasattr(auth_deps, "get_user_org_policy")  # nosec B101

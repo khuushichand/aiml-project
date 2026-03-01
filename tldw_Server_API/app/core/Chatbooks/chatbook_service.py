@@ -1018,10 +1018,6 @@ class ChatbookService:
             logger.warning(f"Error searching for note by title: {e}")
             return None
 
-    def _register_job_handlers(self):
-        """No-op; legacy job queue handlers removed."""
-        return
-
     def _init_job_tables(self):
         """Initialize database tables for job tracking."""
         try:
@@ -5441,15 +5437,6 @@ class ChatbookService:
 
             f.write("\n## License\n\n")
             f.write(manifest.license or "See individual content files for licensing information.")
-
-    def _validate_zip_file(self, file_path: str) -> bool:
-        """Delegate to ChatbookValidator for ZIP validation (compatibility shim)."""
-        try:
-            from .chatbook_validators import ChatbookValidator
-            ok, _ = ChatbookValidator.validate_zip_file(file_path)
-            return bool(ok)
-        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
-            return False
 
     async def _create_zip_archive_async(self, work_dir: Path, output_path: Path):
         """Create ZIP archive of the chatbook asynchronously with compression limits."""
