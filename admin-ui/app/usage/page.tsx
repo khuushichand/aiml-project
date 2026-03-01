@@ -15,15 +15,27 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatLatency } from '@/lib/format';
 import {
+  getRouterAnalyticsAccess,
+  getRouterAnalyticsConversations,
+  getRouterAnalyticsLog,
   getRouterAnalyticsMeta,
+  getRouterAnalyticsModels,
+  getRouterAnalyticsNetwork,
+  getRouterAnalyticsProviders,
   getRouterAnalyticsQuota,
   getRouterAnalyticsStatus,
   getRouterAnalyticsStatusBreakdowns,
 } from '@/lib/router-analytics-client';
 import type {
+  RouterAnalyticsAccessResponse,
   RouterAnalyticsBreakdownRow,
   RouterAnalyticsBreakdownsResponse,
+  RouterAnalyticsConversationsResponse,
+  RouterAnalyticsLogResponse,
   RouterAnalyticsMetaResponse,
+  RouterAnalyticsModelsResponse,
+  RouterAnalyticsNetworkResponse,
+  RouterAnalyticsProvidersResponse,
   RouterAnalyticsQuotaMetric,
   RouterAnalyticsQuotaResponse,
   RouterAnalyticsRange,
@@ -41,12 +53,12 @@ type UsageTabConfig = {
 const TABS: UsageTabConfig[] = [
   { value: 'status', label: 'Status', implemented: true },
   { value: 'quota', label: 'Quota', implemented: true },
-  { value: 'providers', label: 'Providers', implemented: false },
-  { value: 'access', label: 'Access', implemented: false },
-  { value: 'network', label: 'Network', implemented: false },
-  { value: 'models', label: 'Models', implemented: false },
-  { value: 'conversations', label: 'Conversations', implemented: false },
-  { value: 'log', label: 'Log', implemented: false },
+  { value: 'providers', label: 'Providers', implemented: true },
+  { value: 'access', label: 'Access', implemented: true },
+  { value: 'network', label: 'Network', implemented: true },
+  { value: 'models', label: 'Models', implemented: true },
+  { value: 'conversations', label: 'Conversations', implemented: true },
+  { value: 'log', label: 'Log', implemented: true },
 ];
 
 const RANGE_OPTIONS: RouterAnalyticsRange[] = ['realtime', '1h', '8h', '24h', '7d', '30d'];
@@ -88,6 +100,13 @@ const formatBucketTime = (value: string): string => {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
+const formatDateTime = (value?: string | null): string => {
+  if (!value) return '—';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString();
 };
 
 function BreakdownCard({ title, rows, keyLabel }: { title: string; rows: RouterAnalyticsBreakdownRow[]; keyLabel: string }) {
@@ -140,12 +159,30 @@ export default function UsagePage() {
   const [statusPayload, setStatusPayload] = useState<RouterAnalyticsStatusResponse | null>(null);
   const [breakdownsPayload, setBreakdownsPayload] = useState<RouterAnalyticsBreakdownsResponse | null>(null);
   const [quotaPayload, setQuotaPayload] = useState<RouterAnalyticsQuotaResponse | null>(null);
+  const [providersPayload, setProvidersPayload] = useState<RouterAnalyticsProvidersResponse | null>(null);
+  const [accessPayload, setAccessPayload] = useState<RouterAnalyticsAccessResponse | null>(null);
+  const [networkPayload, setNetworkPayload] = useState<RouterAnalyticsNetworkResponse | null>(null);
+  const [modelsPayload, setModelsPayload] = useState<RouterAnalyticsModelsResponse | null>(null);
+  const [conversationsPayload, setConversationsPayload] = useState<RouterAnalyticsConversationsResponse | null>(null);
+  const [logPayload, setLogPayload] = useState<RouterAnalyticsLogResponse | null>(null);
   const [metaPayload, setMetaPayload] = useState<RouterAnalyticsMetaResponse | null>(null);
 
   const [statusLoading, setStatusLoading] = useState<boolean>(true);
   const [statusError, setStatusError] = useState<string>('');
   const [quotaLoading, setQuotaLoading] = useState<boolean>(false);
   const [quotaError, setQuotaError] = useState<string>('');
+  const [providersLoading, setProvidersLoading] = useState<boolean>(false);
+  const [providersError, setProvidersError] = useState<string>('');
+  const [accessLoading, setAccessLoading] = useState<boolean>(false);
+  const [accessError, setAccessError] = useState<string>('');
+  const [networkLoading, setNetworkLoading] = useState<boolean>(false);
+  const [networkError, setNetworkError] = useState<string>('');
+  const [modelsLoading, setModelsLoading] = useState<boolean>(false);
+  const [modelsError, setModelsError] = useState<string>('');
+  const [conversationsLoading, setConversationsLoading] = useState<boolean>(false);
+  const [conversationsError, setConversationsError] = useState<string>('');
+  const [logLoading, setLogLoading] = useState<boolean>(false);
+  const [logError, setLogError] = useState<string>('');
   const [refreshTick, setRefreshTick] = useState<number>(0);
 
   const selectedTokenValue = tokenName && tokenName !== '__all__' ? tokenName : '';
@@ -203,6 +240,108 @@ export default function UsagePage() {
     }
   }, [statusQuery]);
 
+  const loadProvidersData = useCallback(async () => {
+    setProvidersLoading(true);
+    setProvidersError('');
+    try {
+      const [providersResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsProviders(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setProvidersPayload(providersResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setProvidersError(normalizeErrorMessage(loadError));
+    } finally {
+      setProvidersLoading(false);
+    }
+  }, [statusQuery]);
+
+  const loadAccessData = useCallback(async () => {
+    setAccessLoading(true);
+    setAccessError('');
+    try {
+      const [accessResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsAccess(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setAccessPayload(accessResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setAccessError(normalizeErrorMessage(loadError));
+    } finally {
+      setAccessLoading(false);
+    }
+  }, [statusQuery]);
+
+  const loadNetworkData = useCallback(async () => {
+    setNetworkLoading(true);
+    setNetworkError('');
+    try {
+      const [networkResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsNetwork(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setNetworkPayload(networkResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setNetworkError(normalizeErrorMessage(loadError));
+    } finally {
+      setNetworkLoading(false);
+    }
+  }, [statusQuery]);
+
+  const loadModelsData = useCallback(async () => {
+    setModelsLoading(true);
+    setModelsError('');
+    try {
+      const [modelsResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsModels(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setModelsPayload(modelsResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setModelsError(normalizeErrorMessage(loadError));
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [statusQuery]);
+
+  const loadConversationsData = useCallback(async () => {
+    setConversationsLoading(true);
+    setConversationsError('');
+    try {
+      const [conversationsResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsConversations(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setConversationsPayload(conversationsResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setConversationsError(normalizeErrorMessage(loadError));
+    } finally {
+      setConversationsLoading(false);
+    }
+  }, [statusQuery]);
+
+  const loadLogData = useCallback(async () => {
+    setLogLoading(true);
+    setLogError('');
+    try {
+      const [logResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsLog(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setLogPayload(logResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setLogError(normalizeErrorMessage(loadError));
+    } finally {
+      setLogLoading(false);
+    }
+  }, [statusQuery]);
+
   useEffect(() => {
     if (activeTab === 'status') {
       void loadStatusData();
@@ -210,8 +349,43 @@ export default function UsagePage() {
     }
     if (activeTab === 'quota') {
       void loadQuotaData();
+      return;
     }
-  }, [activeTab, loadStatusData, loadQuotaData, refreshTick]);
+    if (activeTab === 'providers') {
+      void loadProvidersData();
+      return;
+    }
+    if (activeTab === 'access') {
+      void loadAccessData();
+      return;
+    }
+    if (activeTab === 'network') {
+      void loadNetworkData();
+      return;
+    }
+    if (activeTab === 'models') {
+      void loadModelsData();
+      return;
+    }
+    if (activeTab === 'conversations') {
+      void loadConversationsData();
+      return;
+    }
+    if (activeTab === 'log') {
+      void loadLogData();
+    }
+  }, [
+    activeTab,
+    loadStatusData,
+    loadQuotaData,
+    loadProvidersData,
+    loadAccessData,
+    loadNetworkData,
+    loadModelsData,
+    loadConversationsData,
+    loadLogData,
+    refreshTick,
+  ]);
 
   const timelineBuckets = useMemo<TimelineBucket[]>(() => {
     if (!statusPayload?.series?.length) return [];
@@ -516,6 +690,439 @@ export default function UsagePage() {
                                 <Badge variant="destructive">Exceeded</Badge>
                               ) : (
                                 <Badge variant="secondary">OK</Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="providers" className="space-y-4">
+              {providersError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{providersError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Total providers</CardDescription>
+                    <CardTitle>{formatNumber(providersPayload?.summary.providers_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Providers online</CardDescription>
+                    <CardTitle>{formatNumber(providersPayload?.summary.providers_online)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Failover events</CardDescription>
+                    <CardTitle>{formatNumber(providersPayload?.summary.failover_events)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Provider health and load</CardTitle>
+                  <CardDescription>Request volume, latency, and success rate by provider in the selected window.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {providersLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading provider analytics...</p>
+                  ) : (providersPayload?.items.length || 0) === 0 ? (
+                    <p className="text-sm text-muted-foreground">No provider usage in this window.</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Provider</TableHead>
+                          <TableHead className="text-right">Requests</TableHead>
+                          <TableHead className="text-right">PP</TableHead>
+                          <TableHead className="text-right">TG</TableHead>
+                          <TableHead className="text-right">Cost USD</TableHead>
+                          <TableHead className="text-right">Latency ms</TableHead>
+                          <TableHead className="text-right">Errors</TableHead>
+                          <TableHead className="text-right">Success</TableHead>
+                          <TableHead className="text-right">Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(providersPayload?.items || []).map((row) => (
+                          <TableRow key={`providers-${row.provider}`}>
+                            <TableCell className="font-medium">{row.provider}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.requests)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.prompt_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_cost_usd)}</TableCell>
+                            <TableCell className="text-right">{formatLatency(row.avg_latency_ms, { fallback: '—', precision: 1 })}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.errors)}</TableCell>
+                            <TableCell className="text-right">{formatPercent(row.success_rate_pct)}</TableCell>
+                            <TableCell className="text-right">
+                              {row.online ? (
+                                <Badge variant="secondary">Online</Badge>
+                              ) : (
+                                <Badge variant="destructive">Offline</Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="access" className="space-y-4">
+              {accessError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{accessError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Token names</CardDescription>
+                    <CardTitle>{formatNumber(accessPayload?.summary.token_names_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Remote IPs</CardDescription>
+                    <CardTitle>{formatNumber(accessPayload?.summary.remote_ips_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>User agents</CardDescription>
+                    <CardTitle>{formatNumber(accessPayload?.summary.user_agents_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Anonymous requests</CardDescription>
+                    <CardTitle>{formatNumber(accessPayload?.summary.anonymous_requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              {accessLoading ? (
+                <Card>
+                  <CardContent className="pt-6">
+                    <p className="text-sm text-muted-foreground">Loading access analytics...</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <BreakdownCard title="Token Names (Access)" rows={accessPayload?.token_names || []} keyLabel="Token Name" />
+                  <BreakdownCard title="Remote IPs (Access)" rows={accessPayload?.remote_ips || []} keyLabel="Remote IP" />
+                  <BreakdownCard title="User Agents (Access)" rows={accessPayload?.user_agents || []} keyLabel="User-Agent" />
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="network" className="space-y-4">
+              {networkError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{networkError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Remote IPs</CardDescription>
+                    <CardTitle>{formatNumber(networkPayload?.summary.remote_ips_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Endpoints</CardDescription>
+                    <CardTitle>{formatNumber(networkPayload?.summary.endpoints_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Operations</CardDescription>
+                    <CardTitle>{formatNumber(networkPayload?.summary.operations_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Error requests</CardDescription>
+                    <CardTitle>{formatNumber(networkPayload?.summary.error_requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              {networkLoading ? (
+                <Card>
+                  <CardContent className="pt-6">
+                    <p className="text-sm text-muted-foreground">Loading network analytics...</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <BreakdownCard title="Remote IPs (Network)" rows={networkPayload?.remote_ips || []} keyLabel="Remote IP" />
+                  <BreakdownCard title="Endpoints (Network)" rows={networkPayload?.endpoints || []} keyLabel="Endpoint" />
+                  <BreakdownCard title="Operations (Network)" rows={networkPayload?.operations || []} keyLabel="Operation" />
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="models" className="space-y-4">
+              {modelsError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{modelsError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Total models</CardDescription>
+                    <CardTitle>{formatNumber(modelsPayload?.summary.models_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Models online</CardDescription>
+                    <CardTitle>{formatNumber(modelsPayload?.summary.models_online)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Providers covered</CardDescription>
+                    <CardTitle>{formatNumber(modelsPayload?.summary.providers_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Error requests</CardDescription>
+                    <CardTitle>{formatNumber(modelsPayload?.summary.error_requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Model health and load</CardTitle>
+                  <CardDescription>Request volume and quality metrics by model/provider pair.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {modelsLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading model analytics...</p>
+                  ) : (modelsPayload?.items.length || 0) === 0 ? (
+                    <p className="text-sm text-muted-foreground">No model usage in this window.</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Model</TableHead>
+                          <TableHead>Provider</TableHead>
+                          <TableHead className="text-right">Requests</TableHead>
+                          <TableHead className="text-right">PP</TableHead>
+                          <TableHead className="text-right">TG</TableHead>
+                          <TableHead className="text-right">Cost USD</TableHead>
+                          <TableHead className="text-right">Latency ms</TableHead>
+                          <TableHead className="text-right">Errors</TableHead>
+                          <TableHead className="text-right">Success</TableHead>
+                          <TableHead className="text-right">Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(modelsPayload?.items || []).map((row) => (
+                          <TableRow key={`models-${row.provider}-${row.model}`}>
+                            <TableCell className="font-medium">{row.model}</TableCell>
+                            <TableCell>{row.provider}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.requests)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.prompt_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_cost_usd)}</TableCell>
+                            <TableCell className="text-right">{formatLatency(row.avg_latency_ms, { fallback: '—', precision: 1 })}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.errors)}</TableCell>
+                            <TableCell className="text-right">{formatPercent(row.success_rate_pct)}</TableCell>
+                            <TableCell className="text-right">
+                              {row.online ? (
+                                <Badge variant="secondary">Online</Badge>
+                              ) : (
+                                <Badge variant="destructive">Offline</Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="conversations" className="space-y-4">
+              {conversationsError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{conversationsError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Total conversations</CardDescription>
+                    <CardTitle>{formatNumber(conversationsPayload?.summary.conversations_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Active conversations</CardDescription>
+                    <CardTitle>{formatNumber(conversationsPayload?.summary.active_conversations)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Avg requests/conversation</CardDescription>
+                    <CardTitle>{formatNumber(conversationsPayload?.summary.avg_requests_per_conversation)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Error requests</CardDescription>
+                    <CardTitle>{formatNumber(conversationsPayload?.summary.error_requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Conversation activity</CardTitle>
+                  <CardDescription>Per-conversation request volume and health in the selected filter window.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {conversationsLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading conversation analytics...</p>
+                  ) : (conversationsPayload?.items.length || 0) === 0 ? (
+                    <p className="text-sm text-muted-foreground">No conversation activity in this window.</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Conversation</TableHead>
+                          <TableHead className="text-right">Requests</TableHead>
+                          <TableHead className="text-right">PP</TableHead>
+                          <TableHead className="text-right">TG</TableHead>
+                          <TableHead className="text-right">Cost USD</TableHead>
+                          <TableHead className="text-right">Latency ms</TableHead>
+                          <TableHead className="text-right">Errors</TableHead>
+                          <TableHead className="text-right">Success</TableHead>
+                          <TableHead className="text-right">Last Seen</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(conversationsPayload?.items || []).map((row) => (
+                          <TableRow key={`conversations-${row.conversation_id}`}>
+                            <TableCell className="font-medium">{row.conversation_id}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.requests)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.prompt_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_cost_usd)}</TableCell>
+                            <TableCell className="text-right">{formatLatency(row.avg_latency_ms, { fallback: '—', precision: 1 })}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.errors)}</TableCell>
+                            <TableCell className="text-right">{formatPercent(row.success_rate_pct)}</TableCell>
+                            <TableCell className="text-right">{formatDateTime(row.last_seen_at)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="log" className="space-y-4">
+              {logError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{logError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Requests in window</CardDescription>
+                    <CardTitle>{formatNumber(logPayload?.summary.requests_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Error requests</CardDescription>
+                    <CardTitle>{formatNumber(logPayload?.summary.error_requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Estimated requests</CardDescription>
+                    <CardTitle>{formatNumber(logPayload?.summary.estimated_requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Distinct request IDs</CardDescription>
+                    <CardTitle>{formatNumber(logPayload?.summary.request_ids_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Request log</CardTitle>
+                  <CardDescription>Recent router usage entries matching current filters.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {logLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading request log...</p>
+                  ) : (logPayload?.items.length || 0) === 0 ? (
+                    <p className="text-sm text-muted-foreground">No requests in this window.</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Time</TableHead>
+                          <TableHead>Req ID</TableHead>
+                          <TableHead>Provider / Model</TableHead>
+                          <TableHead className="text-right">Status</TableHead>
+                          <TableHead className="text-right">Latency ms</TableHead>
+                          <TableHead className="text-right">Tokens</TableHead>
+                          <TableHead className="text-right">Cost USD</TableHead>
+                          <TableHead className="text-right">Estimated</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(logPayload?.items || []).map((row) => (
+                          <TableRow key={`log-${row.ts}-${row.request_id || 'unknown'}`}>
+                            <TableCell>{formatDateTime(row.ts)}</TableCell>
+                            <TableCell className="font-mono text-xs">{row.request_id || '—'}</TableCell>
+                            <TableCell className="text-sm">
+                              <div className="font-medium">{row.provider}</div>
+                              <div className="text-muted-foreground">{row.model}</div>
+                            </TableCell>
+                            <TableCell className="text-right">{row.status ?? '—'}</TableCell>
+                            <TableCell className="text-right">{formatLatency(row.latency_ms, { fallback: '—', precision: 1 })}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_cost_usd)}</TableCell>
+                            <TableCell className="text-right">
+                              {row.estimated ? (
+                                <Badge variant="secondary">Yes</Badge>
+                              ) : (
+                                <Badge variant="outline">No</Badge>
                               )}
                             </TableCell>
                           </TableRow>

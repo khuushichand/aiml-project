@@ -444,3 +444,275 @@ async def test_router_analytics_quota_returns_key_budget_utilization(monkeypatch
     assert keyed[12].day_tokens is not None
     assert keyed[12].day_tokens.exceeded is True
     assert keyed[12].day_tokens.utilization_pct == pytest.approx(150.0)
+
+
+@pytest.mark.asyncio
+async def test_router_analytics_providers_returns_provider_health_breakdown(monkeypatch, tmp_path):
+    _setup_env(tmp_path)
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    await reset_db_pool()
+    reset_settings()
+    await reset_session_manager()
+    user_id = await _ensure_router_usage_seed_rows()
+    pool = await get_db_pool()
+    principal = _single_user_principal(user_id)
+
+    monkeypatch.setattr(
+        admin_router_analytics_service,
+        "_utcnow",
+        lambda: datetime(2026, 3, 1, 10, 30, tzinfo=timezone.utc),
+    )
+
+    providers = await admin_router_analytics_service.get_router_analytics_providers(
+        principal=principal,
+        db=pool,
+        range_value="1h",
+        org_id=None,
+        provider=None,
+        model=None,
+        token_id=None,
+        granularity=None,
+    )
+
+    assert providers.summary.providers_total == 3
+    assert providers.summary.providers_online == 2
+    assert providers.summary.failover_events == 2
+
+    keyed = {row.provider: row for row in providers.items}
+    assert keyed["groq"].requests == 2
+    assert keyed["groq"].errors == 1
+    assert keyed["groq"].online is True
+    assert keyed["groq"].success_rate_pct == pytest.approx(50.0)
+    assert keyed["groq"].avg_latency_ms == pytest.approx(350.0)
+
+    assert keyed["anthropic"].requests == 1
+    assert keyed["anthropic"].online is False
+    assert keyed["anthropic"].success_rate_pct == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_router_analytics_access_returns_token_ip_and_user_agent_breakdown(monkeypatch, tmp_path):
+    _setup_env(tmp_path)
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    await reset_db_pool()
+    reset_settings()
+    await reset_session_manager()
+    user_id = await _ensure_router_usage_seed_rows()
+    pool = await get_db_pool()
+    principal = _single_user_principal(user_id)
+
+    monkeypatch.setattr(
+        admin_router_analytics_service,
+        "_utcnow",
+        lambda: datetime(2026, 3, 1, 10, 30, tzinfo=timezone.utc),
+    )
+
+    access = await admin_router_analytics_service.get_router_analytics_access(
+        principal=principal,
+        db=pool,
+        range_value="1h",
+        org_id=None,
+        provider=None,
+        model=None,
+        token_id=None,
+        granularity=None,
+    )
+
+    assert access.summary.token_names_total >= 3
+    assert access.summary.remote_ips_total >= 2
+    assert access.summary.user_agents_total >= 2
+    assert access.summary.anonymous_requests == 1
+
+    token_names = {row.key: row.requests for row in access.token_names}
+    assert token_names["Ops"] == 2
+    assert token_names["unknown"] == 1
+
+    remote_ips = {row.key: row.requests for row in access.remote_ips}
+    assert remote_ips["10.0.0.5"] == 2
+    assert remote_ips["unknown"] == 1
+
+    user_agents = {row.key: row.requests for row in access.user_agents}
+    assert user_agents["python-httpx/1.0"] == 2
+    assert user_agents["unknown"] == 1
+
+
+@pytest.mark.asyncio
+async def test_router_analytics_network_returns_ip_endpoint_and_operation_breakdown(monkeypatch, tmp_path):
+    _setup_env(tmp_path)
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    await reset_db_pool()
+    reset_settings()
+    await reset_session_manager()
+    user_id = await _ensure_router_usage_seed_rows()
+    pool = await get_db_pool()
+    principal = _single_user_principal(user_id)
+
+    monkeypatch.setattr(
+        admin_router_analytics_service,
+        "_utcnow",
+        lambda: datetime(2026, 3, 1, 10, 30, tzinfo=timezone.utc),
+    )
+
+    network = await admin_router_analytics_service.get_router_analytics_network(
+        principal=principal,
+        db=pool,
+        range_value="1h",
+        org_id=None,
+        provider=None,
+        model=None,
+        token_id=None,
+        granularity=None,
+    )
+
+    assert network.summary.remote_ips_total >= 2
+    assert network.summary.endpoints_total >= 1
+    assert network.summary.operations_total >= 1
+    assert network.summary.error_requests == 2
+
+    remote_ips = {row.key: row.requests for row in network.remote_ips}
+    assert remote_ips["10.0.0.5"] == 2
+    assert remote_ips["unknown"] == 1
+
+    endpoints = {row.key: row.requests for row in network.endpoints}
+    assert endpoints["/api/v1/chat/completions"] == 4
+
+    operations = {row.key: row.requests for row in network.operations}
+    assert operations["chat"] == 4
+
+
+@pytest.mark.asyncio
+async def test_router_analytics_models_returns_model_health_breakdown(monkeypatch, tmp_path):
+    _setup_env(tmp_path)
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    await reset_db_pool()
+    reset_settings()
+    await reset_session_manager()
+    user_id = await _ensure_router_usage_seed_rows()
+    pool = await get_db_pool()
+    principal = _single_user_principal(user_id)
+
+    monkeypatch.setattr(
+        admin_router_analytics_service,
+        "_utcnow",
+        lambda: datetime(2026, 3, 1, 10, 30, tzinfo=timezone.utc),
+    )
+
+    models_payload = await admin_router_analytics_service.get_router_analytics_models(
+        principal=principal,
+        db=pool,
+        range_value="1h",
+        org_id=None,
+        provider=None,
+        model=None,
+        token_id=None,
+        granularity=None,
+    )
+
+    assert models_payload.summary.models_total >= 3
+    assert models_payload.summary.models_online == 2
+    assert models_payload.summary.providers_total == 3
+    assert models_payload.summary.error_requests == 2
+
+    keyed = {(row.provider, row.model): row for row in models_payload.items}
+    assert keyed[("groq", "llama-3.3-70b")].requests == 2
+    assert keyed[("groq", "llama-3.3-70b")].errors == 1
+    assert keyed[("groq", "llama-3.3-70b")].online is True
+    assert keyed[("groq", "llama-3.3-70b")].success_rate_pct == pytest.approx(50.0)
+
+
+@pytest.mark.asyncio
+async def test_router_analytics_conversations_returns_conversation_breakdown(monkeypatch, tmp_path):
+    _setup_env(tmp_path)
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    await reset_db_pool()
+    reset_settings()
+    await reset_session_manager()
+    user_id = await _ensure_router_usage_seed_rows()
+    pool = await get_db_pool()
+    principal = _single_user_principal(user_id)
+
+    monkeypatch.setattr(
+        admin_router_analytics_service,
+        "_utcnow",
+        lambda: datetime(2026, 3, 1, 10, 30, tzinfo=timezone.utc),
+    )
+
+    conversations_payload = await admin_router_analytics_service.get_router_analytics_conversations(
+        principal=principal,
+        db=pool,
+        range_value="1h",
+        org_id=None,
+        provider=None,
+        model=None,
+        token_id=None,
+        granularity=None,
+    )
+
+    assert conversations_payload.summary.conversations_total == 3
+    assert conversations_payload.summary.active_conversations == 2
+    assert conversations_payload.summary.avg_requests_per_conversation == pytest.approx(4.0 / 3.0)
+    assert conversations_payload.summary.error_requests == 2
+
+    keyed = {row.conversation_id: row for row in conversations_payload.items}
+    assert keyed["conv-2"].requests == 2
+    assert keyed["conv-2"].errors == 1
+    assert keyed["conv-2"].success_rate_pct == pytest.approx(50.0)
+    assert keyed["conv-2"].avg_latency_ms == pytest.approx(350.0)
+    assert keyed["conv-3"].success_rate_pct == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_router_analytics_log_returns_recent_rows(monkeypatch, tmp_path):
+    _setup_env(tmp_path)
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    await reset_db_pool()
+    reset_settings()
+    await reset_session_manager()
+    user_id = await _ensure_router_usage_seed_rows()
+    pool = await get_db_pool()
+    principal = _single_user_principal(user_id)
+
+    monkeypatch.setattr(
+        admin_router_analytics_service,
+        "_utcnow",
+        lambda: datetime(2026, 3, 1, 10, 30, tzinfo=timezone.utc),
+    )
+
+    log_payload = await admin_router_analytics_service.get_router_analytics_log(
+        principal=principal,
+        db=pool,
+        range_value="1h",
+        org_id=None,
+        provider=None,
+        model=None,
+        token_id=None,
+        granularity=None,
+    )
+
+    assert log_payload.summary.requests_total == 4
+    assert log_payload.summary.error_requests == 2
+    assert log_payload.summary.estimated_requests == 2
+    assert log_payload.summary.request_ids_total == 4
+    assert len(log_payload.items) == 4
+    assert log_payload.items[0].request_id == "req-4"
+    assert log_payload.items[0].status == 503
+    assert log_payload.items[0].error is True
+    assert log_payload.items[0].estimated is True

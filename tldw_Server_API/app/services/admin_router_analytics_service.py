@@ -7,16 +7,32 @@ from fastapi import HTTPException
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
+    RouterAnalyticsAccessResponse,
+    RouterAnalyticsAccessSummary,
     RouterAnalyticsBreakdownRow,
     RouterAnalyticsBreakdownsResponse,
+    RouterAnalyticsConversationRow,
+    RouterAnalyticsConversationsResponse,
+    RouterAnalyticsConversationsSummary,
     RouterAnalyticsDataWindow,
     RouterAnalyticsGranularity,
+    RouterAnalyticsLogResponse,
+    RouterAnalyticsLogRow,
+    RouterAnalyticsLogSummary,
+    RouterAnalyticsModelRow,
+    RouterAnalyticsModelsResponse,
+    RouterAnalyticsModelsSummary,
     RouterAnalyticsMetaOption,
     RouterAnalyticsMetaResponse,
     RouterAnalyticsQuotaMetric,
+    RouterAnalyticsNetworkResponse,
+    RouterAnalyticsNetworkSummary,
     RouterAnalyticsQuotaResponse,
     RouterAnalyticsQuotaRow,
     RouterAnalyticsQuotaSummary,
+    RouterAnalyticsProviderRow,
+    RouterAnalyticsProvidersResponse,
+    RouterAnalyticsProvidersSummary,
     RouterAnalyticsRange,
     RouterAnalyticsSeriesPoint,
     RouterAnalyticsStatusKpis,
@@ -103,6 +119,20 @@ def _as_float(value: Any, default: float | None = 0.0) -> float | None:
         return float(value)
     except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:
         return default
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    try:
+        text = str(value).strip().lower()
+    except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:
+        return default
+    return text in {"1", "true", "t", "yes", "y"}
 
 
 def _as_text(value: Any, default: str = "unknown") -> str:
@@ -971,6 +1001,759 @@ async def get_router_analytics_quota(
     except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:
         logger.exception("Failed to build router analytics quota payload")
         raise HTTPException(status_code=500, detail="Failed to load router analytics quota") from None
+
+
+async def get_router_analytics_providers(
+    *,
+    principal: AuthPrincipal,
+    db: Any,
+    range_value: RouterAnalyticsRange,
+    org_id: int | None,
+    provider: str | None,
+    model: str | None,
+    token_id: int | None,
+    granularity: RouterAnalyticsGranularity | None,
+) -> RouterAnalyticsProvidersResponse:
+    _ = granularity  # reserved for future bucketing variants
+    try:
+        org_ids = await _resolve_admin_org_scope(principal, org_id)
+        window_start, window_end = _resolve_window(range_value)
+        data_window = _build_status_data_window(range_value=range_value, start=window_start, end=window_end)
+        generated_at = _utcnow()
+
+        if org_ids is not None and len(org_ids) == 0:
+            return RouterAnalyticsProvidersResponse(
+                summary=RouterAnalyticsProvidersSummary(),
+                items=[],
+                generated_at=generated_at,
+                data_window=data_window,
+            )
+
+        is_pg = _is_postgres_connection(db)
+        join_clause, where_clause, params = _build_usage_where_clause(
+            is_pg=is_pg,
+            start=window_start,
+            end=window_end,
+            provider=provider,
+            model=model,
+            token_id=token_id,
+            org_ids=org_ids,
+        )
+
+        if is_pg:
+            summary_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "COUNT(DISTINCT COALESCE(NULLIF(TRIM(provider), ''), 'unknown')) AS providers_total, "
+                "COUNT(DISTINCT CASE WHEN status < 500 THEN COALESCE(NULLIF(TRIM(provider), ''), 'unknown') END) AS providers_online, "
+                "COALESCE(SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END),0) AS failover_events "
+                f"FROM llm_usage_log{join_clause}{where_clause}"
+            )
+            items_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "COALESCE(NULLIF(TRIM(provider), ''), 'unknown') AS provider, "
+                "COUNT(*) AS requests, "
+                "COALESCE(SUM(prompt_tokens),0) AS prompt_tokens, "
+                "COALESCE(SUM(completion_tokens),0) AS completion_tokens, "
+                "COALESCE(SUM(total_tokens),0) AS total_tokens, "
+                "COALESCE(SUM(total_cost_usd),0)::float AS total_cost_usd, "
+                "AVG(latency_ms)::float AS avg_latency_ms, "
+                "COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS errors, "
+                "COALESCE(SUM(CASE WHEN status < 500 THEN 1 ELSE 0 END),0) AS successes "
+                f"FROM llm_usage_log{join_clause}{where_clause} "
+                "GROUP BY 1 "
+                "ORDER BY requests DESC, provider ASC "
+                "LIMIT 200"
+            )
+        else:
+            summary_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "COUNT(DISTINCT COALESCE(NULLIF(TRIM(provider), ''), 'unknown')) AS providers_total, "
+                "COUNT(DISTINCT CASE WHEN status < 500 THEN COALESCE(NULLIF(TRIM(provider), ''), 'unknown') END) AS providers_online, "
+                "IFNULL(SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END),0) AS failover_events "
+                f"FROM llm_usage_log{join_clause}{where_clause}"
+            )
+            items_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "COALESCE(NULLIF(TRIM(provider), ''), 'unknown') AS provider, "
+                "COUNT(*) AS requests, "
+                "IFNULL(SUM(prompt_tokens),0) AS prompt_tokens, "
+                "IFNULL(SUM(completion_tokens),0) AS completion_tokens, "
+                "IFNULL(SUM(total_tokens),0) AS total_tokens, "
+                "IFNULL(SUM(total_cost_usd),0.0) AS total_cost_usd, "
+                "AVG(latency_ms) AS avg_latency_ms, "
+                "IFNULL(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS errors, "
+                "IFNULL(SUM(CASE WHEN status < 500 THEN 1 ELSE 0 END),0) AS successes "
+                f"FROM llm_usage_log{join_clause}{where_clause} "
+                "GROUP BY 1 "
+                "ORDER BY requests DESC, provider ASC "
+                "LIMIT 200"
+            )
+
+        summary_rows = await _fetch_rows(db, summary_sql, params)
+        summary_row = summary_rows[0] if summary_rows else None
+
+        providers_total = _as_int(_row_value(summary_row, "providers_total", 0, 0))
+        providers_online = _as_int(_row_value(summary_row, "providers_online", 1, 0))
+        failover_events = _as_int(_row_value(summary_row, "failover_events", 2, 0))
+
+        item_rows = await _fetch_rows(db, items_sql, params)
+        items: list[RouterAnalyticsProviderRow] = []
+        for row in item_rows:
+            requests = _as_int(_row_value(row, "requests", 1, 0))
+            successes = _as_int(_row_value(row, "successes", 8, 0))
+            success_rate_pct = (float(successes) / float(requests) * 100.0) if requests > 0 else None
+            items.append(
+                RouterAnalyticsProviderRow(
+                    provider=_as_text(_row_value(row, "provider", 0, "unknown")),
+                    requests=requests,
+                    prompt_tokens=_as_int(_row_value(row, "prompt_tokens", 2, 0)),
+                    completion_tokens=_as_int(_row_value(row, "completion_tokens", 3, 0)),
+                    total_tokens=_as_int(_row_value(row, "total_tokens", 4, 0)),
+                    total_cost_usd=float(_as_float(_row_value(row, "total_cost_usd", 5, 0.0), 0.0) or 0.0),
+                    avg_latency_ms=_as_float(_row_value(row, "avg_latency_ms", 6, None), None),
+                    errors=_as_int(_row_value(row, "errors", 7, 0)),
+                    success_rate_pct=success_rate_pct,
+                    online=successes > 0,
+                )
+            )
+
+        return RouterAnalyticsProvidersResponse(
+            summary=RouterAnalyticsProvidersSummary(
+                providers_total=providers_total,
+                providers_online=providers_online,
+                failover_events=failover_events,
+            ),
+            items=items,
+            generated_at=generated_at,
+            data_window=data_window,
+        )
+    except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:
+        logger.exception("Failed to build router analytics providers payload")
+        raise HTTPException(status_code=500, detail="Failed to load router analytics providers") from None
+
+
+async def get_router_analytics_access(
+    *,
+    principal: AuthPrincipal,
+    db: Any,
+    range_value: RouterAnalyticsRange,
+    org_id: int | None,
+    provider: str | None,
+    model: str | None,
+    token_id: int | None,
+    granularity: RouterAnalyticsGranularity | None,
+) -> RouterAnalyticsAccessResponse:
+    _ = granularity  # reserved for future bucketing variants
+    try:
+        org_ids = await _resolve_admin_org_scope(principal, org_id)
+        window_start, window_end = _resolve_window(range_value)
+        data_window = _build_status_data_window(range_value=range_value, start=window_start, end=window_end)
+        generated_at = _utcnow()
+
+        if org_ids is not None and len(org_ids) == 0:
+            return RouterAnalyticsAccessResponse(
+                summary=RouterAnalyticsAccessSummary(),
+                token_names=[],
+                remote_ips=[],
+                user_agents=[],
+                generated_at=generated_at,
+                data_window=data_window,
+            )
+
+        is_pg = _is_postgres_connection(db)
+        join_clause, where_clause, params = _build_usage_where_clause(
+            is_pg=is_pg,
+            start=window_start,
+            end=window_end,
+            provider=provider,
+            model=model,
+            token_id=token_id,
+            org_ids=org_ids,
+        )
+
+        token_names = await _fetch_breakdown_rows(
+            db=db,
+            is_pg=is_pg,
+            join_clause=join_clause,
+            where_clause=where_clause,
+            params=params,
+            dimension_expr="COALESCE(NULLIF(TRIM(token_name), ''), 'unknown')",  # nosec B105
+            dimension_name="token_names",
+            limit=100,
+        )
+        remote_ips = await _fetch_breakdown_rows(
+            db=db,
+            is_pg=is_pg,
+            join_clause=join_clause,
+            where_clause=where_clause,
+            params=params,
+            dimension_expr="COALESCE(NULLIF(TRIM(remote_ip), ''), 'unknown')",
+            dimension_name="remote_ips",
+            limit=100,
+        )
+        user_agents = await _fetch_breakdown_rows(
+            db=db,
+            is_pg=is_pg,
+            join_clause=join_clause,
+            where_clause=where_clause,
+            params=params,
+            dimension_expr="COALESCE(NULLIF(TRIM(user_agent), ''), 'unknown')",
+            dimension_name="user_agents",
+            limit=100,
+        )
+
+        anonymous_requests = 0
+        for row in remote_ips:
+            if row.key == "unknown":
+                anonymous_requests = row.requests
+                break
+
+        return RouterAnalyticsAccessResponse(
+            summary=RouterAnalyticsAccessSummary(
+                token_names_total=len(token_names),
+                remote_ips_total=len(remote_ips),
+                user_agents_total=len(user_agents),
+                anonymous_requests=anonymous_requests,
+            ),
+            token_names=token_names,
+            remote_ips=remote_ips,
+            user_agents=user_agents,
+            generated_at=generated_at,
+            data_window=data_window,
+        )
+    except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:
+        logger.exception("Failed to build router analytics access payload")
+        raise HTTPException(status_code=500, detail="Failed to load router analytics access") from None
+
+
+async def get_router_analytics_network(
+    *,
+    principal: AuthPrincipal,
+    db: Any,
+    range_value: RouterAnalyticsRange,
+    org_id: int | None,
+    provider: str | None,
+    model: str | None,
+    token_id: int | None,
+    granularity: RouterAnalyticsGranularity | None,
+) -> RouterAnalyticsNetworkResponse:
+    _ = granularity  # reserved for future bucketing variants
+    try:
+        org_ids = await _resolve_admin_org_scope(principal, org_id)
+        window_start, window_end = _resolve_window(range_value)
+        data_window = _build_status_data_window(range_value=range_value, start=window_start, end=window_end)
+        generated_at = _utcnow()
+
+        if org_ids is not None and len(org_ids) == 0:
+            return RouterAnalyticsNetworkResponse(
+                summary=RouterAnalyticsNetworkSummary(),
+                remote_ips=[],
+                endpoints=[],
+                operations=[],
+                generated_at=generated_at,
+                data_window=data_window,
+            )
+
+        is_pg = _is_postgres_connection(db)
+        join_clause, where_clause, params = _build_usage_where_clause(
+            is_pg=is_pg,
+            start=window_start,
+            end=window_end,
+            provider=provider,
+            model=model,
+            token_id=token_id,
+            org_ids=org_ids,
+        )
+
+        if is_pg:
+            summary_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "COUNT(DISTINCT COALESCE(NULLIF(TRIM(remote_ip), ''), 'unknown')) AS remote_ips_total, "
+                "COUNT(DISTINCT COALESCE(NULLIF(TRIM(endpoint), ''), 'unknown')) AS endpoints_total, "
+                "COUNT(DISTINCT COALESCE(NULLIF(TRIM(operation), ''), 'unknown')) AS operations_total, "
+                "COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS error_requests "
+                f"FROM llm_usage_log{join_clause}{where_clause}"
+            )
+        else:
+            summary_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "COUNT(DISTINCT COALESCE(NULLIF(TRIM(remote_ip), ''), 'unknown')) AS remote_ips_total, "
+                "COUNT(DISTINCT COALESCE(NULLIF(TRIM(endpoint), ''), 'unknown')) AS endpoints_total, "
+                "COUNT(DISTINCT COALESCE(NULLIF(TRIM(operation), ''), 'unknown')) AS operations_total, "
+                "IFNULL(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS error_requests "
+                f"FROM llm_usage_log{join_clause}{where_clause}"
+            )
+
+        summary_rows = await _fetch_rows(db, summary_sql, params)
+        summary_row = summary_rows[0] if summary_rows else None
+
+        remote_ips = await _fetch_breakdown_rows(
+            db=db,
+            is_pg=is_pg,
+            join_clause=join_clause,
+            where_clause=where_clause,
+            params=params,
+            dimension_expr="COALESCE(NULLIF(TRIM(remote_ip), ''), 'unknown')",
+            dimension_name="remote_ips",
+            limit=100,
+        )
+        endpoints = await _fetch_breakdown_rows(
+            db=db,
+            is_pg=is_pg,
+            join_clause=join_clause,
+            where_clause=where_clause,
+            params=params,
+            dimension_expr="COALESCE(NULLIF(TRIM(endpoint), ''), 'unknown')",
+            dimension_name="endpoints",
+            limit=100,
+        )
+        operations = await _fetch_breakdown_rows(
+            db=db,
+            is_pg=is_pg,
+            join_clause=join_clause,
+            where_clause=where_clause,
+            params=params,
+            dimension_expr="COALESCE(NULLIF(TRIM(operation), ''), 'unknown')",
+            dimension_name="operations",
+            limit=100,
+        )
+
+        return RouterAnalyticsNetworkResponse(
+            summary=RouterAnalyticsNetworkSummary(
+                remote_ips_total=_as_int(_row_value(summary_row, "remote_ips_total", 0, len(remote_ips))),
+                endpoints_total=_as_int(_row_value(summary_row, "endpoints_total", 1, len(endpoints))),
+                operations_total=_as_int(_row_value(summary_row, "operations_total", 2, len(operations))),
+                error_requests=_as_int(_row_value(summary_row, "error_requests", 3, 0)),
+            ),
+            remote_ips=remote_ips,
+            endpoints=endpoints,
+            operations=operations,
+            generated_at=generated_at,
+            data_window=data_window,
+        )
+    except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:
+        logger.exception("Failed to build router analytics network payload")
+        raise HTTPException(status_code=500, detail="Failed to load router analytics network") from None
+
+
+async def get_router_analytics_models(
+    *,
+    principal: AuthPrincipal,
+    db: Any,
+    range_value: RouterAnalyticsRange,
+    org_id: int | None,
+    provider: str | None,
+    model: str | None,
+    token_id: int | None,
+    granularity: RouterAnalyticsGranularity | None,
+) -> RouterAnalyticsModelsResponse:
+    _ = granularity  # reserved for future bucketing variants
+    try:
+        org_ids = await _resolve_admin_org_scope(principal, org_id)
+        window_start, window_end = _resolve_window(range_value)
+        data_window = _build_status_data_window(range_value=range_value, start=window_start, end=window_end)
+        generated_at = _utcnow()
+
+        if org_ids is not None and len(org_ids) == 0:
+            return RouterAnalyticsModelsResponse(
+                summary=RouterAnalyticsModelsSummary(),
+                items=[],
+                generated_at=generated_at,
+                data_window=data_window,
+            )
+
+        is_pg = _is_postgres_connection(db)
+        join_clause, where_clause, params = _build_usage_where_clause(
+            is_pg=is_pg,
+            start=window_start,
+            end=window_end,
+            provider=provider,
+            model=model,
+            token_id=token_id,
+            org_ids=org_ids,
+        )
+
+        if is_pg:
+            summary_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "COUNT(DISTINCT COALESCE(NULLIF(TRIM(model), ''), 'unknown')) AS models_total, "
+                "COUNT(DISTINCT CASE WHEN status < 500 THEN COALESCE(NULLIF(TRIM(model), ''), 'unknown') END) AS models_online, "
+                "COUNT(DISTINCT COALESCE(NULLIF(TRIM(provider), ''), 'unknown')) AS providers_total, "
+                "COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS error_requests "
+                f"FROM llm_usage_log{join_clause}{where_clause}"
+            )
+            items_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS model, "
+                "COALESCE(NULLIF(TRIM(provider), ''), 'unknown') AS provider, "
+                "COUNT(*) AS requests, "
+                "COALESCE(SUM(prompt_tokens),0) AS prompt_tokens, "
+                "COALESCE(SUM(completion_tokens),0) AS completion_tokens, "
+                "COALESCE(SUM(total_tokens),0) AS total_tokens, "
+                "COALESCE(SUM(total_cost_usd),0)::float AS total_cost_usd, "
+                "AVG(latency_ms)::float AS avg_latency_ms, "
+                "COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS errors, "
+                "COALESCE(SUM(CASE WHEN status < 500 THEN 1 ELSE 0 END),0) AS successes "
+                f"FROM llm_usage_log{join_clause}{where_clause} "
+                "GROUP BY 1,2 "
+                "ORDER BY requests DESC, model ASC, provider ASC "
+                "LIMIT 200"
+            )
+        else:
+            summary_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "COUNT(DISTINCT COALESCE(NULLIF(TRIM(model), ''), 'unknown')) AS models_total, "
+                "COUNT(DISTINCT CASE WHEN status < 500 THEN COALESCE(NULLIF(TRIM(model), ''), 'unknown') END) AS models_online, "
+                "COUNT(DISTINCT COALESCE(NULLIF(TRIM(provider), ''), 'unknown')) AS providers_total, "
+                "IFNULL(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS error_requests "
+                f"FROM llm_usage_log{join_clause}{where_clause}"
+            )
+            items_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS model, "
+                "COALESCE(NULLIF(TRIM(provider), ''), 'unknown') AS provider, "
+                "COUNT(*) AS requests, "
+                "IFNULL(SUM(prompt_tokens),0) AS prompt_tokens, "
+                "IFNULL(SUM(completion_tokens),0) AS completion_tokens, "
+                "IFNULL(SUM(total_tokens),0) AS total_tokens, "
+                "IFNULL(SUM(total_cost_usd),0.0) AS total_cost_usd, "
+                "AVG(latency_ms) AS avg_latency_ms, "
+                "IFNULL(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS errors, "
+                "IFNULL(SUM(CASE WHEN status < 500 THEN 1 ELSE 0 END),0) AS successes "
+                f"FROM llm_usage_log{join_clause}{where_clause} "
+                "GROUP BY 1,2 "
+                "ORDER BY requests DESC, model ASC, provider ASC "
+                "LIMIT 200"
+            )
+
+        summary_rows = await _fetch_rows(db, summary_sql, params)
+        summary_row = summary_rows[0] if summary_rows else None
+
+        item_rows = await _fetch_rows(db, items_sql, params)
+        items: list[RouterAnalyticsModelRow] = []
+        for row in item_rows:
+            requests = _as_int(_row_value(row, "requests", 2, 0))
+            successes = _as_int(_row_value(row, "successes", 9, 0))
+            success_rate_pct = (float(successes) / float(requests) * 100.0) if requests > 0 else None
+            items.append(
+                RouterAnalyticsModelRow(
+                    model=_as_text(_row_value(row, "model", 0, "unknown")),
+                    provider=_as_text(_row_value(row, "provider", 1, "unknown")),
+                    requests=requests,
+                    prompt_tokens=_as_int(_row_value(row, "prompt_tokens", 3, 0)),
+                    completion_tokens=_as_int(_row_value(row, "completion_tokens", 4, 0)),
+                    total_tokens=_as_int(_row_value(row, "total_tokens", 5, 0)),
+                    total_cost_usd=float(_as_float(_row_value(row, "total_cost_usd", 6, 0.0), 0.0) or 0.0),
+                    avg_latency_ms=_as_float(_row_value(row, "avg_latency_ms", 7, None), None),
+                    errors=_as_int(_row_value(row, "errors", 8, 0)),
+                    success_rate_pct=success_rate_pct,
+                    online=successes > 0,
+                )
+            )
+
+        return RouterAnalyticsModelsResponse(
+            summary=RouterAnalyticsModelsSummary(
+                models_total=_as_int(_row_value(summary_row, "models_total", 0, 0)),
+                models_online=_as_int(_row_value(summary_row, "models_online", 1, 0)),
+                providers_total=_as_int(_row_value(summary_row, "providers_total", 2, 0)),
+                error_requests=_as_int(_row_value(summary_row, "error_requests", 3, 0)),
+            ),
+            items=items,
+            generated_at=generated_at,
+            data_window=data_window,
+        )
+    except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:
+        logger.exception("Failed to build router analytics models payload")
+        raise HTTPException(status_code=500, detail="Failed to load router analytics models") from None
+
+
+async def get_router_analytics_conversations(
+    *,
+    principal: AuthPrincipal,
+    db: Any,
+    range_value: RouterAnalyticsRange,
+    org_id: int | None,
+    provider: str | None,
+    model: str | None,
+    token_id: int | None,
+    granularity: RouterAnalyticsGranularity | None,
+) -> RouterAnalyticsConversationsResponse:
+    _ = granularity  # reserved for future bucketing variants
+    try:
+        org_ids = await _resolve_admin_org_scope(principal, org_id)
+        window_start, window_end = _resolve_window(range_value)
+        data_window = _build_status_data_window(range_value=range_value, start=window_start, end=window_end)
+        generated_at = _utcnow()
+
+        if org_ids is not None and len(org_ids) == 0:
+            return RouterAnalyticsConversationsResponse(
+                summary=RouterAnalyticsConversationsSummary(),
+                items=[],
+                generated_at=generated_at,
+                data_window=data_window,
+            )
+
+        is_pg = _is_postgres_connection(db)
+        join_clause, where_clause, params = _build_usage_where_clause(
+            is_pg=is_pg,
+            start=window_start,
+            end=window_end,
+            provider=provider,
+            model=model,
+            token_id=token_id,
+            org_ids=org_ids,
+        )
+
+        conversation_expr = "COALESCE(NULLIF(TRIM(conversation_id), ''), 'unknown')"
+        if is_pg:
+            summary_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                f"COUNT(DISTINCT {conversation_expr}) AS conversations_total, "
+                f"COUNT(DISTINCT CASE WHEN status < 500 THEN {conversation_expr} END) AS active_conversations, "
+                f"COALESCE(COUNT(*)::float / NULLIF(COUNT(DISTINCT {conversation_expr}), 0), 0)::float AS avg_requests_per_conversation, "
+                "COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS error_requests "
+                f"FROM llm_usage_log{join_clause}{where_clause}"
+            )
+            items_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                f"{conversation_expr} AS conversation_id, "
+                "COUNT(*) AS requests, "
+                "COALESCE(SUM(prompt_tokens),0) AS prompt_tokens, "
+                "COALESCE(SUM(completion_tokens),0) AS completion_tokens, "
+                "COALESCE(SUM(total_tokens),0) AS total_tokens, "
+                "COALESCE(SUM(total_cost_usd),0)::float AS total_cost_usd, "
+                "AVG(latency_ms)::float AS avg_latency_ms, "
+                "COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS errors, "
+                "COALESCE(SUM(CASE WHEN status < 500 THEN 1 ELSE 0 END),0) AS successes, "
+                "MAX(ts) AS last_seen_at "
+                f"FROM llm_usage_log{join_clause}{where_clause} "
+                "GROUP BY 1 "
+                "ORDER BY requests DESC, last_seen_at DESC, conversation_id ASC "
+                "LIMIT 200"
+            )
+        else:
+            summary_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                f"COUNT(DISTINCT {conversation_expr}) AS conversations_total, "
+                f"COUNT(DISTINCT CASE WHEN status < 500 THEN {conversation_expr} END) AS active_conversations, "
+                f"CASE WHEN COUNT(DISTINCT {conversation_expr}) = 0 THEN 0.0 "
+                f"ELSE (COUNT(*) * 1.0 / COUNT(DISTINCT {conversation_expr})) END AS avg_requests_per_conversation, "
+                "IFNULL(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS error_requests "
+                f"FROM llm_usage_log{join_clause}{where_clause}"
+            )
+            items_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                f"{conversation_expr} AS conversation_id, "
+                "COUNT(*) AS requests, "
+                "IFNULL(SUM(prompt_tokens),0) AS prompt_tokens, "
+                "IFNULL(SUM(completion_tokens),0) AS completion_tokens, "
+                "IFNULL(SUM(total_tokens),0) AS total_tokens, "
+                "IFNULL(SUM(total_cost_usd),0.0) AS total_cost_usd, "
+                "AVG(latency_ms) AS avg_latency_ms, "
+                "IFNULL(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS errors, "
+                "IFNULL(SUM(CASE WHEN status < 500 THEN 1 ELSE 0 END),0) AS successes, "
+                "MAX(ts) AS last_seen_at "
+                f"FROM llm_usage_log{join_clause}{where_clause} "
+                "GROUP BY 1 "
+                "ORDER BY requests DESC, last_seen_at DESC, conversation_id ASC "
+                "LIMIT 200"
+            )
+
+        summary_rows = await _fetch_rows(db, summary_sql, params)
+        summary_row = summary_rows[0] if summary_rows else None
+
+        item_rows = await _fetch_rows(db, items_sql, params)
+        items: list[RouterAnalyticsConversationRow] = []
+        for row in item_rows:
+            requests = _as_int(_row_value(row, "requests", 1, 0))
+            successes = _as_int(_row_value(row, "successes", 8, 0))
+            success_rate_pct = (float(successes) / float(requests) * 100.0) if requests > 0 else None
+            last_seen_raw = _row_value(row, "last_seen_at", 9, None)
+            last_seen_at = (
+                _coerce_utc_datetime(last_seen_raw, fallback=window_end)
+                if last_seen_raw is not None
+                else None
+            )
+            items.append(
+                RouterAnalyticsConversationRow(
+                    conversation_id=_as_text(_row_value(row, "conversation_id", 0, "unknown")),
+                    requests=requests,
+                    prompt_tokens=_as_int(_row_value(row, "prompt_tokens", 2, 0)),
+                    completion_tokens=_as_int(_row_value(row, "completion_tokens", 3, 0)),
+                    total_tokens=_as_int(_row_value(row, "total_tokens", 4, 0)),
+                    total_cost_usd=float(_as_float(_row_value(row, "total_cost_usd", 5, 0.0), 0.0) or 0.0),
+                    avg_latency_ms=_as_float(_row_value(row, "avg_latency_ms", 6, None), None),
+                    errors=_as_int(_row_value(row, "errors", 7, 0)),
+                    success_rate_pct=success_rate_pct,
+                    last_seen_at=last_seen_at,
+                )
+            )
+
+        return RouterAnalyticsConversationsResponse(
+            summary=RouterAnalyticsConversationsSummary(
+                conversations_total=_as_int(_row_value(summary_row, "conversations_total", 0, 0)),
+                active_conversations=_as_int(_row_value(summary_row, "active_conversations", 1, 0)),
+                avg_requests_per_conversation=_as_float(
+                    _row_value(summary_row, "avg_requests_per_conversation", 2, 0.0),
+                    0.0,
+                ),
+                error_requests=_as_int(_row_value(summary_row, "error_requests", 3, 0)),
+            ),
+            items=items,
+            generated_at=generated_at,
+            data_window=data_window,
+        )
+    except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:
+        logger.exception("Failed to build router analytics conversations payload")
+        raise HTTPException(status_code=500, detail="Failed to load router analytics conversations") from None
+
+
+async def get_router_analytics_log(
+    *,
+    principal: AuthPrincipal,
+    db: Any,
+    range_value: RouterAnalyticsRange,
+    org_id: int | None,
+    provider: str | None,
+    model: str | None,
+    token_id: int | None,
+    granularity: RouterAnalyticsGranularity | None,
+) -> RouterAnalyticsLogResponse:
+    _ = granularity  # reserved for future bucketing variants
+    try:
+        org_ids = await _resolve_admin_org_scope(principal, org_id)
+        window_start, window_end = _resolve_window(range_value)
+        data_window = _build_status_data_window(range_value=range_value, start=window_start, end=window_end)
+        generated_at = _utcnow()
+
+        if org_ids is not None and len(org_ids) == 0:
+            return RouterAnalyticsLogResponse(
+                summary=RouterAnalyticsLogSummary(),
+                items=[],
+                generated_at=generated_at,
+                data_window=data_window,
+            )
+
+        is_pg = _is_postgres_connection(db)
+        join_clause, where_clause, params = _build_usage_where_clause(
+            is_pg=is_pg,
+            start=window_start,
+            end=window_end,
+            provider=provider,
+            model=model,
+            token_id=token_id,
+            org_ids=org_ids,
+        )
+
+        if is_pg:
+            summary_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "COUNT(*) AS requests_total, "
+                "COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS error_requests, "
+                "COALESCE(SUM(CASE WHEN COALESCE(estimated::int, 0) = 1 THEN 1 ELSE 0 END),0) AS estimated_requests, "
+                "COUNT(DISTINCT NULLIF(TRIM(request_id), '')) AS request_ids_total "
+                f"FROM llm_usage_log{join_clause}{where_clause}"
+            )
+            items_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "ts, request_id, "
+                "COALESCE(NULLIF(TRIM(conversation_id), ''), 'unknown') AS conversation_id, "
+                "COALESCE(NULLIF(TRIM(provider), ''), 'unknown') AS provider, "
+                "COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS model, "
+                "COALESCE(NULLIF(TRIM(token_name), ''), 'unknown') AS token_name, "
+                "COALESCE(NULLIF(TRIM(endpoint), ''), 'unknown') AS endpoint, "
+                "COALESCE(NULLIF(TRIM(operation), ''), 'unknown') AS operation, "
+                "status, latency_ms, "
+                "COALESCE(prompt_tokens,0) AS prompt_tokens, "
+                "COALESCE(completion_tokens,0) AS completion_tokens, "
+                "COALESCE(total_tokens,0) AS total_tokens, "
+                "COALESCE(total_cost_usd,0)::float AS total_cost_usd, "
+                "COALESCE(NULLIF(TRIM(remote_ip), ''), 'unknown') AS remote_ip, "
+                "COALESCE(NULLIF(TRIM(user_agent), ''), 'unknown') AS user_agent, "
+                "COALESCE(estimated::int, 0) AS estimated "
+                f"FROM llm_usage_log{join_clause}{where_clause} "
+                "ORDER BY ts DESC, id DESC "
+                "LIMIT 200"
+            )
+        else:
+            summary_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "COUNT(*) AS requests_total, "
+                "IFNULL(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END),0) AS error_requests, "
+                "IFNULL(SUM(CASE WHEN IFNULL(estimated,0) = 1 THEN 1 ELSE 0 END),0) AS estimated_requests, "
+                "COUNT(DISTINCT NULLIF(TRIM(request_id), '')) AS request_ids_total "
+                f"FROM llm_usage_log{join_clause}{where_clause}"
+            )
+            items_sql = (  # nosec B608
+                "SELECT "  # nosec B608
+                "ts, request_id, "
+                "COALESCE(NULLIF(TRIM(conversation_id), ''), 'unknown') AS conversation_id, "
+                "COALESCE(NULLIF(TRIM(provider), ''), 'unknown') AS provider, "
+                "COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS model, "
+                "COALESCE(NULLIF(TRIM(token_name), ''), 'unknown') AS token_name, "
+                "COALESCE(NULLIF(TRIM(endpoint), ''), 'unknown') AS endpoint, "
+                "COALESCE(NULLIF(TRIM(operation), ''), 'unknown') AS operation, "
+                "status, latency_ms, "
+                "IFNULL(prompt_tokens,0) AS prompt_tokens, "
+                "IFNULL(completion_tokens,0) AS completion_tokens, "
+                "IFNULL(total_tokens,0) AS total_tokens, "
+                "IFNULL(total_cost_usd,0.0) AS total_cost_usd, "
+                "COALESCE(NULLIF(TRIM(remote_ip), ''), 'unknown') AS remote_ip, "
+                "COALESCE(NULLIF(TRIM(user_agent), ''), 'unknown') AS user_agent, "
+                "IFNULL(estimated,0) AS estimated "
+                f"FROM llm_usage_log{join_clause}{where_clause} "
+                "ORDER BY datetime(ts) DESC, id DESC "
+                "LIMIT 200"
+            )
+
+        summary_rows = await _fetch_rows(db, summary_sql, params)
+        summary_row = summary_rows[0] if summary_rows else None
+
+        item_rows = await _fetch_rows(db, items_sql, params)
+        items: list[RouterAnalyticsLogRow] = []
+        for row in item_rows:
+            status_code = _row_value(row, "status", 8, None)
+            status_value = _as_int(status_code, 0) if status_code is not None else None
+            estimated = _as_bool(_row_value(row, "estimated", 16, False), False)
+            ts_raw = _row_value(row, "ts", 0, window_end)
+            ts_value = _coerce_utc_datetime(ts_raw, fallback=window_end)
+            items.append(
+                RouterAnalyticsLogRow(
+                    ts=ts_value,
+                    request_id=_row_value(row, "request_id", 1, None),
+                    conversation_id=_as_text(_row_value(row, "conversation_id", 2, "unknown")),
+                    provider=_as_text(_row_value(row, "provider", 3, "unknown")),
+                    model=_as_text(_row_value(row, "model", 4, "unknown")),
+                    token_name=_as_text(_row_value(row, "token_name", 5, "unknown")),
+                    endpoint=_as_text(_row_value(row, "endpoint", 6, "unknown")),
+                    operation=_as_text(_row_value(row, "operation", 7, "unknown")),
+                    status=status_value,
+                    latency_ms=_as_float(_row_value(row, "latency_ms", 9, None), None),
+                    prompt_tokens=_as_int(_row_value(row, "prompt_tokens", 10, 0)),
+                    completion_tokens=_as_int(_row_value(row, "completion_tokens", 11, 0)),
+                    total_tokens=_as_int(_row_value(row, "total_tokens", 12, 0)),
+                    total_cost_usd=float(_as_float(_row_value(row, "total_cost_usd", 13, 0.0), 0.0) or 0.0),
+                    remote_ip=_as_text(_row_value(row, "remote_ip", 14, "unknown")),
+                    user_agent=_as_text(_row_value(row, "user_agent", 15, "unknown")),
+                    estimated=estimated,
+                    error=bool(status_value is not None and status_value >= 400),
+                )
+            )
+
+        return RouterAnalyticsLogResponse(
+            summary=RouterAnalyticsLogSummary(
+                requests_total=_as_int(_row_value(summary_row, "requests_total", 0, 0)),
+                error_requests=_as_int(_row_value(summary_row, "error_requests", 1, 0)),
+                estimated_requests=_as_int(_row_value(summary_row, "estimated_requests", 2, 0)),
+                request_ids_total=_as_int(_row_value(summary_row, "request_ids_total", 3, 0)),
+            ),
+            items=items,
+            generated_at=generated_at,
+            data_window=data_window,
+        )
+    except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:
+        logger.exception("Failed to build router analytics log payload")
+        raise HTTPException(status_code=500, detail="Failed to load router analytics log") from None
 
 
 async def _fetch_distinct_dimension_values(

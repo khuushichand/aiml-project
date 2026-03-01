@@ -233,3 +233,59 @@ async def test_router_analytics_endpoints_status_breakdowns_meta(monkeypatch, tm
         assert "items" in quota_payload
         keyed = {int(row["key_id"]): row for row in quota_payload["items"]}
         assert 202 in keyed
+
+        providers_resp = client.get("/api/v1/admin/router-analytics/providers", params={"range": "1h"})
+        assert providers_resp.status_code == 200, providers_resp.text
+        providers_payload = providers_resp.json()
+        assert providers_payload["summary"]["providers_total"] == 2
+        assert providers_payload["summary"]["providers_online"] == 1
+        assert providers_payload["summary"]["failover_events"] == 1
+        provider_rows = {row["provider"]: row for row in providers_payload["items"]}
+        assert provider_rows["openai"]["online"] is True
+        assert provider_rows["groq"]["online"] is False
+
+        access_resp = client.get("/api/v1/admin/router-analytics/access", params={"range": "1h"})
+        assert access_resp.status_code == 200, access_resp.text
+        access_payload = access_resp.json()
+        assert access_payload["summary"]["token_names_total"] >= 2
+        assert access_payload["summary"]["remote_ips_total"] >= 1
+        assert access_payload["summary"]["user_agents_total"] >= 1
+        assert access_payload["summary"]["anonymous_requests"] == 1
+
+        network_resp = client.get("/api/v1/admin/router-analytics/network", params={"range": "1h"})
+        assert network_resp.status_code == 200, network_resp.text
+        network_payload = network_resp.json()
+        assert network_payload["summary"]["remote_ips_total"] >= 1
+        assert network_payload["summary"]["endpoints_total"] >= 1
+        assert network_payload["summary"]["operations_total"] >= 1
+        assert network_payload["summary"]["error_requests"] == 1
+
+        models_resp = client.get("/api/v1/admin/router-analytics/models", params={"range": "1h"})
+        assert models_resp.status_code == 200, models_resp.text
+        models_payload = models_resp.json()
+        assert models_payload["summary"]["models_total"] == 2
+        assert models_payload["summary"]["models_online"] == 1
+        assert models_payload["summary"]["providers_total"] == 2
+        assert models_payload["summary"]["error_requests"] == 1
+
+        conversations_resp = client.get("/api/v1/admin/router-analytics/conversations", params={"range": "1h"})
+        assert conversations_resp.status_code == 200, conversations_resp.text
+        conversations_payload = conversations_resp.json()
+        assert conversations_payload["summary"]["conversations_total"] == 2
+        assert conversations_payload["summary"]["active_conversations"] == 1
+        assert conversations_payload["summary"]["avg_requests_per_conversation"] == pytest.approx(1.0)
+        assert conversations_payload["summary"]["error_requests"] == 1
+        rows = {row["conversation_id"]: row for row in conversations_payload["items"]}
+        assert rows["conv-1"]["success_rate_pct"] == pytest.approx(100.0)
+        assert rows["conv-2"]["success_rate_pct"] == pytest.approx(0.0)
+
+        log_resp = client.get("/api/v1/admin/router-analytics/log", params={"range": "1h"})
+        assert log_resp.status_code == 200, log_resp.text
+        log_payload = log_resp.json()
+        assert log_payload["summary"]["requests_total"] == 2
+        assert log_payload["summary"]["error_requests"] == 1
+        assert log_payload["summary"]["estimated_requests"] == 1
+        assert log_payload["summary"]["request_ids_total"] == 2
+        assert len(log_payload["items"]) == 2
+        assert log_payload["items"][0]["request_id"] == "router-endpoint-2"
+        assert log_payload["items"][0]["error"] is True

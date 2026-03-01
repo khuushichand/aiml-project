@@ -696,6 +696,30 @@ export const api = {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/admin/router-analytics/quota${queryParams ? `?${queryParams}` : ''}`);
   },
+  getRouterAnalyticsProviders: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/router-analytics/providers${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getRouterAnalyticsAccess: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/router-analytics/access${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getRouterAnalyticsNetwork: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/router-analytics/network${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getRouterAnalyticsModels: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/router-analytics/models${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getRouterAnalyticsConversations: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/router-analytics/conversations${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getRouterAnalyticsLog: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/router-analytics/log${queryParams ? `?${queryParams}` : ''}`);
+  },
   getRouterAnalyticsMeta: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/admin/router-analytics/meta${queryParams ? `?${queryParams}` : ''}`);

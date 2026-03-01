@@ -1207,6 +1207,236 @@ class RouterAnalyticsQuotaResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class RouterAnalyticsProviderRow(BaseModel):
+    """Provider-level aggregate row for router analytics providers tab."""
+
+    provider: str
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    avg_latency_ms: float | None = None
+    errors: int = 0
+    success_rate_pct: float | None = None
+    online: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsProvidersSummary(BaseModel):
+    """Providers overview summary counters."""
+
+    providers_total: int = 0
+    providers_online: int = 0
+    failover_events: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsProvidersResponse(BaseModel):
+    """Payload for /admin/router-analytics/providers."""
+
+    summary: RouterAnalyticsProvidersSummary
+    items: list[RouterAnalyticsProviderRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsAccessSummary(BaseModel):
+    """Access tab overview summary counters."""
+
+    token_names_total: int = 0
+    remote_ips_total: int = 0
+    user_agents_total: int = 0
+    anonymous_requests: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsAccessResponse(BaseModel):
+    """Payload for /admin/router-analytics/access."""
+
+    summary: RouterAnalyticsAccessSummary
+    token_names: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    remote_ips: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    user_agents: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsNetworkSummary(BaseModel):
+    """Network tab overview summary counters."""
+
+    remote_ips_total: int = 0
+    endpoints_total: int = 0
+    operations_total: int = 0
+    error_requests: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsNetworkResponse(BaseModel):
+    """Payload for /admin/router-analytics/network."""
+
+    summary: RouterAnalyticsNetworkSummary
+    remote_ips: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    endpoints: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    operations: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsModelRow(BaseModel):
+    """Model-level aggregate row for router analytics models tab."""
+
+    model: str
+    provider: str
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    avg_latency_ms: float | None = None
+    errors: int = 0
+    success_rate_pct: float | None = None
+    online: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsModelsSummary(BaseModel):
+    """Models overview summary counters."""
+
+    models_total: int = 0
+    models_online: int = 0
+    providers_total: int = 0
+    error_requests: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsModelsResponse(BaseModel):
+    """Payload for /admin/router-analytics/models."""
+
+    summary: RouterAnalyticsModelsSummary
+    items: list[RouterAnalyticsModelRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsConversationRow(BaseModel):
+    """Conversation-level aggregate row for router analytics conversations tab."""
+
+    conversation_id: str
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    avg_latency_ms: float | None = None
+    errors: int = 0
+    success_rate_pct: float | None = None
+    last_seen_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsConversationsSummary(BaseModel):
+    """Conversations overview summary counters."""
+
+    conversations_total: int = 0
+    active_conversations: int = 0
+    avg_requests_per_conversation: float | None = None
+    error_requests: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsConversationsResponse(BaseModel):
+    """Payload for /admin/router-analytics/conversations."""
+
+    summary: RouterAnalyticsConversationsSummary
+    items: list[RouterAnalyticsConversationRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsLogRow(BaseModel):
+    """Row entry for router analytics log tab."""
+
+    ts: datetime
+    request_id: str | None = None
+    conversation_id: str = "unknown"
+    provider: str = "unknown"
+    model: str = "unknown"
+    token_name: str = "unknown"
+    endpoint: str = "unknown"
+    operation: str = "unknown"
+    status: int | None = None
+    latency_ms: float | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    remote_ip: str = "unknown"
+    user_agent: str = "unknown"
+    estimated: bool = False
+    error: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsLogSummary(BaseModel):
+    """Log tab summary counters."""
+
+    requests_total: int = 0
+    error_requests: int = 0
+    estimated_requests: int = 0
+    request_ids_total: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsLogResponse(BaseModel):
+    """Payload for /admin/router-analytics/log."""
+
+    summary: RouterAnalyticsLogSummary
+    items: list[RouterAnalyticsLogRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #######################################################################################################################
 #
 # Tool Permission Schemas (MCP Integration)

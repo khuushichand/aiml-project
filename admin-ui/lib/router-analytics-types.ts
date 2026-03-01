@@ -124,3 +124,169 @@ export type RouterAnalyticsQuotaResponse = {
   partial?: boolean;
   warnings?: string[] | null;
 };
+
+export type RouterAnalyticsProviderRow = {
+  provider: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  avg_latency_ms?: number | null;
+  errors: number;
+  success_rate_pct?: number | null;
+  online: boolean;
+};
+
+export type RouterAnalyticsProvidersSummary = {
+  providers_total: number;
+  providers_online: number;
+  failover_events: number;
+};
+
+export type RouterAnalyticsProvidersResponse = {
+  summary: RouterAnalyticsProvidersSummary;
+  items: RouterAnalyticsProviderRow[];
+  generated_at: string;
+  data_window: RouterAnalyticsDataWindow;
+  stale_seconds?: number | null;
+  partial?: boolean;
+  warnings?: string[] | null;
+};
+
+export type RouterAnalyticsAccessSummary = {
+  token_names_total: number;
+  remote_ips_total: number;
+  user_agents_total: number;
+  anonymous_requests: number;
+};
+
+export type RouterAnalyticsAccessResponse = {
+  summary: RouterAnalyticsAccessSummary;
+  token_names: RouterAnalyticsBreakdownRow[];
+  remote_ips: RouterAnalyticsBreakdownRow[];
+  user_agents: RouterAnalyticsBreakdownRow[];
+  generated_at: string;
+  data_window: RouterAnalyticsDataWindow;
+  stale_seconds?: number | null;
+  partial?: boolean;
+  warnings?: string[] | null;
+};
+
+export type RouterAnalyticsNetworkSummary = {
+  remote_ips_total: number;
+  endpoints_total: number;
+  operations_total: number;
+  error_requests: number;
+};
+
+export type RouterAnalyticsNetworkResponse = {
+  summary: RouterAnalyticsNetworkSummary;
+  remote_ips: RouterAnalyticsBreakdownRow[];
+  endpoints: RouterAnalyticsBreakdownRow[];
+  operations: RouterAnalyticsBreakdownRow[];
+  generated_at: string;
+  data_window: RouterAnalyticsDataWindow;
+  stale_seconds?: number | null;
+  partial?: boolean;
+  warnings?: string[] | null;
+};
+
+export type RouterAnalyticsModelRow = {
+  model: string;
+  provider: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  avg_latency_ms?: number | null;
+  errors: number;
+  success_rate_pct?: number | null;
+  online: boolean;
+};
+
+export type RouterAnalyticsModelsSummary = {
+  models_total: number;
+  models_online: number;
+  providers_total: number;
+  error_requests: number;
+};
+
+export type RouterAnalyticsModelsResponse = {
+  summary: RouterAnalyticsModelsSummary;
+  items: RouterAnalyticsModelRow[];
+  generated_at: string;
+  data_window: RouterAnalyticsDataWindow;
+  stale_seconds?: number | null;
+  partial?: boolean;
+  warnings?: string[] | null;
+};
+
+export type RouterAnalyticsConversationRow = {
+  conversation_id: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  avg_latency_ms?: number | null;
+  errors: number;
+  success_rate_pct?: number | null;
+  last_seen_at?: string | null;
+};
+
+export type RouterAnalyticsConversationsSummary = {
+  conversations_total: number;
+  active_conversations: number;
+  avg_requests_per_conversation?: number | null;
+  error_requests: number;
+};
+
+export type RouterAnalyticsConversationsResponse = {
+  summary: RouterAnalyticsConversationsSummary;
+  items: RouterAnalyticsConversationRow[];
+  generated_at: string;
+  data_window: RouterAnalyticsDataWindow;
+  stale_seconds?: number | null;
+  partial?: boolean;
+  warnings?: string[] | null;
+};
+
+export type RouterAnalyticsLogRow = {
+  ts: string;
+  request_id?: string | null;
+  conversation_id: string;
+  provider: string;
+  model: string;
+  token_name: string;
+  endpoint: string;
+  operation: string;
+  status?: number | null;
+  latency_ms?: number | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  remote_ip: string;
+  user_agent: string;
+  estimated: boolean;
+  error: boolean;
+};
+
+export type RouterAnalyticsLogSummary = {
+  requests_total: number;
+  error_requests: number;
+  estimated_requests: number;
+  request_ids_total: number;
+};
+
+export type RouterAnalyticsLogResponse = {
+  summary: RouterAnalyticsLogSummary;
+  items: RouterAnalyticsLogRow[];
+  generated_at: string;
+  data_window: RouterAnalyticsDataWindow;
+  stale_seconds?: number | null;
+  partial?: boolean;
+  warnings?: string[] | null;
+};
