@@ -1,4 +1,5 @@
 from click.testing import CliRunner
+from loguru import logger
 
 from tldw_Server_API.cli.evals_cli import main
 
@@ -62,3 +63,13 @@ def test_benchmark_run_command_executes(monkeypatch):
     )
     assert result.exit_code == 0
     assert called["loaded"] is True
+
+
+def test_cli_log_sink_does_not_error_after_clirunner_teardown(capsys):
+    runner = CliRunner()
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+
+    logger.info("post-clirunner-log")
+    captured = capsys.readouterr()
+    assert "Logging error in Loguru Handler" not in captured.err

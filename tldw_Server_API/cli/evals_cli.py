@@ -11,6 +11,7 @@ Provides a comprehensive command-line interface for:
 - Development and testing utilities
 """
 
+import io
 import sys
 from pathlib import Path
 from typing import Optional
@@ -69,6 +70,45 @@ class CLIContext:
 # Create global context
 cli_context = CLIContext()
 
+_IO_EXCEPTIONS = (BrokenPipeError, OSError, ValueError, io.UnsupportedOperation)
+
+
+class _SafeStreamWrapper:
+    """Best-effort stream proxy that swallows teardown-time IO errors."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def write(self, message: str):
+        try:
+            self._stream.write(message)
+            self.flush()
+        except _IO_EXCEPTIONS:
+            pass
+
+    def flush(self):
+        try:
+            self._stream.flush()
+        except _IO_EXCEPTIONS:
+            pass
+
+    def isatty(self) -> bool:
+        try:
+            return bool(getattr(self._stream, "isatty", lambda: False)())
+        except _IO_EXCEPTIONS:
+            return False
+
+    def __getattr__(self, attr):
+        return getattr(self._stream, attr)
+
+
+def _safe_stderr_stream():
+    """
+    Resolve the best available stderr stream and make sink writes teardown-safe.
+    """
+    stream = sys.stderr if sys.stderr is not None else sys.__stderr__
+    return _SafeStreamWrapper(stream or sys.__stderr__)
+
 
 @click.group(context_settings={'help_option_names': ['-h', '--help']})
 @click.option(
@@ -118,10 +158,10 @@ def main(ctx, config, db_path, log_level, quiet):
             "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
             "<level>{message}</level>"
         )
-        logger.add(sys.stderr, format=log_format, level=log_level.upper())
+        logger.add(_safe_stderr_stream(), format=log_format, level=log_level.upper())
     else:
         # In quiet mode, only show errors
-        logger.add(sys.stderr, level="ERROR", format="{message}")
+        logger.add(_safe_stderr_stream(), level="ERROR", format="{message}")
 
     # Store global options in context
     cli_context.config_path = str(config) if config else None
