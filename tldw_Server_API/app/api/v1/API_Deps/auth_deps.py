@@ -1453,25 +1453,6 @@ async def get_current_active_user(
     return current_user
 
 
-async def get_user_org_policy(
-    db: Any = Depends(get_db_transaction),  # noqa: B008
-    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: dict[str, Any] | None = None,  # compat arg for legacy call sites/tests
-) -> dict[str, Any]:
-    """
-    Deprecated compatibility shim for user-dict org policy lookups.
-
-    New code should prefer ``get_org_policy_from_principal``. This helper
-    now delegates to the claim-first resolver so org policy resolution stays
-    consistent across all authentication flows.
-    """
-    _ = current_user
-    return await get_org_policy_from_principal(
-        db=db,
-        principal=principal,
-    )
-
-
 async def _load_org_policy(db: Any, org_id: int) -> dict[str, Any]:
     """
     Internal helper to load an organization policy with consistent error handling.
@@ -1505,8 +1486,8 @@ async def get_org_policy_from_principal(
     2. Synthetic org_id=1 for explicit single-user principals (subject=single_user).
     3. HTTP 400 when no organization can be resolved.
 
-    This helper is the principal-first counterpart to ``get_user_org_policy`` and
-    is intended for new code paths that already depend on ``get_auth_principal``.
+    This helper is intended for code paths that already depend on
+    ``get_auth_principal``.
     """
     def _should_use_synthetic_single_user_org(p: AuthPrincipal) -> bool:
         """
