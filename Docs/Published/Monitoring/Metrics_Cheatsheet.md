@@ -201,11 +201,7 @@ datasources:
 2) Dashboards
 
 Copy these files to a mounted path, e.g., `/var/lib/grafana/dashboards`:
-- `Docs/Deployment/Monitoring/overview.json`
-- `Docs/Deployment/Monitoring/app-observability-dashboard.json`
-- `Docs/Deployment/Monitoring/mcp-dashboard.json`
-- `Docs/Deployment/Monitoring/web-scraping-dashboard.json`
-- `Docs/Deployment/Monitoring/Grafana_LLM_Cost_Top_Providers.json` (LLM cost/tokens dashboard)
+- Use the provisioning examples in `Helper_Scripts/Samples/Grafana/README.md` and place your dashboard JSON exports in the mounted dashboards path.
 
 Create `provisioning/dashboards/dashboards.yml`:
 ```yaml
@@ -318,7 +314,7 @@ New counters and histograms added for Chatbook tooling. Examples assume a Promet
 - WebSocket: `prompt_studio.websocket.connections`, `prompt_studio.websocket.messages{event_type}`.
 - DB: `prompt_studio.database.operations{operation,table}`, `prompt_studio.database.latency_ms{operation}`.
 
-Grafana: Import `Docs/Deployment/Monitoring/security-dashboard.json` for a base dashboard (HTTP/security). Add panels for the metrics above to monitor app, RAG, embeddings, and chat health.
+Grafana: Start from `Helper_Scripts/Samples/Grafana/README.md`, then add panels for the metrics above to monitor app, RAG, embeddings, and chat health.
 
 ## Platform-Specific Notes
 

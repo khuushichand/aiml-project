@@ -80,7 +80,7 @@ Reference implementations:
 - `tldw_production`: `true` in production to mask secrets and enable production guards.
 - Provider keys: e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.
 
-See `Env_Vars.md` for the complete list and `Docs/AUTHNZ_DATABASE_CONFIG.md` for AuthNZ DB details.
+See `Env_Vars.md` for the complete list and `Docs/AuthNZ/AUTHNZ_DATABASE_CONFIG.md` for AuthNZ DB details.
 
 ## 6) Verify and smoke test
 

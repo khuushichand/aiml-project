@@ -157,7 +157,7 @@ JWT hardening (recommended):
 - Clients should include the returned refresh token after each `/auth/refresh` when `ROTATE_REFRESH_TOKENS=true`.
 - For multi-service deployments, prefer `RS256` and set `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY`.
 
-Rotation guidance: see `Docs/Operations/JWT_Rotation_Runbook.md`.
+Rotation guidance: see `Docs/Deployment/Operations/JWT_Rotation_Runbook.md`.
 
 ### Security Controls (env)
 
