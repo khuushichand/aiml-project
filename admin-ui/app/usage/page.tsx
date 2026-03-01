@@ -16,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatLatency } from '@/lib/format';
 import {
   getRouterAnalyticsMeta,
+  getRouterAnalyticsQuota,
   getRouterAnalyticsStatus,
   getRouterAnalyticsStatusBreakdowns,
 } from '@/lib/router-analytics-client';
@@ -23,6 +24,8 @@ import type {
   RouterAnalyticsBreakdownRow,
   RouterAnalyticsBreakdownsResponse,
   RouterAnalyticsMetaResponse,
+  RouterAnalyticsQuotaMetric,
+  RouterAnalyticsQuotaResponse,
   RouterAnalyticsRange,
   RouterAnalyticsStatusResponse,
 } from '@/lib/router-analytics-types';
@@ -37,7 +40,7 @@ type UsageTabConfig = {
 
 const TABS: UsageTabConfig[] = [
   { value: 'status', label: 'Status', implemented: true },
-  { value: 'quota', label: 'Quota', implemented: false },
+  { value: 'quota', label: 'Quota', implemented: true },
   { value: 'providers', label: 'Providers', implemented: false },
   { value: 'access', label: 'Access', implemented: false },
   { value: 'network', label: 'Network', implemented: false },
@@ -69,6 +72,16 @@ const formatNumber = (value?: number | null): string => {
 const formatTokensPerSecond = (value?: number | null): string => {
   if (value === undefined || value === null || Number.isNaN(value)) return '—';
   return value.toFixed(2);
+};
+
+const formatPercent = (value?: number | null): string => {
+  if (value === undefined || value === null || Number.isNaN(value)) return '—';
+  return `${value.toFixed(1)}%`;
+};
+
+const formatQuotaMetric = (metric?: RouterAnalyticsQuotaMetric | null): string => {
+  if (!metric) return '—';
+  return `${formatNumber(metric.used)} / ${formatNumber(metric.limit)} (${formatPercent(metric.utilization_pct)})`;
 };
 
 const formatBucketTime = (value: string): string => {
@@ -126,10 +139,13 @@ export default function UsagePage() {
 
   const [statusPayload, setStatusPayload] = useState<RouterAnalyticsStatusResponse | null>(null);
   const [breakdownsPayload, setBreakdownsPayload] = useState<RouterAnalyticsBreakdownsResponse | null>(null);
+  const [quotaPayload, setQuotaPayload] = useState<RouterAnalyticsQuotaResponse | null>(null);
   const [metaPayload, setMetaPayload] = useState<RouterAnalyticsMetaResponse | null>(null);
 
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string>('');
+  const [statusLoading, setStatusLoading] = useState<boolean>(true);
+  const [statusError, setStatusError] = useState<string>('');
+  const [quotaLoading, setQuotaLoading] = useState<boolean>(false);
+  const [quotaError, setQuotaError] = useState<string>('');
   const [refreshTick, setRefreshTick] = useState<number>(0);
 
   const selectedTokenValue = tokenName && tokenName !== '__all__' ? tokenName : '';
@@ -152,8 +168,8 @@ export default function UsagePage() {
   );
 
   const loadStatusData = useCallback(async () => {
-    setLoading(true);
-    setError('');
+    setStatusLoading(true);
+    setStatusError('');
     try {
       const [statusResponse, breakdownsResponse, metaResponse] = await Promise.all([
         getRouterAnalyticsStatus(statusQuery),
@@ -164,16 +180,38 @@ export default function UsagePage() {
       setBreakdownsPayload(breakdownsResponse);
       setMetaPayload(metaResponse);
     } catch (loadError) {
-      setError(normalizeErrorMessage(loadError));
+      setStatusError(normalizeErrorMessage(loadError));
     } finally {
-      setLoading(false);
+      setStatusLoading(false);
+    }
+  }, [statusQuery]);
+
+  const loadQuotaData = useCallback(async () => {
+    setQuotaLoading(true);
+    setQuotaError('');
+    try {
+      const [quotaResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsQuota(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setQuotaPayload(quotaResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setQuotaError(normalizeErrorMessage(loadError));
+    } finally {
+      setQuotaLoading(false);
     }
   }, [statusQuery]);
 
   useEffect(() => {
-    if (activeTab !== 'status') return;
-    void loadStatusData();
-  }, [activeTab, loadStatusData, refreshTick]);
+    if (activeTab === 'status') {
+      void loadStatusData();
+      return;
+    }
+    if (activeTab === 'quota') {
+      void loadQuotaData();
+    }
+  }, [activeTab, loadStatusData, loadQuotaData, refreshTick]);
 
   const timelineBuckets = useMemo<TimelineBucket[]>(() => {
     if (!statusPayload?.series?.length) return [];
@@ -327,9 +365,9 @@ export default function UsagePage() {
             </TabsList>
 
             <TabsContent value="status" className="space-y-4">
-              {error && (
+              {statusError && (
                 <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
+                  <AlertDescription>{statusError}</AlertDescription>
                 </Alert>
               )}
 
@@ -370,7 +408,7 @@ export default function UsagePage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {loading ? (
+                  {statusLoading ? (
                     <p className="text-sm text-muted-foreground">Loading status timeline...</p>
                   ) : timelineBuckets.length === 0 ? (
                     <p className="text-sm text-muted-foreground">No usage data in this window.</p>
@@ -407,6 +445,86 @@ export default function UsagePage() {
                 <BreakdownCard title="Remote IPs" rows={breakdownsPayload?.remote_ips || []} keyLabel="Remote IP" />
                 <BreakdownCard title="User Agents" rows={breakdownsPayload?.user_agents || []} keyLabel="User-Agent" />
               </div>
+            </TabsContent>
+
+            <TabsContent value="quota" className="space-y-4">
+              {quotaError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{quotaError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Keys tracked</CardDescription>
+                    <CardTitle>{formatNumber(quotaPayload?.summary.keys_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Keys over budget</CardDescription>
+                    <CardTitle>{formatNumber(quotaPayload?.summary.keys_over_budget)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Budgeted keys</CardDescription>
+                    <CardTitle>{formatNumber(quotaPayload?.summary.budgeted_keys)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Quota utilization</CardTitle>
+                  <CardDescription>Day and 30-day budget usage for active keys in the selected filter window.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {quotaLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading quota data...</p>
+                  ) : (quotaPayload?.items.length || 0) === 0 ? (
+                    <p className="text-sm text-muted-foreground">No quota-linked key usage in this window.</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Token</TableHead>
+                          <TableHead className="text-right">Requests</TableHead>
+                          <TableHead className="text-right">Tokens</TableHead>
+                          <TableHead className="text-right">Cost USD</TableHead>
+                          <TableHead className="text-right">Day Tokens</TableHead>
+                          <TableHead className="text-right">30d Tokens</TableHead>
+                          <TableHead className="text-right">Day USD</TableHead>
+                          <TableHead className="text-right">30d USD</TableHead>
+                          <TableHead className="text-right">Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(quotaPayload?.items || []).map((row) => (
+                          <TableRow key={`quota-${row.key_id}`}>
+                            <TableCell className="font-medium">{row.token_name}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.requests)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_cost_usd)}</TableCell>
+                            <TableCell className="text-right">{formatQuotaMetric(row.day_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatQuotaMetric(row.month_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatQuotaMetric(row.day_usd)}</TableCell>
+                            <TableCell className="text-right">{formatQuotaMetric(row.month_usd)}</TableCell>
+                            <TableCell className="text-right">
+                              {row.over_budget ? (
+                                <Badge variant="destructive">Exceeded</Badge>
+                              ) : (
+                                <Badge variant="secondary">OK</Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
             </TabsContent>
 
             {TABS.filter((tab) => !tab.implemented).map((tab) => (

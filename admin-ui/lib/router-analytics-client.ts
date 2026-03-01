@@ -2,6 +2,7 @@ import { api } from '@/lib/api-client';
 import type {
   RouterAnalyticsBreakdownsResponse,
   RouterAnalyticsMetaResponse,
+  RouterAnalyticsQuotaResponse,
   RouterAnalyticsQuery,
   RouterAnalyticsStatusResponse,
 } from '@/lib/router-analytics-types';
@@ -25,6 +26,10 @@ export async function getRouterAnalyticsStatusBreakdowns(
   query: RouterAnalyticsQuery = {}
 ): Promise<RouterAnalyticsBreakdownsResponse> {
   return await api.getRouterAnalyticsStatusBreakdowns(toQueryParams(query)) as RouterAnalyticsBreakdownsResponse;
+}
+
+export async function getRouterAnalyticsQuota(query: RouterAnalyticsQuery = {}): Promise<RouterAnalyticsQuotaResponse> {
+  return await api.getRouterAnalyticsQuota(toQueryParams(query)) as RouterAnalyticsQuotaResponse;
 }
 
 export async function getRouterAnalyticsMeta(query: Pick<RouterAnalyticsQuery, 'orgId'> = {}): Promise<RouterAnalyticsMetaResponse> {

@@ -57,6 +57,18 @@ async def _seed_router_rows() -> None:
         )
         """
     )
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            key_hash TEXT,
+            key_prefix TEXT,
+            name TEXT,
+            status TEXT DEFAULT 'active'
+        )
+        """
+    )
 
     cols = {row["name"] for row in await pool.fetchall("PRAGMA table_info(llm_usage_log)")}
     if "remote_ip" not in cols:
@@ -67,6 +79,51 @@ async def _seed_router_rows() -> None:
         await pool.execute("ALTER TABLE llm_usage_log ADD COLUMN token_name TEXT")
     if "conversation_id" not in cols:
         await pool.execute("ALTER TABLE llm_usage_log ADD COLUMN conversation_id TEXT")
+
+    key_cols = {row["name"] for row in await pool.fetchall("PRAGMA table_info(api_keys)")}
+    if "llm_budget_day_tokens" not in key_cols:
+        await pool.execute("ALTER TABLE api_keys ADD COLUMN llm_budget_day_tokens INTEGER")
+    if "llm_budget_month_tokens" not in key_cols:
+        await pool.execute("ALTER TABLE api_keys ADD COLUMN llm_budget_month_tokens INTEGER")
+    if "llm_budget_day_usd" not in key_cols:
+        await pool.execute("ALTER TABLE api_keys ADD COLUMN llm_budget_day_usd REAL")
+    if "llm_budget_month_usd" not in key_cols:
+        await pool.execute("ALTER TABLE api_keys ADD COLUMN llm_budget_month_usd REAL")
+
+    await pool.execute(
+        """
+        INSERT OR REPLACE INTO api_keys (
+            id, user_id, key_hash, name, status,
+            llm_budget_day_tokens, llm_budget_month_tokens, llm_budget_day_usd, llm_budget_month_usd
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        201,
+        user_id,
+        "hash-201",
+        "Admin",
+        "active",
+        500,
+        5000,
+        5.0,
+        50.0,
+    )
+    await pool.execute(
+        """
+        INSERT OR REPLACE INTO api_keys (
+            id, user_id, key_hash, name, status,
+            llm_budget_day_tokens, llm_budget_month_tokens, llm_budget_day_usd, llm_budget_month_usd
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        202,
+        user_id,
+        "hash-202",
+        "Ops",
+        "active",
+        10,
+        100,
+        0.01,
+        1.0,
+    )
 
     await pool.execute(
         """
@@ -168,3 +225,11 @@ async def test_router_analytics_endpoints_status_breakdowns_meta(monkeypatch, tm
         assert meta_resp.status_code == 200, meta_resp.text
         meta_payload = meta_resp.json()
         assert any(option["value"] == "openai" for option in meta_payload["providers"])
+
+        quota_resp = client.get("/api/v1/admin/router-analytics/quota", params={"range": "1h"})
+        assert quota_resp.status_code == 200, quota_resp.text
+        quota_payload = quota_resp.json()
+        assert quota_payload["summary"]["keys_total"] >= 1
+        assert "items" in quota_payload
+        keyed = {int(row["key_id"]): row for row in quota_payload["items"]}
+        assert 202 in keyed

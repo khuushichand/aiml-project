@@ -61,6 +61,18 @@ async def _ensure_router_usage_seed_rows() -> int:
         )
         """
     )
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            key_hash TEXT,
+            key_prefix TEXT,
+            name TEXT,
+            status TEXT DEFAULT 'active'
+        )
+        """
+    )
 
     cols = {row["name"] for row in await pool.fetchall("PRAGMA table_info(llm_usage_log)")}
     if "remote_ip" not in cols:
@@ -72,6 +84,16 @@ async def _ensure_router_usage_seed_rows() -> int:
     if "conversation_id" not in cols:
         await pool.execute("ALTER TABLE llm_usage_log ADD COLUMN conversation_id TEXT")
 
+    key_cols = {row["name"] for row in await pool.fetchall("PRAGMA table_info(api_keys)")}
+    if "llm_budget_day_tokens" not in key_cols:
+        await pool.execute("ALTER TABLE api_keys ADD COLUMN llm_budget_day_tokens INTEGER")
+    if "llm_budget_month_tokens" not in key_cols:
+        await pool.execute("ALTER TABLE api_keys ADD COLUMN llm_budget_month_tokens INTEGER")
+    if "llm_budget_day_usd" not in key_cols:
+        await pool.execute("ALTER TABLE api_keys ADD COLUMN llm_budget_day_usd REAL")
+    if "llm_budget_month_usd" not in key_cols:
+        await pool.execute("ALTER TABLE api_keys ADD COLUMN llm_budget_month_usd REAL")
+
     user_uuid = str(uuid.uuid4())
     await pool.execute(
         "INSERT OR IGNORE INTO users (uuid, username, email, password_hash, is_active) VALUES (?,?,?,?,1)",
@@ -81,6 +103,52 @@ async def _ensure_router_usage_seed_rows() -> int:
         "x",
     )
     user_id = int(await pool.fetchval("SELECT id FROM users WHERE username = ?", "router_analytics_user"))
+    await pool.execute(
+        """
+        INSERT OR REPLACE INTO api_keys (
+            id, user_id, key_hash, name, status,
+            llm_budget_day_tokens, llm_budget_month_tokens, llm_budget_day_usd, llm_budget_month_usd
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        11,
+        user_id,
+        "hash-11",
+        "Admin",
+        "active",
+        100,
+        1000,
+        1.0,
+        10.0,
+    )
+    await pool.execute(
+        """
+        INSERT OR REPLACE INTO api_keys (
+            id, user_id, key_hash, name, status,
+            llm_budget_day_tokens, llm_budget_month_tokens, llm_budget_day_usd, llm_budget_month_usd
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        12,
+        user_id,
+        "hash-12",
+        "Ops",
+        "active",
+        30,
+        100,
+        0.05,
+        1.0,
+    )
+    await pool.execute(
+        """
+        INSERT OR REPLACE INTO api_keys (
+            id, user_id, key_hash, name, status
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        13,
+        user_id,
+        "hash-13",
+        "NoBudget",
+        "active",
+    )
 
     # Fixed UTC timestamps keep range math deterministic for tests.
     await pool.execute(
@@ -335,3 +403,44 @@ async def test_router_analytics_status_honors_provider_and_token_filters(monkeyp
     )
     assert by_token.kpis.requests == 1
     assert by_token.kpis.total_tokens == 30
+
+
+@pytest.mark.asyncio
+async def test_router_analytics_quota_returns_key_budget_utilization(monkeypatch, tmp_path):
+    _setup_env(tmp_path)
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    await reset_db_pool()
+    reset_settings()
+    await reset_session_manager()
+    user_id = await _ensure_router_usage_seed_rows()
+    pool = await get_db_pool()
+    principal = _single_user_principal(user_id)
+
+    monkeypatch.setattr(
+        admin_router_analytics_service,
+        "_utcnow",
+        lambda: datetime(2026, 3, 1, 10, 30, tzinfo=timezone.utc),
+    )
+
+    quota = await admin_router_analytics_service.get_router_analytics_quota(
+        principal=principal,
+        db=pool,
+        range_value="1h",
+        org_id=None,
+        provider=None,
+        model=None,
+        token_id=None,
+        granularity=None,
+    )
+
+    assert quota.summary.keys_total >= 2
+    assert quota.summary.keys_over_budget >= 1
+    keyed = {row.key_id: row for row in quota.items}
+    assert 12 in keyed
+    assert keyed[12].over_budget is True
+    assert keyed[12].day_tokens is not None
+    assert keyed[12].day_tokens.exceeded is True
+    assert keyed[12].day_tokens.utilization_pct == pytest.approx(150.0)

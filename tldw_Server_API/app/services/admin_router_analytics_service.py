@@ -13,6 +13,10 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     RouterAnalyticsGranularity,
     RouterAnalyticsMetaOption,
     RouterAnalyticsMetaResponse,
+    RouterAnalyticsQuotaMetric,
+    RouterAnalyticsQuotaResponse,
+    RouterAnalyticsQuotaRow,
+    RouterAnalyticsQuotaSummary,
     RouterAnalyticsRange,
     RouterAnalyticsSeriesPoint,
     RouterAnalyticsStatusKpis,
@@ -281,6 +285,28 @@ def _build_status_data_window(
     end: datetime,
 ) -> RouterAnalyticsDataWindow:
     return RouterAnalyticsDataWindow(start=start, end=end, range=range_value)
+
+
+def _build_quota_metric(used: float, limit_value: Any) -> RouterAnalyticsQuotaMetric | None:
+    limit = _as_float(limit_value, None)
+    if limit is None or limit <= 0:
+        return None
+    used_val = float(used or 0.0)
+    utilization_pct = (used_val / float(limit)) * 100.0 if limit > 0 else None
+    return RouterAnalyticsQuotaMetric(
+        used=used_val,
+        limit=float(limit),
+        utilization_pct=utilization_pct,
+        exceeded=used_val >= float(limit),
+    )
+
+
+def _has_budget_values(*values: Any) -> bool:
+    for value in values:
+        as_float = _as_float(value, None)
+        if as_float is not None and as_float > 0:
+            return True
+    return False
 
 
 async def get_router_analytics_status(
@@ -663,6 +689,288 @@ async def get_router_analytics_status_breakdowns(
     except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:
         logger.exception("Failed to build router analytics breakdowns payload")
         raise HTTPException(status_code=500, detail="Failed to load router analytics breakdowns") from None
+
+
+async def _fetch_quota_key_metadata(
+    *,
+    db: Any,
+    is_pg: bool,
+    key_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    if not key_ids:
+        return {}
+
+    try:
+        if is_pg:
+            sql = (
+                "SELECT id, "
+                "COALESCE(NULLIF(TRIM(name), ''), CONCAT('key-', id::text)) AS token_name, "
+                "llm_budget_day_tokens, llm_budget_month_tokens, llm_budget_day_usd, llm_budget_month_usd "
+                "FROM api_keys WHERE id = ANY($1)"
+            )
+            rows = await _fetch_rows(db, sql, [key_ids])
+        else:
+            placeholders = ",".join("?" for _ in key_ids)
+            sql = (  # nosec B608
+                "SELECT id, "  # nosec B608
+                "COALESCE(NULLIF(TRIM(name), ''), 'unknown') AS token_name, "
+                "llm_budget_day_tokens, llm_budget_month_tokens, llm_budget_day_usd, llm_budget_month_usd "
+                f"FROM api_keys WHERE id IN ({placeholders})"
+            )
+            rows = await _fetch_rows(db, sql, key_ids)
+    except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Router analytics quota key metadata fallback due to query error: {}", exc)
+        if is_pg:
+            fallback_sql = (
+                "SELECT id, "
+                "COALESCE(NULLIF(TRIM(name), ''), CONCAT('key-', id::text)) AS token_name "
+                "FROM api_keys WHERE id = ANY($1)"
+            )
+            rows = await _fetch_rows(db, fallback_sql, [key_ids])
+        else:
+            placeholders = ",".join("?" for _ in key_ids)
+            fallback_sql = (  # nosec B608
+                "SELECT id, COALESCE(NULLIF(TRIM(name), ''), 'unknown') AS token_name "  # nosec B608
+                f"FROM api_keys WHERE id IN ({placeholders})"
+            )
+            rows = await _fetch_rows(db, fallback_sql, key_ids)
+
+    out: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        key_id = _as_int(_row_value(row, "id", 0, 0))
+        if key_id <= 0:
+            continue
+        out[key_id] = {
+            "token_name": _as_text(_row_value(row, "token_name", 1, f"key-{key_id}"), f"key-{key_id}"),
+            "llm_budget_day_tokens": _row_value(row, "llm_budget_day_tokens", 2, None),
+            "llm_budget_month_tokens": _row_value(row, "llm_budget_month_tokens", 3, None),
+            "llm_budget_day_usd": _row_value(row, "llm_budget_day_usd", 4, None),
+            "llm_budget_month_usd": _row_value(row, "llm_budget_month_usd", 5, None),
+        }
+    return out
+
+
+async def get_router_analytics_quota(
+    *,
+    principal: AuthPrincipal,
+    db: Any,
+    range_value: RouterAnalyticsRange,
+    org_id: int | None,
+    provider: str | None,
+    model: str | None,
+    token_id: int | None,
+    granularity: RouterAnalyticsGranularity | None,
+) -> RouterAnalyticsQuotaResponse:
+    _ = granularity  # reserved for future bucketing variants
+    try:
+        org_ids = await _resolve_admin_org_scope(principal, org_id)
+        window_start, window_end = _resolve_window(range_value)
+        data_window = _build_status_data_window(range_value=range_value, start=window_start, end=window_end)
+        generated_at = _utcnow()
+
+        if org_ids is not None and len(org_ids) == 0:
+            return RouterAnalyticsQuotaResponse(
+                summary=RouterAnalyticsQuotaSummary(),
+                items=[],
+                generated_at=generated_at,
+                data_window=data_window,
+            )
+
+        is_pg = _is_postgres_connection(db)
+
+        range_join_clause, range_where_clause, range_params = _build_usage_where_clause(
+            is_pg=is_pg,
+            start=window_start,
+            end=window_end,
+            provider=provider,
+            model=model,
+            token_id=token_id,
+            org_ids=org_ids,
+        )
+        range_where_clause = f"{range_where_clause} AND llm_usage_log.key_id IS NOT NULL"
+
+        if is_pg:
+            range_sql = (  # nosec B608
+                "SELECT llm_usage_log.key_id AS key_id, "  # nosec B608
+                "COALESCE(NULLIF(TRIM(MAX(llm_usage_log.token_name)), ''), 'unknown') AS token_name, "
+                "COUNT(*) AS requests, "
+                "COALESCE(SUM(llm_usage_log.total_tokens),0) AS total_tokens, "
+                "COALESCE(SUM(llm_usage_log.total_cost_usd),0)::float AS total_cost_usd, "
+                "MAX(llm_usage_log.ts) AS last_seen_at "
+                f"FROM llm_usage_log{range_join_clause}{range_where_clause} "
+                "GROUP BY llm_usage_log.key_id "
+                "ORDER BY requests DESC, llm_usage_log.key_id ASC "
+                "LIMIT 200"
+            )
+        else:
+            range_sql = (  # nosec B608
+                "SELECT llm_usage_log.key_id AS key_id, "  # nosec B608
+                "COALESCE(NULLIF(TRIM(MAX(llm_usage_log.token_name)), ''), 'unknown') AS token_name, "
+                "COUNT(*) AS requests, "
+                "IFNULL(SUM(llm_usage_log.total_tokens),0) AS total_tokens, "
+                "IFNULL(SUM(llm_usage_log.total_cost_usd),0.0) AS total_cost_usd, "
+                "MAX(llm_usage_log.ts) AS last_seen_at "
+                f"FROM llm_usage_log{range_join_clause}{range_where_clause} "
+                "GROUP BY llm_usage_log.key_id "
+                "ORDER BY requests DESC, llm_usage_log.key_id ASC "
+                "LIMIT 200"
+            )
+
+        range_rows = await _fetch_rows(db, range_sql, range_params)
+        range_usage: dict[int, dict[str, Any]] = {}
+        for row in range_rows:
+            key_id_val = _as_int(_row_value(row, "key_id", 0, 0))
+            if key_id_val <= 0:
+                continue
+            range_usage[key_id_val] = {
+                "token_name": _as_text(_row_value(row, "token_name", 1, f"key-{key_id_val}"), f"key-{key_id_val}"),
+                "requests": _as_int(_row_value(row, "requests", 2, 0)),
+                "total_tokens": _as_int(_row_value(row, "total_tokens", 3, 0)),
+                "total_cost_usd": _as_float(_row_value(row, "total_cost_usd", 4, 0.0), 0.0) or 0.0,
+                "last_seen_at": _coerce_utc_datetime(
+                    _row_value(row, "last_seen_at", 5, None),
+                    fallback=window_start,
+                ),
+            }
+
+        if not range_usage:
+            return RouterAnalyticsQuotaResponse(
+                summary=RouterAnalyticsQuotaSummary(),
+                items=[],
+                generated_at=generated_at,
+                data_window=data_window,
+            )
+
+        day_start = window_end.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        month_start = window_end.astimezone(timezone.utc) - timedelta(days=30)
+
+        month_join_clause, month_where_clause, month_params = _build_usage_where_clause(
+            is_pg=is_pg,
+            start=month_start,
+            end=window_end,
+            provider=provider,
+            model=model,
+            token_id=token_id,
+            org_ids=org_ids,
+        )
+        month_where_clause = f"{month_where_clause} AND llm_usage_log.key_id IS NOT NULL"
+
+        if is_pg:
+            day_start_placeholder = f"${len(month_params) + 1}"
+            month_sql = (  # nosec B608
+                "SELECT llm_usage_log.key_id AS key_id, "  # nosec B608
+                "COALESCE(SUM(llm_usage_log.total_tokens),0) AS month_tokens, "
+                f"COALESCE(SUM(CASE WHEN llm_usage_log.ts >= {day_start_placeholder} THEN llm_usage_log.total_tokens ELSE 0 END),0) AS day_tokens, "
+                "COALESCE(SUM(llm_usage_log.total_cost_usd),0)::float AS month_usd, "
+                f"COALESCE(SUM(CASE WHEN llm_usage_log.ts >= {day_start_placeholder} THEN llm_usage_log.total_cost_usd ELSE 0 END),0)::float AS day_usd "
+                f"FROM llm_usage_log{month_join_clause}{month_where_clause} "
+                "GROUP BY llm_usage_log.key_id"
+            )
+            month_rows = await _fetch_rows(db, month_sql, [*month_params, _to_db_ts(day_start, is_pg=True)])
+        else:
+            month_sql = (  # nosec B608
+                "SELECT llm_usage_log.key_id AS key_id, "  # nosec B608
+                "IFNULL(SUM(llm_usage_log.total_tokens),0) AS month_tokens, "
+                "IFNULL(SUM(CASE WHEN datetime(llm_usage_log.ts) >= datetime(?) THEN llm_usage_log.total_tokens ELSE 0 END),0) AS day_tokens, "
+                "IFNULL(SUM(llm_usage_log.total_cost_usd),0.0) AS month_usd, "
+                "IFNULL(SUM(CASE WHEN datetime(llm_usage_log.ts) >= datetime(?) THEN llm_usage_log.total_cost_usd ELSE 0 END),0.0) AS day_usd "
+                f"FROM llm_usage_log{month_join_clause}{month_where_clause} "
+                "GROUP BY llm_usage_log.key_id"
+            )
+            day_ts = _to_db_ts(day_start, is_pg=False)
+            month_rows = await _fetch_rows(db, month_sql, [day_ts, day_ts, *month_params])
+
+        month_usage: dict[int, dict[str, float]] = {}
+        for row in month_rows:
+            key_id_val = _as_int(_row_value(row, "key_id", 0, 0))
+            if key_id_val <= 0:
+                continue
+            month_usage[key_id_val] = {
+                "month_tokens": float(_as_int(_row_value(row, "month_tokens", 1, 0))),
+                "day_tokens": float(_as_int(_row_value(row, "day_tokens", 2, 0))),
+                "month_usd": float(_as_float(_row_value(row, "month_usd", 3, 0.0), 0.0) or 0.0),
+                "day_usd": float(_as_float(_row_value(row, "day_usd", 4, 0.0), 0.0) or 0.0),
+            }
+
+        key_ids = sorted(range_usage.keys())
+        key_meta = await _fetch_quota_key_metadata(db=db, is_pg=is_pg, key_ids=key_ids)
+
+        items: list[RouterAnalyticsQuotaRow] = []
+        budgeted_keys = 0
+        over_budget_keys = 0
+
+        for key_id_val in key_ids:
+            range_data = range_usage.get(key_id_val, {})
+            month_data = month_usage.get(
+                key_id_val,
+                {"month_tokens": 0.0, "day_tokens": 0.0, "month_usd": 0.0, "day_usd": 0.0},
+            )
+            meta = key_meta.get(key_id_val, {})
+
+            day_tokens_limit = meta.get("llm_budget_day_tokens")
+            month_tokens_limit = meta.get("llm_budget_month_tokens")
+            day_usd_limit = meta.get("llm_budget_day_usd")
+            month_usd_limit = meta.get("llm_budget_month_usd")
+
+            day_tokens_metric = _build_quota_metric(month_data["day_tokens"], day_tokens_limit)
+            month_tokens_metric = _build_quota_metric(month_data["month_tokens"], month_tokens_limit)
+            day_usd_metric = _build_quota_metric(month_data["day_usd"], day_usd_limit)
+            month_usd_metric = _build_quota_metric(month_data["month_usd"], month_usd_limit)
+
+            reasons: list[str] = []
+            for key_name, metric in (
+                ("day_tokens_exceeded", day_tokens_metric),
+                ("month_tokens_exceeded", month_tokens_metric),
+                ("day_usd_exceeded", day_usd_metric),
+                ("month_usd_exceeded", month_usd_metric),
+            ):
+                if metric is not None and metric.exceeded:
+                    reasons.append(f"{key_name}:{metric.used}/{metric.limit}")
+
+            over_budget = len(reasons) > 0
+            if over_budget:
+                over_budget_keys += 1
+
+            if _has_budget_values(day_tokens_limit, month_tokens_limit, day_usd_limit, month_usd_limit):
+                budgeted_keys += 1
+
+            token_name_value = _as_text(
+                meta.get("token_name") or range_data.get("token_name"),
+                f"key-{key_id_val}",
+            )
+
+            items.append(
+                RouterAnalyticsQuotaRow(
+                    key_id=key_id_val,
+                    token_name=token_name_value,
+                    requests=_as_int(range_data.get("requests"), 0),
+                    total_tokens=_as_int(range_data.get("total_tokens"), 0),
+                    total_cost_usd=float(_as_float(range_data.get("total_cost_usd"), 0.0) or 0.0),
+                    day_tokens=day_tokens_metric,
+                    month_tokens=month_tokens_metric,
+                    day_usd=day_usd_metric,
+                    month_usd=month_usd_metric,
+                    over_budget=over_budget,
+                    reasons=reasons,
+                    last_seen_at=range_data.get("last_seen_at"),
+                )
+            )
+
+        items.sort(key=lambda row: (not row.over_budget, -row.requests, row.key_id))
+
+        return RouterAnalyticsQuotaResponse(
+            summary=RouterAnalyticsQuotaSummary(
+                keys_total=len(items),
+                keys_over_budget=over_budget_keys,
+                budgeted_keys=budgeted_keys,
+            ),
+            items=items,
+            generated_at=generated_at,
+            data_window=data_window,
+        )
+    except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:
+        logger.exception("Failed to build router analytics quota payload")
+        raise HTTPException(status_code=500, detail="Failed to load router analytics quota") from None
 
 
 async def _fetch_distinct_dimension_values(

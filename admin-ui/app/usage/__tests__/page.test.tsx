@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import UsagePage from '../page';
 import {
   getRouterAnalyticsMeta,
+  getRouterAnalyticsQuota,
   getRouterAnalyticsStatus,
   getRouterAnalyticsStatusBreakdowns,
 } from '@/lib/router-analytics-client';
@@ -22,18 +23,21 @@ vi.mock('@/components/ResponsiveLayout', () => ({
 vi.mock('@/lib/router-analytics-client', () => ({
   getRouterAnalyticsStatus: vi.fn(),
   getRouterAnalyticsStatusBreakdowns: vi.fn(),
+  getRouterAnalyticsQuota: vi.fn(),
   getRouterAnalyticsMeta: vi.fn(),
 }));
 
 type RouterClientMock = {
   getRouterAnalyticsStatus: ReturnType<typeof vi.fn>;
   getRouterAnalyticsStatusBreakdowns: ReturnType<typeof vi.fn>;
+  getRouterAnalyticsQuota: ReturnType<typeof vi.fn>;
   getRouterAnalyticsMeta: ReturnType<typeof vi.fn>;
 };
 
 const routerClientMock = {
   getRouterAnalyticsStatus: getRouterAnalyticsStatus,
   getRouterAnalyticsStatusBreakdowns: getRouterAnalyticsStatusBreakdowns,
+  getRouterAnalyticsQuota: getRouterAnalyticsQuota,
   getRouterAnalyticsMeta: getRouterAnalyticsMeta,
 } as unknown as RouterClientMock;
 
@@ -116,6 +120,37 @@ beforeEach(() => {
     granularities: ['1m', '5m', '15m', '1h'],
     generated_at: '2026-03-01T10:30:00Z',
   });
+
+  routerClientMock.getRouterAnalyticsQuota.mockResolvedValue({
+    summary: {
+      keys_total: 3,
+      keys_over_budget: 1,
+      budgeted_keys: 2,
+    },
+    items: [
+      {
+        key_id: 12,
+        token_name: 'Ops',
+        requests: 2,
+        total_tokens: 45,
+        total_cost_usd: 0.04,
+        day_tokens: { used: 45, limit: 30, utilization_pct: 150, exceeded: true },
+        month_tokens: { used: 45, limit: 100, utilization_pct: 45, exceeded: false },
+        day_usd: { used: 0.04, limit: 0.05, utilization_pct: 80, exceeded: false },
+        month_usd: { used: 0.04, limit: 1.0, utilization_pct: 4, exceeded: false },
+        over_budget: true,
+        reasons: ['day_tokens_exceeded:45/30'],
+        last_seen_at: '2026-03-01T10:25:00Z',
+      },
+    ],
+    generated_at: '2026-03-01T10:30:00Z',
+    data_window: {
+      start: '2026-03-01T09:30:00Z',
+      end: '2026-03-01T10:30:00Z',
+      range: '1h',
+    },
+    partial: false,
+  });
 });
 
 afterEach(() => {
@@ -165,8 +200,21 @@ describe('UsagePage router analytics status shell', () => {
     render(<UsagePage />);
 
     await screen.findByRole('heading', { name: 'Usage Stats' });
+    await user.click(screen.getByRole('tab', { name: /Providers/i }));
+
+    expect(screen.getByText('Providers tab is coming soon.')).toBeInTheDocument();
+  });
+
+  it('renders quota tab data from router analytics quota endpoint', async () => {
+    const user = userEvent.setup();
+    render(<UsagePage />);
+
+    await screen.findByRole('heading', { name: 'Usage Stats' });
     await user.click(screen.getByRole('tab', { name: /Quota/i }));
 
-    expect(screen.getByText('Quota tab is coming soon.')).toBeInTheDocument();
+    expect(await screen.findByText('Quota utilization')).toBeInTheDocument();
+    expect(screen.getByText('Keys over budget')).toBeInTheDocument();
+    expect(screen.getAllByText('Ops').length).toBeGreaterThan(0);
+    expect(screen.getByText(/150\.0%/)).toBeInTheDocument();
   });
 });

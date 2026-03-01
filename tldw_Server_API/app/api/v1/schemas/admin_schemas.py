@@ -1153,6 +1153,60 @@ class RouterAnalyticsMetaResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class RouterAnalyticsQuotaMetric(BaseModel):
+    """Budget metric usage versus configured limit."""
+
+    used: float = 0.0
+    limit: float = 0.0
+    utilization_pct: float | None = None
+    exceeded: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsQuotaRow(BaseModel):
+    """Quota row for a key/token entity."""
+
+    key_id: int
+    token_name: str
+    requests: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    day_tokens: RouterAnalyticsQuotaMetric | None = None
+    month_tokens: RouterAnalyticsQuotaMetric | None = None
+    day_usd: RouterAnalyticsQuotaMetric | None = None
+    month_usd: RouterAnalyticsQuotaMetric | None = None
+    over_budget: bool = False
+    reasons: list[str] = Field(default_factory=list)
+    last_seen_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsQuotaSummary(BaseModel):
+    """Quota overview summary counters."""
+
+    keys_total: int = 0
+    keys_over_budget: int = 0
+    budgeted_keys: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsQuotaResponse(BaseModel):
+    """Payload for /admin/router-analytics/quota."""
+
+    summary: RouterAnalyticsQuotaSummary
+    items: list[RouterAnalyticsQuotaRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #######################################################################################################################
 #
 # Tool Permission Schemas (MCP Integration)

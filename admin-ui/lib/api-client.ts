@@ -692,6 +692,10 @@ export const api = {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/admin/router-analytics/status/breakdowns${queryParams ? `?${queryParams}` : ''}`);
   },
+  getRouterAnalyticsQuota: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/router-analytics/quota${queryParams ? `?${queryParams}` : ''}`);
+  },
   getRouterAnalyticsMeta: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/admin/router-analytics/meta${queryParams ? `?${queryParams}` : ''}`);

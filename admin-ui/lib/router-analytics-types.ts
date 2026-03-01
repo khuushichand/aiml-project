@@ -86,3 +86,41 @@ export type RouterAnalyticsMetaResponse = {
   granularities: RouterAnalyticsGranularity[];
   generated_at: string;
 };
+
+export type RouterAnalyticsQuotaMetric = {
+  used: number;
+  limit: number;
+  utilization_pct?: number | null;
+  exceeded: boolean;
+};
+
+export type RouterAnalyticsQuotaRow = {
+  key_id: number;
+  token_name: string;
+  requests: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  day_tokens?: RouterAnalyticsQuotaMetric | null;
+  month_tokens?: RouterAnalyticsQuotaMetric | null;
+  day_usd?: RouterAnalyticsQuotaMetric | null;
+  month_usd?: RouterAnalyticsQuotaMetric | null;
+  over_budget: boolean;
+  reasons?: string[] | null;
+  last_seen_at?: string | null;
+};
+
+export type RouterAnalyticsQuotaSummary = {
+  keys_total: number;
+  keys_over_budget: number;
+  budgeted_keys: number;
+};
+
+export type RouterAnalyticsQuotaResponse = {
+  summary: RouterAnalyticsQuotaSummary;
+  items: RouterAnalyticsQuotaRow[];
+  generated_at: string;
+  data_window: RouterAnalyticsDataWindow;
+  stale_seconds?: number | null;
+  partial?: boolean;
+  warnings?: string[] | null;
+};

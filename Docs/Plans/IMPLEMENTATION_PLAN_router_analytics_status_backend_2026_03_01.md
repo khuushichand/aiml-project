@@ -70,3 +70,30 @@
 - `cd admin-ui && bunx vitest run app/usage/__tests__/page.test.tsx`
 - `cd admin-ui && BROWSERSLIST_IGNORE_OLD_DATA=1 BASELINE_BROWSER_MAPPING_IGNORE_OLD_DATA=1 bunx eslint app/usage/page.tsx app/usage/__tests__/page.test.tsx lib/router-analytics-client.ts lib/router-analytics-types.ts lib/api-client.ts`
 **Status**: Complete
+
+## Stage 9: Router Analytics Quota Delivery Slice
+**Goal**: Deliver Step 2 (`Quota`) with a backend aggregate endpoint and thin frontend tab rendering.
+**Success Criteria**:
+- Additive endpoint: `GET /api/v1/admin/router-analytics/quota`.
+- Payload includes quota summary + key-level utilization against configured day/month token/USD budgets.
+- `/usage` `Quota` tab uses router-analytics quota payload; non-quota follow-on tabs remain staged as coming soon.
+**Tests**:
+- `tldw_Server_API/tests/Admin/test_router_analytics_schemas.py`
+- `tldw_Server_API/tests/Admin/test_router_analytics_service.py`
+- `tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py`
+- `admin-ui/app/usage/__tests__/page.test.tsx`
+**Status**: Complete
+
+## Stage 10: Quota Slice Verification and Security Scan
+**Goal**: Validate the quota delivery scope across backend/frontend and ensure no new security findings.
+**Success Criteria**:
+- Targeted backend admin tests and OpenAPI contract pass.
+- Admin-ui usage tests and full vitest suite pass.
+- Bandit scan on touched backend files is clean.
+**Tests**:
+- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Admin/test_router_analytics_schemas.py tldw_Server_API/tests/Admin/test_router_analytics_service.py tldw_Server_API/tests/Admin/test_router_analytics_endpoints.py tldw_Server_API/tests/Admin/test_admin_split_openapi_contract.py`
+- `cd admin-ui && bunx vitest run app/usage/__tests__/page.test.tsx`
+- `cd admin-ui && bunx vitest run`
+- `cd admin-ui && BROWSERSLIST_IGNORE_OLD_DATA=1 BASELINE_BROWSER_MAPPING_IGNORE_OLD_DATA=1 bunx eslint app/usage/page.tsx app/usage/__tests__/page.test.tsx lib/router-analytics-client.ts lib/router-analytics-types.ts lib/api-client.ts`
+- `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/admin_router_analytics_service.py tldw_Server_API/app/api/v1/endpoints/admin/admin_router_analytics.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py -f json -o /tmp/bandit_router_analytics_quota.json`
+**Status**: Complete
