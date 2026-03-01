@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
@@ -19,15 +19,9 @@ import {
   type MonitoringTimeRangeOption,
 } from '@/lib/monitoring-metrics';
 import {
-  measureTimedEndpoint,
   MONITORING_SUBSYSTEMS,
   normalizeMonitoringHealthStatus,
 } from '@/lib/monitoring-health';
-import {
-  fetchMonitoringSettledResults,
-  monitoringLoadResultEntries,
-  resolveMonitoringLoadState,
-} from './load-state-utils';
 import AlertRulesPanel from './components/AlertRulesPanel';
 import AlertsPanel from './components/AlertsPanel';
 import MetricsChart from './components/MetricsChart';
@@ -35,6 +29,7 @@ import MetricsGrid from './components/MetricsGrid';
 import NotificationsPanel from './components/NotificationsPanel';
 import SystemStatusPanel from './components/SystemStatusPanel';
 import WatchlistsPanel from './components/WatchlistsPanel';
+import { useMonitoringDataLoader } from './use-monitoring-data-loader';
 import { useMonitoringDashboardState } from './use-monitoring-dashboard-state';
 import { useMonitoringMetricsHistory } from './use-monitoring-metrics-history';
 import { useAlertActions } from './use-alert-actions';
@@ -46,7 +41,7 @@ import { useNotificationActions } from './use-notification-actions';
 import { useWatchlistActions } from './use-watchlist-actions';
 import type {
   SystemHealthStatus,
-  SystemStatusItem
+  SystemStatusItem,
 } from './types';
 
 const METRIC_CRITICAL_THRESHOLD = 90;
@@ -146,81 +141,28 @@ export default function MonitoringPage() {
     setSuccess,
   } = useMonitoringMessages();
 
-  const loadData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError('');
-      setNotificationSettingsStatus('pending');
-
-      const settledResults = await fetchMonitoringSettledResults({
-        apiClient: api,
-        measureTimedRequest: measureTimedEndpoint,
-      });
-
-      monitoringLoadResultEntries(settledResults).forEach(({ name, result }) => {
-        if (result.status === 'rejected') {
-          console.warn(`Failed to load ${name}:`, result.reason);
-        }
-      });
-
-      const resolvedState = resolveMonitoringLoadState({
-        settledResults,
-        previousAlerts: alertsRef.current,
-        previousAlertHistory: alertHistoryRef.current,
-        metricWarningThreshold: METRIC_WARNING_THRESHOLD,
-        metricCriticalThreshold: METRIC_CRITICAL_THRESHOLD,
-      });
-
-      setNotificationSettingsStatus(resolvedState.notificationSettingsStatus);
-      setNotificationSettings(resolvedState.notificationSettings);
-      setRecentNotifications(resolvedState.recentNotifications);
-      if (resolvedState.metrics) {
-        setMetrics(resolvedState.metrics);
-      }
-      if (resolvedState.watchlists) {
-        setWatchlists(resolvedState.watchlists);
-      }
-      if (resolvedState.alerts) {
-        alertsRef.current = resolvedState.alerts;
-        setAlerts(resolvedState.alerts);
-      }
-      if (resolvedState.alertHistory) {
-        alertHistoryRef.current = resolvedState.alertHistory;
-        setAlertHistory(resolvedState.alertHistory);
-      }
-      setAssignableUsers(resolvedState.assignableUsers);
-      setSystemStatus(resolvedState.systemStatus);
-
-      void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);
-      markMonitoringDataUpdated();
-    } catch (err: unknown) {
-      console.error('Failed to load monitoring data:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to load monitoring data');
-      setNotificationSettingsStatus('rejected');
-      setNotificationSettings(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [
-    alertHistoryRef,
+  const { loadData } = useMonitoringDataLoader({
     alertsRef,
-    customRangeEnd,
+    alertHistoryRef,
     customRangeStart,
+    customRangeEnd,
+    timeRange,
     loadMetricsHistoryForRange,
     markMonitoringDataUpdated,
-    setAlertHistory,
-    setAlerts,
-    setAssignableUsers,
-    setError,
     setLoading,
-    setMetrics,
-    setNotificationSettings,
+    setError,
     setNotificationSettingsStatus,
+    setNotificationSettings,
     setRecentNotifications,
-    setSystemStatus,
+    setMetrics,
     setWatchlists,
-    timeRange,
-  ]);
+    setAlerts,
+    setAlertHistory,
+    setAssignableUsers,
+    setSystemStatus,
+    metricWarningThreshold: METRIC_WARNING_THRESHOLD,
+    metricCriticalThreshold: METRIC_CRITICAL_THRESHOLD,
+  });
 
   const {
     showCreateWatchlist,
