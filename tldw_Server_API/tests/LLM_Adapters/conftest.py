@@ -16,16 +16,55 @@ Note on plugin discovery and subtree runs
   restore deterministic fixture availability.
 """
 
+import os
 import sys
 import types
 import pytest
 
-# If the real app.main is importable, leave it alone; otherwise, install a stub
-try:  # pragma: no cover - defensive guard
-    import tldw_Server_API.app.main as _real_main  # noqa: F401
-except Exception:
+
+def _merge_csv_env(name: str, values: list[str]) -> None:
+    existing_raw = str(os.getenv(name, "") or "")
+    parts = [p.strip() for p in existing_raw.replace(" ", ",").split(",") if p.strip()]
+    lowered = {p.lower() for p in parts}
+    for value in values:
+        normalized = str(value or "").strip()
+        if normalized and normalized.lower() not in lowered:
+            parts.append(normalized)
+            lowered.add(normalized.lower())
+    os.environ[name] = ",".join(parts)
+
+
+# Keep LLM adapter integration tests isolated from heavy media/audio route imports
+# that pull native STT/ML stacks during app startup in constrained environments.
+_merge_csv_env(
+    "ROUTES_DISABLE",
+    [
+        "media",
+        "media-embeddings",
+        "audio",
+        "audio-websocket",
+        "audio-jobs",
+    ],
+)
+
+# Adapter integration tests exercise request/response behavior and provider
+# shims, not provider inventory enforcement. Keep strict model selection off by
+# default for this package to avoid false-negative 400s when fixtures use
+# deterministic model aliases; callers can still override explicitly.
+os.environ.setdefault("CHAT_ENFORCE_STRICT_MODEL_SELECTION", "0")
+
+
+def _install_app_main_stub() -> None:
+    """Install a minimal tldw_Server_API.app.main stub when needed.
+
+    Some unit-oriented adapter tests do not need the full FastAPI app import,
+    and importing app.main can trigger heavy runtime initialization in constrained
+    environments. Keep a lightweight stub available for fallback fixtures.
+    """
+    if "tldw_Server_API.app.main" in sys.modules:
+        return
     m = types.ModuleType("tldw_Server_API.app.main")
-    # Provide a minimal 'app' attribute that parent conftests import but do not use
+
     class _StubApp:  # pragma: no cover - simple container
         def __init__(self):
             self.dependency_overrides = {}
@@ -33,6 +72,30 @@ except Exception:
 
     m.app = _StubApp()
     sys.modules["tldw_Server_API.app.main"] = m
+
+
+def _resolve_app_for_fallback_client():
+    """Resolve app.main for fallback TestClient construction.
+
+    Defaults to the lightweight stub to avoid importing the full app in unit
+    adapter runs. Set LLM_ADAPTERS_TEST_IMPORT_REAL_APP_MAIN=1 to force a real
+    import in environments where that's desired.
+    """
+    import_real = str(os.getenv("LLM_ADAPTERS_TEST_IMPORT_REAL_APP_MAIN", "0")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if import_real:
+        try:
+            from tldw_Server_API.app.main import app as fastapi_app
+            return fastapi_app
+        except Exception:
+            _install_app_main_stub()
+            from tldw_Server_API.app.main import app as fastapi_app
+            return fastapi_app
+
+    _install_app_main_stub()
+    from tldw_Server_API.app.main import app as fastapi_app
+    return fastapi_app
 
 # Shared chat fixtures are registered at the repository root conftest.py
 # However, when running this subtree in isolation or with plugin autoloading
@@ -59,7 +122,7 @@ def client_user_only(request):  # noqa: D401 - compatibility alias with fallback
     except Exception:
         # Last resort: construct a minimal TestClient against the app
         from fastapi.testclient import TestClient
-        from tldw_Server_API.app.main import app as fastapi_app
+        fastapi_app = _resolve_app_for_fallback_client()
         return TestClient(fastapi_app)
 
 

@@ -13,6 +13,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+from tldw_Server_API.app.core.AuthNZ.exceptions import StorageError, UserNotFoundError
 from tldw_Server_API.app.core.AuthNZ.mfa_service import get_mfa_service
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
 from tldw_Server_API.app.core.AuthNZ.repos.user_provider_secrets_repo import (
@@ -64,9 +65,11 @@ _PROFILE_NONCRITICAL_EXCEPTIONS = (
     OSError,
     PermissionError,
     RuntimeError,
+    StorageError,
     TimeoutError,
     TypeError,
     UnicodeDecodeError,
+    UserNotFoundError,
     ValueError,
 )
 
@@ -425,6 +428,25 @@ class UserProfileService:
             "storage_used_mb": float(user.get("storage_used_mb", 0.0) or 0.0),
         }
         user_id = int(user.get("id"))
+        try:
+            from tldw_Server_API.app.services.storage_quota_service import (
+                get_storage_service,
+            )
+
+            storage_service = await get_storage_service()
+            storage_info = await storage_service.calculate_user_storage(
+                user_id=user_id,
+                update_database=False,
+            )
+            live_quota = storage_info.get("quota_mb")
+            live_used = storage_info.get("total_mb")
+            if live_quota is not None:
+                quotas["storage_quota_mb"] = int(live_quota)
+            if live_used is not None:
+                quotas["storage_used_mb"] = float(live_used)
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("Live storage quotas unavailable for user {}: {}", user_id, exc)
+
         try:
             from tldw_Server_API.app.core.Usage.audio_quota import (
                 active_streams_count,

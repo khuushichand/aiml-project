@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from ...persona_scope import get_explicit_scope_ids
 from ..base import BaseModule, create_tool_definition
 from ..registry import get_module_registry
 
@@ -187,6 +188,61 @@ class KnowledgeModule(BaseModule):
             items.sort(key=lambda x: float(x.get("score") or 0.0), reverse=True)
         return items
 
+    @staticmethod
+    def _id_matches_scope(candidate: Any, scoped_ids: set[str] | None) -> bool:
+        if scoped_ids is None:
+            return True
+        return str(candidate or "").strip() in scoped_ids
+
+    def _item_allowed_by_scope(self, item: dict[str, Any], context: Any | None) -> bool:
+        source = str(item.get("source") or "").strip().lower()
+        if source == "media":
+            scoped_media_ids = get_explicit_scope_ids(context, "media_id")
+            candidate = item.get("id")
+            if candidate is None:
+                uri = str(item.get("uri") or "")
+                if uri.startswith("media://"):
+                    candidate = uri.split("media://", 1)[1].split("#", 1)[0]
+            return self._id_matches_scope(candidate, scoped_media_ids)
+
+        if source == "notes":
+            scoped_note_ids = get_explicit_scope_ids(context, "note_id")
+            candidate = item.get("id")
+            if candidate is None:
+                uri = str(item.get("uri") or "")
+                if uri.startswith("notes://"):
+                    candidate = uri.split("notes://", 1)[1].split("#", 1)[0]
+            return self._id_matches_scope(candidate, scoped_note_ids)
+
+        if source == "chats":
+            scoped_conv_ids = get_explicit_scope_ids(context, "conversation_id")
+            candidate = item.get("conversation_id") or item.get("id")
+            if candidate is None:
+                uri = str(item.get("uri") or "")
+                if uri.startswith("chats://"):
+                    candidate = uri.split("chats://", 1)[1].split("#", 1)[0]
+            return self._id_matches_scope(candidate, scoped_conv_ids)
+
+        if source == "characters":
+            scoped_char_ids = get_explicit_scope_ids(context, "character_id")
+            candidate = item.get("character_id") or item.get("id")
+            if candidate is None:
+                uri = str(item.get("uri") or "")
+                if uri.startswith("characters://"):
+                    candidate = uri.split("characters://", 1)[1].split("#", 1)[0]
+            return self._id_matches_scope(candidate, scoped_char_ids)
+
+        if source == "prompts":
+            scoped_prompt_ids = get_explicit_scope_ids(context, "prompt_id")
+            candidate = item.get("prompt_id") or item.get("id")
+            if candidate is None:
+                uri = str(item.get("uri") or "")
+                if uri.startswith("prompts://"):
+                    candidate = uri.split("prompts://", 1)[1].split("#", 1)[0]
+            return self._id_matches_scope(candidate, scoped_prompt_ids)
+
+        return True
+
     async def _search(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         query: str = args.get("query")
         limit: int = int(args.get("limit", 20))
@@ -207,6 +263,12 @@ class KnowledgeModule(BaseModule):
 
         # Seed dedupe with session-persisted URIs if any
         seen = self._collect_seen(context)
+
+        scoped_note_ids = get_explicit_scope_ids(context, "note_id")
+        scoped_media_ids = get_explicit_scope_ids(context, "media_id")
+        scoped_conv_ids = get_explicit_scope_ids(context, "conversation_id")
+        scoped_char_ids = get_explicit_scope_ids(context, "character_id")
+        scoped_prompt_ids = get_explicit_scope_ids(context, "prompt_id")
 
         # Enforce per-source RBAC before fan-out calls
         allowed_sources: list[str] = []
@@ -231,41 +293,86 @@ class KnowledgeModule(BaseModule):
         # Fan-out calls
         tasks = []
         if "notes" in sources:
-            tasks.append(self._call_tool("notes.search", {"query": query, "limit": limit + offset, "offset": 0, "snippet_length": snippet_len}, context))
+            tasks.append(
+                self._call_tool(
+                    "notes.search",
+                    {
+                        "query": query,
+                        "limit": limit + offset,
+                        "offset": 0,
+                        "snippet_length": snippet_len,
+                        "note_ids_filter": sorted(scoped_note_ids) if scoped_note_ids is not None else None,
+                    },
+                    context,
+                )
+            )
         if "media" in sources:
             f = (filters or {}).get("media") or {}
-            tasks.append(self._call_tool("media.search", {
-                "query": query,
-                "limit": limit + offset,
-                "offset": 0,
-                "snippet_length": snippet_len,
-                "media_types": f.get("media_types"),
-                "date_from": f.get("date_from"),
-                "date_to": f.get("date_to"),
-                "order_by": f.get("order_by", order_by),
-            }, context))
+            tasks.append(
+                self._call_tool(
+                    "media.search",
+                    {
+                        "query": query,
+                        "limit": limit + offset,
+                        "offset": 0,
+                        "snippet_length": snippet_len,
+                        "media_types": f.get("media_types"),
+                        "date_from": f.get("date_from"),
+                        "date_to": f.get("date_to"),
+                        "order_by": f.get("order_by", order_by),
+                        "media_ids_filter": sorted(scoped_media_ids) if scoped_media_ids is not None else None,
+                    },
+                    context,
+                )
+            )
         if "chats" in sources:
             f = (filters or {}).get("chats") or {}
+            character_filter = f.get("character_id")
+            if character_filter is None and scoped_char_ids and len(scoped_char_ids) == 1:
+                try:
+                    character_filter = int(next(iter(scoped_char_ids)))
+                except (TypeError, ValueError):
+                    character_filter = None
             tasks.append(self._call_tool("chats.search", {
                 "query": query,
                 "by": f.get("by", "both"),
                 "limit": limit + offset,
                 "offset": 0,
                 "snippet_length": snippet_len,
-                "character_id": f.get("character_id"),
+                "character_id": character_filter,
                 "sender": f.get("sender"),
+                "conversation_ids_filter": sorted(scoped_conv_ids) if scoped_conv_ids is not None else None,
             }, context))
         if "characters" in sources:
-            tasks.append(self._call_tool("characters.search", {"query": query, "limit": limit + offset, "offset": 0, "snippet_length": snippet_len}, context))
+            tasks.append(
+                self._call_tool(
+                    "characters.search",
+                    {
+                        "query": query,
+                        "limit": limit + offset,
+                        "offset": 0,
+                        "snippet_length": snippet_len,
+                        "character_ids_filter": sorted(scoped_char_ids) if scoped_char_ids is not None else None,
+                    },
+                    context,
+                )
+            )
         if "prompts" in sources:
             f = (filters or {}).get("prompts") or {}
-            tasks.append(self._call_tool("prompts.search", {
-                "query": query,
-                "fields": f.get("fields"),
-                "limit": limit + offset,
-                "offset": 0,
-                "snippet_length": snippet_len,
-            }, context))
+            tasks.append(
+                self._call_tool(
+                    "prompts.search",
+                    {
+                        "query": query,
+                        "fields": f.get("fields"),
+                        "limit": limit + offset,
+                        "offset": 0,
+                        "snippet_length": snippet_len,
+                        "prompt_ids_filter": sorted(scoped_prompt_ids) if scoped_prompt_ids is not None else None,
+                    },
+                    context,
+                )
+            )
 
         results_raw = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
 
@@ -283,6 +390,8 @@ class KnowledgeModule(BaseModule):
         out: list[dict[str, Any]] = []
         new_uris: list[str] = []
         for item in combined:
+            if not self._item_allowed_by_scope(item, context):
+                continue
             uri = str(item.get("uri") or "")
             if not uri or uri in seen:
                 continue
@@ -320,6 +429,19 @@ class KnowledgeModule(BaseModule):
         if not tool:
             raise ValueError(f"Unsupported source for get: {source}")
 
+        if source == "notes":
+            if not self._id_matches_scope(idv, get_explicit_scope_ids(context, "note_id")):
+                raise PermissionError("Source/id not allowed by persona scope")
+        if source == "media":
+            if not self._id_matches_scope(idv, get_explicit_scope_ids(context, "media_id")):
+                raise PermissionError("Source/id not allowed by persona scope")
+        if source == "chats":
+            if not self._id_matches_scope(idv, get_explicit_scope_ids(context, "conversation_id")):
+                raise PermissionError("Source/id not allowed by persona scope")
+        if source == "characters":
+            if not self._id_matches_scope(idv, get_explicit_scope_ids(context, "character_id")):
+                raise PermissionError("Source/id not allowed by persona scope")
+
         # Enforce per-source RBAC for direct fetch
         allowed = await self._tool_allowed(tool, context)
         if not allowed:
@@ -327,15 +449,37 @@ class KnowledgeModule(BaseModule):
 
         # Map to source tools
         if source == "notes":
-            return await self._call_tool("notes.get", {"note_id": str(idv), "retrieval": retrieval}, context)
+            note_args: dict[str, Any] = {
+                "note_id": str(idv),
+                "retrieval": retrieval,
+            }
+            scoped_note_ids = get_explicit_scope_ids(context, "note_id")
+            if scoped_note_ids is not None:
+                note_args["note_ids_filter"] = sorted(scoped_note_ids)
+            return await self._call_tool("notes.get", note_args, context)
         if source == "media":
-            return await self._call_tool("media.get", {"media_id": int(idv), "retrieval": retrieval}, context)
+            return await self._call_tool(
+                "media.get",
+                {"media_id": int(idv), "retrieval": retrieval},
+                context,
+            )
         if source == "chats":
-            return await self._call_tool("chats.get", {"conversation_id": str(idv), "retrieval": retrieval}, context)
+            chats_args: dict[str, Any] = {
+                "conversation_id": str(idv),
+                "retrieval": retrieval,
+            }
+            scoped_conv_ids = get_explicit_scope_ids(context, "conversation_id")
+            if scoped_conv_ids is not None:
+                chats_args["conversation_ids_filter"] = sorted(scoped_conv_ids)
+            return await self._call_tool("chats.get", chats_args, context)
         if source == "characters":
             return await self._call_tool("characters.get", {"character_id": int(idv)}, context)
         if source == "prompts":
-            return await self._call_tool("prompts.get", {"prompt_id_or_name": str(idv)}, context)
+            out = await self._call_tool("prompts.get", {"prompt_id_or_name": str(idv)}, context)
+            meta = out.get("meta") if isinstance(out, dict) else None
+            if isinstance(meta, dict) and not self._item_allowed_by_scope(meta, context):
+                raise PermissionError("Source/id not allowed by persona scope")
+            return out
         # Unsupported source
         raise ValueError(f"Unsupported source for get: {source}")
 

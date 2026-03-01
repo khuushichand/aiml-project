@@ -226,6 +226,27 @@ if (!(globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver) {
   }
 }
 
+const expandOutputTypesSection = () => {
+  const toggle = screen.getByRole("button", { name: /Output Types/i })
+  if (toggle.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(toggle)
+  }
+}
+
+const expandGeneratedOutputsSection = () => {
+  const toggle = screen.getByRole("button", { name: /Generated Outputs/i })
+  if (toggle.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(toggle)
+  }
+}
+
+const renderStudioPane = () => {
+  const renderResult = render(<StudioPane />)
+  expandOutputTypesSection()
+  expandGeneratedOutputsSection()
+  return renderResult
+}
+
 describe("StudioPane Stage 1 generation lifecycle control", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -315,10 +336,11 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
         })
     )
 
-    const { rerender } = render(<StudioPane />)
+    const { rerender } = renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Summary" }))
     rerender(<StudioPane />)
+    expandOutputTypesSection()
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
 
@@ -341,10 +363,11 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       new Error("Generation cancelled by upstream worker")
     )
 
-    const { rerender } = render(<StudioPane />)
+    const { rerender } = renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Summary" }))
     rerender(<StudioPane />)
+    expandOutputTypesSection()
 
     await waitFor(() => {
       expect(mockSetIsGeneratingOutput).toHaveBeenLastCalledWith(false)
@@ -364,7 +387,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
   })
 
   it("passes extended timeout to summary generation RAG request", async () => {
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Summary" }))
 
@@ -381,7 +404,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
   })
 
   it("passes extended timeout to report generation RAG request", async () => {
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Report" }))
 
@@ -402,7 +425,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       generation: "Front: Term\nBack: Definition"
     })
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Flashcards" }))
 
@@ -440,7 +463,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
         } as any
       })
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }))
 
@@ -471,7 +494,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
         } as any
       })
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByLabelText("Delete failed output"))
 
@@ -491,7 +514,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       }
     ]
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Regenerate options" }))
     fireEvent.click(await screen.findByText("Replace existing"))
@@ -520,7 +543,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       }
     ]
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Regenerate options" }))
     fireEvent.click(await screen.findByText("Create new version"))

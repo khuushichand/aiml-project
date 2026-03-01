@@ -263,13 +263,13 @@ class TestPostgreSQLBackend:
 
         backend.execute(f"DROP TABLE IF EXISTS {table_name}")
         backend.execute(f"CREATE TABLE {table_name} (id INTEGER PRIMARY KEY)")
-        backend.execute(f"INSERT INTO {table_name} (id) VALUES (%s)", (1,))
+        backend.execute(f"INSERT INTO {table_name} (id) VALUES (%s)", (1,))  # nosec B608
 
         try:
             with pytest.raises(DatabaseError):
-                backend.execute(f"INSERT INTO {table_name} (id) VALUES (%s)", (1,))
+                backend.execute(f"INSERT INTO {table_name} (id) VALUES (%s)", (1,))  # nosec B608
 
-            result = backend.execute(f"SELECT COUNT(*) AS total FROM {table_name}")
+            result = backend.execute(f"SELECT COUNT(*) AS total FROM {table_name}")  # nosec B608
             assert result.rows[0]["total"] == 1
         finally:
             backend.execute(f"DROP TABLE IF EXISTS {table_name}")
@@ -285,18 +285,21 @@ class TestPostgreSQLBackend:
         backend.execute(f"CREATE TABLE {table_name} (id SERIAL PRIMARY KEY, note TEXT)")
 
         try:
-            backend.execute(
-                f"""
+            table_ident = backend.escape_identifier(table_name)
+            cte_insert_sql_template = """
                 WITH inserted AS (
-                    INSERT INTO {table_name}(note) VALUES (%s)
+                    INSERT INTO {table_ident}(note) VALUES (%s)
                     RETURNING id
                 )
                 SELECT id FROM inserted
-                """,
+                """
+            cte_insert_sql = cte_insert_sql_template.format(table_ident=table_ident)  # nosec B608
+            backend.execute(
+                cte_insert_sql,
                 ("hello",),
             )
 
-            result = backend.execute(f"SELECT COUNT(*) AS total FROM {table_name}")
+            result = backend.execute(f"SELECT COUNT(*) AS total FROM {table_name}")  # nosec B608
             assert result.rows[0]["total"] == 1
         finally:
             backend.execute(f"DROP TABLE IF EXISTS {table_name}")
@@ -312,7 +315,7 @@ class TestPostgreSQLBackend:
         backend.execute(f"DROP TABLE IF EXISTS {source_table}")
         backend.execute(f"CREATE TABLE {source_table} (id SERIAL PRIMARY KEY, title TEXT, body TEXT)")
         backend.execute(
-            f"INSERT INTO {source_table} (title, body) VALUES (%s, %s)",
+            f"INSERT INTO {source_table} (title, body) VALUES (%s, %s)",  # nosec B608
             ("hello", "world"),
         )
 

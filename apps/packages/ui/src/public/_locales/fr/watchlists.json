@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "En file pour briefing"
+  },
+  "items_includeInNextBriefing": {
+    "message": "Inclure dans le prochain briefing"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "Retirer de la file du briefing"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "Cet élément est déjà inclus dans les sorties de briefing."
+  },
+  "items_briefingIncluded": {
+    "message": "Ajouté à la file du prochain briefing."
+  },
+  "items_briefingRemoved": {
+    "message": "Retiré de la file du briefing."
+  },
+  "items_briefingIncludeError": {
+    "message": "Échec de l’inclusion de l’élément dans le briefing."
+  },
+  "items_queuedTag": {
+    "message": "En file"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "Sélectionner une exécution"
+  },
+  "items_queue_runOption": {
+    "message": "Exécution n°{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "Sélectionnez une exécution pour générer un rapport depuis la file."
+  },
+  "items_queue_empty": {
+    "message": "Aucun élément en file trouvé pour cette exécution."
+  },
+  "items_queue_generated": {
+    "message": "Rapport créé à partir de {{count}} élément{{plural}} en file."
+  },
+  "items_queue_generateError": {
+    "message": "Échec de la génération du rapport à partir des éléments en file."
+  },
+  "items_queue_generateReport": {
+    "message": "Générer un rapport depuis la file"
+  }
+}

@@ -43,6 +43,7 @@ import { useUrlState, useUrlPagination } from '@/lib/use-url-state';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
+import { useResourceState } from '@/lib/use-resource-state';
 
 type SavedUserView = {
   id: string;
@@ -166,9 +167,6 @@ function UsersPageContent() {
   const { selectedOrg } = useOrgContext();
   const { user: currentUser } = usePermissions();
   const currentUserId = currentUser?.id;
-  const [users, setUsers] = useState<User[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [bulkAction, setBulkAction] = useState<BulkActionType>(null);
   const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
   const [bulkRole, setBulkRole] = useState('user');
@@ -241,33 +239,38 @@ function UsersPageContent() {
     }
   }, []);
 
-  const loadUsers = useCallback(async () => {
+  const loadUsersResource = useCallback(async () => {
+    const params: Record<string, string> = { limit: '200' };
+    if (selectedOrg) params.org_id = String(selectedOrg.id);
+    if (searchQuery) params.search = searchQuery;
+    if (statusFilter === 'active') params.is_active = 'true';
+    if (statusFilter === 'inactive') params.is_active = 'false';
+    if (verifiedFilter === 'verified') params.is_verified = 'true';
+    if (verifiedFilter === 'unverified') params.is_verified = 'false';
+    if (mfaFilter === 'enabled') params.mfa_enabled = 'true';
+    if (mfaFilter === 'disabled') params.mfa_enabled = 'false';
     try {
-      setLoading(true);
-      setError('');
-      const params: Record<string, string> = { limit: '200' };
-      if (selectedOrg) params.org_id = String(selectedOrg.id);
-      if (searchQuery) params.search = searchQuery;
-      if (statusFilter === 'active') params.is_active = 'true';
-      if (statusFilter === 'inactive') params.is_active = 'false';
-      if (verifiedFilter === 'verified') params.is_verified = 'true';
-      if (verifiedFilter === 'unverified') params.is_verified = 'false';
-      if (mfaFilter === 'enabled') params.mfa_enabled = 'true';
-      if (mfaFilter === 'disabled') params.mfa_enabled = 'false';
-      const data = await api.getUsers(params);
-      setUsers(data);
-    } catch (error: unknown) {
-      console.error('Failed to load users:', error);
-      setError(error instanceof Error && error.message ? error.message : 'Failed to load users');
-      setUsers([]);
-    } finally {
-      setLoading(false);
+      return await api.getUsers(params);
+    } catch (err: unknown) {
+      console.error('Failed to load users:', err);
+      throw err instanceof Error
+        ? err
+        : new Error('Failed to load users');
     }
   }, [mfaFilter, searchQuery, selectedOrg, statusFilter, verifiedFilter]);
 
-  useEffect(() => {
-    loadUsers();
-  }, [loadUsers]);
+  const {
+    value: users,
+    loading,
+    error,
+    reload: loadUsers,
+  } = useResourceState<User[]>({
+    load: loadUsersResource,
+    deps: [selectedOrg?.id, searchQuery, statusFilter, verifiedFilter, mfaFilter],
+    initialValue: [],
+    defaultError: 'Failed to load users',
+    resetOnError: true,
+  });
 
   const loadInvitations = useCallback(async () => {
     try {

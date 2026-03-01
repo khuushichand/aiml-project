@@ -15,8 +15,15 @@ type Options = {
 
 type AudioStatus = {
   hasAudio: boolean
+  hasStt: boolean
+  hasTts: boolean
+  hasVoiceChat: boolean
   healthState: AudioHealthState
   healthLoading: boolean
+  sttHealthState: AudioHealthState
+  sttHealthLoading: boolean
+  ttsHealthState: AudioHealthState
+  ttsHealthLoading: boolean
   voices: TldwVoice[]
   voicesLoading: boolean
   voicesAvailable: boolean | null
@@ -25,42 +32,113 @@ type AudioStatus = {
 type AudioHealthResponse = {
   ok?: boolean
   status?: number
+  data?: {
+    available?: boolean
+    usable?: boolean
+    provider?: string
+  }
 }
+
+const TTS_HEALTH_PROBE_INTERVAL_MS = 60_000
+const STT_HEALTH_PROBE_INTERVAL_MS = 45_000
+const HEALTH_PROBE_RETRY_ATTEMPTS = 1
+const HEALTH_PROBE_RETRY_DELAY_MS = 500
 
 export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
   const { capabilities, loading } = useServerCapabilities()
-  const hasAudio = Boolean(capabilities?.hasAudio) && !loading
+  const hasStt = !loading && Boolean(capabilities?.hasStt ?? capabilities?.hasAudio)
+  const hasTts = !loading && Boolean(capabilities?.hasTts ?? capabilities?.hasAudio)
+  const hasVoiceChat =
+    !loading &&
+    Boolean(
+      capabilities?.hasVoiceChat ??
+        (capabilities?.hasStt != null && capabilities?.hasTts != null
+          ? capabilities.hasStt && capabilities.hasTts
+          : capabilities?.hasAudio)
+    )
+  const hasAudio =
+    !loading &&
+    Boolean(capabilities?.hasAudio ?? (hasStt || hasTts || hasVoiceChat))
 
-  const healthQuery = useQuery<AudioHealthResponse>({
-    queryKey: ["audio-health"],
+  const ttsHealthQuery = useQuery<AudioHealthResponse>({
+    queryKey: ["audio-health", "tts"],
     queryFn: async () =>
       (await apiSend({
         path: "/api/v1/audio/health",
         method: "GET"
       })) as AudioHealthResponse,
-    enabled: hasAudio,
-    staleTime: 60_000,
-    refetchInterval: 60_000,
+    enabled: hasTts,
+    staleTime: TTS_HEALTH_PROBE_INTERVAL_MS,
+    refetchInterval: TTS_HEALTH_PROBE_INTERVAL_MS,
+    retry: HEALTH_PROBE_RETRY_ATTEMPTS,
+    retryDelay: HEALTH_PROBE_RETRY_DELAY_MS,
+    refetchOnMount: false,
     refetchOnWindowFocus: false
   })
 
-  let healthState: AudioHealthState = "unknown"
-  if (!hasAudio) {
-    healthState = loading ? "unknown" : "unavailable"
-  } else if (healthQuery.isLoading) {
-    healthState = "unknown"
-  } else if (healthQuery.data?.ok) {
-    healthState = "healthy"
-  } else if (healthQuery.data?.status === 404) {
-    healthState = "unknown"
+  const sttHealthQuery = useQuery<AudioHealthResponse>({
+    queryKey: ["audio-health", "stt"],
+    queryFn: async () =>
+      (await apiSend({
+        path: "/api/v1/audio/transcriptions/health",
+        method: "GET"
+      })) as AudioHealthResponse,
+    enabled: hasStt,
+    staleTime: STT_HEALTH_PROBE_INTERVAL_MS,
+    refetchInterval: STT_HEALTH_PROBE_INTERVAL_MS,
+    retry: HEALTH_PROBE_RETRY_ATTEMPTS,
+    retryDelay: HEALTH_PROBE_RETRY_DELAY_MS,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false
+  })
+
+  let ttsHealthState: AudioHealthState = "unknown"
+  if (!hasTts) {
+    ttsHealthState = loading ? "unknown" : "unavailable"
+  } else if (ttsHealthQuery.isLoading) {
+    ttsHealthState = "unknown"
+  } else if (ttsHealthQuery.isError) {
+    // Probe errors should not hard-disable audio features.
+    ttsHealthState = "unknown"
+  } else if (ttsHealthQuery.data?.ok) {
+    ttsHealthState = "healthy"
+  } else if (ttsHealthQuery.data?.status === 404) {
+    ttsHealthState = "unknown"
   } else {
-    healthState = "unhealthy"
+    ttsHealthState = "unhealthy"
+  }
+
+  let sttHealthState: AudioHealthState = "unknown"
+  if (!hasStt) {
+    sttHealthState = loading ? "unknown" : "unavailable"
+  } else if (sttHealthQuery.isLoading) {
+    sttHealthState = "unknown"
+  } else if (sttHealthQuery.isError) {
+    // Fail-open on probe transport errors; let real transcription attempts decide.
+    sttHealthState = "unknown"
+  } else if (sttHealthQuery.data?.ok) {
+    const sttPayload = sttHealthQuery.data?.data
+    const provider = String(sttPayload?.provider ?? "")
+      .trim()
+      .toLowerCase()
+    const explicitlyUsable = sttPayload?.usable === true
+    const failOpenForNonWhisper =
+      sttPayload?.available === false && provider.length > 0 && provider !== "whisper"
+    if (sttPayload?.available === false && !explicitlyUsable && !failOpenForNonWhisper) {
+      sttHealthState = "unhealthy"
+    } else {
+      sttHealthState = "healthy"
+    }
+  } else if (sttHealthQuery.data?.status === 404) {
+    sttHealthState = "unknown"
+  } else {
+    sttHealthState = "unhealthy"
   }
 
   const voicesQuery = useQuery<TldwVoice[]>({
     queryKey: ["audio-voices"],
     queryFn: () => fetchTldwVoices(),
-    enabled: hasAudio && Boolean(options.requireVoices),
+    enabled: hasTts && Boolean(options.requireVoices),
     staleTime: 300_000,
     refetchOnWindowFocus: false
   })
@@ -71,8 +149,15 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
 
   return {
     hasAudio,
-    healthState,
-    healthLoading: healthQuery.isLoading,
+    hasStt,
+    hasTts,
+    hasVoiceChat,
+    healthState: ttsHealthState,
+    healthLoading: ttsHealthQuery.isLoading,
+    sttHealthState,
+    sttHealthLoading: sttHealthQuery.isLoading,
+    ttsHealthState,
+    ttsHealthLoading: ttsHealthQuery.isLoading,
     voices,
     voicesLoading: voicesQuery.isLoading,
     voicesAvailable

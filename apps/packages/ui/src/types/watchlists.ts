@@ -100,6 +100,12 @@ export interface JobScope {
 }
 
 export interface JobOutputPrefs {
+  generate_audio?: boolean
+  target_audio_minutes?: number
+  audio_voice?: string
+  audio_speed?: number
+  background_audio_uri?: string
+  voice_map?: Record<string, string>
   retention?: {
     default_seconds?: number
     temporary_seconds?: number
@@ -250,19 +256,30 @@ export interface ScrapedItem {
   tags: string[]
   status: ItemStatus
   reviewed: boolean
+  queued_for_briefing?: boolean
   created_at: string
+}
+
+export interface ScrapedItemSmartCounts {
+  all: number
+  today: number
+  today_unread: number
+  unread: number
+  reviewed: number
+  queued: number
 }
 
 export interface ScrapedItemUpdate {
   reviewed?: boolean
   status?: ItemStatus
+  queued_for_briefing?: boolean
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Output Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type OutputFormat = "md" | "html"
+export type OutputFormat = "md" | "html" | "mp3" | "wav" | "ogg" | "m4a" | "aac" | "flac" | string
 
 export interface WatchlistOutput {
   id: number
@@ -326,6 +343,10 @@ export interface WatchlistTemplate {
   version?: number
   history_count?: number
   available_versions?: number[]
+  composer_ast?: Record<string, unknown> | null
+  composer_schema_version?: string | null
+  composer_sync_hash?: string | null
+  composer_sync_status?: "in_sync" | "needs_repair" | "recovered_from_code" | null
 }
 
 export interface WatchlistTemplateCreate {
@@ -334,6 +355,10 @@ export interface WatchlistTemplateCreate {
   content: string
   format?: "md" | "html"
   overwrite?: boolean
+  composer_ast?: Record<string, unknown> | null
+  composer_schema_version?: string | null
+  composer_sync_hash?: string | null
+  composer_sync_status?: "in_sync" | "needs_repair" | "recovered_from_code" | null
 }
 
 export interface WatchlistTemplateVersionSummary {
@@ -362,6 +387,26 @@ export interface WatchlistSettings {
   forum_default_top_n?: number
   sharing_mode?: string
   watchlists_backend?: "sqlite" | "postgres" | string
+}
+
+export interface WatchlistsOnboardingTelemetryPayload {
+  session_id: string
+  event_type: string
+  event_at?: string | null
+  details?: Record<string, string | number | boolean | null> | null
+}
+
+export interface WatchlistsOnboardingTelemetryResponse {
+  accepted: boolean
+  code?: string | null
+}
+
+export interface WatchlistsOnboardingTelemetrySummaryResponse {
+  counters: Record<string, number>
+  rates: Record<string, number>
+  timings: Record<string, number>
+  since?: string | null
+  until?: string | null
 }
 
 export type WatchlistsIaExperimentVariant = "baseline" | "experimental"
@@ -397,38 +442,31 @@ export interface WatchlistsIaExperimentTelemetrySummaryResponse {
   until?: string | null
 }
 
-export type WatchlistsIaExperimentVariant = "baseline" | "experimental"
-
-export interface WatchlistsIaExperimentTelemetryIngestRequest {
-  variant: WatchlistsIaExperimentVariant
-  session_id: string
-  previous_tab?: string | null
-  current_tab: string
-  transitions: number
-  visited_tabs: string[]
-  first_seen_at?: string | null
-  last_seen_at?: string | null
+export interface WatchlistsRcTelemetryThresholdSummary {
+  id: string
+  label: string
+  status: "ok" | "potential_breach"
+  reporting_only: boolean
+  metric_value?: number | null
+  baseline_value?: number | null
+  delta?: number | null
+  notes?: string | null
 }
 
-export interface WatchlistsIaExperimentTelemetryIngestResponse {
-  accepted: boolean
-}
-
-export interface WatchlistsIaExperimentVariantSummary {
-  variant: WatchlistsIaExperimentVariant
-  events: number
-  sessions: number
-  reached_target_sessions: number
-  avg_transitions: number
-  avg_visited_tabs: number
-  avg_session_seconds: number
-}
-
-export interface WatchlistsIaExperimentTelemetrySummaryResponse {
-  items: WatchlistsIaExperimentVariantSummary[]
+export interface WatchlistsRcTelemetrySummaryResponse {
+  onboarding: WatchlistsOnboardingTelemetrySummaryResponse
+  uc2_backend: Record<string, number>
+  ia_experiment: Record<string, unknown>
+  baseline: Record<string, number>
+  thresholds: WatchlistsRcTelemetryThresholdSummary[]
   since?: string | null
   until?: string | null
 }
+
+export type WatchlistsIaExperimentTelemetryIngestRequest =
+  WatchlistsIaExperimentTelemetryPayload
+export type WatchlistsIaExperimentTelemetryIngestResponse =
+  WatchlistsIaExperimentTelemetryResponse
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Claim Cluster Types

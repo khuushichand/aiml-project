@@ -16,15 +16,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Literal
 
 from loguru import logger
 
-from .query_classifier import QueryClassification
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    StructuredOutputParseError,
+    parse_structured_output,
+)
 
+from .query_classifier import QueryClassification
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -353,7 +357,10 @@ def _create_academic_search_action() -> ResearchAction:
 
     async def _execute(params: dict[str, Any]) -> ActionOutput:
         try:
-            from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import perform_websearch, process_web_search_results
+            from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import (
+                perform_websearch,
+                process_web_search_results,
+            )
 
             query = params.get("query", "")
             # Use web search with academic site filters as a universal fallback
@@ -950,25 +957,19 @@ def _build_research_prompt(
 def _parse_research_action(raw: str) -> dict[str, Any]:
     """Parse LLM response into action dict."""
     text = raw.strip()
-
-    # Strip markdown code fences
-    if text.startswith("```"):
-        lines = text.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        text = "\n".join(lines).strip()
-
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
+        payload = parse_structured_output(
+            text,
+            options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+        )
+        if isinstance(payload, dict):
+            return dict(payload)
+        if isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict):
+                    return dict(item)
+    except StructuredOutputParseError:
         pass
-
-    # Try to find JSON object
-    match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
 
     raise ValueError(f"Could not parse research action JSON: {text[:200]}")
 
@@ -1012,6 +1013,7 @@ async def research_loop(
     db_context: dict[str, Any] | None = None,
     discussion_platforms: list[str] | None = None,
     enable_url_scraping: bool = True,
+    enable_action_dedup: bool = True,
     enable_image_search: bool = False,
     enable_video_search: bool = False,
 ) -> ResearchOutput:
@@ -1029,6 +1031,7 @@ async def research_loop(
         db_context: Optional dict with DB paths/instances for local_db_search.
         discussion_platforms: Optional default platform list for discussion_search.
         enable_url_scraping: Whether scrape_url action is available.
+        enable_action_dedup: Whether to skip repeated equivalent actions and reuse prior results.
         enable_image_search: Whether image_search action is available.
         enable_video_search: Whether video_search action is available.
 
@@ -1059,6 +1062,9 @@ async def research_loop(
     seen_urls: dict[str, dict[str, Any]] = {}  # url -> merged result dict
     _dedup_merged = 0
     _duplicate_fetches_skipped = 0
+    seen_action_signatures: dict[tuple[Any, ...], ActionOutput] = {}
+    _action_dedup_skipped = 0
+    _action_dedup_reused = 0
 
     # Preamble enforcement tracking
     _requires_reasoning_preamble = mode in {"balanced", "quality"}
@@ -1077,6 +1083,49 @@ async def research_loop(
             return str(raw_url).strip()
         except Exception:
             return ""
+
+    def _normalize_query(value: Any) -> str:
+        try:
+            return " ".join(str(value or "").strip().lower().split())
+        except Exception:
+            return ""
+
+    def _normalized_tuple(values: Any) -> tuple[str, ...]:
+        if not isinstance(values, (list, tuple, set)):
+            return tuple()
+        normalized = sorted(_normalize_query(v) for v in values if str(v or "").strip())
+        return tuple(v for v in normalized if v)
+
+    def _action_signature(action_name: str, params: dict[str, Any]) -> tuple[Any, ...]:
+        q = _normalize_query(params.get("query", ""))
+        if action_name == "web_search":
+            return (
+                action_name,
+                q,
+                _normalize_query(params.get("engine", "duckduckgo")),
+                int(params.get("result_count", 5)),
+            )
+        if action_name == "academic_search":
+            return (
+                action_name,
+                q,
+                int(params.get("result_count", 5)),
+            )
+        if action_name == "discussion_search":
+            return (
+                action_name,
+                q,
+                _normalized_tuple(params.get("platforms") or []),
+                int(params.get("max_results", 10)),
+            )
+        if action_name == "local_db_search":
+            return (
+                action_name,
+                q,
+                _normalized_tuple(params.get("sources") or []),
+                int(params.get("top_k", 10)),
+            )
+        return (action_name,)
 
     async def _emit(event_type: str, data: dict[str, Any]) -> None:
         if on_progress is not None:
@@ -1206,10 +1255,37 @@ async def research_loop(
                 if key in db_context and key not in action_params:
                     action_params[key] = db_context[key]
 
+        action_signature = _action_signature(action_name, action_params)
+        if (
+            enable_action_dedup
+            and action_name not in {"scrape_url", "__reasoning_preamble"}
+            and action_signature in seen_action_signatures
+        ):
+            cached_output = seen_action_signatures[action_signature]
+            if cached_output.success and cached_output.result_count > 0:
+                _action_dedup_skipped += 1
+                _action_dedup_reused += int(cached_output.result_count)
+                await _emit("research_searching", {
+                    "step": iteration,
+                    "action": action_name,
+                    "queries": [action_params.get("query", query)],
+                    "action_reused": True,
+                })
+                action_output = cached_output
+                step_duration = 0.0
+            else:
+                action_output = None
+                step_duration = 0.0
+        else:
+            action_output = None
+            step_duration = 0.0
+
         # Skip duplicate URL fetch/scrape by reusing already seen result content.
         url_reused = False
         reused_url = ""
-        if action_name == "scrape_url":
+        if action_output is not None:
+            pass
+        elif action_name == "scrape_url":
             candidate_url = str(action_params.get("url", "")).strip()
             if candidate_url and candidate_url in seen_urls:
                 url_reused = True
@@ -1255,6 +1331,12 @@ async def research_loop(
             step_start = time.time()
             action_output = await registry.execute(action_name, action_params)
             step_duration = time.time() - step_start
+
+        if (
+            action_name not in {"scrape_url", "__reasoning_preamble"}
+            and action_output is not None
+        ):
+            seen_action_signatures[action_signature] = action_output
 
         if action_name == "__reasoning_preamble" and action_output.success:
             _reasoning_preamble_completed = True
@@ -1325,6 +1407,11 @@ async def research_loop(
         "urls_seen": len(seen_urls),
         "duplicates_merged": _dedup_merged,
         "duplicate_fetches_skipped": _duplicate_fetches_skipped,
+    }
+    output.metadata["action_dedup"] = {
+        "enabled": bool(enable_action_dedup),
+        "duplicates_skipped": _action_dedup_skipped,
+        "reused_results_count": _action_dedup_reused,
     }
     if _dedup_merged > 0 or _duplicate_fetches_skipped > 0:
         logger.debug(

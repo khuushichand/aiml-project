@@ -80,9 +80,9 @@ Finding IDs: `H10.1` through `H10.3`
 - Added operational ownership/update-trigger policy:
   - `Docs/Monitoring/WATCHLISTS_HELP_MAINTENANCE_POLICY_2026_02_18.md`
 - Added release QA checklist for help surfaces and guided-tour behavior:
-  - `Docs/Plans/WATCHLISTS_HELP_RELEASE_CHECKLIST_2026_02_18.md`
+  - `Docs/Product/Completed/Plans/WATCHLISTS_HELP_RELEASE_CHECKLIST_2026_02_18.md`
 - Added drift-audit procedure and evidence requirements:
-  - `Docs/Plans/WATCHLISTS_HELP_DRIFT_AUDIT_PLAN_2026_02_18.md`
+  - `Docs/Product/Completed/Plans/WATCHLISTS_HELP_DRIFT_AUDIT_PLAN_2026_02_18.md`
 - Added CI gate for help-link integrity and contextual-help regression:
   - `.github/workflows/ui-watchlists-help-tests.yml`
   - `apps/packages/ui/package.json` script: `test:watchlists:help`

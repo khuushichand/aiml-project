@@ -198,6 +198,36 @@ export interface WorkspaceUIState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Workspace Banner Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type WorkspaceBannerImageMimeType =
+  | "image/jpeg"
+  | "image/png"
+  | "image/webp"
+
+export interface WorkspaceBannerImage {
+  dataUrl: string
+  mimeType: WorkspaceBannerImageMimeType
+  width: number
+  height: number
+  bytes: number
+  updatedAt: Date
+}
+
+export interface WorkspaceBanner {
+  title: string
+  subtitle: string
+  image: WorkspaceBannerImage | null
+}
+
+export const DEFAULT_WORKSPACE_BANNER: WorkspaceBanner = {
+  title: "",
+  subtitle: "",
+  image: null
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Audio Generation Settings
 // ─────────────────────────────────────────────────────────────────────────────
 

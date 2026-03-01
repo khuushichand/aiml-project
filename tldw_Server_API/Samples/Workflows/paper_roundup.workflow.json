@@ -1,0 +1,21 @@
+{
+  "name": "paper_roundup",
+  "version": 1,
+  "description": "Minimal bundled template for paper roundup workflows.",
+  "tags": [
+    "research",
+    "rag",
+    "pdf",
+    "tts",
+    "policy"
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "type": "prompt",
+      "config": {
+        "template": "Generate a concise paper roundup for {{ inputs.topic }}"
+      }
+    }
+  ]
+}

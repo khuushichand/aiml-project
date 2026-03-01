@@ -34,7 +34,7 @@ def test_job_filters_crud(client_with_user):
     # Create job
     job_body = {
         "name": "Filters Job",
-        "scope": {},
+        "scope": {"tags": ["filters"]},
         "active": True,
     }
     r = c.post("/api/v1/watchlists/jobs", json=job_body)

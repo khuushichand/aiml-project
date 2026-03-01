@@ -8,7 +8,7 @@ const sharedRoot = path.resolve(__dirname, "../packages/ui/src")
 export default defineConfig({
   srcDir: sharedRoot,
   entrypointsDir: path.join(__dirname, "entrypoints"),
-  publicDir: path.join(__dirname, "public"),
+  publicDir: path.join(sharedRoot, "public"),
   manifest: {
     default_locale: "en",
     options_ui: {

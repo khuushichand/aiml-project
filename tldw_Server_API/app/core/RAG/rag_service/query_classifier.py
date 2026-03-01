@@ -13,13 +13,17 @@ existing query analysis infrastructure.
 
 from __future__ import annotations
 
-import json
 import re
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    StructuredOutputParseError,
+    parse_structured_output,
+)
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -222,25 +226,19 @@ def _parse_classification_response(raw: str) -> dict[str, Any]:
     """Parse LLM JSON response, handling common formatting issues."""
     text = raw.strip()
 
-    # Strip markdown code fences if present
-    if text.startswith("```"):
-        lines = text.split("\n")
-        # Remove first and last fence lines
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        text = "\n".join(lines).strip()
-
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
+        payload = parse_structured_output(
+            text,
+            options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+        )
+        if isinstance(payload, dict):
+            return dict(payload)
+        if isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict):
+                    return dict(item)
+    except StructuredOutputParseError:
         pass
-
-    # Try to find JSON object in the text
-    match = re.search(r"\{[^{}]*\}", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
 
     raise ValueError(f"Could not parse classification JSON from: {text[:200]}")
 

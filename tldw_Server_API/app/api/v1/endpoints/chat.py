@@ -1952,8 +1952,14 @@ async def create_chat_completion(
                             auth_user_id=int(getattr(current_user, 'id', 0)) if getattr(current_user, 'id', None) is not None else None,
                             request_meta={
                                 'endpoint': '/chat/completions',
+                                'auth_user_id': int(getattr(current_user, 'id', 0)) if getattr(current_user, 'id', None) is not None else None,
                                 'conversation_id': request_data.conversation_id,
                                 'character_id': request_data.character_id,
+                                'chat_db': chat_db,
+                                'user_base_dir': user_base_dir,
+                                'selected_provider': selected_provider,
+                                'selected_model': selected_model,
+                                'tools': request_data.tools,
                             },
                         )
                         result = await command_router.async_dispatch_command(ctx, cmd_name, cmd_args)
@@ -3124,16 +3130,17 @@ async def create_chat_completion(
                 detail = getattr(exc, "detail", None)
                 return isinstance(detail, dict) and detail.get("error_code") == "missing_provider_credentials"
 
-            def _oauth_reconnect_required_exception() -> HTTPException:
-                return HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail={
-                        "error_code": "oauth_reconnect_required",
-                        "provider": "openai",
-                        "reconnect_required": True,
-                        "message": "OpenAI OAuth access is no longer valid. Reconnect OpenAI and retry.",
-                    },
-                )
+            def _record_openai_oauth_retry(outcome: str) -> None:
+                try:
+                    log_counter(
+                        "byok_oauth_401_retry_total",
+                        labels={
+                            "provider": "openai",
+                            "outcome": outcome,
+                        },
+                    )
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                    pass
 
             if (
                 target_api_provider == "openai"
@@ -3166,21 +3173,29 @@ async def create_chat_completion(
                             refreshed_args, _ = _run_refresh_on_endpoint_loop()
                         except HTTPException as refresh_exc:
                             if _is_auth_401_error(refresh_exc) or _is_missing_credentials_error(refresh_exc):
-                                raise _oauth_reconnect_required_exception() from initial_exc
-                            raise
+                                _record_openai_oauth_retry("refresh_failed")
+                                raise initial_exc from refresh_exc
+                            _record_openai_oauth_retry("refresh_failed")
+                            raise initial_exc from refresh_exc
                         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as refresh_exc:
                             logger.warning("OpenAI OAuth forced refresh failed: {}", refresh_exc)
-                            raise _oauth_reconnect_required_exception() from initial_exc
+                            _record_openai_oauth_retry("refresh_failed")
+                            raise initial_exc from refresh_exc
 
                         refreshed_key = refreshed_args.get("api_key")
                         if not isinstance(refreshed_key, str) or not refreshed_key.strip():
-                            raise _oauth_reconnect_required_exception() from initial_exc
+                            _record_openai_oauth_retry("refresh_missing_api_key")
+                            raise initial_exc
 
                         try:
-                            return perform_chat_api_call(**refreshed_args)
+                            refreshed_response = perform_chat_api_call(**refreshed_args)
+                            _record_openai_oauth_retry("success")
+                            return refreshed_response
                         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as retry_exc:
                             if _is_auth_401_error(retry_exc):
-                                raise _oauth_reconnect_required_exception() from retry_exc
+                                _record_openai_oauth_retry("retry_auth_failed")
+                                raise initial_exc from retry_exc
+                            _record_openai_oauth_retry("retry_failed")
                             raise
 
                 llm_call_func = _llm_call_with_openai_oauth_retry

@@ -26,8 +26,15 @@ from typing import Any, Callable, Literal, Optional, cast
 
 from loguru import logger
 
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    StructuredOutputParseError,
+    parse_structured_output,
+)
 from tldw_Server_API.app.core.testing import (
     is_test_mode as _shared_is_test_mode,
+)
+from tldw_Server_API.app.core.testing import (
     is_truthy as _shared_is_truthy,
 )
 
@@ -213,13 +220,19 @@ _classify_and_reformulate: Any = None
 _QueryClassification: Any = None
 _research_loop: Any = None
 _create_default_registry: Any = None
+_ClarificationDecision: Any = None
+_assess_query_for_clarification: Any = None
 try:
     from .query_classifier import (
         QueryClassification as _QueryClassification,
+    )
+    from .query_classifier import (
         classify_and_reformulate as _classify_and_reformulate,
     )
     from .research_agent import (
         create_default_registry as _create_default_registry,
+    )
+    from .research_agent import (
         research_loop as _research_loop,
     )
 except ImportError:
@@ -228,10 +241,23 @@ except ImportError:
     _research_loop = None
     _create_default_registry = None
 
+try:
+    from .clarification_gate import (
+        ClarificationDecision as _ClarificationDecision,
+    )
+    from .clarification_gate import (
+        assess_query_for_clarification as _assess_query_for_clarification,
+    )
+except ImportError:
+    _ClarificationDecision = None
+    _assess_query_for_clarification = None
+
 classify_and_reformulate = _classify_and_reformulate
 QueryClassification = _QueryClassification
 research_loop = _research_loop
 create_default_registry = _create_default_registry
+ClarificationDecision = _ClarificationDecision
+assess_query_for_clarification = _assess_query_for_clarification
 
 # Suggestion generator
 _generate_suggestions: Any = None
@@ -249,8 +275,14 @@ _get_writer_depth_policy: Any = None
 try:
     from .response_writer import (
         build_writer_system_prompt as _build_writer_system_prompt,
+    )
+    from .response_writer import (
         build_writer_user_prompt as _build_writer_user_prompt,
+    )
+    from .response_writer import (
         format_context_xml as _format_context_xml,
+    )
+    from .response_writer import (
         get_writer_depth_policy as _get_writer_depth_policy,
     )
 except ImportError:
@@ -960,6 +992,8 @@ async def unified_rag_pipeline(
     generation_model: Optional[str] = None,
     generation_provider: Optional[str] = None,
     generation_prompt: Optional[str] = None,
+    enable_pre_retrieval_clarification: Optional[bool] = None,
+    clarification_timeout_sec: Optional[float] = None,
     max_generation_tokens: int = 500,
     # Abstention & multi-turn synthesis
     enable_abstention: bool = False,
@@ -1146,6 +1180,8 @@ async def unified_rag_pipeline(
     enable_query_reformulation: bool = True,
     # Iterative agentic research loop
     enable_research_loop: bool = False,
+    # Deduplicate repeated equivalent research actions and reuse results
+    enable_research_action_dedup: bool = True,
     # Discussion/forum search
     enable_discussion_search: bool = False,
     discussion_platforms: Optional[list[str]] = None,  # ["reddit", "stackoverflow", "hackernews"]
@@ -1434,6 +1470,9 @@ async def unified_rag_pipeline(
         if threshold is not None:
             gate["threshold"] = threshold
 
+    class _EarlyReturn(Exception):
+        """Internal control-flow sentinel for intentional short-circuit paths."""
+
     try:
         # ========== LEARNED FUSION / CALIBRATION HELPERS ==========
         def _decorate_calibration_metadata() -> None:
@@ -1459,6 +1498,45 @@ async def unified_rag_pipeline(
             if calibrator_version:
                 cal.setdefault("version", calibrator_version)
             result.metadata["reranking_calibration"] = cal
+
+        # ========== PRE-RETRIEVAL CLARIFICATION ==========
+        effective_pre_clarify = (
+            enable_pre_retrieval_clarification
+            if enable_pre_retrieval_clarification is not None
+            else bool(enable_generation)
+        )
+        if effective_pre_clarify and assess_query_for_clarification is not None:
+            clarification_start = time.time()
+            decision = await assess_query_for_clarification(
+                query=query,
+                chat_history=chat_history,
+                timeout_sec=float(clarification_timeout_sec or 1.5),
+            )
+            result.timings["pre_retrieval_clarification"] = time.time() - clarification_start
+            if decision.required:
+                result.generated_answer = decision.question or "Could you clarify your request?"
+                result.documents = []
+                result.timings["retrieval"] = 0.0
+                result.metadata.setdefault("clarification", {})
+                result.metadata["clarification"].update({
+                    "required": True,
+                    "stage": "pre_retrieval",
+                    "reason": decision.reason,
+                    "confidence": decision.confidence,
+                    "detector": decision.detector,
+                })
+                result.metadata.setdefault("retrieval_bypassed", {})
+                result.metadata["retrieval_bypassed"]["reason"] = "pre_retrieval_clarification"
+                try:
+                    from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+                    increment_counter(
+                        "rag_clarification_triggered_total",
+                        1,
+                        labels={"stage": "pre_retrieval", "detector": decision.detector},
+                    )
+                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+                    pass
+                raise _EarlyReturn()
 
         # ========== SPELL CHECK ==========
         if spell_check:
@@ -1743,12 +1821,14 @@ async def unified_rag_pipeline(
                     db_context=_db_ctx,
                     discussion_platforms=discussion_platforms,
                     enable_url_scraping=bool(search_url_scraping),
+                    enable_action_dedup=bool(enable_research_action_dedup),
                     enable_image_search=bool(enable_image_search),
                     enable_video_search=bool(enable_video_search),
                 )
 
                 # Convert research results to Document objects
-                from .types import Document as _Doc, DataSource as _DS
+                from .types import DataSource as _DS
+                from .types import Document as _Doc
                 _research_docs = []
                 for r_item in _research_output.all_results:
                     _research_docs.append(_Doc(
@@ -1773,6 +1853,7 @@ async def unified_rag_pipeline(
                     "final_reasoning": _research_output.final_reasoning,
                     "max_iterations_requested": _effective_max_iterations,
                     "url_scraping_enabled": bool(search_url_scraping),
+                    "action_dedup": _research_output.metadata.get("action_dedup", {}),
                     "discussion_platforms": discussion_platforms or ["reddit", "stackoverflow", "hackernews"],
                     "url_dedup": _research_output.metadata.get("url_dedup", {}),
                     "steps": [
@@ -3079,11 +3160,19 @@ async def unified_rag_pipeline(
                         prompt += f"- {snippet}\n"
                     prompt += "\nJSON:"
                     llm_out = llm_analyze(api_name=_prov, input_data="", custom_prompt_arg=prompt, model_override=_model)
-                    import json as _json
                     if isinstance(llm_out, str):
                         try:
-                            followups = _json.loads(llm_out)
-                        except (TypeError, ValueError):
+                            parsed = parse_structured_output(
+                                llm_out,
+                                options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+                            )
+                            if isinstance(parsed, list):
+                                followups = [q for q in parsed if isinstance(q, str) and q.strip()]
+                            elif isinstance(parsed, dict):
+                                wrapped_followups = parsed.get("followups") or parsed.get("suggestions")
+                                if isinstance(wrapped_followups, list):
+                                    followups = [q for q in wrapped_followups if isinstance(q, str) and q.strip()]
+                        except (StructuredOutputParseError, TypeError, ValueError):
                             followups = [s.strip("- ") for s in llm_out.splitlines() if s.strip()]
                 except (
                     AttributeError,
@@ -5792,6 +5881,8 @@ async def unified_rag_pipeline(
             except ImportError:
                 result.errors.append("Performance monitor not available")
 
+    except _EarlyReturn:
+        pass
     except (
         AttributeError,
         ConnectionError,

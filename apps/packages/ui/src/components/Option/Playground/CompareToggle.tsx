@@ -131,6 +131,13 @@ export const CompareToggle: React.FC<CompareToggleProps> = ({
         />
       )}
 
+      {/* Max model limit message */}
+      {!canAddMore && (
+        <p className="text-[10px] text-text-muted">
+          {t("playground:compareMaxModels", "You can compare up to {{limit}} models per turn.", { limit: maxModels })}
+        </p>
+      )}
+
       {/* Settings link */}
       {onOpenSettings && (
         <button
@@ -202,7 +209,7 @@ export const CompareToggle: React.FC<CompareToggleProps> = ({
                   provider={getModelProvider(modelId)}
                   className="h-3 w-3"
                 />
-                <span className="max-w-[60px] truncate text-[9px]">
+                <span className="max-w-[100px] truncate text-[9px]">
                   {getModelLabel(modelId)}
                 </span>
               </span>

@@ -3282,7 +3282,7 @@
     "message": "Compatible SillyTavern"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "Ligne un\\nLigne deux avec ||spoiler en ligne||\\n\\n[spoiler]Contenu du spoiler en bloc[/spoiler]"
+    "message": "Ligne un\nLigne deux avec ||spoiler en ligne||\n\n[spoiler]Contenu du spoiler en bloc[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "Styles des éléments de texte enrichi"

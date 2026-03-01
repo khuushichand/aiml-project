@@ -32,7 +32,7 @@ def create_mock_log_entry(change_id, entity, uuid, op, client, version, payload_
      }
 
 def get_entity_state(db: MediaDatabase, entity: str, uuid: str) -> dict | None:
-    cursor = db.execute_query(f"SELECT * FROM `{entity}` WHERE uuid = ?", (uuid,))
+    cursor = db.execute_query(f"SELECT * FROM `{entity}` WHERE uuid = ?", (uuid,))  # nosec B608
     row = cursor.fetchone()
     return dict(row) if row else None
 

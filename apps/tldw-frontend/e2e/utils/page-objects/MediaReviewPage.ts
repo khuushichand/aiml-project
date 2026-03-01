@@ -14,7 +14,7 @@ export class MediaReviewPage {
   // ── Navigation ──────────────────────────────────────────────────────
 
   async goto(): Promise<void> {
-    await this.page.goto("/content-review", { waitUntil: "domcontentloaded" })
+    await this.page.goto("/media-multi", { waitUntil: "domcontentloaded" })
     await waitForConnection(this.page)
   }
 
@@ -73,6 +73,17 @@ export class MediaReviewPage {
     await items.nth(index).click()
   }
 
+  async getItemTitle(index: number): Promise<string> {
+    const items = await this.getMediaItems()
+    const row = items.nth(index)
+    const title = row.locator(".font-medium").first()
+    if ((await title.count()) > 0) {
+      return ((await title.textContent()) ?? "").trim()
+    }
+    const fallback = row.locator("div").first()
+    return ((await fallback.textContent()) ?? "").trim()
+  }
+
   async shiftClickItem(index: number): Promise<void> {
     const items = await this.getMediaItems()
     await items.nth(index).click({ modifiers: ["Shift"] })
@@ -100,6 +111,85 @@ export class MediaReviewPage {
     return ""
   }
 
+  async getSelectionCountValue(): Promise<number> {
+    const text = await this.getSelectionCountDisplay()
+    const match = text.match(/(\d+)\s*\/\s*(\d+)/)
+    if (!match) return 0
+    return Number.parseInt(match[1], 10)
+  }
+
+  async getSelectedAcrossPagesCount(): Promise<number> {
+    const indicator = this.page.getByText(/Selected across pages:\s*\d+/i).first()
+    if (!(await indicator.isVisible().catch(() => false))) return 0
+    const text = (await indicator.textContent()) ?? ""
+    const match = text.match(/Selected across pages:\s*(\d+)/i)
+    if (!match) return 0
+    return Number.parseInt(match[1], 10)
+  }
+
+  async selectFirstNItems(count: number): Promise<void> {
+    const items = await this.getMediaItems()
+    const total = await items.count()
+    const limit = Math.min(Math.max(0, count), total)
+    for (let idx = 0; idx < limit; idx += 1) {
+      const row = items.nth(idx)
+      const selected = (await row.getAttribute("aria-selected")) === "true"
+      if (!selected) {
+        await row.click()
+      }
+    }
+  }
+
+  getBatchToolbar(): Locator {
+    return this.page.getByTestId("media-multi-batch-toolbar")
+  }
+
+  async setBatchExportFormat(format: "json" | "markdown" | "text"): Promise<void> {
+    const select = this.page.getByRole("combobox", { name: /export format/i }).first()
+    if ((await select.count()) === 0 || !(await select.isVisible().catch(() => false))) return
+    await select.selectOption(format)
+  }
+
+  async clickBatchExportSelected(): Promise<void> {
+    await this.page.getByRole("button", { name: /export selected/i }).first().click()
+  }
+
+  async clickBatchMoveToTrash(): Promise<void> {
+    await this.page.getByRole("button", { name: /^move to trash$/i }).first().click()
+  }
+
+  async confirmBatchMoveToTrashIfPrompted(): Promise<void> {
+    const duplicateButtons = this.page
+      .getByRole("button", { name: /^move to trash$/i })
+    const duplicateCount = await duplicateButtons.count()
+    if (duplicateCount > 1) {
+      await duplicateButtons.nth(duplicateCount - 1).click()
+      return
+    }
+
+    const modal = this.page.locator(".ant-modal, [role='dialog']").first()
+    const visible = await modal.isVisible().catch(() => false)
+    if (!visible) return
+
+    const confirmButton = modal.getByRole("button", { name: /^move to trash$/i }).first()
+    if (await confirmButton.isVisible().catch(() => false)) {
+      await confirmButton.click()
+      return
+    }
+
+    const fallback = modal
+      .getByRole("button", { name: /ok|confirm|yes|delete/i })
+      .first()
+    if (await fallback.isVisible().catch(() => false)) {
+      await fallback.click()
+    }
+  }
+
+  async clickOpenTrashCta(): Promise<void> {
+    const button = this.page.getByRole("button", { name: /open trash/i }).first()
+    await button.click({ timeout: 10_000 })
+  }
+
   // ── View Modes ──────────────────────────────────────────────────────
 
   async setViewMode(mode: "spread" | "list" | "all"): Promise<void> {
@@ -125,7 +215,11 @@ export class MediaReviewPage {
   }
 
   async getCurrentViewMode(): Promise<string> {
-    const checked = this.page.locator(".ant-radio-button-wrapper-checked")
+    const checked = this.page
+      .locator(".ant-radio-group")
+      .filter({ hasText: /compare|focus|stack/i })
+      .locator(".ant-radio-button-wrapper-checked")
+      .first()
     const text = await checked.textContent()
     if (text?.match(/compare/i)) return "spread"
     if (text?.match(/focus/i)) return "list"
@@ -195,14 +289,72 @@ export class MediaReviewPage {
     }
   }
 
-  async filterByMediaType(type: string): Promise<void> {
+  async ensureFiltersVisible(): Promise<void> {
     const filterToggle = this.page.locator("button[aria-controls='filter-section']").first()
-    if ((await filterToggle.count()) > 0) {
-      const expanded = await filterToggle.getAttribute("aria-expanded")
-      if (expanded === "false") {
-        await filterToggle.click()
-      }
+    if ((await filterToggle.count()) === 0) return
+    const expanded = await filterToggle.getAttribute("aria-expanded")
+    if (expanded === "false") {
+      await filterToggle.click()
     }
+  }
+
+  async setSort(sortValue: "relevance" | "date_desc" | "date_asc" | "title_asc" | "title_desc"): Promise<void> {
+    await this.ensureFiltersVisible()
+    const sortSelect = this.page.locator("select[aria-label='Sort']").first()
+    if ((await sortSelect.count()) > 0 && (await sortSelect.isVisible().catch(() => false))) {
+      await sortSelect.selectOption(sortValue)
+      return
+    }
+
+    const sortCombo = this.page.getByRole("combobox", { name: /sort/i }).first()
+    if (!(await sortCombo.isVisible().catch(() => false))) return
+    await sortCombo.click()
+    const optionLabels: Record<string, RegExp> = {
+      relevance: /relevance/i,
+      date_desc: /date:\s*newest first/i,
+      date_asc: /date:\s*oldest first/i,
+      title_asc: /title:\s*a-z/i,
+      title_desc: /title:\s*z-a/i
+    }
+    const option = this.page
+      .locator(".ant-select-item-option")
+      .filter({ hasText: optionLabels[sortValue] })
+      .first()
+    if ((await option.count()) > 0 && (await option.isVisible().catch(() => false))) {
+      await option.click()
+    } else {
+      await this.page.keyboard.press("Escape").catch(() => {})
+    }
+  }
+
+  async setDateRange(startDate?: string, endDate?: string): Promise<void> {
+    await this.ensureFiltersVisible()
+    const startInput = this.page.locator("input[aria-label='Start date']").first()
+    const endInput = this.page.locator("input[aria-label='End date']").first()
+    if ((await startInput.count()) > 0 && (await startInput.isVisible().catch(() => false))) {
+      await startInput.fill(startDate ?? "")
+    }
+    if ((await endInput.count()) > 0 && (await endInput.isVisible().catch(() => false))) {
+      await endInput.fill(endDate ?? "")
+    }
+  }
+
+  async toggleContentSearch(enabled: boolean): Promise<void> {
+    await this.ensureFiltersVisible()
+    const checkbox = this.page.getByRole("checkbox", { name: /search full content/i }).first()
+    const current = await checkbox.isChecked().catch(() => false)
+    if (current !== enabled) {
+      await checkbox.click()
+    }
+  }
+
+  async hasContentSearchProgress(): Promise<boolean> {
+    const progress = this.page.getByRole("status", { name: /content filtering progress/i }).first()
+    return progress.isVisible().catch(() => false)
+  }
+
+  async filterByMediaType(type: string): Promise<void> {
+    await this.ensureFiltersVisible()
 
     const select = this.page.locator("#filter-section .ant-select").first()
     if ((await select.count()) === 0 || !(await select.isVisible().catch(() => false))) return
@@ -247,6 +399,15 @@ export class MediaReviewPage {
     }
   }
 
+  async openCompareContentDiff(): Promise<void> {
+    const compareBtn = this.page.getByRole("button", { name: /compare content/i }).first()
+    await compareBtn.click({ timeout: 10_000 })
+  }
+
+  async hasDiffModal(): Promise<boolean> {
+    return this.page.getByText(/diff view/i).first().isVisible().catch(() => false)
+  }
+
   // ── Viewer Panel ────────────────────────────────────────────────────
 
   async getViewerItemCount(): Promise<number> {
@@ -261,6 +422,25 @@ export class MediaReviewPage {
       ".ant-empty, [data-testid*='empty'], :text('Select items')"
     )
     return (await empty.count()) > 0 && (await empty.first().isVisible().catch(() => false))
+  }
+
+  async isStackVirtualizedVisible(): Promise<boolean> {
+    return this.page.getByTestId("media-review-stack-virtualized").isVisible().catch(() => false)
+  }
+
+  async getStackRenderedCardCount(): Promise<number> {
+    const cards = this.page.locator("[data-testid='media-review-stack-virtualized'] .shadow-sm")
+    return cards.count()
+  }
+
+  async scrollStackContainer(pixels: number): Promise<number> {
+    const stackContainer = this.page.getByTestId("media-review-stack-virtualized")
+    return stackContainer.evaluate((node, amount) => {
+      const parent = node.parentElement
+      if (!parent) return 0
+      parent.scrollTop += amount
+      return parent.scrollTop
+    }, pixels)
   }
 
   // ── Pagination ──────────────────────────────────────────────────────
@@ -353,7 +533,23 @@ export class MediaReviewPage {
 
   async clickOpenAllOnPage(): Promise<void> {
     await this.openOptionsMenu()
-    const menuItem = this.page.locator(".ant-dropdown-menu-item:has-text('Review all')")
+    const menuItem = this.page
+      .locator(".ant-dropdown-menu-item")
+      .filter({ hasText: /Add visible to selection|Review all/i })
+      .first()
+    await menuItem.click()
+  }
+
+  async clickAddVisibleToSelection(): Promise<void> {
+    await this.clickOpenAllOnPage()
+  }
+
+  async clickReplaceSelectionWithVisible(): Promise<void> {
+    await this.openOptionsMenu()
+    const menuItem = this.page
+      .locator(".ant-dropdown-menu-item")
+      .filter({ hasText: /Replace selection with visible/i })
+      .first()
     await menuItem.click()
   }
 

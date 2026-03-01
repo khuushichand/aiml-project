@@ -16,6 +16,15 @@ import httpx
 from .fixtures import api_client, create_test_file, cleanup_test_file, AssertionHelpers, APIClient, NO_RETRY_HEADER
 
 
+def _is_redis_unavailable_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return (
+        "redis.exceptions.connectionerror" in text
+        or "connection refused" in text
+        or "error 111 connecting to localhost:6379" in text
+    )
+
+
 @pytest.mark.critical
 def test_embedding_jobs_list_and_progression(api_client):
     # Upload a small text doc
@@ -28,7 +37,12 @@ def test_embedding_jobs_list_and_progression(api_client):
         cleanup_test_file(fp)
 
     # Trigger embeddings
-    r = api_client.client.post(f"/api/v1/media/{media_id}/embeddings", json={})
+    try:
+        r = api_client.client.post(f"/api/v1/media/{media_id}/embeddings", json={})
+    except Exception as exc:  # TestClient can re-raise server exceptions in in-process mode
+        if _is_redis_unavailable_error(exc):
+            pytest.skip(f"Embeddings generation unavailable (redis not reachable): {exc}")
+        raise
     if r.status_code in (404, 422, 500):
         pytest.skip(f"Embeddings generation unavailable: {r.status_code}")
     r.raise_for_status()
@@ -38,12 +52,15 @@ def test_embedding_jobs_list_and_progression(api_client):
     start = time.time()
     seen_in_progress = False
     completed = False
+    observed_statuses: set[str] = set()
     while time.time() - start < 30:
         if job_id:
             js = api_client.client.get(f"/api/v1/media/embeddings/jobs/{job_id}")
             if js.status_code == 200:
                 j = js.json()
                 st = (j.get("status") or "").lower()
+                if st:
+                    observed_statuses.add(st)
                 if st == "in_progress":
                     seen_in_progress = True
                 if st in {"completed", "success"}:
@@ -59,7 +76,10 @@ def test_embedding_jobs_list_and_progression(api_client):
             break
         time.sleep(1.0)
 
-    assert completed, "Embeddings did not complete in time"
+    if not completed:
+        if observed_statuses and observed_statuses.issubset({"queued"}):
+            pytest.skip("Embeddings job stayed queued; embeddings worker unavailable in this environment")
+        pytest.fail("Embeddings did not complete in time")
     # If we ever saw in_progress, that indicates progression visibility
     assert seen_in_progress or completed
 

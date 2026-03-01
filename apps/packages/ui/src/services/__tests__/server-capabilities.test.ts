@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 
 const cacheState = vi.hoisted(() => ({
   value: undefined as unknown
@@ -129,6 +131,94 @@ describe("server capabilities docs-info merge", () => {
     expect(capabilities.hasPersona).toBe(true)
   })
 
+  it("detects media capability from ingest jobs endpoint alone", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "ingest-jobs-only" },
+      paths: {
+        "/api/v1/media/ingest/jobs": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasMedia).toBe(true)
+  })
+
+  it("derives hasAudio from STT-only support while keeping TTS/voice flags explicit", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "audio-split-stt" },
+      paths: {
+        "/api/v1/audio/transcriptions": {},
+        "/api/v1/audio/transcriptions/health": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasStt).toBe(true)
+    expect(capabilities.hasTts).toBe(false)
+    expect(capabilities.hasVoiceChat).toBe(false)
+    expect(capabilities.hasAudio).toBe(true)
+  })
+
+  it("derives hasAudio from TTS-only support", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "audio-split-tts" },
+      paths: {
+        "/api/v1/audio/speech": {},
+        "/api/v1/audio/health": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasStt).toBe(false)
+    expect(capabilities.hasTts).toBe(true)
+    expect(capabilities.hasVoiceChat).toBe(false)
+    expect(capabilities.hasAudio).toBe(true)
+  })
+
+  it("keeps legacy hasAudio true for voice-chat-only route exposure", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "audio-split-voice-chat" },
+      paths: {
+        "/api/v1/audio/chat/stream": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasVoiceChat).toBe(true)
+    expect(capabilities.hasAudio).toBe(true)
+  })
+
+  it("infers voice chat support from combined STT and TTS routes", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "audio-split-stt-tts" },
+      paths: {
+        "/api/v1/audio/transcriptions": {},
+        "/api/v1/audio/speech": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasStt).toBe(true)
+    expect(capabilities.hasTts).toBe(true)
+    expect(capabilities.hasVoiceChat).toBe(true)
+    expect(capabilities.hasAudio).toBe(true)
+  })
+
   it("reuses a fresh cached capability payload for repeated calls", async () => {
     mocks.getOpenAPISpec.mockResolvedValue({
       info: { version: "cached-version" },
@@ -241,5 +331,18 @@ describe("server capabilities docs-info merge", () => {
     expect(diagnostics.calls).toBe(2)
     expect(diagnostics.networkFetches).toBe(1)
     expect(diagnostics.inFlightHits).toBe(1)
+  })
+
+  it("keeps fallback spec aligned with TTS voice-catalog route checks", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "src/services/tldw/server-capabilities.ts"),
+      "utf8"
+    )
+
+    const fallbackPathsBlock = source.match(
+      /const fallbackSpec = \{[\s\S]*?paths:\s*Object\.fromEntries\(\s*\[([\s\S]*?)\]\.map/
+    )?.[1]
+
+    expect(fallbackPathsBlock).toContain('"/api/v1/audio/voices/catalog"')
   })
 })

@@ -20,11 +20,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (_key: string, defaultValue?: unknown, options?: Record<string, unknown>) => {
-      if (typeof defaultValue === "string") {
-        if (options?.total != null) return defaultValue.replace("{{total}}", String(options.total))
-        return defaultValue
-      }
-      return _key
+      if (typeof defaultValue !== "string") return _key
+      if (!options) return defaultValue
+      return defaultValue.replace(/\{\{(\w+)\}\}/g, (_, token) => String(options[token] ?? ""))
     }
   })
 }))
@@ -211,6 +209,9 @@ describe("JobsTab undo delete flow", () => {
     const undoOptions = mocks.showUndoNotificationMock.mock.calls[0][0]
     expect(undoOptions.title).toBe("Monitor deleted")
     expect(undoOptions.duration).toBe(10)
+    expect(undoOptions.description).toBe(
+      "Undo restores this monitor's schedule, feed scope, and delivery settings for 10 seconds."
+    )
 
     await undoOptions.onUndo()
 
@@ -240,5 +241,32 @@ describe("JobsTab undo delete flow", () => {
       expect(mocks.fetchWatchlistJobsMock.mock.calls.length).toBeGreaterThanOrEqual(2)
     })
     expect(mocks.restoreWatchlistJobMock).not.toHaveBeenCalled()
+  })
+
+  it("falls back to default undo window when backend returns invalid restore timing", async () => {
+    mocks.deleteWatchlistJobMock.mockResolvedValueOnce({
+      success: true,
+      job_id: 41,
+      restore_window_seconds: 0,
+      restore_expires_at: null
+    })
+
+    render(<JobsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("jobs-table")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("danger-button"))
+
+    await waitFor(() => {
+      expect(mocks.showUndoNotificationMock).toHaveBeenCalledTimes(1)
+    })
+
+    const undoOptions = mocks.showUndoNotificationMock.mock.calls[0][0]
+    expect(undoOptions.duration).toBe(10)
+    expect(undoOptions.description).toBe(
+      "Undo restores this monitor's schedule, feed scope, and delivery settings for 10 seconds."
+    )
   })
 })

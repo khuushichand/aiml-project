@@ -3297,7 +3297,7 @@
     "message": "Mit SillyTavern kompatibel"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "Zeile eins\\nZeile zwei mit ||Inline-Spoiler||\\n\\n[spoiler]Block-Spoiler-Inhalt[/spoiler]"
+    "message": "Zeile eins\nZeile zwei mit ||Inline-Spoiler||\n\n[spoiler]Block-Spoiler-Inhalt[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "Stile für Rich-Text-Elemente"

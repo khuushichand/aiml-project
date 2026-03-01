@@ -88,3 +88,38 @@ def test_qwen_adapter_native_http_streaming(monkeypatch):
     chunks = list(a.stream({"messages": [{"role": "user", "content": "hi"}], "model": "qwen-plus", "api_key": "k", "stream": True}))
     assert any(c.startswith("data: ") for c in chunks)
     assert sum(1 for c in chunks if "[DONE]" in c) == 1
+
+
+def test_qwen_base_url_uses_region_preset_when_no_override(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter import QwenAdapter
+
+    monkeypatch.delenv("QWEN_BASE_URL", raising=False)
+    monkeypatch.delenv("QWEN_REGION", raising=False)
+    adapter = QwenAdapter()
+    request = {"app_config": {"qwen_api": {"region": "us"}}}
+    assert (
+        adapter._base_url(request["app_config"], request)
+        == "https://dashscope-us.aliyuncs.com/compatible-mode/v1"
+    )
+
+
+def test_qwen_base_url_precedence_request_env_config_region(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter import QwenAdapter
+
+    adapter = QwenAdapter()
+    cfg = {"qwen_api": {"api_base_url": "https://cfg.example.com/v1", "region": "cn"}}
+
+    monkeypatch.setenv("QWEN_BASE_URL", "https://env.example.com/v1")
+    request = {"base_url": "https://req.example.com/v1", "app_config": cfg}
+    assert adapter._base_url(cfg, request) == "https://req.example.com/v1"
+
+    request = {"app_config": cfg}
+    assert adapter._base_url(cfg, request) == "https://env.example.com/v1"
+
+    monkeypatch.delenv("QWEN_BASE_URL", raising=False)
+    assert adapter._base_url(cfg, request) == "https://cfg.example.com/v1"
+
+    cfg_without_base = {"qwen_api": {"region": "cn"}}
+    assert adapter._base_url(cfg_without_base, {"app_config": cfg_without_base}) == (
+        "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )

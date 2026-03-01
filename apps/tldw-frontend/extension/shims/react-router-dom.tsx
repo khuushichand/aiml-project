@@ -22,6 +22,14 @@ type NavigateOptions = {
   state?: unknown
 }
 
+type BlockerHookArg = boolean | ((...args: unknown[]) => boolean)
+
+type ShimBlocker = {
+  state: "unblocked" | "blocked" | "proceeding"
+  proceed: () => void
+  reset: () => void
+}
+
 const runNavigationTransition = (update: () => void) => {
   if (typeof React.startTransition === "function") {
     React.startTransition(update)
@@ -29,6 +37,8 @@ const runNavigationTransition = (update: () => void) => {
   }
   update()
 }
+
+const noop = () => {}
 
 export const Link = React.forwardRef<HTMLAnchorElement, LinkProps>(
   function Link({ to, href, ...rest }, ref) {
@@ -150,6 +160,16 @@ export const useSearchParams = (): [
 
   return [params, setSearchParams]
 }
+
+export const useBlocker = (_when: BlockerHookArg): ShimBlocker =>
+  React.useMemo(
+    () => ({
+      state: "unblocked",
+      proceed: noop,
+      reset: noop
+    }),
+    []
+  )
 
 export const Routes: React.FC<{ children?: React.ReactNode }> = ({
   children

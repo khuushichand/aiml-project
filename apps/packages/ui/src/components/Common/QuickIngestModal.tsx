@@ -5,7 +5,11 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from "react-router-dom"
 import { browser } from "wxt/browser"
 import { tldwClient } from '@/services/tldw/TldwApiClient'
-import { submitQuickIngestBatch } from "@/services/tldw/quick-ingest-batch"
+import {
+  cancelQuickIngestSession,
+  startQuickIngestSession,
+  submitQuickIngestBatch
+} from "@/services/tldw/quick-ingest-batch"
 import { QuickIngestTabs } from "./QuickIngest/QuickIngestTabs"
 import { QueueTab } from "./QuickIngest/QueueTab/QueueTab"
 import { FileDropZone } from "./QuickIngest/QueueTab/FileDropZone"
@@ -158,6 +162,21 @@ type Props = {
   open: boolean
   onClose: () => void
   autoProcessQueued?: boolean
+}
+
+type PlannedRunContext = {
+  total: number
+  plannedUrlEntries: Array<{
+    id: string
+    url: string
+    type: Entry["type"]
+  }>
+  plannedFiles: Array<{
+    file: File
+    type: Entry["type"]
+  }>
+  fileLookup: Map<string, File>
+  fileIdByInstanceId: Map<string, string>
 }
 
 const buildLocalFileKey = (file: File) => {
@@ -760,15 +779,24 @@ export const QuickIngestModal: React.FC<Props> = ({
       queryFn: () => getEmbeddingModels(),
       enabled: open && ingestConnectionStatus === "online"
     })
-  const { markFailure, clearFailure, setQueuedCount, recordRunSuccess, recordRunFailure } =
+  const {
+    markFailure,
+    clearFailure,
+    setQueuedCount,
+    recordRunSuccess,
+    recordRunFailure,
+    recordRunCancelled
+  } =
     useQuickIngestStore((s) => ({
       markFailure: s.markFailure,
       clearFailure: s.clearFailure,
       setQueuedCount: s.setQueuedCount,
       recordRunSuccess: s.recordRunSuccess,
-      recordRunFailure: s.recordRunFailure
+      recordRunFailure: s.recordRunFailure,
+      recordRunCancelled: s.recordRunCancelled
     }))
   const [lastRunError, setLastRunError] = React.useState<string | null>(null)
+  const [lastRunCancelled, setLastRunCancelled] = React.useState<boolean>(false)
   const [draftCreationError, setDraftCreationError] = React.useState<string | null>(null)
   const [draftCreationRetrying, setDraftCreationRetrying] = React.useState(false)
   const [reviewNavigationError, setReviewNavigationError] = React.useState<string | null>(null)
@@ -786,11 +814,22 @@ export const QuickIngestModal: React.FC<Props> = ({
   const lastFileIdByInstanceIdRef = React.useRef<Map<string, string> | null>(null)
   const pendingStoreWithoutReviewRef = React.useRef(false)
   const unmountedRef = React.useRef(false)
+  const activeSessionIdRef = React.useRef<string | null>(null)
+  const terminalSessionIdsRef = React.useRef<Set<string>>(new Set())
+  const plannedRunContextRef = React.useRef<PlannedRunContext | null>(null)
   const processOnly = reviewBeforeStorage || !storeRemote
   const shouldStoreRemote = storeRemote && !processOnly
   const [lastRunProcessOnly, setLastRunProcessOnly] = React.useState(processOnly)
+  const isCancelledMessage = React.useCallback((value: unknown): boolean => {
+    const text = String(value || "").toLowerCase()
+    return text.includes("cancelled") || text.includes("canceled") || text.includes("abort")
+  }, [])
   const deriveResultOutcome = React.useCallback(
     (item: ResultItem): ResultOutcome => {
+      if (item.outcome === "cancelled") return "cancelled"
+      if (item.status === "error" && isCancelledMessage(item.error)) {
+        return "cancelled"
+      }
       if (item.status === "error") return "failed"
       const statuses = getProcessingStatusLabels(item.data)
       const isSkipped =
@@ -798,7 +837,59 @@ export const QuickIngestModal: React.FC<Props> = ({
       if (isSkipped) return "skipped"
       return lastRunProcessOnly ? "processed" : "ingested"
     },
-    [lastRunProcessOnly]
+    [isCancelledMessage, lastRunProcessOnly]
+  )
+
+  const appendMissingResultsFromPlan = React.useCallback(
+    (
+      existingResults: ResultItem[],
+      errorMessage: string,
+      options?: {
+        status?: ResultItem["status"]
+        outcome?: ResultOutcome
+      }
+    ): ResultItem[] => {
+      const planned = plannedRunContextRef.current
+      if (!planned) return existingResults
+      const message =
+        String(errorMessage || "").trim() || qi("statusFailed", "Failed")
+      const status = options?.status || "error"
+      const outcome = options?.outcome
+      const byId = new Map<string, ResultItem>()
+
+      for (const existing of existingResults) {
+        const normalized = normalizeResultItem(existing)
+        if (normalized) {
+          byId.set(normalized.id, normalized)
+        }
+      }
+
+      for (const row of planned.plannedUrlEntries) {
+        if (byId.has(row.id)) continue
+        byId.set(row.id, {
+          id: row.id,
+          status,
+          outcome,
+          url: row.url,
+          type: row.type,
+          error: message
+        })
+      }
+      for (const entry of planned.plannedFiles) {
+        const fileId = planned.fileIdByInstanceId.get(getFileInstanceId(entry.file))
+        if (!fileId || byId.has(fileId)) continue
+        byId.set(fileId, {
+          id: fileId,
+          status,
+          outcome,
+          fileName: entry.file.name,
+          type: entry.type,
+          error: message
+        })
+      }
+      return Array.from(byId.values())
+    },
+    [qi]
   )
 
   React.useEffect(() => {
@@ -1759,6 +1850,237 @@ export const QuickIngestModal: React.FC<Props> = ({
 
   const autoProcessedRef = React.useRef(false)
 
+  const setActiveSessionId = React.useCallback((sessionId: string | null) => {
+    activeSessionIdRef.current = sessionId
+  }, [])
+
+  React.useEffect(() => {
+    if (open) return
+    setActiveSessionId(null)
+    plannedRunContextRef.current = null
+    terminalSessionIdsRef.current.clear()
+  }, [open, setActiveSessionId])
+
+  const completeRunningState = React.useCallback(() => {
+    setRunning(false)
+    setRunStartedAt(null)
+    setActiveSessionId(null)
+  }, [setActiveSessionId])
+
+  const summarizeResultOutcomes = React.useCallback(
+    (items: ResultItem[]) => {
+      let successCount = 0
+      let failCount = 0
+      let cancelledCount = 0
+      for (const item of items) {
+        if (item.status === "ok") {
+          successCount += 1
+          continue
+        }
+        const outcome = deriveResultOutcome(item)
+        if (outcome === "cancelled") {
+          cancelledCount += 1
+        } else {
+          failCount += 1
+        }
+      }
+      return { successCount, failCount, cancelledCount }
+    },
+    [deriveResultOutcome]
+  )
+
+  const handleRunFailure = React.useCallback(
+    (errorMessage: string) => {
+      const msg = String(errorMessage || "").trim() || "Quick ingest failed."
+      setResults((prev) =>
+        appendMissingResultsFromPlan(prev, msg, { status: "error", outcome: "failed" })
+      )
+      completeRunningState()
+      setLastRunCancelled(false)
+      setLastRunError(msg)
+      const total = plannedRunContextRef.current?.total || 0
+      recordRunFailure({
+        totalCount: total,
+        failedCount: total > 0 ? total : undefined,
+        errorMessage: msg
+      })
+      markFailure()
+      plannedRunContextRef.current = null
+    },
+    [
+      appendMissingResultsFromPlan,
+      completeRunningState,
+      markFailure,
+      recordRunFailure
+    ]
+  )
+
+  const handleRunCancelled = React.useCallback(
+    (messageText?: string) => {
+      const msg =
+        String(messageText || "").trim() ||
+        qi("cancelledByUser", "Cancelled by user.")
+      let nextResultsSnapshot: ResultItem[] = []
+      setResults((prev) => {
+        const next = appendMissingResultsFromPlan(prev, msg, {
+          status: "error",
+          outcome: "cancelled"
+        })
+        nextResultsSnapshot = next
+        return next
+      })
+      completeRunningState()
+      setLastRunCancelled(true)
+      setLastRunError(null)
+      clearFailure()
+      const counts = summarizeResultOutcomes(nextResultsSnapshot)
+      recordRunCancelled({
+        totalCount: plannedRunContextRef.current?.total || nextResultsSnapshot.length,
+        successCount: counts.successCount,
+        failedCount: counts.failCount,
+        cancelledCount: counts.cancelledCount,
+        errorMessage: msg
+      })
+      plannedRunContextRef.current = null
+    },
+    [
+      appendMissingResultsFromPlan,
+      clearFailure,
+      completeRunningState,
+      qi,
+      recordRunCancelled,
+      summarizeResultOutcomes
+    ]
+  )
+
+  const handleRunCompleted = React.useCallback(
+    async (normalizedResults: ResultItem[]) => {
+      const out = appendMissingResultsFromPlan(
+        normalizedResults,
+        qi("missingResultItems", "No result was returned for this item."),
+        { status: "error", outcome: "failed" }
+      )
+      if (unmountedRef.current) {
+        return
+      }
+      setResults(out)
+      completeRunningState()
+      setLastRunCancelled(false)
+      const { successCount, failCount, cancelledCount } =
+        summarizeResultOutcomes(out)
+      const hasOkResults = successCount > 0
+      const firstSuccessfulItem = out.find((r) => r.status === "ok") || null
+      const firstMediaId = firstSuccessfulItem
+        ? mediaIdFromPayload(firstSuccessfulItem.data)
+        : null
+      const primarySourceLabel =
+        firstSuccessfulItem?.url ||
+        firstSuccessfulItem?.fileName ||
+        null
+
+      if (hasOkResults) {
+        recordRunSuccess({
+          totalCount: out.length,
+          successCount,
+          failedCount: failCount,
+          firstMediaId:
+            firstMediaId === null || typeof firstMediaId === "undefined"
+              ? null
+              : String(firstMediaId),
+          primarySourceLabel
+        })
+      } else if (cancelledCount > 0) {
+        recordRunCancelled({
+          totalCount: out.length,
+          successCount,
+          failedCount: failCount,
+          cancelledCount
+        })
+      } else {
+        const firstError = out.find((item) => item.status === "error")?.error || null
+        recordRunFailure({
+          totalCount: out.length,
+          failedCount: out.length,
+          errorMessage: firstError
+        })
+      }
+
+      const fileLookup = plannedRunContextRef.current?.fileLookup || new Map<string, File>()
+      let createdDraftBatch: {
+        batchId: string
+        draftIds: string[]
+        skippedAssets: number
+      } | null = null
+      if (reviewBeforeStorage && hasOkResults) {
+        let draftErrorMessage: string | null = null
+        try {
+          createdDraftBatch = await createDraftsFromResults(out, fileLookup)
+          if (createdDraftBatch?.batchId) {
+            setReviewBatchId(createdDraftBatch.batchId)
+          }
+        } catch (err) {
+          console.error("[quickIngest] Failed to create review drafts", err)
+          draftErrorMessage = qi(
+            "reviewDraftsFailedFallback",
+            "Failed to create review drafts."
+          )
+        }
+        if (!createdDraftBatch?.batchId) {
+          const msg =
+            draftErrorMessage ||
+            qi("reviewDraftsFailedFallback", "Failed to create review drafts.")
+          messageApi.error(msg)
+          setDraftCreationError(msg)
+          plannedRunContextRef.current = null
+          return
+        }
+      }
+
+      if (lastRunProcessOnly && !reviewBeforeStorage && out.length > 0) {
+        messageApi.info(
+          qi(
+            "processingComplete",
+            "Processing complete. Use \"Download JSON\" below to save results locally."
+          )
+        )
+      }
+      if (out.length > 0) {
+        const summary =
+          cancelledCount > 0
+            ? `${successCount} succeeded · ${failCount} failed · ${cancelledCount} cancelled`
+            : `${successCount} succeeded · ${failCount} failed`
+        if (failCount > 0) {
+          messageApi.warning(summary)
+        } else if (cancelledCount > 0) {
+          messageApi.info(summary)
+        } else {
+          messageApi.success(summary)
+        }
+      }
+      if (createdDraftBatch?.batchId) {
+        await handleReviewBatchReady(createdDraftBatch)
+      }
+      clearFailure()
+      setLastRunError(null)
+      plannedRunContextRef.current = null
+    },
+    [
+      appendMissingResultsFromPlan,
+      clearFailure,
+      completeRunningState,
+      createDraftsFromResults,
+      handleReviewBatchReady,
+      lastRunProcessOnly,
+      messageApi,
+      qi,
+      recordRunCancelled,
+      recordRunFailure,
+      recordRunSuccess,
+      reviewBeforeStorage,
+      summarizeResultOutcomes
+    ]
+  )
+
   // Allow external callers (e.g., tests) to force a connection check
   React.useEffect(() => {
     const handler = () => {
@@ -1786,12 +2108,15 @@ export const QuickIngestModal: React.FC<Props> = ({
   const run = React.useCallback(async () => {
     // Reset any previous error state before a new attempt.
     setLastRunError(null)
+    setLastRunCancelled(false)
     setDraftCreationError(null)
     setDraftCreationRetrying(false)
     setReviewNavigationError(null)
     lastFileLookupRef.current = null
     lastFileIdByInstanceIdRef.current = null
     clearFailure()
+    terminalSessionIdsRef.current.clear()
+    setActiveSessionId(null)
 
     const missingFileCount = missingFileStubs.length
     if (missingFileCount > 0) {
@@ -1878,48 +2203,25 @@ export const QuickIngestModal: React.FC<Props> = ({
     }
     lastFileLookupRef.current = fileLookup
     lastFileIdByInstanceIdRef.current = fileIdByInstanceId
-
-    const appendMissingFailureResults = (
-      existingResults: ResultItem[],
-      errorMessage: string
-    ): ResultItem[] => {
-      const message = String(errorMessage || "").trim() || qi("statusFailed", "Failed")
-      const byId = new Map<string, ResultItem>()
-      for (const existing of existingResults) {
-        const normalized = normalizeResultItem(existing)
-        if (normalized) {
-          byId.set(normalized.id, normalized)
-        }
-      }
-      for (const row of plannedUrlEntries) {
-        if (byId.has(row.id)) continue
-        byId.set(row.id, {
-          id: row.id,
-          status: "error",
-          url: row.url,
-          type: row.type,
-          error: message
-        })
-      }
-      for (const planned of plannedFiles) {
-        const fileId = fileIdByInstanceId.get(getFileInstanceId(planned.file))
-        if (!fileId || byId.has(fileId)) continue
-        byId.set(fileId, {
-          id: fileId,
-          status: "error",
-          fileName: planned.file.name,
-          type: planned.type,
-          error: message
-        })
-      }
-      return Array.from(byId.values())
+    plannedRunContextRef.current = {
+      total,
+      plannedUrlEntries,
+      plannedFiles,
+      fileLookup,
+      fileIdByInstanceId
     }
 
-    const markPendingItemsAsFailed = (errorMessage: string) => {
-      setResults((prev) => {
-        return appendMissingFailureResults(prev, errorMessage)
-      })
+    let sessionIdForRun: string | null = null
+    const shouldIgnoreRunResolution = (sessionId: string | null) => {
+      const normalizedSessionId = String(sessionId || "").trim()
+      if (!normalizedSessionId) return false
+      if (terminalSessionIdsRef.current.has(normalizedSessionId)) {
+        return true
+      }
+      const activeSessionId = String(activeSessionIdRef.current || "").trim()
+      return activeSessionId !== normalizedSessionId
     }
+
     try {
       // Ensure tldwConfig is hydrated for background requests
       try {
@@ -2001,12 +2303,41 @@ export const QuickIngestModal: React.FC<Props> = ({
         })
       )
 
-      console.log('[QI_MODAL] About to send tldw:quick-ingest-batch', {
-        entriesCount: entries.length,
-        filesCount: filesPayload.length,
+      const requestPayload = {
+        entries,
+        files: filesPayload,
         storeRemote,
-        processOnly
-      })
+        processOnly,
+        common,
+        advancedValues,
+        fileDefaults,
+        chunkingTemplateName,
+        autoApplyTemplate
+      }
+
+      const startAck = await startQuickIngestSession(requestPayload)
+      if (!startAck?.ok || !startAck?.sessionId) {
+        const msg =
+          startAck?.error ||
+          qi(
+            "quickIngestStartFailed",
+            "Quick ingest failed to start. Check tldw server settings and try again."
+          )
+        messageApi.error(msg)
+        if (!unmountedRef.current) {
+          handleRunFailure(msg)
+        }
+        return
+      }
+      const sessionId = String(startAck.sessionId).trim()
+      sessionIdForRun = sessionId
+      terminalSessionIdsRef.current.delete(sessionId)
+      setActiveSessionId(sessionId)
+
+      // Direct runtimes do not currently emit async session events.
+      if (sessionId && !sessionId.startsWith("qi-direct-")) {
+        return
+      }
 
       let resp:
         | {
@@ -2017,52 +2348,33 @@ export const QuickIngestModal: React.FC<Props> = ({
         | undefined
 
       try {
-        resp = (await submitQuickIngestBatch({
-          entries,
-          files: filesPayload,
-          storeRemote,
-          processOnly,
-          common,
-          advancedValues,
-          fileDefaults,
-          chunkingTemplateName,
-          autoApplyTemplate
-        })) as
+        resp = (await submitQuickIngestBatch(requestPayload)) as
           | {
               ok: boolean
               error?: string
               results?: Array<Partial<ResultItem>>
             }
           | undefined
-        console.log('[QI_MODAL] quick ingest batch returned', {
-          ok: resp?.ok,
-          error: resp?.error
-        })
       } catch (sendErr: any) {
-        console.error('[QI_MODAL] quick ingest batch error', sendErr?.message)
+        if (shouldIgnoreRunResolution(sessionIdForRun)) {
+          return
+        }
         throw sendErr
       }
 
-      if (unmountedRef.current) {
+      if (unmountedRef.current || shouldIgnoreRunResolution(sessionIdForRun)) {
         return
       }
 
       if (!resp?.ok) {
-        const msg = resp?.error || "Quick ingest failed. Check tldw server settings and try again."
-        messageApi.error(msg)
-        if (unmountedRef.current) {
+        if (shouldIgnoreRunResolution(sessionIdForRun)) {
           return
         }
-        markPendingItemsAsFailed(msg)
-        setLastRunError(msg)
-        recordRunFailure({
-          totalCount: total,
-          failedCount: total,
-          errorMessage: msg
-        })
-        markFailure()
-        setRunning(false)
-        setRunStartedAt(null)
+        const msg = resp?.error || "Quick ingest failed. Check tldw server settings and try again."
+        messageApi.error(msg)
+        if (!unmountedRef.current) {
+          handleRunFailure(msg)
+        }
         return
       }
 
@@ -2070,126 +2382,29 @@ export const QuickIngestModal: React.FC<Props> = ({
         .map((item) => normalizeResultItem(item))
         .filter((item): item is ResultItem => Boolean(item))
       if (total > 0 && normalizedResults.length === 0) {
+        if (shouldIgnoreRunResolution(sessionIdForRun)) {
+          return
+        }
         const msg = qi(
           "noResultItemsReturned",
           "Ingest request finished without item results."
         )
-        markPendingItemsAsFailed(msg)
-        setLastRunError(msg)
-        recordRunFailure({
-          totalCount: total,
-          failedCount: total,
-          errorMessage: msg
-        })
-        markFailure()
-        setRunning(false)
-        setRunStartedAt(null)
+        handleRunFailure(msg)
         return
       }
-      const out = appendMissingFailureResults(
-        normalizedResults,
-        qi("missingResultItems", "No result was returned for this item.")
-      )
-      if (unmountedRef.current) {
+      if (shouldIgnoreRunResolution(sessionIdForRun)) {
         return
       }
-      setResults(out)
-      setRunning(false)
-      setRunStartedAt(null)
-      const hasOkResults = out.some((r) => r.status === "ok")
-      const successCount = out.filter((r) => r.status === "ok").length
-      const failCount = out.length - successCount
-      const firstSuccessfulItem = out.find((r) => r.status === "ok") || null
-      const firstMediaId = firstSuccessfulItem
-        ? mediaIdFromPayload(firstSuccessfulItem.data)
-        : null
-      const primarySourceLabel =
-        firstSuccessfulItem?.url ||
-        firstSuccessfulItem?.fileName ||
-        null
-      if (hasOkResults) {
-        recordRunSuccess({
-          totalCount: out.length,
-          successCount,
-          failedCount: failCount,
-          firstMediaId:
-            firstMediaId === null || typeof firstMediaId === "undefined"
-              ? null
-              : String(firstMediaId),
-          primarySourceLabel
-        })
-      } else {
-        const firstError = out.find((item) => item.status === "error")?.error || null
-        recordRunFailure({
-          totalCount: out.length,
-          failedCount: out.length,
-          errorMessage: firstError
-        })
-      }
-      let createdDraftBatch: {
-        batchId: string
-        draftIds: string[]
-        skippedAssets: number
-      } | null = null
-      if (reviewBeforeStorage && hasOkResults) {
-        let draftErrorMessage: string | null = null
-        try {
-          createdDraftBatch = await createDraftsFromResults(out, fileLookup)
-          if (createdDraftBatch?.batchId) {
-            setReviewBatchId(createdDraftBatch.batchId)
-          }
-        } catch (err) {
-          console.error("[quickIngest] Failed to create review drafts", err)
-          draftErrorMessage = qi(
-            "reviewDraftsFailedFallback",
-            "Failed to create review drafts."
-          )
-        }
-        if (!createdDraftBatch?.batchId) {
-          const msg =
-            draftErrorMessage ||
-            qi("reviewDraftsFailedFallback", "Failed to create review drafts.")
-          messageApi.error(msg)
-          setDraftCreationError(msg)
-          return
-        }
-      }
-
-      if (processOnly && !reviewBeforeStorage && out.length > 0) {
-        messageApi.info(
-          qi(
-            "processingComplete",
-            "Processing complete. Use \"Download JSON\" below to save results locally."
-          )
-        )
-      }
-      if (out.length > 0) {
-        const summary = `${successCount} succeeded · ${failCount} failed`
-        if (failCount > 0) messageApi.warning(summary)
-        else messageApi.success(summary)
-      }
-      if (createdDraftBatch?.batchId) {
-        await handleReviewBatchReady(createdDraftBatch)
-      }
-      // Successful run (even with some item-level failures) clears the global failure flag.
-      clearFailure()
-      setLastRunError(null)
+      await handleRunCompleted(normalizedResults)
     } catch (e: any) {
+      if (shouldIgnoreRunResolution(sessionIdForRun)) {
+        return
+      }
       const msg = e?.message || "Quick ingest failed."
       messageApi.error(msg)
-      if (unmountedRef.current) {
-        return
+      if (!unmountedRef.current) {
+        handleRunFailure(msg)
       }
-      markPendingItemsAsFailed(msg)
-      setRunning(false)
-      setRunStartedAt(null)
-      setLastRunError(msg)
-      recordRunFailure({
-        totalCount: total,
-        failedCount: total > 0 ? total : undefined,
-        errorMessage: msg
-      })
-      markFailure()
     }
   }, [
     advancedValues,
@@ -2197,8 +2412,8 @@ export const QuickIngestModal: React.FC<Props> = ({
     chunkingTemplateName,
     clearFailure,
     common,
-    createDraftsFromResults,
-    handleReviewBatchReady,
+    handleRunCompleted,
+    handleRunFailure,
     ingestBlocked,
     ingestConnectionStatus,
     attachedFiles,
@@ -2210,15 +2425,14 @@ export const QuickIngestModal: React.FC<Props> = ({
     mergeDefaults,
     processOnly,
     qi,
-    recordRunFailure,
-    recordRunSuccess,
     fileTypeFromName,
     reviewBeforeStorage,
     rows,
     storeRemote,
     t,
     normalizedTypeDefaults,
-    missingFileStubs.length
+    missingFileStubs.length,
+    setActiveSessionId
   ])
 
   const hasReviewableResults = React.useMemo(
@@ -2557,8 +2771,8 @@ export const QuickIngestModal: React.FC<Props> = ({
 
     const paths = spec?.paths || {}
     const mediaAddSchema = extractSchemaFromPath(paths, [
-      '/api/v1/media/add',
-      '/api/v1/media/add/'
+      '/api/v1/media/ingest/jobs',
+      '/api/v1/media/ingest/jobs/'
     ])
     const webScrapeSchema = extractSchemaFromPath(paths, [
       '/api/v1/media/process-web-scraping',
@@ -3064,9 +3278,11 @@ export const QuickIngestModal: React.FC<Props> = ({
       elapsedMs > 0
         ? `${Math.floor(elapsedMs / 60000)}:${String(Math.floor((elapsedMs % 60000) / 1000)).padStart(2, '0')}`
         : null
-    const state: "running" | "failed" | "complete" | "ready" =
+    const state: "running" | "failed" | "complete" | "cancelled" | "ready" =
       running
         ? "running"
+        : lastRunCancelled
+          ? "cancelled"
         : lastRunError
           ? "failed"
           : total > 0 && done >= total
@@ -3074,6 +3290,7 @@ export const QuickIngestModal: React.FC<Props> = ({
             : "ready"
     return { total, done, pct, elapsedLabel, state, error: lastRunError }
   }, [
+    lastRunCancelled,
     lastRunError,
     liveTotalCount,
     processedCount,
@@ -3100,10 +3317,9 @@ export const QuickIngestModal: React.FC<Props> = ({
     if (!results || results.length === 0) {
       return null
     }
-    const successCount = results.filter((r) => r.status === "ok").length
-    const failCount = results.length - successCount
-    return { successCount, failCount }
-  }, [results])
+    const { successCount, failCount, cancelledCount } = summarizeResultOutcomes(results)
+    return { successCount, failCount, cancelledCount }
+  }, [results, summarizeResultOutcomes])
 
   const storageLabel = React.useMemo(() => {
     if (!storeRemote) {
@@ -3668,41 +3884,142 @@ export const QuickIngestModal: React.FC<Props> = ({
     [confirmReplaceQueue, qi, queuedFileStubs.length, resetQueueForRetry, rows, running]
   )
 
-  // Live progress updates from background batch processor
+  const requestCancelActiveRun = React.useCallback(async () => {
+    if (!running) return
+    const sessionId = String(activeSessionIdRef.current || "").trim()
+    if (!sessionId) return
+
+    const confirmed = await confirmDanger({
+      title: qi("cancelRunConfirmTitle", "Cancel current ingest run?"),
+      content: qi(
+        "cancelRunConfirmBody",
+        "This stops remaining items in the current run. Completed items stay in results."
+      ),
+      okText: qi("cancelRunConfirmAction", "Cancel run"),
+      cancelText: qi("cancelRunKeep", "Keep running"),
+      danger: true,
+      autoFocusButton: "cancel"
+    })
+    if (!confirmed) return
+
+    terminalSessionIdsRef.current.add(sessionId)
+    handleRunCancelled(qi("cancelledByUser", "Cancelled by user."))
+
+    try {
+      const response = await cancelQuickIngestSession({
+        sessionId,
+        reason: "user_cancelled"
+      })
+      if (!response?.ok && response?.error) {
+        messageApi.warning(response.error)
+      }
+    } catch (error) {
+      const text =
+        error instanceof Error
+          ? error.message
+          : String(error || "Cancel request failed.")
+      messageApi.warning(text)
+    }
+  }, [confirmDanger, handleRunCancelled, messageApi, qi, running])
+
+  const handleModalCancel = React.useCallback(() => {
+    if (running) {
+      void requestCancelActiveRun()
+      return
+    }
+    onClose()
+  }, [onClose, requestCancelActiveRun, running])
+
+  // Live progress + terminal updates from background quick-ingest session runtime.
   React.useEffect(() => {
     const handler = (message: any) => {
-      if (!message || message.type !== "tldw:quick-ingest-progress") return
-      const payload = message.payload || {}
-      const result = normalizeResultItem(payload.result as Partial<ResultItem> | undefined)
-      if (typeof payload.processedCount === "number") {
-        setProcessedCount(payload.processedCount)
-        if (
-          typeof payload.totalCount === "number" &&
-          payload.processedCount >= payload.totalCount
-        ) {
-          setRunning(false)
-          setRunStartedAt(null)
-        }
+      if (!message || typeof message.type !== "string") return
+      const type = String(message.type)
+      if (
+        type !== "tldw:quick-ingest/progress" &&
+        type !== "tldw:quick-ingest/completed" &&
+        type !== "tldw:quick-ingest/failed" &&
+        type !== "tldw:quick-ingest/cancelled" &&
+        type !== "tldw:quick-ingest-progress"
+      ) {
+        return
       }
-      if (typeof payload.totalCount === "number") {
-        setLiveTotalCount(payload.totalCount)
-        setTotalPlanned(payload.totalCount)
-      }
-      if (!result || !result.id) return
 
-      setResults((prev) => {
-        const map = new Map<string, ResultItem>()
-        for (const r of prev) {
-          if (r.id) map.set(r.id, r)
+      const payload = message.payload || {}
+      const sessionId = String(payload.sessionId || "").trim()
+      const activeSessionId = String(activeSessionIdRef.current || "").trim()
+      if (!sessionId || !activeSessionId || sessionId !== activeSessionId) {
+        return
+      }
+      if (
+        terminalSessionIdsRef.current.has(sessionId) &&
+        type !== "tldw:quick-ingest/progress" &&
+        type !== "tldw:quick-ingest-progress"
+      ) {
+        return
+      }
+
+      if (type === "tldw:quick-ingest/progress" || type === "tldw:quick-ingest-progress") {
+        const result = normalizeResultItem(payload.result as Partial<ResultItem> | undefined)
+        if (typeof payload.processedCount === "number") {
+          setProcessedCount(payload.processedCount)
         }
-        const existing = map.get(result.id)
-        map.set(result.id, {
-          ...(existing || {}),
-          ...result,
-          status: normalizeResultStatus(result.status)
+        if (typeof payload.totalCount === "number") {
+          setLiveTotalCount(payload.totalCount)
+          setTotalPlanned(payload.totalCount)
+        }
+        if (!result || !result.id) return
+
+        setResults((prev) => {
+          const map = new Map<string, ResultItem>()
+          for (const r of prev) {
+            if (r.id) map.set(r.id, r)
+          }
+          const existing = map.get(result.id)
+          map.set(result.id, {
+            ...(existing || {}),
+            ...result,
+            status: normalizeResultStatus(result.status),
+            outcome: isCancelledMessage(result.error) ? "cancelled" : existing?.outcome
+          })
+          return Array.from(map.values())
         })
-        return Array.from(map.values())
-      })
+        return
+      }
+
+      terminalSessionIdsRef.current.add(sessionId)
+      if (type === "tldw:quick-ingest/completed") {
+        const normalizedResults = (payload.results || [])
+          .map((item: Partial<ResultItem>) => normalizeResultItem(item))
+          .filter((item: ResultItem | null): item is ResultItem => Boolean(item))
+        if (
+          (plannedRunContextRef.current?.total || 0) > 0 &&
+          normalizedResults.length === 0
+        ) {
+          handleRunFailure(
+            qi(
+              "noResultItemsReturned",
+              "Ingest request finished without item results."
+            )
+          )
+          return
+        }
+        void handleRunCompleted(normalizedResults)
+        return
+      }
+      if (type === "tldw:quick-ingest/failed") {
+        const msg =
+          String(payload.error || "").trim() ||
+          qi("statusFailed", "Quick ingest failed.")
+        handleRunFailure(msg)
+        return
+      }
+      if (type === "tldw:quick-ingest/cancelled") {
+        const msg =
+          String(payload.reason || "").trim() ||
+          qi("cancelledByUser", "Cancelled by user.")
+        handleRunCancelled(msg)
+      }
     }
 
     try {
@@ -3718,7 +4035,7 @@ export const QuickIngestModal: React.FC<Props> = ({
         }
       } catch {}
     }
-  }, [])
+  }, [handleRunCancelled, handleRunCompleted, handleRunFailure, isCancelledMessage, qi])
 
   React.useEffect(() => {
     const forceIntro = () => {
@@ -3792,7 +4109,7 @@ export const QuickIngestModal: React.FC<Props> = ({
         </div>
       }
       open={open}
-      onCancel={onClose}
+      onCancel={handleModalCancel}
       footer={null}
       width={760}
       style={{ maxWidth: "calc(100vw - 32px)" }}
@@ -4371,6 +4688,7 @@ export const QuickIngestModal: React.FC<Props> = ({
             hasMissingFiles={hasMissingFiles}
             missingFileCount={missingFileCount}
             onRun={run}
+            onCancel={requestCancelActiveRun}
             storeRemote={storeRemote}
             reviewBeforeStorage={reviewBeforeStorage}
           />
@@ -4907,6 +5225,7 @@ export const QuickIngestModal: React.FC<Props> = ({
               hasMissingFiles={hasMissingFiles}
               missingFileCount={missingFileCount}
               onRun={run}
+              onCancel={requestCancelActiveRun}
               storeRemote={storeRemote}
               reviewBeforeStorage={reviewBeforeStorage}
             />

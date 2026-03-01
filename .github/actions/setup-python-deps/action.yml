@@ -25,12 +25,44 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Resolve cache dependency paths
+      id: resolve-cache-paths
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        resolved_paths=()
+        while IFS= read -r path; do
+          path="${path%$'\r'}"
+          [[ -n "$path" ]] || continue
+          if [[ -e "$path" ]]; then
+            resolved_paths+=("$path")
+          fi
+        done << 'CACHE_PATHS'
+        ${{ inputs.cache-dependency-path }}
+        CACHE_PATHS
+
+        if [[ ${#resolved_paths[@]} -eq 0 ]]; then
+          resolved_paths=("pyproject.toml")
+        fi
+
+        {
+          echo 'paths<<EOF'
+          printf '%s\n' "${resolved_paths[@]}"
+          echo 'EOF'
+        } >> "$GITHUB_OUTPUT"
+
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python-version }}
         cache: pip
-        cache-dependency-path: ${{ inputs.cache-dependency-path }}
+        cache-dependency-path: ${{ steps.resolve-cache-paths.outputs.paths }}
+
+    - name: Ensure pip cache directory exists
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.cache/pip"
 
     - name: Setup uv
       if: inputs.use-uv == 'true'

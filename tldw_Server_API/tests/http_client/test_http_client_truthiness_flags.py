@@ -85,3 +85,32 @@ def test_fetch_simple_redirect_flags_accept_y(monkeypatch):
     assert calls == ["https://a.test/start", "https://b.test/next"]
     assert resp["status"] == 200
     assert resp["url"] == "https://b.test/next"
+
+
+def test_validate_egress_reuses_dns_pin_cache_for_same_host(monkeypatch):
+    from tldw_Server_API.app.core.Security import egress as egress_mod
+
+    calls: list[object] = []
+
+    def _fake_policy(url: str, *, block_private_override=None, resolved_ips_override=None):
+        calls.append(resolved_ips_override)
+        if resolved_ips_override is None:
+            return types.SimpleNamespace(
+                allowed=True,
+                reason=None,
+                resolved_ips=("93.184.216.34", "93.184.216.35"),
+            )
+        return types.SimpleNamespace(
+            allowed=True,
+            reason=None,
+            resolved_ips=tuple(resolved_ips_override),
+        )
+
+    monkeypatch.setattr(egress_mod, "evaluate_url_policy", _fake_policy)
+
+    dns_pin_cache: dict[str, tuple[str, ...]] = {}
+    hc._validate_egress_or_raise("https://example.com/path-a", dns_pin_cache=dns_pin_cache)
+    hc._validate_egress_or_raise("https://example.com/path-b", dns_pin_cache=dns_pin_cache)
+
+    assert calls == [None, ("93.184.216.34", "93.184.216.35")]
+    assert dns_pin_cache["example.com"] == ("93.184.216.34", "93.184.216.35")

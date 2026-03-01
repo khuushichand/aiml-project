@@ -87,6 +87,34 @@ describe("quick chat workflow guides", () => {
     ])
   })
 
+  it("accepts cards without routeLabel and derives one from route", () => {
+    const parsed = parseQuickChatWorkflowGuidesJson(
+      JSON.stringify([
+        {
+          id: "custom-no-route-label",
+          title: "Custom Guide",
+          question: "Where do I go?",
+          answer: "Open workspace.",
+          route: "/workspace-playground",
+          tags: ["workflow"]
+        }
+      ])
+    )
+
+    expect(parsed.error).toBeUndefined()
+    expect(parsed.guides).toEqual([
+      {
+        id: "custom-no-route-label",
+        title: "Custom Guide",
+        question: "Where do I go?",
+        answer: "Open workspace.",
+        route: "/workspace-playground",
+        routeLabel: "Workspace Playground",
+        tags: ["workflow"]
+      }
+    ])
+  })
+
   it("returns validation error for invalid JSON payload", () => {
     const parsed = parseQuickChatWorkflowGuidesJson("{not-json")
     expect(parsed.guides).toBeNull()

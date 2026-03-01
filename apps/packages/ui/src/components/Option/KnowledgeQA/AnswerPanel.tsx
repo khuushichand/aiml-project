@@ -5,7 +5,7 @@
 import React, { type ReactNode, useEffect, useMemo, useState } from "react"
 import { Sparkles, AlertCircle, Loader2, ThumbsUp, ThumbsDown } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import { getFeedbackSessionId, submitExplicitFeedback } from "@/services/feedback"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useNavigate } from "react-router-dom"

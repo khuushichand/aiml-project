@@ -34,8 +34,8 @@ def client_with_user(monkeypatch):
 def _extract_opml_urls(xml_text: str) -> list[str]:
     urls = []
     try:
-        import xml.etree.ElementTree as ET
-        root = ET.fromstring(xml_text)
+        from defusedxml import ElementTree as DET
+        root = DET.fromstring(xml_text)
         for outline in root.findall('.//outline'):
             url = outline.attrib.get('xmlUrl') or outline.attrib.get('xmlurl')
             if url:

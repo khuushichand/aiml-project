@@ -8,9 +8,9 @@ Goal
 - Validate unified SSE/WS streams behind `STREAMS_UNIFIED` and flip the flag ON in staging, then plan production.
 
 References
-- PRD: `Docs/Design/Stream_Abstraction_PRD.md` (Status: Pilot Rollout)
+- PRD: `Docs/Product/Completed/Stream_Abstraction_PRD.md` (Status: Pilot Rollout)
 - Dev Overlay: `Dockerfiles/docker-compose.dev.yml`
-- Metrics Dashboard: `Docs/Deployment/Monitoring/Grafana_Streaming_Basics.json`
+- Metrics Dashboard: `Docs/Monitoring/Grafana_Dashboards/README.md`
 
 Checklist
 

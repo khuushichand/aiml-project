@@ -30,6 +30,7 @@ from ....DB_Management.Media_DB_v2 import (
     get_media_transcripts,
     permanently_delete_item,
 )
+from ...persona_scope import get_explicit_scope_ids, merge_requested_ids_with_scope
 from ..base import BaseModule, create_resource_definition, create_tool_definition
 from ..disk_space import get_free_disk_space_gb
 
@@ -583,6 +584,29 @@ class MediaModule(BaseModule):
             sanitized.pop(key, None)
         return sanitized
 
+    def _media_ids_scope(self, context: Any | None) -> set[str] | None:
+        return get_explicit_scope_ids(context, "media_id")
+
+    def _effective_media_ids_filter(self, requested: Any, context: Any | None) -> list[int] | None:
+        scoped_ids = self._media_ids_scope(context)
+        merged = merge_requested_ids_with_scope(requested, scoped_ids=scoped_ids)
+        if merged is None:
+            return None
+        parsed: list[int] = []
+        for value in sorted(merged):
+            try:
+                parsed.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        return parsed
+
+    def _assert_media_scope_allowed(self, media_id: int, context: Any | None) -> None:
+        scoped_ids = self._media_ids_scope(context)
+        if scoped_ids is None:
+            return
+        if str(media_id) not in scoped_ids:
+            raise PermissionError("Access denied for this media item by persona scope")
+
     async def _media_search_normalized(
         self,
         query: str,
@@ -593,6 +617,7 @@ class MediaModule(BaseModule):
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         order_by: str = "relevance",
+        media_ids_filter: Optional[list[Any]] = None,
         context: Any | None = None,
     ) -> dict[str, Any]:
         return await asyncio.to_thread(
@@ -605,6 +630,7 @@ class MediaModule(BaseModule):
             date_from,
             date_to,
             order_by,
+            media_ids_filter,
             context,
         )
 
@@ -618,6 +644,7 @@ class MediaModule(BaseModule):
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         order_by: str = "relevance",
+        media_ids_filter: Optional[list[Any]] = None,
         context: Any | None = None,
     ) -> dict[str, Any]:
         # Session defaults
@@ -647,6 +674,14 @@ class MediaModule(BaseModule):
         page_size = max(1, limit)
         page = (offset // page_size) + 1
         local_offset = offset % page_size
+        effective_media_ids_filter = self._effective_media_ids_filter(media_ids_filter, context)
+        if effective_media_ids_filter is not None and not effective_media_ids_filter:
+            return {
+                "results": [],
+                "has_more": False,
+                "next_offset": None,
+                "total_estimated": 0,
+            }
         dbi = self._open_media_db(context)
         results, total = dbi.search_media_db(
             search_query=query,
@@ -654,6 +689,7 @@ class MediaModule(BaseModule):
             media_types=media_types or None,
             date_range=date_range,
             sort_by=sort_by,
+            media_ids_filter=effective_media_ids_filter,
             page=page,
             results_per_page=page_size,
             include_trash=False,
@@ -667,6 +703,7 @@ class MediaModule(BaseModule):
                     media_types=media_types or None,
                     date_range=date_range,
                     sort_by=sort_by,
+                    media_ids_filter=effective_media_ids_filter,
                     page=page + 1,
                     results_per_page=page_size,
                     include_trash=False,
@@ -733,6 +770,7 @@ class MediaModule(BaseModule):
 
     def _media_get_normalized_sync(self, media_id: int, retrieval: Optional[dict[str, Any]] = None, context: Any | None = None) -> dict[str, Any]:
         retrieval = retrieval or {}
+        self._assert_media_scope_allowed(media_id, context)
         mode = retrieval.get("mode", "snippet")
         snippet_length = int(retrieval.get("snippet_length", 300))
         max_tokens = retrieval.get("max_tokens")
@@ -987,6 +1025,17 @@ class MediaModule(BaseModule):
                 sort_by_value = order_key
 
         media_ids_filter = kwargs.get("media_ids_filter")
+        effective_media_ids_filter = self._effective_media_ids_filter(media_ids_filter, context)
+        if effective_media_ids_filter is not None and not effective_media_ids_filter:
+            return {
+                "query": query,
+                "type": search_type,
+                "count": 0,
+                "results": [],
+                "offset": offset,
+                "limit": limit,
+                "total": 0,
+            }
         include_trash = bool(kwargs.get("include_trash", False))
         include_deleted = bool(kwargs.get("include_deleted", False))
         metadata_filter = kwargs.get("metadata_filter")
@@ -1006,7 +1055,7 @@ class MediaModule(BaseModule):
             "must_not_have_keywords": must_not_have_keywords,
             "sort_by": sort_by_value,
             "order_by": order_by_param,
-            "media_ids_filter": media_ids_filter,
+            "media_ids_filter": effective_media_ids_filter,
             "include_trash": include_trash,
             "include_deleted": include_deleted,
             "metadata_filter": metadata_filter,
@@ -1036,7 +1085,7 @@ class MediaModule(BaseModule):
                     must_have_keywords=must_have_keywords,
                     must_not_have_keywords=must_not_have_keywords,
                     sort_by_value=sort_by_value,
-                    media_ids_filter=media_ids_filter,
+                    media_ids_filter=effective_media_ids_filter,
                     include_trash=include_trash,
                     include_deleted=include_deleted,
                 )
@@ -1049,7 +1098,7 @@ class MediaModule(BaseModule):
                     media_types=media_types,
                     metadata_filter=metadata_filter,
                     index_namespace=index_namespace,
-                    media_ids_filter=media_ids_filter,
+                    media_ids_filter=effective_media_ids_filter,
                     context=context,
                     query_vector=query_vector,
                 )
@@ -1064,7 +1113,7 @@ class MediaModule(BaseModule):
                     must_have_keywords=must_have_keywords,
                     must_not_have_keywords=must_not_have_keywords,
                     sort_by_value=sort_by_value,
-                    media_ids_filter=media_ids_filter,
+                    media_ids_filter=effective_media_ids_filter,
                     include_trash=include_trash,
                     include_deleted=include_deleted,
                     search_fields=search_fields,
@@ -1418,6 +1467,7 @@ class MediaModule(BaseModule):
     ) -> dict[str, Any]:
         """Get media transcript with formatting options"""
         try:
+            self._assert_media_scope_allowed(media_id, context)
             # Ownership check first
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
@@ -1479,6 +1529,7 @@ class MediaModule(BaseModule):
     ) -> dict[str, Any]:
         """Get comprehensive media metadata"""
         try:
+            self._assert_media_scope_allowed(media_id, context)
             # Ownership check
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
@@ -1576,6 +1627,7 @@ class MediaModule(BaseModule):
     ) -> dict[str, Any]:
         """Update media with validation"""
         try:
+            self._assert_media_scope_allowed(media_id, context)
             # Ownership check
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
@@ -1682,6 +1734,7 @@ class MediaModule(BaseModule):
     ) -> dict[str, Any]:
         """Delete media with soft/hard delete options"""
         try:
+            self._assert_media_scope_allowed(media_id, context)
             # Ownership check
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)

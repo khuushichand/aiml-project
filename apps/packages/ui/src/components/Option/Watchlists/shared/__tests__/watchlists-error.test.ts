@@ -55,5 +55,72 @@ describe("mapWatchlistsError", () => {
     expect(mapped.kind).toBe("rate_limit")
     expect(mapped.description).toContain("Reduce monitor frequency")
   })
-})
 
+  it("maps DNS lookup failures to host-resolution guidance", () => {
+    const mapped = mapWatchlistsError(
+      new Error("dnsResolutionError: Name resolution failed for feed host"),
+      {
+        t,
+        context: "feed preflight",
+        operationLabel: "test"
+      }
+    )
+
+    expect(mapped.kind).toBe("dns")
+    expect(mapped.description).toContain("source host resolves")
+  })
+
+  it("maps TLS failures to certificate guidance", () => {
+    const mapped = mapWatchlistsError(
+      new Error("TLS handshake failed: certificate verify failed"),
+      {
+        t,
+        context: "run retry",
+        operationLabel: "retry"
+      }
+    )
+
+    expect(mapped.kind).toBe("tls")
+    expect(mapped.description).toContain("TLS certificate settings")
+  })
+
+  it("maps validation failures to warning severity and remediation guidance", () => {
+    const mapped = mapWatchlistsError(
+      {
+        status: 422,
+        details: {
+          detail: {
+            code: "watchlists_validation_error",
+            message: "Schedule is too frequent."
+          }
+        }
+      },
+      {
+        t,
+        context: "monitor setup",
+        operationLabel: "save"
+      }
+    )
+
+    expect(mapped.kind).toBe("validation")
+    expect(mapped.severity).toBe("warning")
+    expect(mapped.description).toContain("Review highlighted values")
+  })
+
+  it("maps gateway timeout statuses to timeout guidance", () => {
+    const mapped = mapWatchlistsError(
+      {
+        response: {
+          status: 504
+        }
+      },
+      {
+        t,
+        context: "activity refresh"
+      }
+    )
+
+    expect(mapped.kind).toBe("timeout")
+    expect(mapped.description).toContain("Retry now")
+  })
+})

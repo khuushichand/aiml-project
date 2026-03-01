@@ -109,7 +109,7 @@ async def test_embeddings_worker_smoke_queue_to_retrieval(monkeypatch, tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_embeddings_worker_custom_content_stores_in_chroma(monkeypatch):
+async def test_embeddings_worker_custom_content_stores_in_chroma(monkeypatch, tmp_path):
     async def fake_create_embeddings_batch_async(*, texts, provider, model_id, metadata):
         assert texts == ["hello kanban"]
         assert provider == "test-provider"
@@ -148,7 +148,11 @@ async def test_embeddings_worker_custom_content_stores_in_chroma(monkeypatch):
     )
     monkeypatch.setattr(jobs_worker, "_resolve_model_provider", lambda *_: ("test-model", "test-provider"))
     monkeypatch.setattr(jobs_worker, "_kanban_card_indexable", lambda **_: True)
-    monkeypatch.setattr(jobs_worker, "_embedding_config_for_user", lambda: {"USER_DB_BASE_DIR": "/tmp/test"})
+    monkeypatch.setattr(
+        jobs_worker,
+        "_embedding_config_for_user",
+        lambda: {"USER_DB_BASE_DIR": str(tmp_path / "test")},
+    )
     monkeypatch.setattr(jobs_worker, "ChromaDBManager", FakeChromaDBManager)
 
     job = {

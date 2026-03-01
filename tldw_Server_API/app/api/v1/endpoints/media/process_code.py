@@ -21,6 +21,10 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.code_utils import (
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
+    save_uploaded_files,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
+    download_url_async,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     ProcessItem,
@@ -52,8 +56,8 @@ async def process_code_endpoint(
     lines or structure-aware code chunking, and returns artifacts without
     DB writes.
 
-    This mirrors the legacy `_legacy_media.process_code_endpoint` behavior
-    while routing through the modular `media` package.
+    This mirrors legacy `process-code` behavior while routing through the
+    modular `media` package.
     """
 
     # Reuse shared validation so that error messages and 400 semantics match
@@ -72,9 +76,8 @@ async def process_code_endpoint(
 
         # Handle uploads
         if files:
-            # Preserve test-time monkeypatching of `_save_uploaded_files` and
-            # `file_validator_instance` via the `media` shim.
-            save_uploaded_files = media_mod._save_uploaded_files
+            # Preserve test-time monkeypatching of `file_validator_instance`
+            # while using the canonical core upload helper.
             validator = media_mod.file_validator_instance
 
             saved, upload_errors = await save_uploaded_files(
@@ -139,7 +142,6 @@ async def process_code_endpoint(
 
         # Handle URLs
         if urls:
-            download_url_async = media_mod._download_url_async
             tasks = [
                 download_url_async(
                     client=None,

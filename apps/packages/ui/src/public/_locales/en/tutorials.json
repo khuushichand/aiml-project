@@ -319,5 +319,185 @@
   },
   "characters_basics_libraryContent": {
     "message": "Open character actions to chat, quick-chat, edit, duplicate, export, or review version history."
+  },
+  "prompts_basics_label": {
+    "message": "Prompts Basics"
+  },
+  "prompts_basics_description": {
+    "message": "Create reusable prompts, search your library, and manage prompt workflow segments"
+  },
+  "prompts_basics_segmentedTitle": {
+    "message": "Prompt Workspaces"
+  },
+  "prompts_basics_segmentedContent": {
+    "message": "Switch between Custom, Copilot, Studio, and Trash to manage different prompt sources."
+  },
+  "prompts_basics_createTitle": {
+    "message": "Create Prompt"
+  },
+  "prompts_basics_createContent": {
+    "message": "Create a reusable prompt template you can insert into chat conversations."
+  },
+  "prompts_basics_searchTitle": {
+    "message": "Search Prompts"
+  },
+  "prompts_basics_searchContent": {
+    "message": "Search prompt names, content, and keywords to quickly find the right template."
+  },
+  "prompts_basics_filtersTitle": {
+    "message": "Filter and Scope"
+  },
+  "prompts_basics_filtersContent": {
+    "message": "Use type and tag filters to narrow your prompt list before editing or running prompts."
+  },
+  "prompts_basics_transferTitle": {
+    "message": "Import and Export"
+  },
+  "prompts_basics_transferContent": {
+    "message": "Export prompts for backup or sharing, and import prompt sets to bootstrap new workflows."
+  },
+  "evaluations_basics_label": {
+    "message": "Evaluations Basics"
+  },
+  "evaluations_basics_description": {
+    "message": "Create evaluations, inspect recent runs, and navigate evaluation tabs"
+  },
+  "evaluations_basics_headerTitle": {
+    "message": "Evaluations Workspace"
+  },
+  "evaluations_basics_headerContent": {
+    "message": "Use this workspace to define evaluation specs and monitor quality over time."
+  },
+  "evaluations_basics_tabsTitle": {
+    "message": "Tab Navigation"
+  },
+  "evaluations_basics_tabsContent": {
+    "message": "Switch between Evaluations, Runs, Datasets, Webhooks, and History depending on your workflow stage."
+  },
+  "evaluations_basics_createTitle": {
+    "message": "Create Evaluation"
+  },
+  "evaluations_basics_createContent": {
+    "message": "Start here to define a new evaluation and attach a dataset or inline samples."
+  },
+  "evaluations_basics_listTitle": {
+    "message": "Recent Evaluations"
+  },
+  "evaluations_basics_listContent": {
+    "message": "Select an evaluation from this list to inspect details, edit it, or run it."
+  },
+  "evaluations_basics_detailTitle": {
+    "message": "Evaluation Details"
+  },
+  "evaluations_basics_detailContent": {
+    "message": "Review selected evaluation metadata and copy IDs needed for automation and debugging."
+  },
+  "notes_basics_label": {
+    "message": "Notes Basics"
+  },
+  "notes_basics_description": {
+    "message": "Organize notes, apply filters, and edit content with split list/editor workflow"
+  },
+  "notes_basics_listTitle": {
+    "message": "Notes List"
+  },
+  "notes_basics_listContent": {
+    "message": "Browse and select notes from the sidebar to load them in the editor."
+  },
+  "notes_basics_modeTitle": {
+    "message": "Active and Trash Views"
+  },
+  "notes_basics_modeContent": {
+    "message": "Switch between active notes and trash to recover or permanently remove entries."
+  },
+  "notes_basics_filtersTitle": {
+    "message": "Sort and Filter"
+  },
+  "notes_basics_filtersContent": {
+    "message": "Sort by date/title and use notebook/keyword filters to narrow your working set."
+  },
+  "notes_basics_editorTitle": {
+    "message": "Editor Workspace"
+  },
+  "notes_basics_editorContent": {
+    "message": "Edit note content, references, and metadata in the main editor panel."
+  },
+  "notes_basics_saveTitle": {
+    "message": "Save and Actions"
+  },
+  "notes_basics_saveContent": {
+    "message": "Save updates, duplicate notes, export content, and run helper actions from the header."
+  },
+  "flashcards_basics_label": {
+    "message": "Flashcards Basics"
+  },
+  "flashcards_basics_description": {
+    "message": "Use study, manage, and transfer flows to maintain spaced-repetition decks"
+  },
+  "flashcards_basics_tabsTitle": {
+    "message": "Study, Manage, Transfer"
+  },
+  "flashcards_basics_tabsContent": {
+    "message": "Switch tabs to study cards, manage deck contents, and import or export card data."
+  },
+  "flashcards_basics_reviewTitle": {
+    "message": "Study Tab"
+  },
+  "flashcards_basics_reviewContent": {
+    "message": "Run review sessions here and score recall quality to update spaced-repetition schedules."
+  },
+  "flashcards_basics_manageTitle": {
+    "message": "Manage Tab"
+  },
+  "flashcards_basics_manageContent": {
+    "message": "Open the Manage tab to search cards, filter by deck/tags, and perform bulk updates."
+  },
+  "flashcards_basics_transferTitle": {
+    "message": "Transfer Tab"
+  },
+  "flashcards_basics_transferContent": {
+    "message": "Use Transfer for CSV/JSON/APKG import and export workflows."
+  },
+  "flashcards_basics_quizTitle": {
+    "message": "Bridge to Quiz"
+  },
+  "flashcards_basics_quizContent": {
+    "message": "Jump into Quiz mode from your selected deck to validate retention with assessments."
+  },
+  "worldBooks_basics_label": {
+    "message": "World Books Basics"
+  },
+  "worldBooks_basics_description": {
+    "message": "Create world books, filter by state, and manage reusable lore entries"
+  },
+  "worldBooks_basics_headerTitle": {
+    "message": "World Books Workspace"
+  },
+  "worldBooks_basics_headerContent": {
+    "message": "World Books hold reusable lore and structured context that can be attached to characters and chat sessions."
+  },
+  "worldBooks_basics_searchTitle": {
+    "message": "Search World Books"
+  },
+  "worldBooks_basics_searchContent": {
+    "message": "Search by title, metadata, and content to quickly locate the right world book."
+  },
+  "worldBooks_basics_filtersTitle": {
+    "message": "Status Filters"
+  },
+  "worldBooks_basics_filtersContent": {
+    "message": "Filter by enabled/disabled state and attachment status before editing or exporting."
+  },
+  "worldBooks_basics_tableTitle": {
+    "message": "World Book Library"
+  },
+  "worldBooks_basics_tableContent": {
+    "message": "Select a row to manage entries, attachments, and advanced actions for each world book."
+  },
+  "worldBooks_basics_actionsTitle": {
+    "message": "Create and Import"
+  },
+  "worldBooks_basics_actionsContent": {
+    "message": "Create a new world book or import an existing JSON bundle to seed your knowledge base."
   }
 }

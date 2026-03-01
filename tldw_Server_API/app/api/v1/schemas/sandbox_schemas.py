@@ -24,6 +24,10 @@ class SandboxRuntimeInfo(BaseModel):
     supported_spec_versions: list[str] = Field(default_factory=lambda: ["1.0"], description="Supported spec versions (e.g., ['1.0','1.1'] when 1.1 features are enabled)")
     interactive_supported: bool | None = Field(default=None, description="Whether stdin-over-WS interactive runs are supported")
     egress_allowlist_supported: bool | None = Field(default=None, description="Whether egress allowlisting is supported by the runtime")
+    strict_deny_all_supported: bool | None = Field(default=None, description="Whether strict deny-all network enforcement is supported")
+    strict_allowlist_supported: bool | None = Field(default=None, description="Whether strict allowlist network enforcement is supported")
+    enforcement_ready: dict[str, bool] | None = Field(default=None, description="Runtime enforcement readiness by network policy mode")
+    host: dict[str, str] | None = Field(default=None, description="Runtime host capability facts for troubleshooting")
     store_mode: str | None = Field(default=None, description="Current store backend mode (memory|sqlite|cluster)")
     notes: str | None = None
 
@@ -46,6 +50,10 @@ class SandboxSessionCreateRequest(BaseModel):
         default="standard",
         description="Trust level for risk-based isolation: trusted (relaxed), standard (default), untrusted (strict)"
     )
+    persona_id: str | None = Field(default=None, description="Optional persona identifier bound to this sandbox session")
+    workspace_id: str | None = Field(default=None, description="Optional workspace identifier bound to this sandbox session")
+    workspace_group_id: str | None = Field(default=None, description="Optional workspace-group identifier bound to this sandbox session")
+    scope_snapshot_id: str | None = Field(default=None, description="Optional scope snapshot identifier bound to this sandbox session")
 
 
 class SandboxSession(BaseModel):
@@ -54,6 +62,10 @@ class SandboxSession(BaseModel):
     base_image: str | None = None
     expires_at: datetime | None = None
     policy_hash: str | None = None
+    persona_id: str | None = None
+    workspace_id: str | None = None
+    workspace_group_id: str | None = None
+    scope_snapshot_id: str | None = None
 
 
 class SandboxFileUploadResponse(BaseModel):
@@ -98,6 +110,10 @@ class SandboxRunCreateRequest(BaseModel):
         default="standard",
         description="Trust level for risk-based isolation: trusted (relaxed), standard (default), untrusted (strict)"
     )
+    persona_id: str | None = Field(default=None, description="Optional persona identifier bound to this run")
+    workspace_id: str | None = Field(default=None, description="Optional workspace identifier bound to this run")
+    workspace_group_id: str | None = Field(default=None, description="Optional workspace-group identifier bound to this run")
+    scope_snapshot_id: str | None = Field(default=None, description="Optional scope snapshot identifier bound to this run")
 
 
 class SandboxRun(BaseModel):
@@ -133,6 +149,11 @@ class SandboxRunStatus(BaseModel):
     resource_usage: dict[str, int] | None = Field(default=None, description="Resource usage summary when available")
     estimated_start_time: datetime | None = None
     log_stream_url: str | None = Field(default=None, description="Optional WS URL (signed or unsigned) to stream logs; may include from_seq query (spec 1.1)")
+    session_id: str | None = None
+    persona_id: str | None = None
+    workspace_id: str | None = None
+    workspace_group_id: str | None = None
+    scope_snapshot_id: str | None = None
 
 
 class ArtifactInfo(BaseModel):
@@ -174,6 +195,11 @@ class SandboxAdminRunSummary(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     message: str | None = None
+    session_id: str | None = None
+    persona_id: str | None = None
+    workspace_id: str | None = None
+    workspace_group_id: str | None = None
+    scope_snapshot_id: str | None = None
 
 
 class SandboxAdminRunListResponse(BaseModel):

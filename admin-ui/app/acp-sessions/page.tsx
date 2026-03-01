@@ -13,7 +13,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
-import { RefreshCw, MessageSquare, XCircle, Eye, Wifi, WifiOff } from 'lucide-react';
+import { RefreshCw, MessageSquare, XCircle, Wifi, WifiOff } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
@@ -46,10 +46,18 @@ export default function ACPSessionsPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('');
-  const [agentTypeFilter, setAgentTypeFilter] = useState('');
-  const [userIdFilter, setUserIdFilter] = useState('');
-  const [selectedSession, setSelectedSession] = useState<ACPSession | null>(null);
+  const [statusFilterDraft, setStatusFilterDraft] = useState<string>('');
+  const [agentTypeFilterDraft, setAgentTypeFilterDraft] = useState('');
+  const [userIdFilterDraft, setUserIdFilterDraft] = useState('');
+  const [appliedFilters, setAppliedFilters] = useState<{
+    status: string;
+    agentType: string;
+    userId: string;
+  }>({
+    status: '',
+    agentType: '',
+    userId: '',
+  });
   const confirm = useConfirm();
   const toast = useToast();
 
@@ -58,9 +66,9 @@ export default function ACPSessionsPage() {
     setError('');
     try {
       const params: Record<string, string> = {};
-      if (statusFilter) params.status = statusFilter;
-      if (agentTypeFilter) params.agent_type = agentTypeFilter;
-      if (userIdFilter) params.user_id = userIdFilter;
+      if (appliedFilters.status) params.status = appliedFilters.status;
+      if (appliedFilters.agentType) params.agent_type = appliedFilters.agentType;
+      if (appliedFilters.userId) params.user_id = appliedFilters.userId;
       const response = await api.getACPSessions(params) as ACPSessionListResponse;
       setSessions(response.sessions || []);
       setTotal(response.total || 0);
@@ -70,11 +78,19 @@ export default function ACPSessionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, agentTypeFilter, userIdFilter]);
+  }, [appliedFilters]);
 
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  const handleApplyFilters = useCallback(() => {
+    setAppliedFilters({
+      status: statusFilterDraft,
+      agentType: agentTypeFilterDraft.trim(),
+      userId: userIdFilterDraft.trim(),
+    });
+  }, [statusFilterDraft, agentTypeFilterDraft, userIdFilterDraft]);
 
   const handleCloseSession = useCallback(async (sessionId: string) => {
     const ok = await confirm({
@@ -147,8 +163,8 @@ export default function ACPSessionsPage() {
             <CardContent>
               <div className="flex flex-wrap gap-3">
                 <Select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  value={statusFilterDraft}
+                  onChange={(e) => setStatusFilterDraft(e.target.value)}
                 >
                   <option value="">All Statuses</option>
                   <option value="active">Active</option>
@@ -157,17 +173,17 @@ export default function ACPSessionsPage() {
                 </Select>
                 <Input
                   placeholder="Agent type..."
-                  value={agentTypeFilter}
-                  onChange={(e) => setAgentTypeFilter(e.target.value)}
+                  value={agentTypeFilterDraft}
+                  onChange={(e) => setAgentTypeFilterDraft(e.target.value)}
                   className="w-40"
                 />
                 <Input
                   placeholder="User ID..."
-                  value={userIdFilter}
-                  onChange={(e) => setUserIdFilter(e.target.value)}
+                  value={userIdFilterDraft}
+                  onChange={(e) => setUserIdFilterDraft(e.target.value)}
                   className="w-32"
                 />
-                <Button variant="outline" size="sm" onClick={loadSessions}>Apply</Button>
+                <Button variant="outline" size="sm" onClick={handleApplyFilters}>Apply</Button>
               </div>
             </CardContent>
           </Card>

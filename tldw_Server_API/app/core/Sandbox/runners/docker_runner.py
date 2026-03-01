@@ -322,11 +322,26 @@ class DockerRunner:
         ]
 
         # User and workspace mounts
-        import random
         run_as_root = bool(getattr(spec, "run_as_root", None))
         if not run_as_root:
-            uid = random.randint(10000, 60000)
-            gid = uid
+            try:
+                uid = int(
+                    os.getenv("SANDBOX_DOCKER_DEFAULT_UID")
+                    or getattr(app_settings, "SANDBOX_DOCKER_DEFAULT_UID", 1000)
+                )
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
+                uid = 1000
+            try:
+                gid = int(
+                    os.getenv("SANDBOX_DOCKER_DEFAULT_GID")
+                    or getattr(app_settings, "SANDBOX_DOCKER_DEFAULT_GID", uid)
+                )
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
+                gid = uid
+            if uid <= 0:
+                uid = 1000
+            if gid <= 0:
+                gid = uid
             cmd += ["--user", f"{uid}:{gid}"]
         else:
             uid = 0
@@ -359,6 +374,15 @@ class DockerRunner:
             port_mappings = list(getattr(spec, "port_mappings", []) or [])
         except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             port_mappings = []
+        acp_ssh_port: int | None = None
+        try:
+            raw_acp_ssh_port = str(env.get("ACP_SSH_PORT", "")).strip()
+            if raw_acp_ssh_port:
+                parsed_acp_ssh_port = int(raw_acp_ssh_port)
+                if 1 <= parsed_acp_ssh_port <= 65535:
+                    acp_ssh_port = parsed_acp_ssh_port
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
+            acp_ssh_port = None
         # OpenSSH in capability-dropped containers needs a small capability set for pre-auth.
         needs_ssh_caps = False
         for mapping in port_mappings:
@@ -368,7 +392,7 @@ class DockerRunner:
                 container_port = int(mapping.get("container_port"))
             except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 continue
-            if container_port == 22:
+            if container_port == 22 or (acp_ssh_port is not None and container_port == acp_ssh_port):
                 needs_ssh_caps = True
             cmd += ["-p", f"{host_ip}:{host_port}:{container_port}"]
         if needs_ssh_caps:

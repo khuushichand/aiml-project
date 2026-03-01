@@ -9,13 +9,18 @@ Part of the Self-Correcting RAG feature set (Stages 5-6).
 """
 
 import asyncio
-import json
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from loguru import logger
+
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    StructuredOutputParseError,
+    parse_structured_output,
+)
 
 
 @dataclass
@@ -279,12 +284,19 @@ class FastGroundednessGrader:
         """Parse LLM response into FastGroundednessResult."""
         try:
             response_str = str(raw_response)
-
-            # Try to extract JSON
-            json_match = re.search(r'\{[^{}]*\}', response_str, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group())
-
+            payload = parse_structured_output(
+                response_str,
+                options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+            )
+            parsed: dict[str, Any] | None = None
+            if isinstance(payload, dict):
+                parsed = payload
+            elif isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict):
+                        parsed = item
+                        break
+            if parsed is not None:
                 is_grounded = bool(parsed.get("is_grounded", True))
                 confidence = float(parsed.get("confidence", 0.5))
                 rationale = str(parsed.get("rationale", ""))
@@ -297,7 +309,7 @@ class FastGroundednessGrader:
                     method="llm",
                 )
 
-        except (json.JSONDecodeError, AttributeError, TypeError, ValueError) as e:
+        except (StructuredOutputParseError, AttributeError, TypeError, ValueError) as e:
             logger.debug(f"Failed to parse groundedness response: {e}")
 
         # Default on parse failure
@@ -483,12 +495,19 @@ class UtilityGrader:
         """Parse LLM response into UtilityResult."""
         try:
             response_str = str(raw_response)
-
-            # Try to extract JSON
-            json_match = re.search(r'\{[^{}]*\}', response_str, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group())
-
+            payload = parse_structured_output(
+                response_str,
+                options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+            )
+            parsed: dict[str, Any] | None = None
+            if isinstance(payload, dict):
+                parsed = payload
+            elif isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict):
+                        parsed = item
+                        break
+            if parsed is not None:
                 utility_score = int(parsed.get("utility_score", 3))
                 utility_score = max(1, min(5, utility_score))  # Clamp to 1-5
                 explanation = str(parsed.get("explanation", ""))
@@ -500,7 +519,7 @@ class UtilityGrader:
                     method="llm",
                 )
 
-        except (json.JSONDecodeError, AttributeError, TypeError, ValueError) as e:
+        except (StructuredOutputParseError, AttributeError, TypeError, ValueError) as e:
             logger.debug(f"Failed to parse utility response: {e}")
 
         # Default on parse failure

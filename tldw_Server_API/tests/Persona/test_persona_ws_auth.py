@@ -2,14 +2,18 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
-from tldw_Server_API.app.main import app as fastapi_app
 
 
 pytestmark = pytest.mark.unit
+
+
+fastapi_app = FastAPI()
+fastapi_app.include_router(persona_ep.router, prefix="/api/v1/persona")
 
 
 class _FakeWebSocket:
@@ -29,9 +33,16 @@ async def test_resolve_authenticated_user_id_single_user_bearer_api_key_path(mon
         raise AssertionError("JWT verification should not run for single-user bearer API key path")
 
     class _ApiKeyManager:
-        async def validate_api_key(self, api_key: str, ip_address: str | None = None):
+        async def validate_api_key(
+            self,
+            api_key: str,
+            ip_address: str | None = None,
+            required_scope: str | None = None,
+            **_kwargs,
+        ):
             assert api_key == "test_api_key"
             assert ip_address == "127.0.0.1"
+            assert required_scope in (None, "", "read")
             return {"user_id": 42}
 
     async def _fake_get_api_key_manager():
@@ -62,9 +73,16 @@ async def test_resolve_authenticated_user_id_multi_user_non_jwt_bearer_api_key_p
         raise AssertionError("JWT verification should not run for non-JWT bearer token path")
 
     class _ApiKeyManager:
-        async def validate_api_key(self, api_key: str, ip_address: str | None = None):
+        async def validate_api_key(
+            self,
+            api_key: str,
+            ip_address: str | None = None,
+            required_scope: str | None = None,
+            **_kwargs,
+        ):
             assert api_key == "not-a-jwt-token"
             assert ip_address == "127.0.0.1"
+            assert required_scope in (None, "", "read")
             return {"user_id": "api-user"}
 
     async def _fake_get_api_key_manager():
@@ -151,8 +169,15 @@ def test_persona_stream_single_user_accepts_bearer_api_key(monkeypatch):
         raise AssertionError("JWT verification should not run for single-user bearer API key path")
 
     class _ApiKeyManager:
-        async def validate_api_key(self, api_key: str, ip_address: str | None = None):
+        async def validate_api_key(
+            self,
+            api_key: str,
+            ip_address: str | None = None,
+            required_scope: str | None = None,
+            **_kwargs,
+        ):
             if api_key == "test_api_key":
+                assert required_scope in (None, "", "read")
                 return {"user_id": 99}
             return None
 

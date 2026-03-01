@@ -40,7 +40,7 @@ Non-functional requirements:
 
 ## Data and Persistence
 - Store `greetingEnabled` in the per-chat settings record.
-- Use the shared sync and migration rules described in `Docs/Product/Character_Chat_Greeting_Picker_PRD.md`.
+- Use the shared sync and migration rules described in `Docs/Product/Completed/Character_Chat_Greeting_Picker_PRD.md`.
 
 ## API and Integration
 - No new endpoints if per-chat settings are stored in history metadata.
@@ -52,7 +52,7 @@ Non-functional requirements:
 
 ## Risks and Open Questions
 - Ensuring regenerate behavior remains consistent across different chat modes.
-- Interaction with group chat greeting scope, see `Docs/Product/Group_Multi_Character_Chats_PRD.md`.
+- Interaction with group chat greeting scope, see `Docs/Product/Completed/Group_Multi_Character_Chats_PRD.md`.
 
 ## Testing
 - Unit tests for prompt history construction with greeting included and excluded.

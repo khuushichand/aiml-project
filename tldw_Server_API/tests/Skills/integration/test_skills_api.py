@@ -3,15 +3,27 @@
 # Integration tests for Skills REST API endpoints
 #
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
+
+# Keep module-level app import lightweight for this suite.
+os.environ.setdefault("MINIMAL_TEST_APP", "1")
+os.environ.setdefault("TEST_MODE", "1")
+_routes_disable = {
+    part.strip()
+    for part in str(os.environ.get("ROUTES_DISABLE", "")).split(",")
+    if part and part.strip()
+}
+_routes_disable.update({"media", "audio", "audio-websocket"})
+os.environ["ROUTES_DISABLE"] = ",".join(sorted(_routes_disable))
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Skills.skills_service import SkillsService
-from tldw_Server_API.app.main import app
 
 pytestmark = pytest.mark.integration
 
@@ -22,6 +34,8 @@ TEST_USER_ID = 999
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     """Provide a TestClient with mocked auth and isolated user database."""
+    from tldw_Server_API.app.main import app as fastapi_app
+
     user_base = tmp_path / "user_databases" / str(TEST_USER_ID)
     user_base.mkdir(parents=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_databases"))
@@ -38,14 +52,14 @@ def client(tmp_path, monkeypatch):
     # Monkeypatch DatabasePaths so SkillsService gets our temp dir
     monkeypatch.setattr(DatabasePaths, "get_user_base_directory", staticmethod(lambda uid: user_base))
 
-    app.dependency_overrides[get_request_user] = override_user
-    app.dependency_overrides[get_chacha_db_for_user] = override_chacha_db
+    fastapi_app.dependency_overrides[get_request_user] = override_user
+    fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_chacha_db
 
     try:
-        with TestClient(app) as c:
+        with TestClient(fastapi_app) as c:
             yield c
     finally:
-        app.dependency_overrides.clear()
+        fastapi_app.dependency_overrides.clear()
         chacha_db.close_connection()
 
 
@@ -590,15 +604,16 @@ class TestSkillsEndToEndWorkflow:
         seed_resp = client.post(f"{SKILLS_PREFIX}/seed")
         assert seed_resp.status_code == 200, seed_resp.text
         seed_data = seed_resp.json()
-        assert seed_data["count"] >= 2
+        assert seed_data["count"] >= 3
         assert "summarize" in seed_data["seeded"]
         assert "code-review" in seed_data["seeded"]
+        assert "feynman-technique" in seed_data["seeded"]
 
     def test_e2e_seed_endpoint_idempotent_and_overwrite(self, client):
         first_seed = client.post(f"{SKILLS_PREFIX}/seed")
         assert first_seed.status_code == 200, first_seed.text
         first_data = first_seed.json()
-        assert first_data["count"] >= 2
+        assert first_data["count"] >= 3
 
         # idempotent without overwrite
         second_seed = client.post(f"{SKILLS_PREFIX}/seed")

@@ -127,6 +127,7 @@ export const QuickChatHelperButton: React.FC<QuickChatHelperButtonProps> = ({
           <button
             onClick={handleOpen}
             className={buttonClassName}
+            data-testid="quick-chat-helper-open-button"
             aria-label={tooltip}
             aria-haspopup="dialog"
             aria-expanded={isOpen}

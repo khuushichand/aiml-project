@@ -174,16 +174,76 @@ export interface ACPSessionPromptRequest {
 export interface ACPSessionPromptResponse {
   stop_reason?: string
   raw_result: Record<string, unknown>
+  usage?: ACPTokenUsage | null
 }
 
 // -----------------------------------------------------------------------------
 // Session and Update Types
 // -----------------------------------------------------------------------------
 
+export interface ACPTokenUsage {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+}
+
+export type ACPBackendSessionStatus = "active" | "closed" | "error"
+
+export interface ACPSessionListItem {
+  session_id: string
+  user_id: number
+  agent_type: ACPAgentType
+  name: string
+  status: ACPBackendSessionStatus
+  created_at: string
+  last_activity_at?: string | null
+  message_count: number
+  usage: ACPTokenUsage
+  tags: string[]
+  has_websocket: boolean
+  persona_id?: string | null
+  workspace_id?: string | null
+  workspace_group_id?: string | null
+  scope_snapshot_id?: string | null
+}
+
+export interface ACPSessionListResponse {
+  sessions: ACPSessionListItem[]
+  total: number
+}
+
+export interface ACPSessionDetailResponse extends ACPSessionListItem {
+  messages: Array<Record<string, unknown>>
+  cwd?: string | null
+}
+
+export interface ACPSessionUsageResponse {
+  session_id: string
+  user_id: number
+  agent_type: ACPAgentType
+  usage: ACPTokenUsage
+  message_count: number
+  created_at: string
+  last_activity_at?: string | null
+}
+
+export interface ACPSessionForkRequest {
+  message_index: number
+  name?: string
+}
+
+export interface ACPSessionForkResponse {
+  session_id: string
+  name: string
+  forked_from: string
+  message_count: number
+}
+
 export interface ACPSession {
   id: string
   cwd: string
   name?: string
+  forkParentSessionId?: string | null
   agentType?: ACPAgentType
   tags?: string[]
   mcpServers?: ACPMCPServerConfig[]
@@ -193,6 +253,10 @@ export interface ACPSession {
   sandboxRunId?: string | null
   sshWsUrl?: string | null
   sshUser?: string | null
+  backendStatus?: ACPBackendSessionStatus | null
+  messageCount?: number
+  usage?: ACPTokenUsage | null
+  lastActivityAt?: Date | null
   updates: ACPUpdate[]
   pendingPermissions: ACPPendingPermission[]
   createdAt: Date

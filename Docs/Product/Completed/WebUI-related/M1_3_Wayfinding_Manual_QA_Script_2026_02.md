@@ -5,8 +5,8 @@ Owner: WebUI + QA
 Milestone: M1.3 (Wayfinding + recovery UX alignment)  
 Last Updated: February 12, 2026  
 Related:
-- `Docs/Product/WebUI/M1_Navigation_IA_Execution_Plan_2026_02.md`
-- `Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md`
+- `Docs/Product/Completed/WebUI-related/M1_Navigation_IA_Execution_Plan_2026_02.md`
+- `Docs/Product/Completed/WebUI-related/M1_1_Canonical_Route_Inventory_2026_02.md`
 
 ## Goal
 
@@ -32,7 +32,7 @@ For each scenario capture:
 
 Store evidence under:
 - `apps/tldw-frontend/test-results/` (automated)
-- `Docs/Product/WebUI/evidence/m1_3_wayfinding/` (manual artifacts)
+- Manual QA notes inline in this script and the linked execution plan (raw screenshot artifacts are not retained in-repo).
 
 ## Scenario A: Settings Active-Route Clarity
 

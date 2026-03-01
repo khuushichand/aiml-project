@@ -134,7 +134,7 @@ def test_stress_step_heartbeat(workflows_dual_backend_db):
         db.update_step_subprocess(
             step_run_id=step_run_id,
             pid=attempt,
-            workdir=f"/tmp/{backend_label}/{attempt}",
+            workdir=f"/tmp/{backend_label}/{attempt}",  # nosec B108
         )
     db.complete_step_run(step_run_id=step_run_id, status="succeeded", outputs={"ok": True})
 

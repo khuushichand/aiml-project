@@ -39,6 +39,13 @@ import { getVariable } from "@/utils/select-variable"
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"
 import { useTldwStt } from "@/hooks/useTldwStt"
 import { useMicStream } from "@/hooks/useMicStream"
+import type {
+  DictationErrorClass,
+  DictationModePreference,
+  DictationResolvedMode,
+  DictationServerErrorTransition
+} from "@/hooks/useDictationStrategy"
+import { useDictationStrategy } from "@/hooks/useDictationStrategy"
 import { BsIncognito } from "react-icons/bs"
 import { handleChatInputKeyDown } from "@/utils/key-down"
 import { getIsSimpleInternetSearch } from "@/services/search"
@@ -98,6 +105,7 @@ import { generateID } from "@/db/dexie/helpers"
 import type { UploadedFile } from "@/db/dexie/types"
 import { formatFileSize } from "@/utils/format"
 import { formatPinnedResults } from "@/utils/rag-format"
+import { emitDictationDiagnostics } from "@/utils/dictation-diagnostics"
 import {
   buildAvailableChatModelIds,
   findUnavailableChatModel,
@@ -271,6 +279,14 @@ export const SidepanelForm = ({
     stop: stopSpeechRecognition,
     supported: browserSupportsSpeechRecognition
   } = useSpeechRecognition()
+  const [dictationAutoFallbackEnabled] = useStorage(
+    "dictation_auto_fallback",
+    false
+  )
+  const [dictationModeOverride] = useStorage<DictationModePreference | null>(
+    "dictationModeOverride",
+    null
+  )
 
   const {
     tabMentionsEnabled,
@@ -367,13 +383,20 @@ export const SidepanelForm = ({
   const { uxState } = useConnectionUxState()
   const isConnectionReady = isConnected && phase === ConnectionPhase.CONNECTED
   const { capabilities, loading: capsLoading } = useServerCapabilities()
-  const hasServerAudio =
-    isConnectionReady && !capsLoading && capabilities?.hasAudio
-  const { healthState: audioHealthState } = useTldwAudioStatus()
-  const canUseServerAudio = hasServerAudio && audioHealthState !== "unhealthy"
-  const speechAvailable =
-    browserSupportsSpeechRecognition || canUseServerAudio
-  const speechUsesServer = canUseServerAudio
+  const hasServerVoiceChat =
+    isConnectionReady &&
+    !capsLoading &&
+    Boolean(capabilities?.hasVoiceChat ?? capabilities?.hasAudio)
+  const hasServerStt =
+    isConnectionReady &&
+    !capsLoading &&
+    Boolean(capabilities?.hasStt ?? capabilities?.hasAudio)
+  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus()
+  const canUseServerAudio =
+    hasServerVoiceChat && audioHealthState !== "unhealthy"
+  const canUseServerStt = hasServerStt && sttHealthState !== "unhealthy"
+  const hasVoiceInputControls =
+    browserSupportsSpeechRecognition || hasServerStt || hasServerVoiceChat
   const voiceChatAvailable = canUseServerAudio
 
   const voiceChat = useVoiceChatStream({
@@ -614,17 +637,95 @@ export const SidepanelForm = ({
   // When sidepanel connection transitions to CONNECTED, focus the composer
   useFocusComposerOnConnect(phase)
 
+  const dictationDiagnosticsSnapshotRef = React.useRef<{
+    requestedMode: DictationModePreference
+    resolvedMode: DictationResolvedMode
+    speechAvailable: boolean
+    speechUsesServer: boolean
+    fallbackReason: DictationErrorClass | null
+  }>({
+    requestedMode: "auto",
+    resolvedMode: "unavailable",
+    speechAvailable: false,
+    speechUsesServer: false,
+    fallbackReason: null
+  })
+  const serverDictationErrorBridgeRef = React.useRef<
+    (error: unknown) => DictationServerErrorTransition
+  >(
+    () => ({
+      errorClass: "unknown_error",
+      appliedFallback: false,
+      requestedMode: "auto",
+      resolvedModeBeforeError: "unavailable",
+      speechAvailableBeforeError: false,
+      speechUsesServerBeforeError: false,
+      browserSupportsSpeechRecognition: false,
+      autoFallbackEnabled: false
+    })
+  )
+  const serverDictationSuccessBridgeRef = React.useRef<() => void>(() => {})
+  const handleServerDictationError = React.useCallback((error: unknown) => {
+    const transition = serverDictationErrorBridgeRef.current(error)
+    emitDictationDiagnostics({
+      surface: "sidepanel",
+      kind: "server_error",
+      requestedMode: transition.requestedMode,
+      resolvedMode: transition.resolvedModeBeforeError,
+      speechAvailable: transition.speechAvailableBeforeError,
+      speechUsesServer: transition.speechUsesServerBeforeError,
+      errorClass: transition.errorClass,
+      fallbackApplied: transition.appliedFallback,
+      fallbackReason: transition.appliedFallback ? transition.errorClass : null
+    })
+  }, [])
+  const handleServerDictationSuccess = React.useCallback(() => {
+    serverDictationSuccessBridgeRef.current()
+    const snapshot = dictationDiagnosticsSnapshotRef.current
+    emitDictationDiagnostics({
+      surface: "sidepanel",
+      kind: "server_success",
+      requestedMode: snapshot.requestedMode,
+      resolvedMode: snapshot.resolvedMode,
+      speechAvailable: snapshot.speechAvailable,
+      speechUsesServer: snapshot.speechUsesServer,
+      fallbackReason: snapshot.fallbackReason
+    })
+  }, [])
+
   // Server-side dictation hook
   const {
     isServerDictating,
     startServerDictation,
     stopServerDictation
   } = useServerDictation({
-    canUseServerAudio,
+    canUseServerStt,
     speechToTextLanguage,
     sttSettings,
-    onTranscript: (text) => form.setFieldValue("message", text)
+    onTranscript: (text) => form.setFieldValue("message", text),
+    onError: handleServerDictationError,
+    onSuccess: handleServerDictationSuccess
   })
+
+  const dictationStrategy = useDictationStrategy({
+    canUseServerStt,
+    browserSupportsSpeechRecognition,
+    isServerDictating,
+    isBrowserDictating: isListening,
+    modeOverride: dictationModeOverride,
+    autoFallbackEnabled: Boolean(dictationAutoFallbackEnabled)
+  })
+  serverDictationErrorBridgeRef.current = dictationStrategy.recordServerError
+  serverDictationSuccessBridgeRef.current = dictationStrategy.recordServerSuccess
+  dictationDiagnosticsSnapshotRef.current = {
+    requestedMode: dictationStrategy.requestedMode,
+    resolvedMode: dictationStrategy.resolvedMode,
+    speechAvailable: dictationStrategy.speechAvailable,
+    speechUsesServer: dictationStrategy.speechUsesServer,
+    fallbackReason: dictationStrategy.autoFallbackErrorClass
+  }
+  const speechAvailable = dictationStrategy.speechAvailable
+  const speechUsesServer = dictationStrategy.speechUsesServer
 
   // Composer window events hook
   const handleOpenQuickIngest = React.useCallback(() => {
@@ -1448,22 +1549,48 @@ export const SidepanelForm = ({
     setWebSearch(!webSearch)
   }, [setWebSearch, webSearch])
 
-  const handleSpeechToggle = React.useCallback(() => {
-    if (isListening) {
-      stopListening()
-    } else {
-      resetTranscript()
-      startListening({
-        continuous: true,
-        lang: speechToTextLanguage
-      })
+  const startBrowserDictation = React.useCallback(() => {
+    resetTranscript()
+    startListening({
+      continuous: true,
+      lang: speechToTextLanguage
+    })
+  }, [resetTranscript, speechToTextLanguage, startListening])
+
+  const handleDictationToggle = React.useCallback(() => {
+    switch (dictationStrategy.toggleIntent) {
+      case "start_server":
+        void startServerDictation()
+        break
+      case "stop_server":
+        stopServerDictation()
+        break
+      case "start_browser":
+        startBrowserDictation()
+        break
+      case "stop_browser":
+        stopListening()
+        break
+      default:
+        break
     }
+    const snapshot = dictationDiagnosticsSnapshotRef.current
+    emitDictationDiagnostics({
+      surface: "sidepanel",
+      kind: "toggle",
+      requestedMode: snapshot.requestedMode,
+      resolvedMode: snapshot.resolvedMode,
+      speechAvailable: snapshot.speechAvailable,
+      speechUsesServer: snapshot.speechUsesServer,
+      toggleIntent: dictationStrategy.toggleIntent,
+      fallbackReason: snapshot.fallbackReason
+    })
   }, [
-    isListening,
-    resetTranscript,
-    speechToTextLanguage,
-    startListening,
-    stopListening
+    dictationStrategy.toggleIntent,
+    startBrowserDictation,
+    startServerDictation,
+    stopListening,
+    stopServerDictation
   ])
 
   const voiceChatStatusLabel = React.useMemo(() => {
@@ -2274,7 +2401,7 @@ export const SidepanelForm = ({
                                       </button>
                                     </Popover>
                                   </div>
-                                  {(browserSupportsSpeechRecognition || hasServerAudio) && (
+                                  {hasVoiceInputControls && (
                                     <Tooltip
                                       title={
                                         !speechAvailable
@@ -2295,7 +2422,7 @@ export const SidepanelForm = ({
                                     >
                                       <button
                                         type="button"
-                                        onClick={speechUsesServer ? startServerDictation : handleSpeechToggle}
+                                        onClick={handleDictationToggle}
                                         disabled={!speechAvailable || voiceChatEnabled}
                                         className={`rounded-md border border-border p-1 text-text-muted hover:bg-surface2 hover:text-text disabled:cursor-not-allowed disabled:opacity-50 ${
                                           speechAvailable &&
@@ -2573,7 +2700,7 @@ export const SidepanelForm = ({
                                 {t("playground:actions.uploadShort", "Image")}
                               </span>
                             </div>
-                            {(browserSupportsSpeechRecognition || hasServerAudio) && (
+                            {hasVoiceInputControls && (
                               <div className="flex flex-wrap items-end gap-1.5">
                                 <div className="flex flex-col items-center gap-1">
                                   <Tooltip
@@ -2638,7 +2765,7 @@ export const SidepanelForm = ({
                                   >
                                     <button
                                       type="button"
-                                      onClick={speechUsesServer ? startServerDictation : handleSpeechToggle}
+                                      onClick={handleDictationToggle}
                                       disabled={!speechAvailable || voiceChatEnabled}
                                       className={`h-11 w-11 min-h-[44px] min-w-[44px] rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50 ${
                                         speechAvailable &&

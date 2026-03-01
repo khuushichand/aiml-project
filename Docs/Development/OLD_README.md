@@ -80,7 +80,7 @@
 </details>
 
 ### Screenshots of the UI
-Screenshot of the Frontpage ![Screenshot](Docs/Screenshots/blank-front.png)
+Screenshot of the front page is not maintained in this archived README.
 
 
 #### Key Features:
@@ -90,7 +90,7 @@ Screenshot of the Frontpage ![Screenshot](Docs/Screenshots/blank-front.png)
 - Ingest(Transcribe/convert to markdown) content from (multiple) URLs or local files (video, audio, documents, web articles, books, mediawiki dumps) -> Summarize/Analyze -> Chat with/about the content.- Build up a personal knowledge archive, then turn around and use the LLM to help you learn it at a pace your comfortable with.
 - **Full Plaintext & RAG Search Capability** Search across all ingested content via RAG or 'old-fashioned non-LLM search' (RAG being BM25 + Vector Search/Contextual embeddings + Re-ranking + Contextual Retrieval).
   - Search by content, title, author, URL, or tags, with support for meta-tags, so that you can have the equivalent of 'folders' for your content (and tags).
-  - If you'd like to see my notes on RAG: see `./Docs/RAG_Notes.md`
+  - If you'd like to see my notes on RAG: see `./Docs/RAG/RAG_Notes.md`
   - Notes support (notebook-style), so you can keep track of your thoughts and ideas while chatting/learning, with the ability to search across them or use them for RAG.
 - **Local LLM inference for offline usage and chat** - via `llamafile`/`HuggingFace Transformers`.
 - **4 Different Chat UI styles** - Regular chat, Stacked chat, Multi-Response chat(1 Prompt, 3 APIs) and 4 Separate API chats on one page.
@@ -107,7 +107,7 @@ Screenshot of the Frontpage ![Screenshot](Docs/Screenshots/blank-front.png)
 - **Local Audio Recording with Transcription** - Record audio locally and transcribe it.
 - **Structured Prompt Creation and Management** - Create prompts using a structured approach, and then edit and use them in your chats. Or delete them.
   - Also have the ability to import prompts individually or in bulk. As well as export them as markdown documents.
-  - See `./Docs/Prompts/` for examples of prompts. and `./Docs/Propmts/TEMPLATE.md` for the prompt template used in tldw.
+  - See `./Docs/Prompts/` for examples of prompts and `./Docs/Prompts/TEMPLATE.md` for the prompt template used in tldw.
 - Features to come: Migration to a FastAPI backend(Gradio is a placeholder UI). Anki Flashcard Deck Editing (Creation is in), Mindmap creation from content(currently in under `Utilities`, uses PlantUML), better document handling, and more.
 </details>
 

@@ -82,7 +82,7 @@ class TestGetRunAudioEndpoint:
             ),
             patch(
                 "tldw_Server_API.app.core.DB_Management.db_path_utils.DatabasePaths.get_user_base_directory",
-                return_value="/tmp/test_user",
+                return_value="/tmp/test_user",  # nosec B108
             ),
             patch("os.path.exists", return_value=True),
             patch(
@@ -141,7 +141,7 @@ class TestGetRunAudioEndpoint:
             ),
             patch(
                 "tldw_Server_API.app.core.DB_Management.db_path_utils.DatabasePaths.get_user_base_directory",
-                return_value="/tmp/test_user",
+                return_value="/tmp/test_user",  # nosec B108
             ),
             patch("os.path.exists", return_value=True),
             patch(
@@ -236,7 +236,7 @@ class TestGetRunAudioEndpoint:
             ),
             patch(
                 "tldw_Server_API.app.core.DB_Management.db_path_utils.DatabasePaths.get_user_base_directory",
-                return_value="/tmp/test_user",
+                return_value="/tmp/test_user",  # nosec B108
             ),
             patch("os.path.exists", return_value=True),
             patch(
@@ -308,7 +308,7 @@ class TestGetRunAudioEndpoint:
             ),
             patch(
                 "tldw_Server_API.app.core.DB_Management.db_path_utils.DatabasePaths.get_user_base_directory",
-                return_value="/tmp/test_user",
+                return_value="/tmp/test_user",  # nosec B108
             ),
             patch("os.path.exists", return_value=True),
             patch(
@@ -389,7 +389,7 @@ class TestGetRunAudioEndpoint:
             ),
             patch(
                 "tldw_Server_API.app.core.DB_Management.db_path_utils.DatabasePaths.get_user_base_directory",
-                return_value="/tmp/test_user",
+                return_value="/tmp/test_user",  # nosec B108
             ),
             patch("os.path.exists", return_value=True),
             patch(

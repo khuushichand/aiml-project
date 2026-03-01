@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react"
 import { Loader2 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import type { QueryStage } from "../types"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
 import { ConversationThread } from "../ConversationThread"

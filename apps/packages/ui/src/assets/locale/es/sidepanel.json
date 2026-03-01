@@ -200,5 +200,16 @@
       "html": "HTML",
       "xml": "XML"
     }
+  },
+  "persona": {
+    "unsavedStateDiscardPrompt": "Tienes cambios sin guardar en los documentos de estado. ¿Descartar los borradores locales?",
+    "unsavedStateDiscardPromptConnect": "Tienes cambios sin guardar en los documentos de estado. ¿Conectarte y descartar los borradores locales?",
+    "unsavedStateDiscardPromptDisconnect": "Tienes cambios sin guardar en los documentos de estado. ¿Desconectarte y descartar los borradores locales?",
+    "unsavedStateDiscardPromptReloadState": "Tienes cambios sin guardar en los documentos de estado. ¿Cargar el estado y descartar los borradores locales?",
+    "unsavedStateDiscardPromptPersonaSwitch": "Tienes cambios sin guardar en los documentos de estado. ¿Cambiar de persona y descartar los borradores locales?",
+    "unsavedStateDiscardPromptSessionSwitch": "Tienes cambios sin guardar en los documentos de estado. ¿Cambiar de sesión y descartar los borradores locales?",
+    "unsavedStateDiscardPromptRestoreState": "Tienes cambios sin guardar en los documentos de estado. ¿Restaurar esta versión del estado y descartar los borradores locales?",
+    "unsavedStateDiscardPromptRouteTransition": "Tienes cambios sin guardar en los documentos de estado. ¿Salir de esta página y descartar los borradores locales?",
+    "unsavedStateBeforeUnloadPrompt": "Tienes cambios sin guardar en los documentos de estado. ¿Salir de esta página sin guardar?"
   }
 }

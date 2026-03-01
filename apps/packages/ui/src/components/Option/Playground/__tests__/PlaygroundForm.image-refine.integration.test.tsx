@@ -20,6 +20,38 @@ const createChatCompletionMock = vi.hoisted(() =>
     })
   }))
 )
+const speechRecognitionState = vi.hoisted(() => ({
+  transcript: "",
+  isListening: false,
+  supported: false,
+  start: vi.fn(),
+  stop: vi.fn(),
+  resetTranscript: vi.fn()
+}))
+const serverDictationState = vi.hoisted(() => ({
+  isServerDictating: false,
+  startServerDictation: vi.fn(async () => undefined),
+  stopServerDictation: vi.fn(),
+  lastOptions: null as null | Record<string, any>
+}))
+const dictationStrategyState = vi.hoisted(() => ({
+  value: {
+    requestedMode: "auto",
+    resolvedMode: "unavailable",
+    speechAvailable: false,
+    speechUsesServer: false,
+    isDictating: false,
+    toggleIntent: "unavailable",
+    autoFallbackActive: false,
+    autoFallbackErrorClass: null,
+    recordServerError: vi.fn(() => ({
+      errorClass: "unknown_error",
+      appliedFallback: false
+    })),
+    recordServerSuccess: vi.fn(),
+    clearAutoFallback: vi.fn()
+  } as any
+}))
 
 type SubmitPayload = {
   message?: string
@@ -485,13 +517,28 @@ vi.mock("@/hooks/useMcpTools", () => ({
 
 vi.mock("@/hooks/useSpeechRecognition", () => ({
   useSpeechRecognition: () => ({
-    transcript: "",
-    isListening: false,
-    resetTranscript: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-    supported: false
+    transcript: speechRecognitionState.transcript,
+    isListening: speechRecognitionState.isListening,
+    resetTranscript: speechRecognitionState.resetTranscript,
+    start: speechRecognitionState.start,
+    stop: speechRecognitionState.stop,
+    supported: speechRecognitionState.supported
   })
+}))
+
+vi.mock("@/hooks/useServerDictation", () => ({
+  useServerDictation: (options: Record<string, any>) => {
+    serverDictationState.lastOptions = options
+    return {
+      isServerDictating: serverDictationState.isServerDictating,
+      startServerDictation: serverDictationState.startServerDictation,
+      stopServerDictation: serverDictationState.stopServerDictation
+    }
+  }
+}))
+
+vi.mock("@/hooks/useDictationStrategy", () => ({
+  useDictationStrategy: () => dictationStrategyState.value
 }))
 
 vi.mock("~/hooks/useTabMentions", () => ({
@@ -587,9 +634,44 @@ vi.mock("../ComposerTextarea", () => ({
 }))
 
 vi.mock("../ComposerToolbar", () => ({
-  ComposerToolbar: ({ generateButton }: { generateButton?: React.ReactNode }) => (
-    <div data-testid="composer-toolbar">{generateButton}</div>
-  )
+  ComposerToolbar: ({
+    generateButton,
+    speechAvailable,
+    speechUsesServer,
+    isListening,
+    isServerDictating,
+    onDictationToggle
+  }: {
+    generateButton?: React.ReactNode
+    speechAvailable?: boolean
+    speechUsesServer?: boolean
+    isListening?: boolean
+    isServerDictating?: boolean
+    onDictationToggle?: () => void
+  }) => {
+    const isActive = speechUsesServer
+      ? Boolean(isServerDictating)
+      : Boolean(isListening)
+    const dictationLabel = !speechAvailable
+      ? "Dictation unavailable"
+      : isActive
+        ? "Stop dictation"
+        : "Start dictation"
+    return (
+      <div data-testid="composer-toolbar">
+        {generateButton}
+        <button
+          type="button"
+          data-testid="dictation-button"
+          aria-label={dictationLabel}
+          onClick={onDictationToggle}
+          disabled={!speechAvailable}
+        >
+          Dictation
+        </button>
+      </div>
+    )
+  }
 }))
 
 vi.mock("../ContextFootprintPanel", () => ({
@@ -902,6 +984,32 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
   beforeEach(() => {
     onSubmitMock.mockClear()
     createChatCompletionMock.mockClear()
+    speechRecognitionState.transcript = ""
+    speechRecognitionState.isListening = false
+    speechRecognitionState.supported = false
+    speechRecognitionState.start.mockClear()
+    speechRecognitionState.stop.mockClear()
+    speechRecognitionState.resetTranscript.mockClear()
+    serverDictationState.isServerDictating = false
+    serverDictationState.startServerDictation.mockClear()
+    serverDictationState.stopServerDictation.mockClear()
+    serverDictationState.lastOptions = null
+    dictationStrategyState.value = {
+      requestedMode: "auto",
+      resolvedMode: "unavailable",
+      speechAvailable: false,
+      speechUsesServer: false,
+      isDictating: false,
+      toggleIntent: "unavailable",
+      autoFallbackActive: false,
+      autoFallbackErrorClass: null,
+      recordServerError: vi.fn(() => ({
+        errorClass: "unknown_error",
+        appliedFallback: false
+      })),
+      recordServerSuccess: vi.fn(),
+      clearAutoFallback: vi.fn()
+    }
   })
 
   it("supports create -> refine -> accept flow and submits refine metadata", async () => {
@@ -1011,5 +1119,109 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
     const submitPayload = getLastSubmitPayload()
     expect(submitPayload.message).toBe("manual prompt override from user edit")
     expect(submitPayload.imageGenerationRefine).toBeUndefined()
+  })
+})
+
+describe("PlaygroundForm dictation integration", () => {
+  beforeEach(() => {
+    speechRecognitionState.transcript = ""
+    speechRecognitionState.isListening = false
+    speechRecognitionState.supported = true
+    speechRecognitionState.start.mockClear()
+    speechRecognitionState.stop.mockClear()
+    speechRecognitionState.resetTranscript.mockClear()
+    serverDictationState.isServerDictating = false
+    serverDictationState.startServerDictation.mockClear()
+    serverDictationState.stopServerDictation.mockClear()
+    serverDictationState.lastOptions = null
+  })
+
+  it("routes server dictation intent through the shared toggle handler", async () => {
+    const user = userEvent.setup()
+    dictationStrategyState.value = {
+      requestedMode: "auto",
+      resolvedMode: "server",
+      speechAvailable: true,
+      speechUsesServer: true,
+      isDictating: false,
+      toggleIntent: "start_server",
+      autoFallbackActive: false,
+      autoFallbackErrorClass: null,
+      recordServerError: vi.fn(() => ({
+        errorClass: "unknown_error",
+        appliedFallback: false
+      })),
+      recordServerSuccess: vi.fn(),
+      clearAutoFallback: vi.fn()
+    }
+
+    render(<PlaygroundForm droppedFiles={[]} />)
+    await user.click(screen.getByTestId("dictation-button"))
+
+    expect(serverDictationState.startServerDictation).toHaveBeenCalledTimes(1)
+    expect(speechRecognitionState.start).not.toHaveBeenCalled()
+  })
+
+  it("routes browser dictation intent through speech recognition start", async () => {
+    const user = userEvent.setup()
+    dictationStrategyState.value = {
+      requestedMode: "auto",
+      resolvedMode: "browser",
+      speechAvailable: true,
+      speechUsesServer: false,
+      isDictating: false,
+      toggleIntent: "start_browser",
+      autoFallbackActive: false,
+      autoFallbackErrorClass: null,
+      recordServerError: vi.fn(() => ({
+        errorClass: "unknown_error",
+        appliedFallback: false
+      })),
+      recordServerSuccess: vi.fn(),
+      clearAutoFallback: vi.fn()
+    }
+
+    render(<PlaygroundForm droppedFiles={[]} />)
+    await user.click(screen.getByTestId("dictation-button"))
+
+    expect(speechRecognitionState.start).toHaveBeenCalledTimes(1)
+    expect(speechRecognitionState.start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continuous: true,
+        lang: "en-US"
+      })
+    )
+    expect(serverDictationState.startServerDictation).not.toHaveBeenCalled()
+  })
+
+  it("writes transcript text into the composer when server dictation resolves", async () => {
+    dictationStrategyState.value = {
+      requestedMode: "auto",
+      resolvedMode: "server",
+      speechAvailable: true,
+      speechUsesServer: true,
+      isDictating: false,
+      toggleIntent: "start_server",
+      autoFallbackActive: false,
+      autoFallbackErrorClass: null,
+      recordServerError: vi.fn(() => ({
+        errorClass: "unknown_error",
+        appliedFallback: false
+      })),
+      recordServerSuccess: vi.fn(),
+      clearAutoFallback: vi.fn()
+    }
+
+    render(<PlaygroundForm droppedFiles={[]} />)
+    await waitFor(() => {
+      expect(serverDictationState.lastOptions).toBeTruthy()
+    })
+
+    serverDictationState.lastOptions?.onTranscript?.("dictation transcript text")
+
+    const textarea = screen.getByTestId("composer-textarea") as HTMLTextAreaElement
+    await waitFor(() => {
+      expect(textarea.value).toBe("dictation transcript text")
+    })
   })
 })

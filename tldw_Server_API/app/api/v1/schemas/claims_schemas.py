@@ -27,6 +27,14 @@ class ClaimsSettingsResponse(BaseModel):
         ...,
         description="JSON parsing strictness for LLM claim outputs.",
     )
+    claims_prompt_validation_mode: Literal["off", "warning", "error"] = Field(
+        ...,
+        description="Startup/CI prompt preflight validation mode.",
+    )
+    claims_prompt_validation_strict: bool = Field(
+        ...,
+        description="Treat non-exact prompt alignment checks as strict failures.",
+    )
     claims_alignment_mode: Literal["off", "exact", "fuzzy"] = Field(
         ...,
         description="Span alignment mode for extracted claims.",
@@ -36,6 +44,16 @@ class ClaimsSettingsResponse(BaseModel):
         ge=0.0,
         le=1.0,
         description="Fuzzy alignment threshold for extracted claim spans.",
+    )
+    claims_context_window_chars: int = Field(
+        ...,
+        ge=0,
+        description="Trailing chars from previous chunk to include as extraction context.",
+    )
+    claims_extraction_passes: int = Field(
+        ...,
+        ge=1,
+        description="Sequential extraction passes for llm/aps modes.",
     )
     claims_rebuild_enabled: bool = Field(..., description="Enable periodic claims rebuild worker.")
     claims_rebuild_interval_sec: int = Field(..., description="Claims rebuild loop interval in seconds.")
@@ -60,8 +78,12 @@ class ClaimsSettingsUpdate(BaseModel):
     claims_llm_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     claims_llm_model: str | None = Field(default=None)
     claims_json_parse_mode: Literal["lenient", "strict"] | None = Field(default=None)
+    claims_prompt_validation_mode: Literal["off", "warning", "error"] | None = Field(default=None)
+    claims_prompt_validation_strict: bool | None = Field(default=None)
     claims_alignment_mode: Literal["off", "exact", "fuzzy"] | None = Field(default=None)
     claims_alignment_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    claims_context_window_chars: int | None = Field(default=None, ge=0, le=20000)
+    claims_extraction_passes: int | None = Field(default=None, ge=1, le=10)
     claims_rebuild_enabled: bool | None = Field(default=None)
     claims_rebuild_interval_sec: int | None = Field(default=None, ge=60, le=604800)
     claims_rebuild_policy: str | None = Field(default=None)

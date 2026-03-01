@@ -496,7 +496,7 @@ async def execute_skill(
     response_model=dict,
     status_code=status.HTTP_200_OK,
     summary="Seed built-in example skills",
-    description="Copy built-in example skills (summarize, code-review) into the user's skills directory.",
+    description="Copy built-in example skills into the user's skills directory.",
 )
 async def seed_builtin_skills(
     overwrite: bool = False,

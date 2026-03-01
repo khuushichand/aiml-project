@@ -1,0 +1,21 @@
+{
+  "items": {
+    "queuedForBriefing": "В очереди на брифинг",
+    "includeInNextBriefing": "Добавить в следующий брифинг",
+    "removeFromBriefingQueue": "Удалить из очереди брифинга",
+    "briefingAlreadyIncluded": "Этот элемент уже включен в материалы брифинга.",
+    "briefingIncluded": "Добавлено в очередь следующего брифинга.",
+    "briefingRemoved": "Удалено из очереди брифинга.",
+    "briefingIncludeError": "Не удалось включить элемент в брифинг.",
+    "queuedTag": "В очереди",
+    "queue": {
+      "runPlaceholder": "Выберите запуск",
+      "runOption": "Запуск #{{id}}",
+      "runRequired": "Выберите запуск, чтобы создать отчет из очереди.",
+      "empty": "Для этого запуска не найдено элементов в очереди.",
+      "generated": "Создан отчет из {{count}} элемент{{plural}} в очереди.",
+      "generateError": "Не удалось создать отчет из элементов в очереди.",
+      "generateReport": "Создать отчет из очереди"
+    }
+  }
+}

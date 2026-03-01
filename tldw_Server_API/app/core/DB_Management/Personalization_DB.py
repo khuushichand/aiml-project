@@ -540,14 +540,18 @@ class PersonalizationDB:
             finally:
                 conn.close()
 
-    def list_recent_events(self, user_id: str, limit: int = 500) -> list[dict[str, Any]]:
+    def list_recent_events(self, user_id: str, limit: int = 500, offset: int = 0) -> list[dict[str, Any]]:
         """Return recent usage events, thread-safe."""
         with self._lock:
             conn = self._connect()
             try:
                 cur = conn.execute(
-                    "SELECT id, timestamp, type, resource_id, tags FROM usage_events WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",
-                    (str(user_id), int(limit)),
+                    (
+                        "SELECT id, timestamp, type, resource_id, tags "
+                        "FROM usage_events WHERE user_id = ? "
+                        "ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+                    ),
+                    (str(user_id), int(limit), int(offset)),
                 )
                 rows = cur.fetchall()
                 out: list[dict[str, Any]] = []

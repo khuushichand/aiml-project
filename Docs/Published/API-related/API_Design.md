@@ -50,6 +50,7 @@ This document outlines the current API design for the TL;DW Server (tldw_server)
   - Character chat sessions/messages under `/api/v1/chats` and related paths
 - Prompts & Prompt Studio
   - `/api/v1/prompts/*` (library)
+  - Prompt collections: `/api/v1/prompts/collections/*` (user-scoped, DB-backed)
   - Prompt Studio: projects, prompts, tests, optimization, websocket
   - Keywords for prompts: `/api/v1/prompts/keywords/*` (no global `/keywords`)
 - Notes
@@ -78,6 +79,10 @@ This document outlines the current API design for the TL;DW Server (tldw_server)
   - Audio STT/TTS: `/api/v1/audio/transcriptions`, `/api/v1/audio/speech`
 - Keywords:
   - No global `/api/v1/keywords`. Prompt keywords live under `/api/v1/prompts/keywords/*`. Media keywords are provided via media payloads/DB.
+- Prompt collections:
+  - `/api/v1/prompts/collections/*` is production-backed (user-scoped persistence in Prompts DB), not a test/dev-only in-memory surface.
+- Sync send entities:
+  - `POST /api/v1/sync/send` only accepts `Media`, `Keywords`, and `MediaKeywords` in change entries. Unsupported entities are rejected with `400`.
 - Import/Export:
   - Use Chatbooks: `/api/v1/chatbooks/export` and `/api/v1/chatbooks/import`.
 - Tools:
@@ -114,9 +119,12 @@ This document outlines the current API design for the TL;DW Server (tldw_server)
   - `GET /api/v1/prompts`, `POST /api/v1/prompts`, `PUT /api/v1/prompts/{id}`, `DELETE /api/v1/prompts/{id}`
   - `POST /api/v1/prompts/search`, `GET /api/v1/prompts/export`, `POST /api/v1/prompts/import`
   - `GET /api/v1/prompts/{id}/versions`, `POST /api/v1/prompts/{id}/versions/{version}/restore`
+  - `POST /api/v1/prompts/collections/create`, `GET /api/v1/prompts/collections/{collection_id}`
   - `POST /api/v1/prompts/templates/variables`, `POST /api/v1/prompts/templates/render`
   - `POST /api/v1/prompts/bulk/delete`, `POST /api/v1/prompts/bulk/keywords`
   - `GET /api/v1/prompts/keywords`, `POST /api/v1/prompts/keywords`
+- Sync
+  - `POST /api/v1/sync/send`, `GET /api/v1/sync/get`
 - Evaluations
   - `POST /api/v1/evaluations`, `GET /api/v1/evaluations/runs`
 - LLM Providers & Local LLM

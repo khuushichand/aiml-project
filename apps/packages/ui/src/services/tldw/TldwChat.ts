@@ -233,6 +233,8 @@ const normalizeChatTools = (
 export interface TldwChatOptions {
   model: string
   temperature?: number
+  logprobs?: boolean
+  topLogprobs?: number
   maxTokens?: number
   topP?: number
   frequencyPenalty?: number
@@ -275,6 +277,19 @@ export interface ChatStreamChunk {
         }
       }>
     }
+    logprobs?: {
+      content?: Array<{
+        token?: string
+        logprob?: number
+        top_logprobs?: Array<{
+          token?: string
+          logprob?: number
+        }>
+      }>
+      tokens?: string[]
+      token_logprobs?: number[]
+      top_logprobs?: Array<Record<string, number>>
+    }
     finish_reason?: string | null
   }>
 }
@@ -287,7 +302,8 @@ export class TldwChatService {
    */
   async sendMessage(
     messages: ChatMessage[],
-    options: TldwChatOptions
+    options: TldwChatOptions,
+    onResponse?: (response: unknown) => void
   ): Promise<string> {
     try {
       await tldwClient.initialize()
@@ -305,6 +321,11 @@ export class TldwChatService {
         model: options.model,
         stream: false,
         temperature: options.temperature,
+        logprobs: options.logprobs,
+        top_logprobs:
+          options.logprobs && Number.isFinite(options.topLogprobs)
+            ? options.topLogprobs
+            : undefined,
         max_tokens: options.maxTokens,
         top_p: options.topP,
         frequency_penalty: options.frequencyPenalty,
@@ -331,6 +352,9 @@ export class TldwChatService {
 
       const response = await tldwClient.createChatCompletion(request)
       const data = await response.json().catch(() => null)
+      if (onResponse) {
+        onResponse(data)
+      }
       const content = data?.choices?.[0]?.message?.content || data?.content || data?.text
       if (typeof content === 'string') {
         return content
@@ -372,6 +396,11 @@ export class TldwChatService {
         model: options.model,
         stream: true,
         temperature: options.temperature,
+        logprobs: options.logprobs,
+        top_logprobs:
+          options.logprobs && Number.isFinite(options.topLogprobs)
+            ? options.topLogprobs
+            : undefined,
         max_tokens: options.maxTokens,
         top_p: options.topP,
         frequency_penalty: options.frequencyPenalty,
@@ -530,7 +559,7 @@ export class TldwChatService {
     // Add messages from the end (most recent first)
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i]
-      
+
       // Skip system prompt if already added
       if (msg.role === 'system' && result.length > 0 && result[0].role === 'system') {
         continue

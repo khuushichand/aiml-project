@@ -31,7 +31,7 @@ Functional requirements:
 
 Non-functional requirements:
 - Summarization must be deterministic given the same inputs and configuration.
-- Summaries must respect shared prompt budget caps and truncation rules. See `Docs/Product/Character_Chat_Prompt_Assembly_Preview_PRD.md`.
+- Summaries must respect shared prompt budget caps and truncation rules. See `Docs/Product/Completed/Character_Chat_Prompt_Assembly_Preview_PRD.md`.
 
 ## UX Notes
 - Show a small pin icon on each message with clear tooltip.

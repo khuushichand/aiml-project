@@ -5,7 +5,7 @@
 - **Primary Outcome**: Allow admins and evaluation engineers to design, run, inspect, and export embedding experiments confidently, with automated cleanup and metrics.
 
 ## Status
-- Complete (v2 scope delivered; see `Docs/Plans/IMPLEMENTATION_PLAN_embeddings_abtest_v2_remaining.md`).
+- Complete (v2 scope delivered; see `Docs/Product/Completed/Embeddings_AB_Testing_v2_PRD.md`).
 
 ## Scope (v2)
 1. Formalize persistence (SQLAlchemy adapter or documented alternative) with migrations and tests; restore implementation roadmap documentation.

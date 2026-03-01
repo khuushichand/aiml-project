@@ -99,7 +99,7 @@ class _FakeDB:
 
         return _FakeConn()
 
-    def search_by_safe_metadata(self, filters=None, match_all=True, page=1, per_page=20, group_by_media=True):
+    def search_by_safe_metadata(self, filters=None, match_all=True, page=1, per_page=20, group_by_media=True, **kwargs):
 
         self.last_filters = filters
         return [], 0

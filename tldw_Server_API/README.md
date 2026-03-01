@@ -29,7 +29,7 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 
 Quick setup:
 ```bash
-cp .env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 python -m tldw_Server_API.app.core.AuthNZ.initialize
 ```
 
@@ -56,7 +56,7 @@ See `app/main.py` for router includes and full route namespaces.
 ## Further API Docs
 
 - Chat API: `Docs/API-related/Chat_API_Documentation.md`
-- Character Chat API: `Docs/CHARACTER_CHAT_API_DOCUMENTATION.md`
+- Character Chat API: `Docs/API-related/CHARACTER_CHAT_API_DOCUMENTATION.md`
 - OCR Providers: `Docs/OCR/OCR_Providers.md`
 
 ## Adding a New Endpoint

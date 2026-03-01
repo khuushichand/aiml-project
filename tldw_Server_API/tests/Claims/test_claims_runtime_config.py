@@ -2,8 +2,11 @@ import pytest
 
 from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
     resolve_claims_alignment_config,
+    resolve_claims_context_window_chars,
+    resolve_claims_extraction_passes,
     resolve_claims_json_parse_mode,
     resolve_claims_llm_config,
+    resolve_claims_prompt_validation_config,
 )
 
 
@@ -59,3 +62,33 @@ def test_resolve_claims_alignment_config_validates_and_clamps_threshold():
     )
     assert mode2 == "fuzzy"
     assert threshold2 == pytest.approx(0.0)
+
+
+@pytest.mark.unit
+def test_resolve_claims_prompt_validation_config_defaults_and_normalizes():
+    mode, strict = resolve_claims_prompt_validation_config(
+        {
+            "CLAIMS_PROMPT_VALIDATION_MODE": "ERROR",
+            "CLAIMS_PROMPT_VALIDATION_STRICT": "true",
+        }
+    )
+    assert mode == "error"
+    assert strict is True
+
+    mode2, strict2 = resolve_claims_prompt_validation_config(
+        {
+            "CLAIMS_PROMPT_VALIDATION_MODE": "invalid",
+            "CLAIMS_PROMPT_VALIDATION_STRICT": "not-a-bool",
+        }
+    )
+    assert mode2 == "warning"
+    assert strict2 is False
+
+
+@pytest.mark.unit
+def test_resolve_claims_context_window_chars_and_passes_are_bounded():
+    assert resolve_claims_context_window_chars({"CLAIMS_CONTEXT_WINDOW_CHARS": -100}) == 0
+    assert resolve_claims_context_window_chars({"CLAIMS_CONTEXT_WINDOW_CHARS": "2048"}) == 2048
+
+    assert resolve_claims_extraction_passes({"CLAIMS_EXTRACTION_PASSES": -1}) == 1
+    assert resolve_claims_extraction_passes({"CLAIMS_EXTRACTION_PASSES": "3"}) == 3

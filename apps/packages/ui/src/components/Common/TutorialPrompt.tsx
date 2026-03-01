@@ -17,9 +17,12 @@ import { getPrimaryTutorialForRoute, hasTutorialsForRoute } from "@/tutorials"
 
 /** Delay before showing the prompt (ms) to let the page settle */
 const PROMPT_DELAY_MS = 2000
+/** Minimum time between prompt appearances to avoid rapid-route spam */
+const PROMPT_COOLDOWN_MS = 10000
 
 /** Duration the notification stays open (0 = manual close only) */
 const NOTIFICATION_DURATION = 0
+const NOTIFICATION_KEY = "tutorial-prompt-global"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Component
@@ -30,11 +33,17 @@ export const TutorialPrompt: React.FC = () => {
   const location = useLocation()
   const [api, contextHolder] = notification.useNotification()
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const notificationKeyRef = useRef<string | null>(null)
   const shownRef = useRef<Set<string>>(new Set())
+  const lastPromptShownAtRef = useRef(0)
+  const activePromptPageRef = useRef<string | null>(null)
+  const suppressCloseMarkRef = useRef(false)
 
   const hasSeenPromptForPage = useTutorialStore((state) => state.hasSeenPromptForPage)
   const markPromptSeen = useTutorialStore((state) => state.markPromptSeen)
   const startTutorial = useTutorialStore((state) => state.startTutorial)
+  const isHelpModalOpen = useTutorialStore((state) => state.isHelpModalOpen)
+  const activeTutorialId = useTutorialStore((state) => state.activeTutorialId)
 
   useEffect(() => {
     const pageKey = location.pathname
@@ -43,6 +52,21 @@ export const TutorialPrompt: React.FC = () => {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current)
       timeoutRef.current = null
+    }
+
+    // Always keep a single active notification instance.
+    if (notificationKeyRef.current) {
+      suppressCloseMarkRef.current = true
+      api.destroy(notificationKeyRef.current)
+      notificationKeyRef.current = null
+      activePromptPageRef.current = null
+    } else {
+      suppressCloseMarkRef.current = false
+    }
+
+    // Skip prompts while a tutorial/help modal is active.
+    if (isHelpModalOpen || activeTutorialId) {
+      return
     }
 
     // Skip if we've already shown a prompt for this page in this session
@@ -69,23 +93,38 @@ export const TutorialPrompt: React.FC = () => {
     // Mark as shown for this session immediately
     shownRef.current.add(pageKey)
 
+    const now = Date.now()
+    const elapsedSinceLastPrompt = now - lastPromptShownAtRef.current
+    const cooldownRemaining = Math.max(PROMPT_COOLDOWN_MS - elapsedSinceLastPrompt, 0)
+    const delayMs = Math.max(PROMPT_DELAY_MS, cooldownRemaining)
+
     // Show notification after a delay
-    timeoutRef.current = setTimeout(() => {
-      const notificationKey = `tutorial-prompt-${pageKey}`
+    timeoutRef.current = window.setTimeout(() => {
+      lastPromptShownAtRef.current = Date.now()
+      activePromptPageRef.current = pageKey
 
       const handleDismiss = () => {
-        api.destroy(notificationKey)
+        if (notificationKeyRef.current) {
+          api.destroy(notificationKeyRef.current)
+          notificationKeyRef.current = null
+        }
         markPromptSeen(pageKey)
+        activePromptPageRef.current = null
       }
 
       const handleStartTour = () => {
-        api.destroy(notificationKey)
+        if (notificationKeyRef.current) {
+          api.destroy(notificationKeyRef.current)
+          notificationKeyRef.current = null
+        }
         markPromptSeen(pageKey)
         startTutorial(primaryTutorial.id)
+        activePromptPageRef.current = null
       }
 
+      notificationKeyRef.current = NOTIFICATION_KEY
       api.info({
-        key: notificationKey,
+        key: NOTIFICATION_KEY,
         message: (
           <span className="font-medium">
             {t("tutorials:prompt.title", "New to this page?")}
@@ -118,21 +157,37 @@ export const TutorialPrompt: React.FC = () => {
         placement: "bottomRight",
         className: "tutorial-prompt-notification",
         onClose: () => {
-          // Mark as seen when notification is closed (including auto-close)
-          markPromptSeen(pageKey)
+          notificationKeyRef.current = null
+          if (suppressCloseMarkRef.current) {
+            suppressCloseMarkRef.current = false
+            return
+          }
+
+          if (activePromptPageRef.current) {
+            markPromptSeen(activePromptPageRef.current)
+          }
+          activePromptPageRef.current = null
         }
       })
-    }, PROMPT_DELAY_MS)
+    }, delayMs)
 
     return () => {
       if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current)
+        window.clearTimeout(timeoutRef.current)
         timeoutRef.current = null
+      }
+      if (notificationKeyRef.current) {
+        suppressCloseMarkRef.current = true
+        api.destroy(notificationKeyRef.current)
+        notificationKeyRef.current = null
+        activePromptPageRef.current = null
       }
     }
   }, [
     location.pathname,
+    activeTutorialId,
     api,
+    isHelpModalOpen,
     t,
     hasSeenPromptForPage,
     markPromptSeen,

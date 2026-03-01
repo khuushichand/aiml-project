@@ -12,6 +12,12 @@ This guide documents email support in the media API. It covers the processing-on
 - Endpoint: `POST /api/v1/media/process-emails`
 - Purpose: Extract content and metadata from uploaded `.eml` files, optionally chunk and analyze, without writing to the database.
 
+Compatibility note:
+- During the deprecation window, additive compatibility headers can appear when legacy compatibility inputs are detected:
+  - `Deprecation: true`
+  - `Sunset: <HTTP-date>`
+  - `Link: </api/v1/media/process-emails>; rel="successor-version"`
+
 Request (multipart/form-data)
 - Field `files`: one or more `.eml` files. When `accept_archives=true` is provided, a `.zip` archive of `.eml` files is also accepted. When `accept_mbox=true` is provided, a `.mbox` mailbox is accepted. When `accept_pst=true` is provided, a `.pst`/`.ost` container is accepted (feature flag; parsing requires external tools).
 - Options (form fields):

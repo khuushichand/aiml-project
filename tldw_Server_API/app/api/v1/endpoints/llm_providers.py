@@ -1,9 +1,7 @@
 # llm_providers.py
 import asyncio
-import hashlib
 import json
 import os
-import threading
 import time
 from functools import partial
 from typing import Any, Optional
@@ -30,6 +28,17 @@ from tldw_Server_API.app.core.Image_Generation.listing import list_image_models_
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import (
     PROVIDER_CAPABILITIES,
     provider_requires_api_key,
+)
+from tldw_Server_API.app.core.LLM_Calls.openrouter_model_inventory import (
+    discover_openrouter_models as _discover_openrouter_models_shared,
+)
+from tldw_Server_API.app.core.LLM_Calls.extra_body_compat_catalog import (
+    get_model_extra_body_compat,
+    get_provider_extra_body_compat,
+)
+from tldw_Server_API.app.core.LLM_Calls.tokenizer_resolver import (
+    resolve_tokenizer_metadata,
+    strict_token_counting_enabled as _strict_token_counting_enabled_shared,
 )
 from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
 
@@ -1074,20 +1083,7 @@ LOCAL_MODEL_DISCOVERY_TIMEOUT = 3.0  # seconds
 LOCAL_MODEL_DISCOVERY_TTL = 300  # seconds
 _LOCAL_MODEL_CACHE: dict[str, tuple[float, list[str]]] = {}
 OPENROUTER_MODEL_DISCOVERY_TIMEOUT = 5.0  # seconds
-OPENROUTER_MODEL_DISCOVERY_TTL_DEFAULT = 600  # seconds
-_OPENROUTER_MODEL_CACHE: dict[str, tuple[float, list[str]]] = {}
-_OPENROUTER_MODEL_CACHE_LOCK = threading.Lock()
-
-
-def _openrouter_discovery_ttl_seconds() -> int:
-    raw = os.getenv("OPENROUTER_MODEL_DISCOVERY_TTL_SECONDS")
-    if raw is None:
-        return OPENROUTER_MODEL_DISCOVERY_TTL_DEFAULT
-    try:
-        parsed = int(str(raw).strip())
-    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
-        return OPENROUTER_MODEL_DISCOVERY_TTL_DEFAULT
-    return max(30, parsed)
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 def _dedupe_preserve_order(values: list[str]) -> list[str]:
@@ -1173,87 +1169,20 @@ def _extract_models_from_response(payload: Any) -> list[str]:
     return _dedupe_preserve_order(models)
 
 
-def _resolve_openrouter_models_url() -> str:
-    base_url = (os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1").strip()
-    if not base_url:
-        base_url = "https://openrouter.ai/api/v1"
-    base_url = base_url.rstrip("/")
-    if base_url.lower().endswith("/models"):
-        base_url = base_url[: -len("/models")]
-    return f"{base_url}/models"
-
-
 def discover_openrouter_models(
     api_key: Optional[str],
     *,
     force_refresh: bool = False,
 ) -> list[str]:
-    """Best-effort discovery of OpenRouter model ids from /models.
-
-    Results are cached briefly to avoid repeated upstream calls. On discovery
-    failures, this function falls back to cached values when available.
-    """
-    resolved_key = (api_key or "").strip()
-    if not resolved_key:
-        return []
-
-    models_url = _resolve_openrouter_models_url()
-    key_digest = hashlib.sha1(resolved_key.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
-    cache_key = f"{models_url}|{key_digest}"
-    now = time.time()
-    ttl = _openrouter_discovery_ttl_seconds()
-
-    with _OPENROUTER_MODEL_CACHE_LOCK:
-        cached = _OPENROUTER_MODEL_CACHE.get(cache_key)
-    if cached and not force_refresh and (now - cached[0] < ttl):
-        return list(cached[1])
-
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {resolved_key}",
-    }
-    referer = (os.getenv("OPENROUTER_SITE_URL") or "").strip()
-    site_name = (os.getenv("OPENROUTER_SITE_NAME") or "").strip()
-    if referer:
-        headers["HTTP-Referer"] = referer
-    if site_name:
-        headers["X-Title"] = site_name
-
-    try:
-        resp = _http_fetch(
-            method="GET",
-            url=models_url,
-            headers=headers,
-            timeout=OPENROUTER_MODEL_DISCOVERY_TIMEOUT,
-            retry=_RetryPolicy(attempts=1),
-        )
-        try:
-            if resp.status_code >= 400:
-                logger.warning(
-                    f"[OpenRouter model discovery] {models_url} responded with {resp.status_code}"
-                )
-                return list(cached[1]) if cached else []
-            payload = resp.json()
-        finally:
-            close = getattr(resp, "close", None)
-            if callable(close):
-                close()
-
-        discovered = _extract_models_from_response(payload)
-        with _OPENROUTER_MODEL_CACHE_LOCK:
-            _OPENROUTER_MODEL_CACHE[cache_key] = (time.time(), list(discovered))
-
-        if discovered:
-            logger.info(
-                f"[OpenRouter model discovery] found {len(discovered)} models via {models_url}"
-            )
-        return discovered
-    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug(f"[OpenRouter model discovery] {models_url} failed: {exc}")
-        return list(cached[1]) if cached else []
-    except Exception as exc:  # noqa: BLE001 - discovery must fail open
-        logger.debug(f"[OpenRouter model discovery] unexpected failure via {models_url}: {exc}")
-        return list(cached[1]) if cached else []
+    """Best-effort discovery of OpenRouter model ids from /models."""
+    return _discover_openrouter_models_shared(
+        api_key,
+        force_refresh=force_refresh,
+        include_extended_aliases=False,
+        timeout_seconds=OPENROUTER_MODEL_DISCOVERY_TIMEOUT,
+        log_prefix="[OpenRouter model discovery]",
+        fetch_fn=_http_fetch,
+    )
 
 
 def discover_models_from_endpoint(
@@ -1320,6 +1249,84 @@ def discover_models_from_endpoint(
     _LOCAL_MODEL_CACHE[cache_key] = (now, discovered)
     return discovered
 
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUE_VALUES
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def _resolve_model_tokenizer_support(
+    provider_name: str,
+    model_name: str,
+    config_parser: Any,
+) -> dict[str, Any]:
+    try:
+        return resolve_tokenizer_metadata(
+            provider_name,
+            model_name,
+            strict_mode_effective=_strict_token_counting_enabled_shared(default=False),
+            config_parser=config_parser,
+            runtime_probe_exact=True,
+            runtime_probe_timeout_seconds=2.0,
+            runtime_probe_text="",
+        )
+    except Exception:  # noqa: BLE001 - metadata path should fail open
+        return {
+            "available": False,
+            "tokenizer": None,
+            "kind": None,
+            "source": None,
+            "detokenize": False,
+            "count_accuracy": "unavailable",
+            "strict_mode_effective": _strict_token_counting_enabled_shared(default=False),
+        }
+
+
+def _build_runtime_context(config_parser: Any) -> dict[str, Any]:
+    strict_openai_compat = False
+    try:
+        if config_parser.has_section("Local-API") and config_parser.has_option("Local-API", "strict_openai_compat"):
+            strict_openai_compat = _truthy(config_parser.get("Local-API", "strict_openai_compat", fallback="false"))
+    except Exception:  # noqa: BLE001 - capability metadata should fail open
+        strict_openai_compat = False
+
+    env_override = os.getenv("LOCAL_LLM_STRICT_OPENAI_COMPAT")
+    if env_override is not None:
+        strict_openai_compat = _truthy(env_override)
+    return {"strict_openai_compat": strict_openai_compat}
+
+
+def _fallback_extra_body_compat() -> dict[str, Any]:
+    return {
+        "supported": False,
+        "effective_reason": "unsupported for deployment/runtime configuration",
+        "known_params": [],
+        "param_groups": [],
+        "notes": "No extra_body compatibility metadata registered for this provider/model.",
+        "example": {"extra_body": {}},
+        "source": "catalog+runtime",
+    }
+
+
+def _safe_provider_extra_body_compat(provider: str, runtime_context: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return get_provider_extra_body_compat(provider, runtime_context=runtime_context)
+    except Exception:  # noqa: BLE001 - capability metadata should fail open
+        return _fallback_extra_body_compat()
+
+
+def _safe_model_extra_body_compat(provider: str, model: str, runtime_context: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return get_model_extra_body_compat(provider, model, runtime_context=runtime_context)
+    except Exception:  # noqa: BLE001 - capability metadata should fail open
+        return _fallback_extra_body_compat()
+
+
 def get_configured_providers(
     include_deprecated: bool = False,
     refresh_openrouter: bool = False,
@@ -1332,6 +1339,7 @@ def get_configured_providers(
     """
     try:
         config_parser = load_comprehensive_config()
+        runtime_context = _build_runtime_context(config_parser)
         providers = []
 
         # Check if we have the required sections
@@ -1394,6 +1402,13 @@ def get_configured_providers(
                 'display_name': 'DeepSeek',
                 'api_key_field': 'deepseek_api_key',
                 'model_field': 'deepseek_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
+            'qwen': {
+                'display_name': 'Qwen',
+                'api_key_field': 'qwen_api_key',
+                'model_field': 'qwen_model',
                 'type': 'commercial',
                 'section': 'API'
             },
@@ -1664,6 +1679,39 @@ def get_configured_providers(
                 models_info = filtered
                 models = [mi['name'] for mi in models_info]
 
+            for model_info in models_info:
+                model_name = str(model_info.get("name") or model_info.get("id") or "").strip()
+                model_info["extra_body_compat"] = _safe_model_extra_body_compat(
+                    provider_name,
+                    model_name,
+                    runtime_context,
+                )
+                tokenizer_support = _resolve_model_tokenizer_support(provider_name, model_name, config_parser)
+                model_info["tokenizer_available"] = bool(tokenizer_support.get("available"))
+                model_info["tokenizer"] = tokenizer_support.get("tokenizer")
+                model_info["tokenizer_kind"] = tokenizer_support.get("kind")
+                model_info["tokenizer_source"] = tokenizer_support.get("source")
+                model_info["detokenize_available"] = bool(tokenizer_support.get("detokenize"))
+                model_info["count_accuracy"] = tokenizer_support.get("count_accuracy", "unavailable")
+                model_info["strict_mode_effective"] = bool(tokenizer_support.get("strict_mode_effective", False))
+                if tokenizer_support.get("error"):
+                    model_info["tokenization_error"] = tokenizer_support.get("error")
+
+            tokenizers_by_model = {
+                str(model_info.get("name") or model_info.get("id") or "").strip(): {
+                    "available": bool(model_info.get("tokenizer_available")),
+                    "tokenizer": model_info.get("tokenizer"),
+                    "kind": model_info.get("tokenizer_kind"),
+                    "source": model_info.get("tokenizer_source"),
+                    "detokenize": bool(model_info.get("detokenize_available")),
+                    "count_accuracy": model_info.get("count_accuracy", "unavailable"),
+                    "strict_mode_effective": bool(model_info.get("strict_mode_effective", False)),
+                    "error": model_info.get("tokenization_error"),
+                }
+                for model_info in models_info
+                if str(model_info.get("name") or model_info.get("id") or "").strip()
+            }
+
             endpoint_only = provider_info['type'] == 'local' and is_configured and not models
 
             provider_data = {
@@ -1675,7 +1723,9 @@ def get_configured_providers(
                 'type': provider_info['type'],
                 'default_model': models[0] if models else None,
                 'is_configured': is_configured,  # Add configuration status
-                'endpoint_only': endpoint_only
+                'endpoint_only': endpoint_only,
+                'extra_body_compat': _safe_provider_extra_body_compat(provider_name, runtime_context),
+                'tokenizers': tokenizers_by_model or None,
             }
 
             # Add endpoint for local providers

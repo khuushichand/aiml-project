@@ -5,7 +5,7 @@ Owner: Core Maintainers (Server/API + WebUI)
 Status: Draft
 Updated: 2026-02-07
 
-Related: Docs/Product/Content_Collections_PRD.md
+Related: Docs/Product/Completed/Content_Collections_PRD.md
 
 ---
 

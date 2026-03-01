@@ -342,6 +342,10 @@ async def test_openai_oauth_endpoints_sqlite(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_OAUTH_CLIENT_SECRET", "oauth-client-secret")
     monkeypatch.setenv("OPENAI_OAUTH_AUTH_URL", "https://oauth.example.com/authorize")
     monkeypatch.setenv("OPENAI_OAUTH_TOKEN_URL", "https://oauth.example.com/token")
+    monkeypatch.setenv(
+        "OPENAI_OAUTH_REDIRECT_URI",
+        "https://app.example.com/api/v1/users/keys/openai/oauth/callback",
+    )
     monkeypatch.setenv("OPENAI_OAUTH_SCOPES", "openid profile api")
     monkeypatch.setenv("OPENAI_OAUTH_ALLOWED_RETURN_PATH_PREFIXES", "/settings,/profile")
 
@@ -471,6 +475,9 @@ async def test_openai_oauth_endpoints_sqlite(tmp_path, monkeypatch):
         parsed = urlparse(auth_body["auth_url"])
         parsed_qs = parse_qs(parsed.query)
         assert parsed_qs.get("client_id") == ["oauth-client-id"]
+        assert parsed_qs.get("redirect_uri") == [
+            "https://app.example.com/api/v1/users/keys/openai/oauth/callback"
+        ]
         state_value = parsed_qs["state"][0]
 
         r = client.get(

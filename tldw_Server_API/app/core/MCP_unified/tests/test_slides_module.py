@@ -112,12 +112,15 @@ class FakeGenerator:
 
 
 @pytest.mark.asyncio
-async def test_slides_templates_export_and_rag(monkeypatch):
+async def test_slides_templates_export_and_rag(monkeypatch, tmp_path):
     mod = SlidesModule(ModuleConfig(name="slides"))
     fake_db = FakeSlidesDB()
     mod._open_db = lambda ctx: fake_db  # type: ignore[attr-defined]
 
-    ctx = SimpleNamespace(db_paths={"media": "/tmp/media.db", "chacha": "/tmp/chacha.db"}, user_id="1")
+    ctx = SimpleNamespace(
+        db_paths={"media": str(tmp_path / "media.db"), "chacha": str(tmp_path / "chacha.db")},
+        user_id="1",
+    )
 
     created = await mod.execute_tool(
         "slides.presentations.create",

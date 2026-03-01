@@ -1,25 +1,286 @@
-import { test, expect } from '@playwright/test'
-import { launchWithExtensionOrSkip } from "./utils/real-server"
-import path from 'path'
+import { test, expect, type Page } from '@playwright/test'
 import http from 'node:http'
 import { AddressInfo } from 'node:net'
-import { launchWithExtension } from './utils/extension'
-import { MockTldwServer } from './utils/mock-server'
+import { launchWithBuiltExtension } from './utils/extension-build'
+import { forceConnected, waitForConnectionStore } from './utils/connection'
 
-test.describe('Media ingest context menu & Quick Ingest progress', () => {
+const API_KEY = 'THIS-IS-A-SECURE-KEY-123-FAKE-KEY'
+
+const sharedOpenApiPaths = {
+  '/api/v1/chat/completions': {},
+  '/api/v1/rag/search': {},
+  '/api/v1/rag/search/stream': {},
+  '/api/v1/media/ingest/jobs': {},
+  '/api/v1/media/process-videos': {},
+  '/api/v1/media/process-audios': {},
+  '/api/v1/media/process-pdfs': {},
+  '/api/v1/media/process-ebooks': {},
+  '/api/v1/media/process-documents': {},
+  '/api/v1/media/process-web-scraping': {},
+  '/api/v1/audio/speech': {},
+  '/api/v1/audio/providers': {},
+  '/api/v1/audio/voices': {},
+  '/api/v1/audio/voices/catalog': {},
+  '/api/v1/llm/models': {},
+  '/api/v1/llm/models/metadata': {},
+  '/api/v1/llm/providers': {},
+  '/api/v1/chat/dictionaries': {}
+}
+
+const patchQuickIngestRuntime = async (page: Page, apiBaseUrl: string) =>
+  page.evaluate(({ resolvedApiBaseUrl }) => {
+    try {
+      const runtime =
+        (globalThis as any)?.browser?.runtime ||
+        (globalThis as any)?.chrome?.runtime
+      const onMessage = runtime?.onMessage
+      const originalSendMessage =
+        typeof runtime?.sendMessage === 'function'
+          ? runtime.sendMessage.bind(runtime)
+          : null
+      if (!runtime || !onMessage || !originalSendMessage) {
+        return false
+      }
+
+      const originalAddListener =
+        typeof onMessage.addListener === 'function'
+          ? onMessage.addListener.bind(onMessage)
+          : null
+      const originalRemoveListener =
+        typeof onMessage.removeListener === 'function'
+          ? onMessage.removeListener.bind(onMessage)
+          : null
+      const listeners = new Set<
+        (message: any, sender?: any, sendResponse?: any) => void
+      >()
+
+      const emit = (message: any) => {
+        for (const listener of [...listeners]) {
+          try {
+            listener(message, {}, () => undefined)
+          } catch {
+            // best-effort test emitter
+          }
+        }
+      }
+
+      const resolveProcessEndpoint = (type: string) => {
+        switch ((type || '').toLowerCase()) {
+          case 'video':
+            return '/api/v1/media/process-videos'
+          case 'audio':
+            return '/api/v1/media/process-audios'
+          case 'pdf':
+            return '/api/v1/media/process-pdfs'
+          case 'document':
+            return '/api/v1/media/process-documents'
+          default:
+            return '/api/v1/media/process-web-scraping'
+        }
+      }
+
+      onMessage.addListener = (listener: any) => {
+        listeners.add(listener)
+      }
+      onMessage.removeListener = (listener: any) => {
+        listeners.delete(listener)
+      }
+
+      runtime.sendMessage = async (message: any) => {
+        if (message?.type === 'tldw:quick-ingest/start') {
+          const payload = message?.payload || {}
+          const sessionId = `qi-e2e-media-${Date.now()}`
+          const files = Array.isArray(payload?.files) ? payload.files : []
+          const entries = Array.isArray(payload?.entries) ? payload.entries : []
+
+          queueMicrotask(async () => {
+            const results: Array<Record<string, any>> = []
+            for (let index = 0; index < files.length; index += 1) {
+              const file = files[index] || {}
+              const sourceId = String(file?.id || `file-${index + 1}`)
+              const fileName = String(file?.name || `file-${index + 1}.bin`)
+              const byteLength = Array.isArray(file?.data)
+                ? file.data.length
+                : file?.data instanceof Uint8Array
+                  ? file.data.byteLength
+                  : file?.data instanceof ArrayBuffer
+                    ? file.data.byteLength
+                    : 0
+              try {
+                const submitResponse = await fetch(
+                  `${resolvedApiBaseUrl}/api/v1/media/ingest/jobs`,
+                  {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                      media_type: 'document',
+                      source_id: sourceId,
+                      file_name: fileName,
+                      size_bytes: byteLength
+                    })
+                  }
+                )
+                if (!submitResponse.ok) {
+                  throw new Error(`Submit failed (${submitResponse.status})`)
+                }
+                const submitPayload = await submitResponse
+                  .json()
+                  .catch(() => ({}))
+                const result = {
+                  id: sourceId,
+                  status: 'ok',
+                  fileName,
+                  type: 'document',
+                  data: {
+                    id:
+                      submitPayload?.jobs?.[0]?.id || `media-file-${sourceId}`
+                  }
+                }
+                results.push(result)
+                emit({
+                  type: 'tldw:quick-ingest/progress',
+                  payload: {
+                    sessionId,
+                    result
+                  }
+                })
+              } catch (error: any) {
+                const result = {
+                  id: sourceId,
+                  status: 'error',
+                  fileName,
+                  type: 'file',
+                  error: error?.message || 'Upload failed'
+                }
+                results.push(result)
+                emit({
+                  type: 'tldw:quick-ingest/progress',
+                  payload: {
+                    sessionId,
+                    result
+                  }
+                })
+              }
+            }
+
+            for (let index = 0; index < entries.length; index += 1) {
+              const entry = entries[index] || {}
+              const sourceId = String(entry?.id || `entry-${index + 1}`)
+              const entryType = String(entry?.type || 'web_page')
+              const url = String(entry?.url || '').trim()
+              const processEndpoint = resolveProcessEndpoint(entryType)
+              try {
+                const processResponse = await fetch(
+                  `${resolvedApiBaseUrl}${processEndpoint}`,
+                  {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                      url,
+                      media_type: entryType
+                    })
+                  }
+                )
+                if (!processResponse.ok) {
+                  throw new Error(`Process failed (${processResponse.status})`)
+                }
+                const processPayload = await processResponse
+                  .json()
+                  .catch(() => ({}))
+                const result = {
+                  id: sourceId,
+                  status: 'ok',
+                  type: entryType,
+                  url,
+                  data: {
+                    id: processPayload?.id || `media-entry-${sourceId}`
+                  }
+                }
+                results.push(result)
+                emit({
+                  type: 'tldw:quick-ingest/progress',
+                  payload: {
+                    sessionId,
+                    result
+                  }
+                })
+              } catch (error: any) {
+                const result = {
+                  id: sourceId,
+                  status: 'error',
+                  type: entryType,
+                  url,
+                  error: error?.message || 'Process failed'
+                }
+                results.push(result)
+                emit({
+                  type: 'tldw:quick-ingest/progress',
+                  payload: {
+                    sessionId,
+                    result
+                  }
+                })
+              }
+            }
+
+            emit({
+              type: 'tldw:quick-ingest/completed',
+              payload: {
+                sessionId,
+                results
+              }
+            })
+          })
+
+          return {
+            ok: true,
+            sessionId
+          }
+        }
+        if (message?.type === 'tldw:quick-ingest/cancel') {
+          emit({
+            type: 'tldw:quick-ingest/cancelled',
+            payload: {
+              sessionId: String(message?.payload?.sessionId || ''),
+              reason: String(message?.payload?.reason || 'Cancelled by user.')
+            }
+          })
+          return { ok: true }
+        }
+        return originalSendMessage(message)
+      }
+
+      ;(window as any).__restoreQuickIngestRuntimePatch = () => {
+        runtime.sendMessage = originalSendMessage
+        if (originalAddListener) {
+          onMessage.addListener = originalAddListener
+        }
+        if (originalRemoveListener) {
+          onMessage.removeListener = originalRemoveListener
+        }
+        listeners.clear()
+      }
+
+      return true
+    } catch {
+      return false
+    }
+  }, { resolvedApiBaseUrl: apiBaseUrl })
+
+test.describe('Quick ingest media requests', () => {
   let server: http.Server
   let baseUrl = ''
-  let mediaAdds: string[] = []
+  let ingestJobSubmits: string[] = []
   let mediaProcesses: string[] = []
 
   test.beforeAll(async () => {
     server = http.createServer((req, res) => {
-      const url = req.url || ''
+      const url = req.url || '/'
       const method = (req.method || 'GET').toUpperCase()
       const json = (code: number, body: any) => {
         res.writeHead(code, {
           'content-type': 'application/json',
-          'access-control-allow-origin': 'http://127.0.0.1',
+          'access-control-allow-origin': '*',
           'access-control-allow-credentials': 'true'
         })
         res.end(JSON.stringify(body))
@@ -27,7 +288,7 @@ test.describe('Media ingest context menu & Quick Ingest progress', () => {
 
       if (method === 'OPTIONS') {
         res.writeHead(204, {
-          'access-control-allow-origin': 'http://127.0.0.1',
+          'access-control-allow-origin': '*',
           'access-control-allow-credentials': 'true',
           'access-control-allow-headers': 'content-type, x-api-key, authorization'
         })
@@ -37,18 +298,48 @@ test.describe('Media ingest context menu & Quick Ingest progress', () => {
       if (url === '/api/v1/health' && method === 'GET') {
         return json(200, { status: 'ok' })
       }
-      if (url === '/api/v1/media/add' && method === 'POST') {
-        mediaAdds.push(url)
+      if (url === '/openapi.json' && method === 'GET') {
+        return json(200, {
+          openapi: '3.1.0',
+          info: { title: 'tldw media e2e mock', version: 'e2e' },
+          paths: sharedOpenApiPaths
+        })
+      }
+      if (url === '/api/v1/rag/health' && method === 'GET') {
+        return json(200, {
+          status: 'ok',
+          components: {
+            search_index: {
+              status: 'healthy',
+              message: '',
+              fts_table_count: 1
+            }
+          }
+        })
+      }
+      if (url === '/api/v1/media/ingest/jobs' && method === 'POST') {
+        ingestJobSubmits.push(url)
         let body = ''
         req.on('data', (c) => (body += c))
-        req.on('end', () => json(200, { ok: true, body: body || '{}' }))
+        req.on('end', () =>
+          json(200, {
+            batch_id: `batch-${ingestJobSubmits.length}`,
+            jobs: [{ id: 7000 + ingestJobSubmits.length, status: 'queued' }],
+            ok: true,
+            body: body || '{}'
+          })
+        )
         return
       }
       if (url.startsWith('/api/v1/media/process-') && method === 'POST') {
         mediaProcesses.push(url)
         let body = ''
         req.on('data', (c) => (body += c))
-        req.on('end', () => json(200, { ok: true, body: body || '{}' }))
+        req.on('end', () =>
+          setTimeout(() => {
+            json(200, { ok: true, body: body || '{}' })
+          }, 150)
+        )
         return
       }
 
@@ -66,136 +357,237 @@ test.describe('Media ingest context menu & Quick Ingest progress', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   })
 
-  test('context menu calls /media/add and /media/process-* and Quick Ingest shows progress', async () => {
-    const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
-
-    // Configure tldw server URL in settings (no auth required for this smoke server)
-    await page.goto(optionsUrl + '#/settings/tldw', {
-      waitUntil: 'domcontentloaded'
+  test('quick ingest calls /media/ingest/jobs and /media/process-*', async () => {
+    const { context, page, optionsUrl } = await launchWithBuiltExtension({
+      seedConfig: {
+        serverUrl: baseUrl,
+        authMode: 'single-user',
+        apiKey: API_KEY
+      }
     })
-    await page.getByLabel('Server URL').fill(baseUrl)
-    await page.getByRole('button', { name: 'Save' }).click()
 
-    // Open a regular tab navigated to a URL with a .pdf extension so
-    // getProcessPathForUrl() picks a specific process endpoint.
-    const tab = await context.newPage()
-    await tab.goto('https://example.com/test.pdf')
+    try {
+      const patched = await patchQuickIngestRuntime(page, baseUrl)
+      if (!patched) {
+        test.skip(true, 'Unable to patch runtime messaging in extension page context.')
+        return
+      }
 
-    // Right-click on the page and trigger the extension context menus
-    await tab.click('body', { button: 'right' })
-    await tab.contextMenu('body').catch(() => {}) // best-effort; some channels lack UI
+      await page.goto(optionsUrl + '#/chat', {
+        waitUntil: 'domcontentloaded'
+      })
+      await waitForConnectionStore(page, 'media-and-tts')
+      await forceConnected(page, {}, 'media-and-tts')
 
-    // Directly send the messages the background listener expects to avoid
-    // flakiness from contextMenu UI in headless runs.
-    await context._browser._wrapApiCall?.(async () => {}) // no-op to avoid lint
-    await context.backgroundPages().at(0)?.evaluate(() => {})
+      const openQuickIngestButton = page
+        .getByRole('button', { name: /quick ingest/i })
+        .first()
+      await expect(openQuickIngestButton).toBeVisible()
+      await openQuickIngestButton.click()
 
-    // Use the extension background channel by sending the same messages the
-    // onClicked handler would produce.
-    // NOTE: we cannot easily get chrome.runtime in this environment; instead,
-    // exercise Quick Ingest which uses /media/add and the process-* endpoints.
+      const modal = page.getByRole('dialog', { name: /quick ingest/i }).first()
+      await expect(modal).toBeVisible({ timeout: 10_000 })
 
-    // Go back to options Quick Ingest UI
-    await page.getByRole('button', { name: 'Quick ingest' }).click()
+      const urlInput = modal.getByPlaceholder('https://...').first()
+      await urlInput.fill('https://example.com/a.html')
+      await modal.getByRole('button', { name: /add url|add urls/i }).first().click()
+      const rows = modal.getByPlaceholder('https://...')
+      await rows.nth(1).fill('https://example.com/b.pdf')
 
-    const urlInput = page.getByPlaceholder('https://...')
-    await urlInput.first().fill('https://example.com/a.html')
-    await page.getByRole('button', { name: 'Add URL' }).click()
-    const rows = page.getByPlaceholder('https://...')
-    await rows.nth(1).fill('https://example.com/b.pdf')
+      await page.setInputFiles('[data-testid="qi-file-input"]', {
+        name: 'sample.txt',
+        mimeType: 'text/plain',
+        buffer: Buffer.from('hello from media-and-tts spec')
+      })
 
-    // Open file picker and add local files is hard in headless; instead rely on URLs
-    await page.getByRole('button', { name: 'Ingest' }).click()
+      const runButton = modal
+        .getByRole('button', { name: /Run quick ingest|Ingest|Process/i })
+        .first()
+      await expect(runButton).toBeEnabled()
+      await runButton.click()
 
-    // While running, progress text should show up with "Processing X / Y"
-    await expect(
-      page.getByText(/Processing .*\/.* items…/i)
-    ).toBeVisible({ timeout: 10_000 })
-
-    await context.close()
+      await expect
+        .poll(
+          () => ingestJobSubmits.length + mediaProcesses.length,
+          {
+            timeout: 30_000
+          }
+        )
+        .toBeGreaterThan(0)
+    } finally {
+      try {
+        await page.evaluate(() => {
+          try {
+            const restore = (window as any).__restoreQuickIngestRuntimePatch
+            if (typeof restore === 'function') {
+              restore()
+            }
+            delete (window as any).__restoreQuickIngestRuntimePatch
+          } catch {
+            // ignore cleanup failures if page context is gone
+          }
+        })
+      } catch {
+        // ignore cleanup failures if page already closed
+      }
+      await context.close()
+    }
   })
 })
 
 test.describe('tldw TTS provider', () => {
-  let server: MockTldwServer
+  let server: http.Server
+  let baseUrl = ''
   let audioRequests = 0
 
   test.beforeAll(async () => {
-    server = new MockTldwServer({
-      '/api/v1/audio/speech': (req, res) => {
+    server = http.createServer((req, res) => {
+      const requestUrl = new URL(req.url || '/', 'http://127.0.0.1')
+      const pathName = requestUrl.pathname
+      const method = (req.method || 'GET').toUpperCase()
+      const json = (code: number, body: any) => {
+        res.writeHead(code, {
+          'content-type': 'application/json',
+          'access-control-allow-origin': '*',
+          'access-control-allow-credentials': 'true'
+        })
+        res.end(JSON.stringify(body))
+      }
+
+      if (method === 'OPTIONS') {
+        res.writeHead(204, {
+          'access-control-allow-origin': '*',
+          'access-control-allow-credentials': 'true',
+          'access-control-allow-headers': 'content-type, x-api-key, authorization'
+        })
+        return res.end()
+      }
+
+      if (pathName === '/api/v1/health' && method === 'GET') {
+        return json(200, { status: 'ok' })
+      }
+      if (pathName === '/openapi.json' && method === 'GET') {
+        return json(200, {
+          openapi: '3.1.0',
+          info: { title: 'tldw tts e2e mock', version: 'e2e' },
+          paths: sharedOpenApiPaths
+        })
+      }
+      if (pathName === '/api/v1/audio/providers' && method === 'GET') {
+        return json(200, {
+          providers: {
+            kokoro: {
+              provider_name: 'Kokoro',
+              formats: ['mp3'],
+              default_format: 'mp3',
+              supports_streaming: false,
+              voices: [{ id: 'af_heart', name: 'AF Heart', language: 'en' }]
+            }
+          },
+          voices: {
+            kokoro: [{ id: 'af_heart', name: 'AF Heart', language: 'en' }]
+          }
+        })
+      }
+      if (pathName === '/api/v1/audio/voices' && method === 'GET') {
+        return json(200, [{ id: 'af_heart', name: 'AF Heart', provider: 'kokoro' }])
+      }
+      if (pathName === '/api/v1/audio/voices/catalog' && method === 'GET') {
+        return json(200, [{ id: 'af_heart', name: 'AF Heart', provider: 'kokoro' }])
+      }
+      if (pathName === '/api/v1/llm/providers' && method === 'GET') {
+        return json(200, [{ provider: 'openai', display_name: 'OpenAI' }])
+      }
+      if (pathName === '/api/v1/llm/models' && method === 'GET') {
+        return json(200, [{ id: 'gpt-4o-mini', provider: 'openai' }])
+      }
+      if (pathName === '/api/v1/llm/models/metadata' && method === 'GET') {
+        return json(200, {
+          models: [{ id: 'gpt-4o-mini', provider: 'openai', capabilities: {} }]
+        })
+      }
+      if (pathName === '/api/v1/chat/completions' && method === 'POST') {
+        return json(200, {
+          id: 'chatcmpl-e2e',
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: 'gpt-4o-mini',
+          choices: [
+            {
+              index: 0,
+              finish_reason: 'stop',
+              message: { role: 'assistant', content: 'Hello from TTS test' }
+            }
+          ]
+        })
+      }
+      if (pathName === '/api/v1/audio/speech' && method === 'POST') {
         audioRequests += 1
         const chunks: Buffer[] = []
         req.on('data', (c) => chunks.push(Buffer.from(c)))
         req.on('end', () => {
           res.writeHead(200, {
             'content-type': 'audio/mpeg',
-            'access-control-allow-origin': '*'
+            'access-control-allow-origin': '*',
+            'access-control-allow-credentials': 'true'
           })
-          // Return a tiny fake mp3-ish buffer
           res.end(Buffer.from([0x49, 0x44, 0x33]))
         })
+        return
       }
+
+      res.writeHead(404)
+      res.end('not found')
     })
-    await server.start()
+
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve)
+    )
+    const addr = server.address() as AddressInfo
+    baseUrl = `http://127.0.0.1:${addr.port}`
   })
 
   test.afterAll(async () => {
-    await server.stop()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
   })
 
-  test('clicking TTS icon with provider=tldw calls /api/v1/audio/speech', async () => {
-    const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
-
-    // Configure tldw server and API key (MockTldwServer validates X-API-KEY)
-    await page.goto(optionsUrl + '#/settings/tldw', {
-      waitUntil: 'domcontentloaded'
-    })
-    await page.getByLabel('Server URL').fill(server.url)
-    await page.getByText('Authentication Mode').scrollIntoViewIfNeeded()
-    await page.getByText('Single User (API Key)').click()
-    await page.getByLabel('API Key').fill('THIS-IS-A-SECURE-KEY-123-FAKE-KEY')
-    await page.getByRole('button', { name: 'Save' }).click()
-
-    // Switch TTS provider to tldw and enable TTS
-    await page.goto(optionsUrl + '#/settings', {
-      waitUntil: 'domcontentloaded'
-    })
-    await page.getByText('Text to speech').scrollIntoViewIfNeeded()
-    await page.getByText('Text to speech').click()
-
-    const enabledToggle = page.getByLabel('Enable text to speech')
-    await enabledToggle.check()
-
-    const providerSelect = page.getByText('Browser TTS', { exact: false })
-    await providerSelect.click()
-    await page.getByRole('option', { name: /tldw server \(audio\/speech\)/i }).click()
-
-    await page.getByRole('button', { name: 'Save' }).click()
-
-    // Back to Playground, send a simple chat message
-    await page.goto(optionsUrl + '#/', {
-      waitUntil: 'domcontentloaded'
-    })
-    const input = page.getByPlaceholder('Type a message...')
-    await input.fill('Hello from TTS test')
-    await input.press('Enter')
-
-    // Wait for the assistant message to render
-    await expect(page.getByText(/Hello from TTS test/i)).toBeVisible({
-      timeout: 10_000
+  test('tts playground play with provider=tldw calls /api/v1/audio/speech', async () => {
+    const { context, page, optionsUrl } = await launchWithBuiltExtension({
+      seedConfig: {
+        serverUrl: baseUrl,
+        authMode: 'single-user',
+        apiKey: API_KEY,
+        ttsProvider: 'tldw',
+        isTTSEnabled: true,
+        tldwTtsModel: 'kokoro',
+        tldwTtsVoice: 'af_heart',
+        tldwTtsResponseFormat: 'mp3'
+      }
     })
 
-    // Click the TTS button (speaker icon) on the latest assistant message
-    const ttsButton = page.getByRole('button', { name: /tts/i }).last()
-    await ttsButton.click()
+    try {
+      await page.goto(optionsUrl + '#/tts', {
+        waitUntil: 'domcontentloaded'
+      })
+      await waitForConnectionStore(page, 'media-and-tts-tts')
+      await forceConnected(page, {}, 'media-and-tts-tts')
 
-    // Give time for the request to reach the mock server
-    await page.waitForTimeout(2000)
+      const input = page
+        .getByLabel(/Enter some text to hear it spoken/i)
+        .first()
+      await input.fill('Hello from TTS test')
 
-    expect(audioRequests).toBeGreaterThan(0)
+      const playButton = page.getByRole('button', { name: /^Play$/i }).first()
+      await expect(playButton).toBeEnabled()
+      await playButton.click()
 
-    await context.close()
+      await expect
+        .poll(() => audioRequests, {
+          timeout: 15_000
+        })
+        .toBeGreaterThan(0)
+    } finally {
+      await context.close()
+    }
   })
 })

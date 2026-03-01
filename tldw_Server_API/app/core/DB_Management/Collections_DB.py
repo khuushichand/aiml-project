@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from loguru import logger
 
@@ -115,10 +116,15 @@ _SQLITE_PRAGMA_TABLES = {
     "content_item_tags",
     "content_items",
     "file_artifacts",
+    "notification_preferences",
+    "notification_bridge_state",
     "output_templates",
     "outputs",
+    "reminder_task_runs",
+    "reminder_tasks",
     "reading_digest_schedules",
     "reading_highlights",
+    "user_notifications",
 }
 
 
@@ -218,6 +224,86 @@ class ReadingDigestScheduleRow:
     next_run_at: str | None
     last_status: str | None
     created_at: str
+    updated_at: str
+
+
+@dataclass
+class ReminderTaskRow:
+    id: str
+    user_id: str
+    tenant_id: str
+    title: str
+    body: str | None
+    link_type: str | None
+    link_id: str | None
+    link_url: str | None
+    schedule_kind: str
+    run_at: str | None
+    cron: str | None
+    timezone: str | None
+    enabled: bool
+    last_run_at: str | None
+    next_run_at: str | None
+    last_status: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass
+class ReminderTaskRunRow:
+    id: int
+    task_id: str
+    user_id: str
+    scheduled_for: str | None
+    job_id: str | None
+    run_slot_utc: str
+    run_slot_key: str
+    status: str
+    error: str | None
+    created_at: str
+    started_at: str | None
+    completed_at: str | None
+
+
+@dataclass
+class UserNotificationRow:
+    id: int
+    user_id: str
+    kind: str
+    title: str
+    message: str
+    severity: str
+    source_task_id: str | None
+    source_task_run_id: int | None
+    source_job_id: str | None
+    source_domain: str | None
+    source_job_type: str | None
+    link_type: str | None
+    link_id: str | None
+    link_url: str | None
+    dedupe_key: str | None
+    retention_until: str | None
+    archived_at: str | None
+    created_at: str
+    read_at: str | None
+    dismissed_at: str | None
+
+
+@dataclass
+class NotificationPreferencesRow:
+    user_id: str
+    reminder_enabled: bool
+    job_completed_enabled: bool
+    job_failed_enabled: bool
+    updated_at: str
+
+
+@dataclass
+class NotificationBridgeStateRow:
+    consumer_name: str
+    last_event_id: int
+    lease_owner_id: str | None
+    lease_expires_at: str | None
     updated_at: str
 
 
@@ -537,6 +623,88 @@ class CollectionsDatabase:
             CREATE INDEX IF NOT EXISTS idx_reading_digest_user ON reading_digest_schedules(user_id);
             CREATE INDEX IF NOT EXISTS idx_reading_digest_tenant ON reading_digest_schedules(tenant_id);
 
+            CREATE TABLE IF NOT EXISTS reminder_tasks (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT,
+                link_type TEXT,
+                link_id TEXT,
+                link_url TEXT,
+                schedule_kind TEXT NOT NULL,
+                run_at TEXT,
+                cron TEXT,
+                timezone TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                last_run_at TEXT,
+                next_run_at TEXT,
+                last_status TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_reminder_tasks_user ON reminder_tasks(user_id);
+            CREATE INDEX IF NOT EXISTS idx_reminder_tasks_user_enabled ON reminder_tasks(user_id, enabled);
+
+            CREATE TABLE IF NOT EXISTS reminder_task_runs (
+                id BIGSERIAL PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                scheduled_for TEXT,
+                job_id TEXT,
+                run_slot_utc TEXT NOT NULL,
+                run_slot_key TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_reminder_task_runs_task_id ON reminder_task_runs(task_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_reminder_task_runs_slot ON reminder_task_runs(task_id, run_slot_key);
+
+            CREATE TABLE IF NOT EXISTS user_notifications (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                source_task_id TEXT,
+                source_task_run_id BIGINT,
+                source_job_id TEXT,
+                source_domain TEXT,
+                source_job_type TEXT,
+                link_type TEXT,
+                link_id TEXT,
+                link_url TEXT,
+                dedupe_key TEXT,
+                retention_until TEXT,
+                archived_at TEXT,
+                created_at TEXT NOT NULL,
+                read_at TEXT,
+                dismissed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created ON user_notifications(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread ON user_notifications(user_id, read_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_user_notifications_user_dedupe ON user_notifications(user_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS notification_preferences (
+                user_id TEXT PRIMARY KEY,
+                reminder_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                job_completed_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                job_failed_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS notification_bridge_state (
+                consumer_name TEXT PRIMARY KEY,
+                last_event_id BIGINT,
+                lease_owner_id TEXT,
+                lease_expires_at TEXT,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS file_artifacts (
                 id BIGSERIAL PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -703,6 +871,88 @@ class CollectionsDatabase:
             );
             CREATE INDEX IF NOT EXISTS idx_reading_digest_user ON reading_digest_schedules(user_id);
             CREATE INDEX IF NOT EXISTS idx_reading_digest_tenant ON reading_digest_schedules(tenant_id);
+
+            CREATE TABLE IF NOT EXISTS reminder_tasks (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT,
+                link_type TEXT,
+                link_id TEXT,
+                link_url TEXT,
+                schedule_kind TEXT NOT NULL,
+                run_at TEXT,
+                cron TEXT,
+                timezone TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                last_run_at TEXT,
+                next_run_at TEXT,
+                last_status TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_reminder_tasks_user ON reminder_tasks(user_id);
+            CREATE INDEX IF NOT EXISTS idx_reminder_tasks_user_enabled ON reminder_tasks(user_id, enabled);
+
+            CREATE TABLE IF NOT EXISTS reminder_task_runs (
+                id INTEGER PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                scheduled_for TEXT,
+                job_id TEXT,
+                run_slot_utc TEXT NOT NULL,
+                run_slot_key TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_reminder_task_runs_task_id ON reminder_task_runs(task_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_reminder_task_runs_slot ON reminder_task_runs(task_id, run_slot_key);
+
+            CREATE TABLE IF NOT EXISTS user_notifications (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                source_task_id TEXT,
+                source_task_run_id INTEGER,
+                source_job_id TEXT,
+                source_domain TEXT,
+                source_job_type TEXT,
+                link_type TEXT,
+                link_id TEXT,
+                link_url TEXT,
+                dedupe_key TEXT,
+                retention_until TEXT,
+                archived_at TEXT,
+                created_at TEXT NOT NULL,
+                read_at TEXT,
+                dismissed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created ON user_notifications(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread ON user_notifications(user_id, read_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_user_notifications_user_dedupe ON user_notifications(user_id, dedupe_key);
+
+            CREATE TABLE IF NOT EXISTS notification_preferences (
+                user_id TEXT PRIMARY KEY,
+                reminder_enabled INTEGER NOT NULL DEFAULT 1,
+                job_completed_enabled INTEGER NOT NULL DEFAULT 1,
+                job_failed_enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS notification_bridge_state (
+                consumer_name TEXT PRIMARY KEY,
+                last_event_id INTEGER,
+                lease_owner_id TEXT,
+                lease_expires_at TEXT,
+                updated_at TEXT NOT NULL
+            );
 
             CREATE TABLE IF NOT EXISTS file_artifacts (
                 id INTEGER PRIMARY KEY,
@@ -3602,6 +3852,740 @@ class CollectionsDatabase:
         params.extend(status_params)
         res = self.backend.execute(q, tuple(params))
         return res.rowcount > 0
+
+    # ------------------------
+    # Reminder tasks API
+    # ------------------------
+    def _reminder_task_row_from_db(self, row: dict[str, Any]) -> ReminderTaskRow:
+        return ReminderTaskRow(
+            id=str(row.get("id")),
+            user_id=str(row.get("user_id")),
+            tenant_id=str(row.get("tenant_id") or "default"),
+            title=str(row.get("title") or ""),
+            body=row.get("body"),
+            link_type=row.get("link_type"),
+            link_id=row.get("link_id"),
+            link_url=row.get("link_url"),
+            schedule_kind=str(row.get("schedule_kind") or ""),
+            run_at=row.get("run_at"),
+            cron=row.get("cron"),
+            timezone=row.get("timezone"),
+            enabled=self._coerce_bool_setting(row.get("enabled"), True),
+            last_run_at=row.get("last_run_at"),
+            next_run_at=row.get("next_run_at"),
+            last_status=row.get("last_status"),
+            created_at=str(row.get("created_at") or ""),
+            updated_at=str(row.get("updated_at") or ""),
+        )
+
+    def create_reminder_task(
+        self,
+        *,
+        title: str,
+        body: str | None,
+        schedule_kind: str,
+        run_at: str | None,
+        cron: str | None,
+        timezone: str | None,
+        enabled: bool = True,
+        link_type: str | None = None,
+        link_id: str | None = None,
+        link_url: str | None = None,
+        tenant_id: str = "default",
+    ) -> str:
+        now = _utcnow_iso()
+        task_id = uuid4().hex
+        enabled_flag = self._coerce_bool_flag(enabled, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        q = (
+            "INSERT INTO reminder_tasks ("
+            "id, user_id, tenant_id, title, body, link_type, link_id, link_url, "
+            "schedule_kind, run_at, cron, timezone, enabled, last_run_at, next_run_at, last_status, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            task_id,
+            self.user_id,
+            tenant_id,
+            title,
+            body,
+            link_type,
+            link_id,
+            link_url,
+            schedule_kind,
+            run_at,
+            cron,
+            timezone,
+            enabled_flag,
+            None,
+            None,
+            None,
+            now,
+            now,
+        )
+        self._execute_insert(q, params)
+        return task_id
+
+    def get_reminder_task(self, task_id: str) -> ReminderTaskRow:
+        row = self.backend.execute(
+            "SELECT * FROM reminder_tasks WHERE id = ? AND user_id = ?",
+            (task_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("reminder_task_not_found")
+        return self._reminder_task_row_from_db(row)
+
+    def list_reminder_tasks(self, *, include_disabled: bool = True) -> list[ReminderTaskRow]:
+        params: list[Any] = [self.user_id]
+        where = "user_id = ?"
+        if not include_disabled:
+            where += " AND enabled = ?"
+            params.append(self._coerce_bool_flag(True, postgres=self.backend.backend_type == BackendType.POSTGRESQL))
+        q = f"SELECT * FROM reminder_tasks WHERE {where} ORDER BY created_at DESC"  # nosec B608
+        rows = self.backend.execute(q, tuple(params)).rows
+        return [self._reminder_task_row_from_db(row) for row in rows]
+
+    def update_reminder_task(self, task_id: str, patch: dict[str, Any]) -> ReminderTaskRow:
+        if not patch:
+            return self.get_reminder_task(task_id)
+        fields: list[str] = []
+        params: list[Any] = []
+        for key in (
+            "title",
+            "body",
+            "link_type",
+            "link_id",
+            "link_url",
+            "schedule_kind",
+            "run_at",
+            "cron",
+            "timezone",
+            "last_run_at",
+            "next_run_at",
+            "last_status",
+        ):
+            if key in patch:
+                fields.append(f"{key} = ?")
+                params.append(patch.get(key))
+        if "enabled" in patch:
+            fields.append("enabled = ?")
+            params.append(
+                self._coerce_bool_flag(
+                    patch.get("enabled"),
+                    postgres=self.backend.backend_type == BackendType.POSTGRESQL,
+                )
+            )
+        fields.append("updated_at = ?")
+        params.append(_utcnow_iso())
+        params.extend([task_id, self.user_id])
+        q = f"UPDATE reminder_tasks SET {', '.join(fields)} WHERE id = ? AND user_id = ?"  # nosec B608
+        res = self.backend.execute(q, tuple(params))
+        if res.rowcount <= 0:
+            raise KeyError("reminder_task_not_found")
+        return self.get_reminder_task(task_id)
+
+    def delete_reminder_task(self, task_id: str) -> bool:
+        res = self.backend.execute(
+            "DELETE FROM reminder_tasks WHERE id = ? AND user_id = ?",
+            (task_id, self.user_id),
+        )
+        return bool(res.rowcount and res.rowcount > 0)
+
+    def try_claim_reminder_task_slot(
+        self,
+        task_id: str,
+        *,
+        expected_next_run_at: str | None,
+        next_run_at: str | None,
+        last_run_at: str | None,
+        last_status: str | None,
+        disallow_statuses: tuple[str, ...] | None = None,
+    ) -> bool:
+        """Attempt to claim a reminder slot with optimistic next_run_at matching."""
+        fields = ["next_run_at = ?", "last_run_at = ?", "last_status = ?", "updated_at = ?"]
+        params: list[Any] = [next_run_at, last_run_at, last_status, _utcnow_iso(), task_id, self.user_id]
+        status_clause = ""
+        status_params: list[Any] = []
+        if disallow_statuses:
+            placeholders = ", ".join(["?"] * len(disallow_statuses))
+            status_clause = f" AND (last_status IS NULL OR last_status NOT IN ({placeholders}))"
+            status_params.extend(disallow_statuses)
+        enabled_true = self._coerce_bool_flag(True, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        if expected_next_run_at is None:
+            q = (
+                f"UPDATE reminder_tasks SET {', '.join(fields)} "  # nosec B608
+                "WHERE id = ? AND user_id = ? AND enabled = ? AND next_run_at IS NULL"
+                f"{status_clause}"
+            )
+        else:
+            q = (
+                f"UPDATE reminder_tasks SET {', '.join(fields)} "  # nosec B608
+                "WHERE id = ? AND user_id = ? AND enabled = ? AND next_run_at = ?"
+                f"{status_clause}"
+            )
+            params.append(expected_next_run_at)
+        params.insert(6, enabled_true)
+        params.extend(status_params)
+        res = self.backend.execute(q, tuple(params))
+        return res.rowcount > 0
+
+    def _reminder_task_run_row_from_db(self, row: dict[str, Any]) -> ReminderTaskRunRow:
+        return ReminderTaskRunRow(
+            id=int(row.get("id")),
+            task_id=str(row.get("task_id") or ""),
+            user_id=str(row.get("user_id") or ""),
+            scheduled_for=row.get("scheduled_for"),
+            job_id=row.get("job_id"),
+            run_slot_utc=str(row.get("run_slot_utc") or ""),
+            run_slot_key=str(row.get("run_slot_key") or ""),
+            status=str(row.get("status") or ""),
+            error=row.get("error"),
+            created_at=str(row.get("created_at") or ""),
+            started_at=row.get("started_at"),
+            completed_at=row.get("completed_at"),
+        )
+
+    def create_reminder_task_run(
+        self,
+        *,
+        task_id: str,
+        scheduled_for: str | None,
+        job_id: str | None,
+        run_slot_utc: str,
+        run_slot_key: str,
+        status: str,
+        error: str | None = None,
+        started_at: str | None = None,
+        completed_at: str | None = None,
+    ) -> ReminderTaskRunRow:
+        now = _utcnow_iso()
+        q = (
+            "INSERT INTO reminder_task_runs ("
+            "task_id, user_id, scheduled_for, job_id, run_slot_utc, run_slot_key, status, error, "
+            "created_at, started_at, completed_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(task_id, run_slot_key) DO NOTHING"
+        )
+        params = (
+            task_id,
+            self.user_id,
+            scheduled_for,
+            job_id,
+            run_slot_utc,
+            run_slot_key,
+            status,
+            error,
+            now,
+            started_at,
+            completed_at,
+        )
+        self.backend.execute(q, params)
+        return self.get_reminder_task_run_by_slot(task_id=task_id, run_slot_key=run_slot_key)
+
+    def get_reminder_task_run_by_slot(self, *, task_id: str, run_slot_key: str) -> ReminderTaskRunRow:
+        row = self.backend.execute(
+            "SELECT * FROM reminder_task_runs WHERE task_id = ? AND user_id = ? AND run_slot_key = ?",
+            (task_id, self.user_id, run_slot_key),
+        ).first
+        if not row:
+            raise KeyError("reminder_task_run_not_found")
+        return self._reminder_task_run_row_from_db(row)
+
+    def update_reminder_task_run_status(
+        self,
+        *,
+        run_id: int,
+        status: str,
+        error: str | None = None,
+        completed_at: str | None = None,
+    ) -> ReminderTaskRunRow:
+        q = (
+            "UPDATE reminder_task_runs SET status = ?, error = ?, completed_at = ? "
+            "WHERE id = ? AND user_id = ?"
+        )
+        res = self.backend.execute(q, (status, error, completed_at, run_id, self.user_id))
+        if res.rowcount <= 0:
+            raise KeyError("reminder_task_run_not_found")
+        row = self.backend.execute(
+            "SELECT * FROM reminder_task_runs WHERE id = ? AND user_id = ?",
+            (run_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("reminder_task_run_not_found")
+        return self._reminder_task_run_row_from_db(row)
+
+    # ------------------------
+    # Notifications API
+    # ------------------------
+    def _notification_row_from_db(self, row: dict[str, Any]) -> UserNotificationRow:
+        return UserNotificationRow(
+            id=int(row.get("id")),
+            user_id=str(row.get("user_id")),
+            kind=str(row.get("kind") or ""),
+            title=str(row.get("title") or ""),
+            message=str(row.get("message") or ""),
+            severity=str(row.get("severity") or "info"),
+            source_task_id=row.get("source_task_id"),
+            source_task_run_id=(int(row["source_task_run_id"]) if row.get("source_task_run_id") is not None else None),
+            source_job_id=row.get("source_job_id"),
+            source_domain=row.get("source_domain"),
+            source_job_type=row.get("source_job_type"),
+            link_type=row.get("link_type"),
+            link_id=row.get("link_id"),
+            link_url=row.get("link_url"),
+            dedupe_key=row.get("dedupe_key"),
+            retention_until=row.get("retention_until"),
+            archived_at=row.get("archived_at"),
+            created_at=str(row.get("created_at") or ""),
+            read_at=row.get("read_at"),
+            dismissed_at=row.get("dismissed_at"),
+        )
+
+    def create_user_notification(
+        self,
+        *,
+        kind: str,
+        title: str,
+        message: str,
+        severity: str,
+        source_task_id: str | None = None,
+        source_task_run_id: int | None = None,
+        source_job_id: str | None = None,
+        source_domain: str | None = None,
+        source_job_type: str | None = None,
+        link_type: str | None = None,
+        link_id: str | None = None,
+        link_url: str | None = None,
+        dedupe_key: str | None = None,
+        retention_until: str | None = None,
+    ) -> UserNotificationRow:
+        now = _utcnow_iso()
+        q = (
+            "INSERT INTO user_notifications ("
+            "user_id, kind, title, message, severity, source_task_id, source_task_run_id, source_job_id, "
+            "source_domain, source_job_type, link_type, link_id, link_url, dedupe_key, retention_until, archived_at, "
+            "created_at, read_at, dismissed_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            self.user_id,
+            kind,
+            title,
+            message,
+            severity,
+            source_task_id,
+            source_task_run_id,
+            source_job_id,
+            source_domain,
+            source_job_type,
+            link_type,
+            link_id,
+            link_url,
+            dedupe_key,
+            retention_until,
+            None,
+            now,
+            None,
+            None,
+        )
+        res = self._execute_insert(q, params)
+        new_id = self._extract_lastrowid(res)
+        if not new_id and dedupe_key:
+            existing = self.backend.execute(
+                "SELECT * FROM user_notifications WHERE user_id = ? AND dedupe_key = ? ORDER BY id DESC LIMIT 1",
+                (self.user_id, dedupe_key),
+            ).first
+            if existing:
+                return self._notification_row_from_db(existing)
+        if not new_id:
+            raise DatabaseError("Failed to create user notification")
+        row = self.backend.execute(
+            "SELECT * FROM user_notifications WHERE id = ? AND user_id = ?",
+            (new_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("user_notification_not_found")
+        return self._notification_row_from_db(row)
+
+    def list_user_notifications(
+        self,
+        *,
+        include_archived: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[UserNotificationRow]:
+        params: list[Any] = [self.user_id]
+        where = "user_id = ?"
+        if not include_archived:
+            where += " AND archived_at IS NULL AND dismissed_at IS NULL"
+        q = f"SELECT * FROM user_notifications WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"  # nosec B608
+        params.extend([limit, offset])
+        rows = self.backend.execute(q, tuple(params)).rows
+        return [self._notification_row_from_db(row) for row in rows]
+
+    def list_user_notifications_after_id(
+        self,
+        *,
+        after_id: int,
+        limit: int = 100,
+        include_archived: bool = False,
+    ) -> list[UserNotificationRow]:
+        bounded_limit = max(1, min(1000, int(limit)))
+        if include_archived:
+            q = (
+                "SELECT * FROM user_notifications "
+                "WHERE user_id = ? AND id > ? "
+                "ORDER BY id ASC LIMIT ?"
+            )
+            params = (self.user_id, int(after_id), bounded_limit)
+        else:
+            q = (
+                "SELECT * FROM user_notifications "
+                "WHERE user_id = ? AND archived_at IS NULL AND dismissed_at IS NULL AND id > ? "
+                "ORDER BY id ASC LIMIT ?"
+            )
+            params = (self.user_id, int(after_id), bounded_limit)
+        rows = self.backend.execute(q, params).rows
+        return [self._notification_row_from_db(row) for row in rows]
+
+    def get_user_notifications_latest_id(self, *, include_archived: bool = False) -> int:
+        if include_archived:
+            q = "SELECT MAX(id) AS max_id FROM user_notifications WHERE user_id = ?"
+            row = self.backend.execute(q, (self.user_id,)).first
+        else:
+            q = (
+                "SELECT MAX(id) AS max_id FROM user_notifications "
+                "WHERE user_id = ? AND archived_at IS NULL AND dismissed_at IS NULL"
+            )
+            row = self.backend.execute(q, (self.user_id,)).first
+        if not row:
+            return 0
+        max_id = row.get("max_id")
+        return int(max_id or 0)
+
+    def get_user_notifications_window_floor_id(
+        self,
+        *,
+        window_size: int,
+        include_archived: bool = False,
+    ) -> int | None:
+        bounded_window = max(1, int(window_size))
+        offset = bounded_window - 1
+        if include_archived:
+            q = (
+                "SELECT id FROM user_notifications "
+                "WHERE user_id = ? "
+                "ORDER BY id DESC LIMIT 1 OFFSET ?"
+            )
+            row = self.backend.execute(q, (self.user_id, offset)).first
+        else:
+            q = (
+                "SELECT id FROM user_notifications "
+                "WHERE user_id = ? AND archived_at IS NULL AND dismissed_at IS NULL "
+                "ORDER BY id DESC LIMIT 1 OFFSET ?"
+            )
+            row = self.backend.execute(q, (self.user_id, offset)).first
+        if not row:
+            return None
+        raw_id = row.get("id")
+        if raw_id is None:
+            return None
+        return int(raw_id)
+
+    def get_user_notification(self, notification_id: int) -> UserNotificationRow:
+        row = self.backend.execute(
+            "SELECT * FROM user_notifications WHERE id = ? AND user_id = ?",
+            (notification_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("user_notification_not_found")
+        return self._notification_row_from_db(row)
+
+    def mark_user_notifications_read(self, ids: list[int]) -> int:
+        if not ids:
+            return 0
+        placeholders = ",".join(["?"] * len(ids))
+        q = (
+            f"UPDATE user_notifications SET read_at = ? WHERE user_id = ? AND id IN ({placeholders}) "  # nosec B608
+            "AND read_at IS NULL"
+        )
+        params: list[Any] = [_utcnow_iso(), self.user_id, *ids]
+        res = self.backend.execute(q, tuple(params))
+        return int(res.rowcount or 0)
+
+    def dismiss_user_notification(self, notification_id: int) -> bool:
+        q = (
+            "UPDATE user_notifications SET dismissed_at = ? "
+            "WHERE id = ? AND user_id = ? AND dismissed_at IS NULL"
+        )
+        res = self.backend.execute(q, (_utcnow_iso(), notification_id, self.user_id))
+        return bool(res.rowcount and res.rowcount > 0)
+
+    def count_unread_user_notifications(self) -> int:
+        q = (
+            "SELECT COUNT(*) AS cnt FROM user_notifications "
+            "WHERE user_id = ? AND read_at IS NULL AND dismissed_at IS NULL AND archived_at IS NULL"
+        )
+        return int(self.backend.execute(q, (self.user_id,)).scalar or 0)
+
+    @staticmethod
+    def _parse_iso_utc(value: Any) -> datetime | None:
+        if value in (None, ""):
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def prune_user_notifications(
+        self,
+        *,
+        now_iso: str | None = None,
+        retention_days_by_kind: dict[str, int] | None = None,
+        read_dismissed_grace_days: int = 30,
+        archive_grace_days: int = 7,
+    ) -> tuple[int, int]:
+        """Archive expired notifications and hard-delete stale archived notifications.
+
+        Returns:
+            (archived_count, deleted_count)
+        """
+        now_dt = self._parse_iso_utc(now_iso) or datetime.now(timezone.utc)
+        now_effective_iso = now_dt.isoformat()
+
+        retention = dict(retention_days_by_kind or {})
+        accel_days = max(0, int(read_dismissed_grace_days))
+        grace_days = max(0, int(archive_grace_days))
+        archived_cutoff_dt = now_dt - timedelta(days=grace_days)
+
+        rows = self.backend.execute(
+            "SELECT id, kind, created_at, read_at, dismissed_at, retention_until, archived_at "
+            "FROM user_notifications WHERE user_id = ?",
+            (self.user_id,),
+        ).rows
+
+        archive_ids: list[int] = []
+        delete_ids: list[int] = []
+        for row in rows:
+            if isinstance(row, dict):
+                row_id = int(row.get("id"))
+                kind = str(row.get("kind") or "")
+                created_at = self._parse_iso_utc(row.get("created_at"))
+                read_at = self._parse_iso_utc(row.get("read_at"))
+                dismissed_at = self._parse_iso_utc(row.get("dismissed_at"))
+                retention_until = self._parse_iso_utc(row.get("retention_until"))
+                archived_at = self._parse_iso_utc(row.get("archived_at"))
+            else:
+                row_id = int(row[0])
+                kind = str(row[1] or "")
+                created_at = self._parse_iso_utc(row[2])
+                read_at = self._parse_iso_utc(row[3])
+                dismissed_at = self._parse_iso_utc(row[4])
+                retention_until = self._parse_iso_utc(row[5])
+                archived_at = self._parse_iso_utc(row[6])
+
+            if archived_at is not None:
+                if archived_at <= archived_cutoff_dt:
+                    delete_ids.append(row_id)
+                continue
+
+            expire_candidates: list[datetime] = []
+            if retention_until is not None:
+                expire_candidates.append(retention_until)
+
+            default_days = retention.get(kind)
+            if default_days is not None and default_days > 0 and created_at is not None:
+                expire_candidates.append(created_at + timedelta(days=int(default_days)))
+
+            if accel_days > 0:
+                if read_at is not None:
+                    expire_candidates.append(read_at + timedelta(days=accel_days))
+                if dismissed_at is not None:
+                    expire_candidates.append(dismissed_at + timedelta(days=accel_days))
+
+            if expire_candidates and min(expire_candidates) <= now_dt:
+                archive_ids.append(row_id)
+
+        archived = 0
+        if archive_ids:
+            placeholders = ",".join(["?"] * len(archive_ids))
+            q = (
+                f"UPDATE user_notifications SET archived_at = ? "  # nosec B608
+                f"WHERE user_id = ? AND archived_at IS NULL AND id IN ({placeholders})"
+            )
+            params: list[Any] = [now_effective_iso, self.user_id, *archive_ids]
+            res = self.backend.execute(q, tuple(params))
+            archived = int(res.rowcount or 0)
+
+        deleted = 0
+        if delete_ids:
+            placeholders = ",".join(["?"] * len(delete_ids))
+            q = f"DELETE FROM user_notifications WHERE user_id = ? AND id IN ({placeholders})"  # nosec B608
+            params = tuple([self.user_id, *delete_ids])
+            res = self.backend.execute(q, params)
+            deleted = int(res.rowcount or 0)
+
+        return archived, deleted
+
+    def _notification_preferences_row_from_db(self, row: dict[str, Any]) -> NotificationPreferencesRow:
+        return NotificationPreferencesRow(
+            user_id=str(row.get("user_id")),
+            reminder_enabled=self._coerce_bool_setting(row.get("reminder_enabled"), True),
+            job_completed_enabled=self._coerce_bool_setting(row.get("job_completed_enabled"), True),
+            job_failed_enabled=self._coerce_bool_setting(row.get("job_failed_enabled"), True),
+            updated_at=str(row.get("updated_at") or ""),
+        )
+
+    def get_notification_preferences(self) -> NotificationPreferencesRow:
+        row = self.backend.execute(
+            "SELECT * FROM notification_preferences WHERE user_id = ?",
+            (self.user_id,),
+        ).first
+        if row:
+            return self._notification_preferences_row_from_db(row)
+        now = _utcnow_iso()
+        return NotificationPreferencesRow(
+            user_id=self.user_id,
+            reminder_enabled=True,
+            job_completed_enabled=True,
+            job_failed_enabled=True,
+            updated_at=now,
+        )
+
+    def update_notification_preferences(
+        self,
+        *,
+        reminder_enabled: bool | None = None,
+        job_completed_enabled: bool | None = None,
+        job_failed_enabled: bool | None = None,
+    ) -> NotificationPreferencesRow:
+        current = self.get_notification_preferences()
+        reminder = current.reminder_enabled if reminder_enabled is None else bool(reminder_enabled)
+        completed = current.job_completed_enabled if job_completed_enabled is None else bool(job_completed_enabled)
+        failed = current.job_failed_enabled if job_failed_enabled is None else bool(job_failed_enabled)
+        now = _utcnow_iso()
+
+        reminder_flag = self._coerce_bool_flag(reminder, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        completed_flag = self._coerce_bool_flag(completed, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        failed_flag = self._coerce_bool_flag(failed, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        q = (
+            "INSERT INTO notification_preferences (user_id, reminder_enabled, job_completed_enabled, job_failed_enabled, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "reminder_enabled = excluded.reminder_enabled, "
+            "job_completed_enabled = excluded.job_completed_enabled, "
+            "job_failed_enabled = excluded.job_failed_enabled, "
+            "updated_at = excluded.updated_at"
+        )
+        self.backend.execute(q, (self.user_id, reminder_flag, completed_flag, failed_flag, now))
+        return self.get_notification_preferences()
+
+    def _notification_bridge_state_row_from_db(self, row: dict[str, Any]) -> NotificationBridgeStateRow:
+        return NotificationBridgeStateRow(
+            consumer_name=str(row.get("consumer_name") or ""),
+            last_event_id=int(row.get("last_event_id") or 0),
+            lease_owner_id=row.get("lease_owner_id"),
+            lease_expires_at=row.get("lease_expires_at"),
+            updated_at=str(row.get("updated_at") or ""),
+        )
+
+    def get_notification_bridge_state(self, *, consumer_name: str) -> NotificationBridgeStateRow:
+        row = self.backend.execute(
+            "SELECT * FROM notification_bridge_state WHERE consumer_name = ?",
+            (consumer_name,),
+        ).first
+        if row:
+            return self._notification_bridge_state_row_from_db(row)
+        return NotificationBridgeStateRow(
+            consumer_name=consumer_name,
+            last_event_id=0,
+            lease_owner_id=None,
+            lease_expires_at=None,
+            updated_at=_utcnow_iso(),
+        )
+
+    def update_notification_bridge_state(
+        self,
+        *,
+        consumer_name: str,
+        last_event_id: int | None = None,
+        lease_owner_id: str | None = None,
+        lease_expires_at: str | None = None,
+    ) -> NotificationBridgeStateRow:
+        current = self.get_notification_bridge_state(consumer_name=consumer_name)
+        next_last_event_id = current.last_event_id if last_event_id is None else int(last_event_id)
+        next_lease_owner_id = current.lease_owner_id if lease_owner_id is None else lease_owner_id
+        next_lease_expires_at = current.lease_expires_at if lease_expires_at is None else lease_expires_at
+        now = _utcnow_iso()
+
+        q = (
+            "INSERT INTO notification_bridge_state (consumer_name, last_event_id, lease_owner_id, lease_expires_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(consumer_name) DO UPDATE SET "
+            "last_event_id = excluded.last_event_id, "
+            "lease_owner_id = excluded.lease_owner_id, "
+            "lease_expires_at = excluded.lease_expires_at, "
+            "updated_at = excluded.updated_at"
+        )
+        self.backend.execute(
+            q,
+            (
+                consumer_name,
+                next_last_event_id,
+                next_lease_owner_id,
+                next_lease_expires_at,
+                now,
+            ),
+        )
+        return self.get_notification_bridge_state(consumer_name=consumer_name)
+
+    def try_claim_notification_bridge_lease(
+        self,
+        *,
+        consumer_name: str,
+        lease_owner_id: str,
+        lease_expires_at: str,
+        now_iso: str | None = None,
+    ) -> bool:
+        now = now_iso or _utcnow_iso()
+        self.backend.execute(
+            (
+                "INSERT INTO notification_bridge_state (consumer_name, last_event_id, lease_owner_id, lease_expires_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(consumer_name) DO NOTHING"
+            ),
+            (consumer_name, 0, None, None, now),
+        )
+        q = (
+            "UPDATE notification_bridge_state "
+            "SET lease_owner_id = ?, lease_expires_at = ?, updated_at = ? "
+            "WHERE consumer_name = ? AND ("
+            "lease_owner_id IS NULL OR lease_owner_id = ? OR lease_expires_at IS NULL OR lease_expires_at <= ?"
+            ")"
+        )
+        res = self.backend.execute(
+            q,
+            (
+                lease_owner_id,
+                lease_expires_at,
+                now,
+                consumer_name,
+                lease_owner_id,
+                now,
+            ),
+        )
+        return bool(res.rowcount and res.rowcount > 0)
+
+    def release_notification_bridge_lease(self, *, consumer_name: str, lease_owner_id: str) -> bool:
+        q = (
+            "UPDATE notification_bridge_state "
+            "SET lease_owner_id = NULL, lease_expires_at = NULL, updated_at = ? "
+            "WHERE consumer_name = ? AND lease_owner_id = ?"
+        )
+        res = self.backend.execute(q, (_utcnow_iso(), consumer_name, lease_owner_id))
+        return bool(res.rowcount and res.rowcount > 0)
 
     def purge_expired_outputs(self) -> int:
         """Hard delete expired/retained outputs. Returns number of rows removed."""

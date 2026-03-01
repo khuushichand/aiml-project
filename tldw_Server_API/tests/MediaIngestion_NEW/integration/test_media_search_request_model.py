@@ -92,6 +92,25 @@ def test_media_search_rejects_query_too_long(media_search_client):
     assert resp.status_code == 422
 
 
+def test_media_search_forwards_boost_fields(media_search_client):
+    resp = media_search_client.post(
+        "/api/v1/media/search",
+        json={
+            "query": "Alpha",
+            "boost_fields": {
+                "title": 3.5,
+                "content": 0.5,
+            },
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert _FakeMediaDB.last_legacy_search_kwargs is not None
+    assert _FakeMediaDB.last_legacy_search_kwargs.get("boost_fields") == {
+        "title": 3.5,
+        "content": 0.5,
+    }
+
+
 def test_media_search_email_operator_mode_delegates_to_email_search(media_search_client):
     resp = media_search_client.post(
         "/api/v1/media/search",

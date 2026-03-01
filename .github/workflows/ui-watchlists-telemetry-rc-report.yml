@@ -1,0 +1,129 @@
+name: UI Watchlists Telemetry RC Report
+
+on:
+  push:
+    branches:
+      - "release/**"
+      - "rc/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-watchlists-telemetry-rc-report-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  watchlists-telemetry-rc-report:
+    name: Watchlists Telemetry RC Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONPATH: .
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      TEST_MODE: "true"
+      DISABLE_HEAVY_STARTUP: "1"
+      # Work around protobuf/opentelemetry runtime incompatibilities in CI runners.
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
+      MINIMAL_TEST_APP: "1"
+      PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: "0"
+      AUTH_MODE: single_user
+      SINGLE_USER_API_KEY: watchlists-telemetry-rc-key-12345
+      SERVER_LABEL: watchlists-telemetry-rc
+      E2E_TEST_BASE_URL: http://127.0.0.1:8000
+      WATCHLISTS_TELEMETRY_API_BASE_URL: http://127.0.0.1:8000
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: Setup Python and server dependencies
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: "3.12"
+          use-uv: "true"
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+          extras: dev
+
+      - name: Start backend server (single-user)
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py start
+
+      - name: Backend health check
+        if: always()
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
+
+      - name: Generate Watchlists telemetry RC report
+        id: telemetry_report
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          python Helper_Scripts/ci/watchlists_telemetry_rc_report.py \
+            --api-base-url "${WATCHLISTS_TELEMETRY_API_BASE_URL}" \
+            --api-key "${SINGLE_USER_API_KEY}" \
+            --summary-output /tmp/watchlists_telemetry_rc_report_summary.md \
+            --json-output /tmp/watchlists_telemetry_rc_report.json
+          rc=$?
+          echo "exit_code=${rc}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Publish telemetry RC summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/watchlists_telemetry_rc_report_summary.md ]; then
+            cat /tmp/watchlists_telemetry_rc_report_summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Watchlists Telemetry RC Report"
+              echo
+              echo "Summary file missing; inspect prior steps for startup/fetch/script failures."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload telemetry RC report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watchlists-telemetry-rc-report
+          if-no-files-found: ignore
+          path: |
+            /tmp/watchlists_telemetry_rc_report_summary.md
+            /tmp/watchlists_telemetry_rc_report.json
+
+      - name: Enforce operational failure policy
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.telemetry_report.outputs.exit_code }}" != "0" ]; then
+            echo "::error::Watchlists telemetry RC report failed due to an operational error."
+            exit 1
+          fi
+
+      - name: Print backend server log on failure
+        if: failure()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+
+          label = os.environ.get("SERVER_LABEL", "watchlists-telemetry-rc")
+          log_path = pathlib.Path(f"server-{label}.log")
+          if log_path.exists():
+              print("===== backend server log =====")
+              print(log_path.read_text(encoding="utf-8"))
+          PY
+
+      - name: Stop backend server
+        if: always()
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py stop || true

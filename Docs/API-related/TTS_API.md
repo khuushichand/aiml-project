@@ -1,5 +1,11 @@
 # TTS API
 
+## User Guide Map
+
+- [Getting Started — STT and TTS](../User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md) — quickstart for first successful speech requests.
+- [TTS Providers Getting Started](../User_Guides/WebUI_Extension/TTS_Getting_Started.md) — provider selection and first successful synthesis.
+- [TTS Provider Setup Guide](../User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md) — runbook index for deep provider setup/tuning.
+
 
 1. Client pattern (Python)
 

@@ -285,6 +285,49 @@ def test_search_media_db_postgres_uses_tsquery():
     assert result_params[1] == "deep & learning"
 
 
+def test_search_media_db_postgres_uses_weighted_ts_rank_when_boost_fields_set():
+
+    db = MediaDatabase.__new__(MediaDatabase)
+    db.backend_type = BackendType.POSTGRESQL
+    db.client_id = "pg-test"
+    db.db_path_str = "pg-test-db"
+
+    calls: List[Tuple[str, Tuple[Any, ...]]] = []
+
+    class _CountCursor:
+        def fetchone(self):
+            return (1,)
+
+    class _ResultCursor:
+        def fetchall(self):
+            return [{"id": 1, "title": "Deep Learning", "relevance_score": 0.5}]
+
+    def fake_execute(sql: str, params: Tuple[Any, ...] | None = None):
+        captured_params = tuple(params) if params is not None else tuple()
+        calls.append((sql, captured_params))
+        if "COUNT" in sql:
+            return _CountCursor()
+        return _ResultCursor()
+
+    db.execute_query = fake_execute  # type: ignore[assignment]
+    db._append_case_insensitive_like = MediaDatabase._append_case_insensitive_like.__get__(db, MediaDatabase)
+
+    results, total = db.search_media_db(
+        "deep learning",
+        search_fields=["title", "content"],
+        sort_by="relevance",
+        boost_fields={"title": 4.0, "content": 0.5},
+    )
+
+    assert total == 1
+    assert results and results[0]["title"] == "Deep Learning"
+    result_sql, result_params = calls[1]
+    assert "ts_rank(" in result_sql
+    assert "0.500000,1.000000,0.500000,4.000000" in result_sql
+    assert result_params[0] == "deep & learning"
+    assert result_params[1] == "deep & learning"
+
+
 def test_soft_delete_keyword_postgres_uses_backend_helpers() -> None:
 
     db = MediaDatabase.__new__(MediaDatabase)

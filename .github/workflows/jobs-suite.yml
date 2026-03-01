@@ -34,6 +34,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
+      - name: Install PortAudio headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+
       - name: Setup Python and deps (with uv)
         uses: ./.github/actions/setup-python-deps
         with:
@@ -68,6 +73,7 @@ jobs:
       - name: Run Jobs tests (SQLite only)
         run: |
           pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin \
+            tldw_Server_API/tests/Jobs \
             -m "jobs and not pg_jobs" \
             --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
             --junit-xml=test-results-jobs-sqlite.xml
@@ -117,10 +123,16 @@ jobs:
       TEST_DB_NAME: tldw_test
       TLDW_TEST_POSTGRES_REQUIRED: '1'
       RUN_JOBS: '1'
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       WORKFLOWS_EGRESS_ALLOWLIST: "93.184.216.34,does-not-resolve.invalid,example.com"
     steps:
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+      - name: Install PortAudio headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
 
       - name: Setup Python and deps (with uv)
         uses: ./.github/actions/setup-python-deps
@@ -180,6 +192,7 @@ jobs:
       - name: Run Jobs tests (PostgreSQL only)
         run: |
           pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin \
+            tldw_Server_API/tests/Jobs \
             -m "pg_jobs" \
             --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
             --junit-xml=test-results-jobs-postgres.xml

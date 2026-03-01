@@ -5,6 +5,7 @@ import { Drawer, Tabs } from "antd"
 import { Bot, MessageSquare, Wrench, Terminal } from "lucide-react"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useACPSession } from "@/hooks/useACPSession"
+import { ACPRestClient } from "@/services/acp/client"
 import { useACPSessionsStore } from "@/store/acp-sessions"
 import type { ACPPermissionTier } from "@/services/acp/types"
 import { ACPPlaygroundHeader } from "./ACPPlaygroundHeader"
@@ -34,6 +35,10 @@ export const ACPPlayground: React.FC = () => {
   // Pane state with persistence
   const [leftPaneOpen, setLeftPaneOpen] = useStorage(ACP_LEFT_PANE_KEY, true)
   const [rightPaneOpen, setRightPaneOpen] = useStorage(ACP_RIGHT_PANE_KEY, true)
+  const [serverUrl] = useStorage("serverUrl", "http://localhost:8000")
+  const [authMode] = useStorage("authMode", "single-user")
+  const [apiKey] = useStorage("apiKey", "")
+  const [accessToken] = useStorage("accessToken", "")
 
   // Mobile drawer state
   const [leftDrawerOpen, setLeftDrawerOpen] = React.useState(false)
@@ -63,14 +68,54 @@ export const ACPPlayground: React.FC = () => {
   const addPendingPermission = useACPSessionsStore((s) => s.addPendingPermission)
   const removePendingPermission = useACPSessionsStore((s) => s.removePendingPermission)
   const clearPendingPermissions = useACPSessionsStore((s) => s.clearPendingPermissions)
+  const upsertSessionsFromServerList = useACPSessionsStore((s) => s.upsertSessionsFromServerList)
+  const applySessionDetail = useACPSessionsStore((s) => s.applySessionDetail)
+  const applySessionUsage = useACPSessionsStore((s) => s.applySessionUsage)
+  const globalError = useACPSessionsStore((s) => s.globalError)
   const setGlobalError = useACPSessionsStore((s) => s.setGlobalError)
   const cleanupExpiredSessions = useACPSessionsStore((s) => s.cleanupExpiredSessions)
   const workspaceTabLabel = t("playground:acp.workspace.title", "Workspace")
+  const [isHydratingSessions, setIsHydratingSessions] = React.useState(false)
+
+  const restClient = React.useMemo(
+    () =>
+      new ACPRestClient({
+        serverUrl,
+        getAuthHeaders: async () => {
+          const headers: Record<string, string> = {}
+          if (authMode === "single-user" && apiKey) {
+            headers["X-API-KEY"] = apiKey
+          } else if (authMode === "multi-user" && accessToken) {
+            headers.Authorization = `Bearer ${accessToken}`
+          }
+          return headers
+        },
+        getAuthParams: async () => ({
+          token: authMode === "multi-user" && accessToken ? accessToken : undefined,
+          api_key: authMode === "single-user" && apiKey ? apiKey : undefined,
+        }),
+      }),
+    [serverUrl, authMode, apiKey, accessToken]
+  )
+
+  const refreshSessionsFromServer = React.useCallback(async () => {
+    setIsHydratingSessions(true)
+    try {
+      const response = await restClient.listSessions({ limit: 200, offset: 0 })
+      upsertSessionsFromServerList(response.sessions ?? [])
+    } catch (error) {
+      console.warn("Failed to hydrate ACP sessions from backend:", error)
+    } finally {
+      setIsHydratingSessions(false)
+    }
+  }, [restClient, upsertSessionsFromServerList])
 
   // Single ACP connection shared across chat + modal actions.
   const {
     state,
     isConnected,
+    error: websocketError,
+    connect,
     sendPrompt,
     cancel,
     approvePermission,
@@ -80,6 +125,7 @@ export const ACPPlayground: React.FC = () => {
     autoConnect: !!activeSessionId,
     onConnected: (message) => {
       updateSessionState(message.session_id, "connected")
+      setGlobalError(null)
       if (message.agent_capabilities) {
         setSessionCapabilities(message.session_id, message.agent_capabilities)
       }
@@ -117,6 +163,11 @@ export const ACPPlayground: React.FC = () => {
     cleanupExpiredSessions()
   }, [cleanupExpiredSessions])
 
+  // Hydrate persisted ACP sessions from backend when the page loads.
+  useEffect(() => {
+    void refreshSessionsFromServer()
+  }, [refreshSessionsFromServer])
+
   // Keep the active session state in sync with the shared ACP hook.
   useEffect(() => {
     if (!activeSessionId) return
@@ -137,6 +188,42 @@ export const ACPPlayground: React.FC = () => {
     }
     previousActiveSessionIdRef.current = activeSessionId
   }, [activeSessionId, updateSessionState, clearPendingPermissions])
+
+  useEffect(() => {
+    setGlobalError(null)
+  }, [activeSessionId, setGlobalError])
+
+  // When switching sessions, refresh detail + usage if the session exists server-side.
+  useEffect(() => {
+    if (!activeSessionId) return
+
+    let cancelled = false
+    const loadSessionMetadata = async () => {
+      try {
+        const [detailResult, usageResult] = await Promise.allSettled([
+          restClient.getSessionDetail(activeSessionId),
+          restClient.getSessionUsage(activeSessionId),
+        ])
+
+        if (cancelled) return
+
+        if (detailResult.status === "fulfilled") {
+          applySessionDetail(detailResult.value)
+        }
+        if (usageResult.status === "fulfilled") {
+          applySessionUsage(usageResult.value)
+        }
+      } catch {
+        // Ignore metadata refresh failures for local-only sessions.
+      }
+    }
+
+    void loadSessionMetadata()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeSessionId, restClient, applySessionDetail, applySessionUsage])
 
   const handleToggleLeftPane = () => {
     if (isMobile) {
@@ -194,7 +281,12 @@ export const ACPPlayground: React.FC = () => {
           )}
         </span>
       ),
-      children: <ACPSessionPanel />,
+      children: (
+        <ACPSessionPanel
+          onRefreshSessions={refreshSessionsFromServer}
+          isRefreshing={isHydratingSessions}
+        />
+      ),
     },
     {
       key: "chat",
@@ -209,6 +301,8 @@ export const ACPPlayground: React.FC = () => {
           state={state}
           isConnected={isConnected}
           updates={activeSession?.updates ?? []}
+          connect={connect}
+          error={globalError ?? websocketError}
           sendPrompt={sendPrompt}
           cancel={cancel}
         />
@@ -282,7 +376,11 @@ export const ACPPlayground: React.FC = () => {
         {/* Left pane - Sessions (desktop) */}
         {leftPaneOpen && (
           <aside className="hidden w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col">
-            <ACPSessionPanel onHide={() => setLeftPaneOpen(false)} />
+            <ACPSessionPanel
+              onHide={() => setLeftPaneOpen(false)}
+              onRefreshSessions={refreshSessionsFromServer}
+              isRefreshing={isHydratingSessions}
+            />
           </aside>
         )}
 
@@ -301,7 +399,10 @@ export const ACPPlayground: React.FC = () => {
           className="lg:hidden"
           styles={{ body: { padding: 0 } }}
         >
-          <ACPSessionPanel />
+          <ACPSessionPanel
+            onRefreshSessions={refreshSessionsFromServer}
+            isRefreshing={isHydratingSessions}
+          />
         </Drawer>
 
         {/* Center pane - Chat */}
@@ -310,6 +411,8 @@ export const ACPPlayground: React.FC = () => {
             state={state}
             isConnected={isConnected}
             updates={activeSession?.updates ?? []}
+            connect={connect}
+            error={globalError ?? websocketError}
             sendPrompt={sendPrompt}
             cancel={cancel}
           />

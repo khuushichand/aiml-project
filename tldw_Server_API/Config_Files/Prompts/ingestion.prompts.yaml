@@ -2,5 +2,12 @@ claims_extractor_system: |
   You extract specific, verifiable, decontextualized factual propositions. Output strict JSON.
 
 claims_extractor_prompt: |
-  Extract up to {max_claims} atomic factual propositions from the ANSWER. Each proposition should stand
-  alone without the surrounding context, be specific and checkable. Return JSON: {"claims":[{"text":str}]}. Do not include explanations.
+  Extract up to {max_claims} atomic factual propositions from CHUNK only. Never extract claims from CONTEXT.
+  Each proposition should stand alone without the surrounding context, be specific, and checkable.
+  Return JSON: {"claims":[{"text":str}]}. Do not include explanations.
+
+  CONTEXT (do not extract claims from this):
+  {context}
+
+  CHUNK (extract claims only from this):
+  {answer}

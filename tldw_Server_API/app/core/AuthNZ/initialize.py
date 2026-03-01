@@ -140,11 +140,7 @@ def _resolve_env_locations() -> tuple[list[Path], list[Path], Path]:
         cfg_dir / ".env",
         cfg_dir / ".ENV",
     ]
-    template_candidates = [
-        cfg_dir / ".env.quickstart",
-        cfg_dir / ".env.authnz.template",
-        cfg_dir / ".env.template",
-    ]
+    template_candidates = [cfg_dir / ".env.example"]
     return env_candidates, template_candidates, cfg_dir
 
 

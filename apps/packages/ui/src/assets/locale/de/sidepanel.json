@@ -200,5 +200,16 @@
       "html": "HTML",
       "xml": "XML"
     }
+  },
+  "persona": {
+    "unsavedStateDiscardPrompt": "Sie haben ungespeicherte Änderungen an den Zustandsdokumenten. Lokale Entwürfe verwerfen?",
+    "unsavedStateDiscardPromptConnect": "Sie haben ungespeicherte Änderungen an den Zustandsdokumenten. Verbinden und lokale Entwürfe verwerfen?",
+    "unsavedStateDiscardPromptDisconnect": "Sie haben ungespeicherte Änderungen an den Zustandsdokumenten. Trennen und lokale Entwürfe verwerfen?",
+    "unsavedStateDiscardPromptReloadState": "Sie haben ungespeicherte Änderungen an den Zustandsdokumenten. Zustand laden und lokale Entwürfe verwerfen?",
+    "unsavedStateDiscardPromptPersonaSwitch": "Sie haben ungespeicherte Änderungen an den Zustandsdokumenten. Persona wechseln und lokale Entwürfe verwerfen?",
+    "unsavedStateDiscardPromptSessionSwitch": "Sie haben ungespeicherte Änderungen an den Zustandsdokumenten. Sitzung wechseln und lokale Entwürfe verwerfen?",
+    "unsavedStateDiscardPromptRestoreState": "Sie haben ungespeicherte Änderungen an den Zustandsdokumenten. Diese Zustandsversion wiederherstellen und lokale Entwürfe verwerfen?",
+    "unsavedStateDiscardPromptRouteTransition": "Sie haben ungespeicherte Änderungen an den Zustandsdokumenten. Diese Seite verlassen und lokale Entwürfe verwerfen?",
+    "unsavedStateBeforeUnloadPrompt": "Sie haben ungespeicherte Änderungen an den Zustandsdokumenten. Diese Seite ohne Speichern verlassen?"
   }
 }

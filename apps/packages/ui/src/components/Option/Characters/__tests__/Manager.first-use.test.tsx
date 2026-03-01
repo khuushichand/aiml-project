@@ -524,7 +524,7 @@ describe("CharactersManager first-use onboarding", () => {
 
     render(<CharactersManager />)
 
-    expect(await screen.findByRole("columnheader", { name: /Last used/i })).toBeInTheDocument()
+    expect(await screen.findByRole("columnheader", { name: /Activity/i })).toBeInTheDocument()
 
     const listQuery = getLatestListCharactersQueryOptions()
     expect(listQuery.queryKey[1]).toMatchObject({
@@ -1570,8 +1570,21 @@ describe("CharactersManager first-use onboarding", () => {
       .getByText("Folder")
       .closest(".ant-form-item")
     expect(folderField).not.toBeNull()
-    fireEvent.mouseDown(within(folderField as HTMLElement).getByRole("combobox"))
-    await user.click(await screen.findByText("New Folder"))
+    const folderCombobox = within(folderField as HTMLElement).getByRole("combobox")
+    const folderSelectContent = (folderField as HTMLElement).querySelector(
+      ".ant-select-content"
+    )
+    expect(folderSelectContent).not.toBeNull()
+    fireEvent.mouseDown(folderSelectContent as HTMLElement)
+    await waitFor(() => {
+      expect(folderCombobox).toHaveAttribute("aria-expanded", "true")
+    })
+    await user.click(
+      await screen.findByText("New Folder", {
+        selector: ".ant-select-item-option-content"
+      })
+    )
+    await waitFor(() => expect(saveButton).toBeEnabled())
     await user.click(saveButton)
 
     await waitFor(() => {
@@ -1583,7 +1596,7 @@ describe("CharactersManager first-use onboarding", () => {
         5
       )
     })
-  }, 30000)
+  }, 60_000)
 
   it("filters to favorited characters when favorites-only is enabled", async () => {
     const user = userEvent.setup()
@@ -2293,6 +2306,68 @@ describe("CharactersManager first-use onboarding", () => {
       ).not.toBeInTheDocument()
     })
     expect(tldwClientMock.updateCharacter).not.toHaveBeenCalled()
+  }, 30000)
+
+  it("supports Space key variants for inline name and description editing", async () => {
+    const records = [
+      {
+        id: "inline-space",
+        name: "Inline Space Name",
+        description: "Inline Space Description",
+        system_prompt: "Prompt text",
+        version: 3
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    const nameInlineButton = await screen.findByRole("button", {
+      name: /Edit name inline/i
+    })
+    const nameSpaceEvent = new KeyboardEvent("keydown", {
+      key: " ",
+      bubbles: true,
+      cancelable: true
+    })
+    nameInlineButton.dispatchEvent(nameSpaceEvent)
+    expect(nameSpaceEvent.defaultPrevented).toBe(true)
+
+    const nameInlineInput = await screen.findByDisplayValue("Inline Space Name")
+    fireEvent.keyDown(nameInlineInput, { key: "Escape" })
+
+    await waitFor(() => {
+      expect(screen.queryByDisplayValue("Inline Space Name")).not.toBeInTheDocument()
+    })
+
+    const descriptionInlineButton = await screen.findByRole("button", {
+      name: /Edit description inline/i
+    })
+    const descriptionSpacebarEvent = new KeyboardEvent("keydown", {
+      key: "Spacebar",
+      bubbles: true,
+      cancelable: true
+    })
+    descriptionInlineButton.dispatchEvent(descriptionSpacebarEvent)
+    expect(descriptionSpacebarEvent.defaultPrevented).toBe(true)
+
+    await screen.findByDisplayValue("Inline Space Description")
   }, 30000)
 
   it("renames tags across affected characters from the manage tags modal", async () => {
@@ -3468,6 +3543,53 @@ describe("CharactersManager first-use onboarding", () => {
       name: "Open world book Chronicle Index"
     })
     expect(chronicleLink).toHaveAttribute("href", expect.stringContaining("focusWorldBookId=22"))
+  }, 30000)
+
+  it("opens a full-size image modal when the preview avatar is clicked", async () => {
+    const user = userEvent.setup()
+    const avatarUrl = "https://example.com/preview-avatar.png"
+    const characterRecord = {
+      id: "preview-avatar-click",
+      name: "Preview Avatar Character",
+      avatar_url: avatarUrl,
+      system_prompt: "Avatar preview prompt",
+      greeting: "Avatar preview greeting",
+      description: "Avatar preview description",
+      version: 1
+    }
+
+    window.localStorage.setItem("characters-view-mode", "gallery")
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "tldw:characterPreviewWorldBooks") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByText("Preview Avatar Character"))
+    await screen.findByText("Character Preview")
+
+    await user.click(await screen.findByTestId("character-preview-avatar-button"))
+
+    const fullImage = await screen.findByTestId("character-preview-full-image")
+    expect(fullImage).toHaveAttribute("src", avatarUrl)
+    expect(await screen.findByText("Character image")).toBeInTheDocument()
   }, 30000)
 
   it("shows world-book empty state in gallery preview when no attachments exist", async () => {

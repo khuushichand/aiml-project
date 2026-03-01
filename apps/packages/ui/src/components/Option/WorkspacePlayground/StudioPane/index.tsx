@@ -522,10 +522,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const previewAudioRef = useRef<HTMLAudioElement | null>(null)
 
   // Local state for collapsible sections
-  const [studioOptionsExpanded, setStudioOptionsExpanded] = useState(true)
+  const [studioOptionsExpanded, setStudioOptionsExpanded] = useState(false)
   const [studioExpanded, setStudioExpanded] = useState(true)
   const [outputsExpanded, setOutputsExpanded] = useState(true)
-  const [notesExpanded, setNotesExpanded] = useState(true)
+  const [notesExpanded, setNotesExpanded] = useState(false)
   const [chatModels, setChatModels] = useState<ModelInfo[]>([])
   const [loadingChatModels, setLoadingChatModels] = useState(false)
   const generationAbortRef = useRef<AbortController | null>(null)
@@ -1559,6 +1559,15 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     })
   }
 
+  const handleIconButtonKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>
+  ) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault()
+      event.currentTarget.click()
+    }
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       {contextHolder}
@@ -2265,6 +2274,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                                   event.stopPropagation()
                                   handleDeleteArtifact(artifact)
                                 }}
+                                onKeyDown={handleIconButtonKeyDown}
                                 className="rounded p-0.5 hover:bg-error/10"
                                 aria-label={failedStatusDeleteLabel}
                               >
@@ -2309,168 +2319,195 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                       </div>
                     </div>
                     {artifact.status === "completed" && (
-                      <div className="mt-2 flex gap-1">
-                        {(artifact.content || artifact.audioUrl) && (
-                          <Tooltip title={t("common:view", "View")}>
-                            <button
-                              type="button"
-                              onClick={() => handleViewArtifact(artifact)}
-                            className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
-                            aria-label={t("common:view", "View")}
-                          >
-                            <Eye className="h-4 w-4" />
-                          </button>
-                          </Tooltip>
-                        )}
-                        {(artifact.type === "flashcards" || artifact.type === "quiz") && (
-                          <Tooltip title={t("common:edit", "Edit")}>
-                            <button
-                              type="button"
-                              onClick={() => handleViewArtifact(artifact)}
-                              className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
-                              aria-label={t("common:edit", "Edit")}
-                              data-testid={`studio-artifact-edit-${artifact.id}`}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </button>
-                          </Tooltip>
-                        )}
-                        <Tooltip title={t("common:download", "Download")}>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              artifact.type === "slides" && artifact.presentationId
-                                ? handleSlidesDownload(artifact)
-                                : handleDownloadArtifact(artifact)
-                            }
-                            className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
-                            aria-label={t("common:download", "Download")}
-                          >
-                            <Download className="h-4 w-4" />
-                          </button>
-                        </Tooltip>
-                        <Dropdown
-                          trigger={["click"]}
-                          menu={{
-                            items: [
-                              {
-                                key: "replace",
-                                label: t(
-                                  "playground:studio.regenerateReplace",
-                                  "Replace existing"
-                                )
-                              },
-                              {
-                                key: "new_version",
-                                label: t(
-                                  "playground:studio.regenerateNewVersion",
-                                  "Create new version"
-                                )
-                              }
-                            ],
-                            onClick: ({ key }) => {
-                              const mode =
-                                key === "replace" ? "replace" : "new_version"
-                              handleGenerateOutput(artifact.type, {
-                                mode,
-                                targetArtifactId: artifact.id
-                              })
-                            }
-                          }}
-                        >
-                          <Tooltip
-                            title={t(
-                              "playground:studio.regenerateOptions",
-                              "Regenerate options"
-                            )}
-                          >
-                            <button
-                              type="button"
-                              className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
-                              aria-label={t(
-                                "playground:studio.regenerateOptions",
-                                "Regenerate options"
-                              )}
-                            >
-                            <RefreshCw className="h-4 w-4" />
-                            </button>
-                          </Tooltip>
-                        </Dropdown>
-                        <Tooltip
-                          title={t(
-                            "playground:studio.discussAction",
-                            "Discuss in chat"
+                      <div className="mt-2 space-y-1.5">
+                        <div
+                          data-testid={`studio-artifact-primary-actions-${artifact.id}`}
+                          role="group"
+                          aria-label={t(
+                            "playground:studio.primaryActions",
+                            "Primary output actions"
                           )}
+                          className="flex flex-wrap items-center gap-1 rounded border border-border/70 bg-surface/70 px-1.5 py-1"
                         >
-                          <button
-                            type="button"
-                            onClick={() => handleDiscussArtifact(artifact)}
-                            className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
-                            aria-label={t(
-                              "playground:studio.discussAction",
-                              "Discuss in chat"
-                            )}
-                          >
-                            <MessageCircle className="h-4 w-4" />
-                          </button>
-                        </Tooltip>
-                        {artifact.content && (
+                          {(artifact.content || artifact.audioUrl) && (
+                            <Tooltip title={t("common:view", "View")}>
+                              <button
+                                type="button"
+                                onClick={() => handleViewArtifact(artifact)}
+                                onKeyDown={handleIconButtonKeyDown}
+                                className="rounded p-1 text-text-muted hover:bg-surface2 hover:text-text"
+                                aria-label={t("common:view", "View")}
+                              >
+                                <Eye className="h-4 w-4" />
+                              </button>
+                            </Tooltip>
+                          )}
+                          {(artifact.type === "flashcards" || artifact.type === "quiz") && (
+                            <Tooltip title={t("common:edit", "Edit")}>
+                              <button
+                                type="button"
+                                onClick={() => handleViewArtifact(artifact)}
+                                onKeyDown={handleIconButtonKeyDown}
+                                className="rounded p-1 text-text-muted hover:bg-surface2 hover:text-text"
+                                aria-label={t("common:edit", "Edit")}
+                                data-testid={`studio-artifact-edit-${artifact.id}`}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </button>
+                            </Tooltip>
+                          )}
+                          <Tooltip title={t("common:download", "Download")}>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                artifact.type === "slides" && artifact.presentationId
+                                  ? handleSlidesDownload(artifact)
+                                  : handleDownloadArtifact(artifact)
+                              }
+                              onKeyDown={handleIconButtonKeyDown}
+                              className="rounded p-1 text-text-muted hover:bg-surface2 hover:text-text"
+                              aria-label={t("common:download", "Download")}
+                            >
+                              <Download className="h-4 w-4" />
+                            </button>
+                          </Tooltip>
+                        </div>
+                        <div
+                          data-testid={`studio-artifact-secondary-actions-${artifact.id}`}
+                          role="group"
+                          aria-label={t(
+                            "playground:studio.secondaryActions",
+                            "Secondary output actions"
+                          )}
+                          className="flex flex-wrap items-center gap-1 rounded border border-border/60 bg-surface2/50 px-1.5 py-1"
+                        >
                           <Dropdown
                             trigger={["click"]}
                             menu={{
                               items: [
                                 {
-                                  key: "append",
+                                  key: "replace",
                                   label: t(
-                                    "playground:studio.saveToNotesAppend",
-                                    "Append to notes"
+                                    "playground:studio.regenerateReplace",
+                                    "Replace existing"
                                   )
                                 },
                                 {
-                                  key: "replace",
+                                  key: "new_version",
                                   label: t(
-                                    "playground:studio.saveToNotesReplace",
-                                    "Replace note draft"
+                                    "playground:studio.regenerateNewVersion",
+                                    "Create new version"
                                   )
                                 }
                               ],
                               onClick: ({ key }) => {
-                                handleSaveArtifactToNotes(
-                                  artifact,
-                                  key === "replace" ? "replace" : "append"
-                                )
+                                const mode =
+                                  key === "replace" ? "replace" : "new_version"
+                                handleGenerateOutput(artifact.type, {
+                                  mode,
+                                  targetArtifactId: artifact.id
+                                })
                               }
                             }}
                           >
                             <Tooltip
                               title={t(
-                                "playground:studio.saveToNotesAction",
-                                "Save to notes"
+                                "playground:studio.regenerateOptions",
+                                "Regenerate options"
                               )}
                             >
                               <button
                                 type="button"
+                                onKeyDown={handleIconButtonKeyDown}
                                 className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
                                 aria-label={t(
+                                  "playground:studio.regenerateOptions",
+                                  "Regenerate options"
+                                )}
+                              >
+                                <RefreshCw className="h-4 w-4" />
+                              </button>
+                            </Tooltip>
+                          </Dropdown>
+                          <Tooltip
+                            title={t(
+                              "playground:studio.discussAction",
+                              "Discuss in chat"
+                            )}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleDiscussArtifact(artifact)}
+                              onKeyDown={handleIconButtonKeyDown}
+                              className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
+                              aria-label={t(
+                                "playground:studio.discussAction",
+                                "Discuss in chat"
+                              )}
+                            >
+                              <MessageCircle className="h-4 w-4" />
+                            </button>
+                          </Tooltip>
+                          {artifact.content && (
+                            <Dropdown
+                              trigger={["click"]}
+                              menu={{
+                                items: [
+                                  {
+                                    key: "append",
+                                    label: t(
+                                      "playground:studio.saveToNotesAppend",
+                                      "Append to notes"
+                                    )
+                                  },
+                                  {
+                                    key: "replace",
+                                    label: t(
+                                      "playground:studio.saveToNotesReplace",
+                                      "Replace note draft"
+                                    )
+                                  }
+                                ],
+                                onClick: ({ key }) => {
+                                  handleSaveArtifactToNotes(
+                                    artifact,
+                                    key === "replace" ? "replace" : "append"
+                                  )
+                                }
+                              }}
+                            >
+                              <Tooltip
+                                title={t(
                                   "playground:studio.saveToNotesAction",
                                   "Save to notes"
                                 )}
                               >
-                                <StickyNote className="h-4 w-4" />
-                              </button>
-                            </Tooltip>
-                          </Dropdown>
-                        )}
-                        <Tooltip title={t("common:delete", "Delete")}>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteArtifact(artifact)}
-                            className="rounded p-1 text-text-muted hover:bg-error/10 hover:text-error"
-                            aria-label={t("common:delete", "Delete")}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </Tooltip>
+                                <button
+                                  type="button"
+                                  onKeyDown={handleIconButtonKeyDown}
+                                  className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
+                                  aria-label={t(
+                                    "playground:studio.saveToNotesAction",
+                                    "Save to notes"
+                                  )}
+                                >
+                                  <StickyNote className="h-4 w-4" />
+                                </button>
+                              </Tooltip>
+                            </Dropdown>
+                          )}
+                          <Tooltip title={t("common:delete", "Delete")}>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteArtifact(artifact)}
+                              onKeyDown={handleIconButtonKeyDown}
+                              className="rounded p-1 text-text-muted hover:bg-error/10 hover:text-error"
+                              aria-label={t("common:delete", "Delete")}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </Tooltip>
+                        </div>
                       </div>
                     )}
                   </div>

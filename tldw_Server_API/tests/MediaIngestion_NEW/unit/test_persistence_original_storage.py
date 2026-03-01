@@ -14,7 +14,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing import (
     input_sourcing,
     persistence as ingestion_persistence,
 )
-from tldw_Server_API.app.api.v1.endpoints import media as media_endpoints
 from tldw_Server_API.app.core import Storage
 from tldw_Server_API.app.services import storage_quota_service
 
@@ -210,8 +209,6 @@ async def test_original_storage_uses_processing_source(monkeypatch, fake_db, fak
             "db_message": "ok",
         }
 
-    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(Storage, "get_storage_backend", lambda: storage)
@@ -274,8 +271,6 @@ async def test_add_media_orchestrate_handles_document_exceptions(monkeypatch, tm
             "db_message": "ok",
         }
 
-    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
 
@@ -353,8 +348,6 @@ async def test_add_media_orchestrate_partial_upload_errors_returns_multi_status(
             "db_message": "ok",
         }
 
-    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
 
@@ -427,8 +420,6 @@ async def test_add_media_orchestrate_document_concurrency_limit(monkeypatch, fak
             "db_message": "ok",
         }
 
-    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
 
@@ -465,7 +456,6 @@ async def test_add_media_orchestrate_enforces_rg_media_jobs_limit(monkeypatch, f
         path.write_text("ok")
         return [{"path": path, "original_filename": "doc.txt"}], []
 
-    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
 
     class _DenyJobsGov:
@@ -541,8 +531,6 @@ async def test_add_media_orchestrate_enforces_rg_ingestion_bytes_limit_and_relea
             "db_message": "ok",
         }
 
-    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(storage_quota_service, "get_storage_quota_service", lambda: _FakeUploadQuotaService())
@@ -650,8 +638,6 @@ async def test_add_media_orchestrate_records_ingestion_bytes_in_shared_ledger(mo
             "db_message": "ok",
         }
 
-    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(storage_quota_service, "get_storage_quota_service", lambda: _FakeUploadQuotaService())

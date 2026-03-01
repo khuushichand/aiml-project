@@ -89,24 +89,43 @@ def _build_app_with_overrides(
     def _get_stub_registry() -> _StubRegistry:
         return _StubRegistry()
 
-    app.dependency_overrides[mlx_mod.get_mlx_registry] = _get_stub_registry
+    app.dependency_overrides[mlx_mod._resolve_mlx_registry] = _get_stub_registry
 
     return app
 
 
 @pytest.mark.unit
-def test_mlx_load_401_when_principal_unavailable():
+@pytest.mark.parametrize(
+    "method,path,payload",
+    [
+        ("post", "/api/v1/llm/providers/mlx/load", {}),
+        ("post", "/api/v1/llm/providers/mlx/unload", {}),
+        ("get", "/api/v1/llm/providers/mlx/status", None),
+    ],
+)
+def test_mlx_lifecycle_401_when_principal_unavailable(method: str, path: str, payload: dict | None):
     app = _build_app_with_overrides(principal=None, fail_with_401=True)
 
     with TestClient(app) as client:
-        resp = client.post("/api/v1/llm/providers/mlx/load", json={})
+        if method == "post":
+            resp = client.post(path, json=payload or {})
+        else:
+            resp = client.get(path)
 
     assert resp.status_code == 401
     assert "Authentication required" in resp.json().get("detail", "")
 
 
 @pytest.mark.unit
-def test_mlx_load_403_when_missing_admin_role():
+@pytest.mark.parametrize(
+    "method,path,payload",
+    [
+        ("post", "/api/v1/llm/providers/mlx/load", {}),
+        ("post", "/api/v1/llm/providers/mlx/unload", {}),
+        ("get", "/api/v1/llm/providers/mlx/status", None),
+    ],
+)
+def test_mlx_lifecycle_403_when_missing_admin_role(method: str, path: str, payload: dict | None):
     principal = _make_principal(
         is_admin=False,
         roles=["user"],
@@ -115,37 +134,40 @@ def test_mlx_load_403_when_missing_admin_role():
     app = _build_app_with_overrides(principal=principal)
 
     with TestClient(app) as client:
-        resp = client.post("/api/v1/llm/providers/mlx/load", json={})
+        if method == "post":
+            resp = client.post(path, json=payload or {})
+        else:
+            resp = client.get(path)
 
     assert resp.status_code == 403
 
 
 @pytest.mark.unit
-def test_mlx_load_200_for_admin_principal(monkeypatch):
+@pytest.mark.parametrize(
+    "method,path,payload",
+    [
+        ("post", "/api/v1/llm/providers/mlx/load", {}),
+        ("post", "/api/v1/llm/providers/mlx/unload", {}),
+        ("get", "/api/v1/llm/providers/mlx/status", None),
+    ],
+)
+def test_mlx_lifecycle_200_for_admin_principal(monkeypatch, method: str, path: str, payload: dict | None):
     principal = _make_principal(
         is_admin=True,
         roles=["admin"],
         permissions=[],
     )
-    # Ensure a valid default model_path so internal helpers do not raise
-    monkeypatch.setattr(mlx_mod, "_default_settings", lambda: {"model_path": "stub-model-path"})
-
-    class _StubRegistry:
-        def load(self, model_path=None, overrides=None):
-            return {"status": "ok", "model_path": model_path}
-
-        def unload(self):
-            return {"status": "unloaded"}
-
-        def status(self):
-            return {"ok": True}
-
-    monkeypatch.setattr(mlx_mod, "get_mlx_registry", lambda: _StubRegistry())
+    if path.endswith("/load"):
+        # Ensure a valid default model_path so internal helpers do not raise.
+        monkeypatch.setattr(mlx_mod, "_default_settings", lambda: {"model_path": "stub-model-path"})
     app = _build_app_with_overrides(principal=principal)
 
     with TestClient(app) as client:
-        resp = client.post("/api/v1/llm/providers/mlx/load", json={})
+        if method == "post":
+            resp = client.post(path, json=payload or {})
+        else:
+            resp = client.get(path)
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body.get("status") == "ok"
+    assert body.get("backend") == "mlx"

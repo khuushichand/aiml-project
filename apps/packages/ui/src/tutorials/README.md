@@ -19,7 +19,16 @@ tutorials/
 ├── index.ts              # Public exports
 ├── registry.ts           # Central registry and types
 ├── definitions/          # Tutorial definitions by page
-│   └── playground.ts     # Playground tutorials
+│   ├── playground.ts
+│   ├── workspace-playground.ts
+│   ├── media.ts
+│   ├── knowledge.ts
+│   ├── characters.ts
+│   ├── prompts.ts
+│   ├── evaluations.ts
+│   ├── notes.ts
+│   ├── flashcards.ts
+│   └── world-books.ts
 └── README.md             # This file
 ```
 
@@ -42,7 +51,7 @@ interface TutorialStep {
 
 interface TutorialDefinition {
   id: string               // Unique ID (e.g., "playground-basics")
-  routePattern: string     // Route to match (e.g., "/options/playground")
+  routePattern: string     // Canonical route (e.g., "/chat")
   labelKey: string         // i18n key for name
   labelFallback: string
   descriptionKey: string   // i18n key for description
@@ -105,7 +114,7 @@ import type { TutorialDefinition } from "../registry"
 
 const myPageBasics: TutorialDefinition = {
   id: "my-page-basics",
-  routePattern: "/options/my-page",
+  routePattern: "/my-page",
   labelKey: "tutorials:myPage.basics.label",
   labelFallback: "My Page Basics",
   descriptionKey: "tutorials:myPage.basics.description",
@@ -180,9 +189,9 @@ export const TUTORIAL_REGISTRY: TutorialDefinition[] = [
 
 | Pattern | Matches |
 |---------|---------|
-| `/options/my-page` | Exact path only |
-| `/options/my-page/*` | Any subpath |
-| `/options/*` | All option pages |
+| `/my-page` | Exact path only |
+| `/settings/*` | Any settings subpath |
+| `/chat` | Canonical chat path |
 
 ## Debugging
 

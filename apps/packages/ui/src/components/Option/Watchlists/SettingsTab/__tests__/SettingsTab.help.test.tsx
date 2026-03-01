@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { SettingsTab } from "../SettingsTab"
 import { WATCHLISTS_HELP_DOCS } from "../../shared/help-docs"
 
+const ONBOARDING_PATH_STORAGE_KEY = "watchlists:onboarding-path:v1"
+
 const mocks = vi.hoisted(() => ({
   getWatchlistSettingsMock: vi.fn(),
   fetchWatchlistJobsMock: vi.fn(),
@@ -14,10 +16,20 @@ const mocks = vi.hoisted(() => ({
   messageErrorMock: vi.fn()
 }))
 
+const interpolate = (template: string, values?: Record<string, unknown>) => {
+  if (!values) return template
+  return template.replace(/\{\{(\w+)\}\}/g, (_match, token) => {
+    const value = values[token]
+    return value == null ? "" : String(value)
+  })
+}
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (_key: string, defaultValue?: unknown) =>
-      typeof defaultValue === "string" ? defaultValue : _key
+    t: (_key: string, defaultValue?: unknown, values?: Record<string, unknown>) =>
+      typeof defaultValue === "string"
+        ? interpolate(defaultValue, values)
+        : _key
   })
 }))
 
@@ -51,8 +63,9 @@ vi.mock("antd", () => {
       />
     )
   }
-  const Select = ({ options = [], value, onChange }: any) => (
+  const Select = ({ options = [], value, onChange, ...rest }: any) => (
     <select
+      data-testid={rest["data-testid"]}
       value={value ?? ""}
       onChange={(event) => onChange?.(event.currentTarget.value || null)}
     >
@@ -65,8 +78,44 @@ vi.mock("antd", () => {
     </select>
   )
   const Skeleton = () => <div>Loading...</div>
-  const Switch = () => null
-  const Table = ({ dataSource = [] }: any) => <div>{dataSource.length}</div>
+  const Switch = ({
+    checked,
+    onChange,
+    disabled,
+    loading: _loading,
+    checkedChildren,
+    unCheckedChildren,
+    ...rest
+  }: any) => (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked ? "true" : "false"}
+      disabled={Boolean(disabled)}
+      onClick={() => onChange?.(!checked)}
+      {...rest}
+    >
+      {checked ? checkedChildren || "On" : unCheckedChildren || "Off"}
+    </button>
+  )
+  const Table = ({ dataSource = [], columns = [] }: any) => (
+    <table>
+      <tbody>
+        {dataSource.map((record: any, rowIndex: number) => (
+          <tr key={record.id ?? rowIndex}>
+            {columns.map((column: any, columnIndex: number) => {
+              const key = String(column.key ?? column.dataIndex ?? columnIndex)
+              const value = column.dataIndex ? record[column.dataIndex] : undefined
+              const content = column.render
+                ? column.render(value, record, rowIndex)
+                : value
+              return <td key={key}>{content}</td>
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
   const Tooltip = ({ title, children }: any) => (
     <div>
       {children}
@@ -134,6 +183,7 @@ describe("SettingsTab contextual help", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.removeItem(ONBOARDING_PATH_STORAGE_KEY)
     delete process.env.NEXT_PUBLIC_WATCHLISTS_SHOW_INTERNAL_DIAGNOSTICS
     mocks.getWatchlistSettingsMock.mockResolvedValue({
       default_output_ttl_seconds: 86400,
@@ -190,5 +240,21 @@ describe("SettingsTab contextual help", () => {
     await waitFor(() => {
       expect(screen.getByText("Internal diagnostics")).toBeInTheDocument()
     })
+  })
+
+  it("persists onboarding path selection from settings", async () => {
+    render(<SettingsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByText("Onboarding")).toBeInTheDocument()
+    })
+
+    const select = screen.getByTestId("watchlists-settings-onboarding-path-select")
+    expect(select).toBeInTheDocument()
+
+    ;(select as HTMLSelectElement).value = "advanced"
+    select.dispatchEvent(new Event("change", { bubbles: true }))
+
+    expect(localStorage.getItem(ONBOARDING_PATH_STORAGE_KEY)).toBe("advanced")
   })
 })

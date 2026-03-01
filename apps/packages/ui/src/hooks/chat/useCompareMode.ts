@@ -66,10 +66,14 @@ export const useCompareMode = ({ historyId, forceEnabled }: UseCompareModeOption
     })
   }, [setCompareMode, setCompareSelectedModels])
 
+  const [compareAutoDisabledFlag, setCompareAutoDisabledFlag] =
+    React.useState(false)
+
   React.useEffect(() => {
     if (!effectiveCompareEnabled && compareMode) {
       setCompareMode(false)
       setCompareSelectedModels([])
+      setCompareAutoDisabledFlag(true)
     }
   }, [effectiveCompareEnabled, compareMode, setCompareMode, setCompareSelectedModels])
 
@@ -214,6 +218,8 @@ export const useCompareMode = ({ historyId, forceEnabled }: UseCompareModeOption
     setCompareMaxModels,
     compareModeActive,
     compareParentForHistory,
-    markCompareHistoryCreated
+    markCompareHistoryCreated,
+    compareAutoDisabledFlag,
+    setCompareAutoDisabledFlag
   }
 }

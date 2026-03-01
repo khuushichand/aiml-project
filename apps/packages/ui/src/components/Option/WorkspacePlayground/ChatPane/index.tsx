@@ -50,8 +50,6 @@ import { getWorkspaceChatSearchMessageId } from "../workspace-global-search"
 
 const { TextArea } = Input
 const VISIBLE_SOURCE_TAG_COUNT = 5
-const CHAT_TRANSCRIPT_MIN_HEIGHT = "calc(100vh - 22rem)"
-const CHAT_TRANSCRIPT_MAX_HEIGHT = "calc(200vh - 20rem)"
 
 type RetrievalDiagnostics = {
   chunkCount: number | null
@@ -72,6 +70,7 @@ type ChatModelOption = {
   label: string
   provider: string
 }
+type ChatPaneContentWidthMode = "comfortable" | "expanded" | "full"
 type LorebookActivityTurn = {
   turnNumber: number
   assistantPreview: string
@@ -716,12 +715,23 @@ const WorkspaceChatEmpty: React.FC<{
   sourceCount: number
   selectedSourceTypes: WorkspaceSourceType[]
   isMobile: boolean
-}> = ({ hasSelectedSources, sourceCount, selectedSourceTypes, isMobile }) => {
+  layoutMode?: ChatPaneContentWidthMode
+  onExamplePromptSelect?: (prompt: string) => void
+}> = ({
+  hasSelectedSources,
+  sourceCount,
+  selectedSourceTypes,
+  isMobile,
+  layoutMode = "comfortable",
+  onExamplePromptSelect
+}) => {
   const { t } = useTranslation(["playground"])
   const sourceTypeSet = React.useMemo(
     () => new Set(selectedSourceTypes),
     [selectedSourceTypes]
   )
+  const hasPromptActions = typeof onExamplePromptSelect === "function"
+  const emptyStateMaxWidthClass = "max-w-none"
 
   const examples = React.useMemo(() => {
     if (!hasSelectedSources) {
@@ -789,8 +799,9 @@ const WorkspaceChatEmpty: React.FC<{
   }, [hasSelectedSources, sourceTypeSet, t])
 
   return (
-    <div className="mx-auto mt-10 max-w-xl px-4">
+    <div className={`mx-auto w-full ${emptyStateMaxWidthClass} px-4 pb-2 pt-3`}>
       <FeatureEmptyState
+        className="max-w-none"
         icon={MessageSquarePlus}
         title={t("playground:chat.emptyTitle", "Start your research")}
         description={
@@ -805,7 +816,21 @@ const WorkspaceChatEmpty: React.FC<{
                 getWorkspaceChatNoSourcesHint(isMobile)
               )
         }
-        examples={examples}
+        examples={examples.map((example, index) => (
+          <button
+            key={example}
+            type="button"
+            data-testid={`workspace-chat-empty-prompt-chip-${index}`}
+            onClick={() => {
+              if (typeof onExamplePromptSelect !== "function") return
+              onExamplePromptSelect(example)
+            }}
+            disabled={!hasPromptActions}
+            className="w-full rounded-md border border-border/70 bg-surface2/70 px-2 py-1 text-left text-xs text-text-muted transition hover:border-primary/40 hover:bg-primary/5 hover:text-text disabled:cursor-default disabled:opacity-80"
+          >
+            {example}
+          </button>
+        ))}
       />
     </div>
   )
@@ -910,8 +935,8 @@ const SimpleChatInput: React.FC<{
   }
 
   return (
-    <div>
-      <form onSubmit={handleSubmit} className="flex items-end gap-2">
+    <div className="rounded-lg border border-border/70 bg-surface/90 p-1.5 shadow-sm">
+      <form onSubmit={handleSubmit} className="flex items-end gap-1.5">
         <div className="relative flex-1">
           {/* Slash command autocomplete dropdown (UX-006) */}
           {showSlashMenu && filteredSlashCommands.length > 0 && (
@@ -958,7 +983,7 @@ const SimpleChatInput: React.FC<{
           <button
             type="button"
             onClick={onStop}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-error text-white transition hover:bg-error/90"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-error text-white transition hover:bg-error/90"
             aria-label={t("common:stop", "Stop")}
             title={t("common:stop", "Stop") as string}
           >
@@ -968,7 +993,7 @@ const SimpleChatInput: React.FC<{
           <button
             type="submit"
             disabled={!value.trim() || isPreparingContext}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary text-white transition hover:bg-primaryStrong disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-white transition hover:bg-primaryStrong disabled:cursor-not-allowed disabled:opacity-50"
             aria-label={
               isPreparingContext
                 ? t(
@@ -986,7 +1011,7 @@ const SimpleChatInput: React.FC<{
           </button>
         )}
       </form>
-      <p className="mt-1 text-xs text-text-muted">
+      <p className="mt-1 px-0.5 text-[11px] text-text-muted">
         {t(
           "playground:chat.inputKeyboardHint",
           "Enter or Cmd/Ctrl+Enter to send, Shift+Enter for new line"
@@ -1035,11 +1060,13 @@ const buildCapturedMessageTitle = (
 interface ChatPaneProps {
   provenanceEnabled?: boolean
   statusGuardrailsEnabled?: boolean
+  contentWidthMode?: ChatPaneContentWidthMode
 }
 
 export const ChatPane: React.FC<ChatPaneProps> = ({
   provenanceEnabled = true,
-  statusGuardrailsEnabled = true
+  statusGuardrailsEnabled = true,
+  contentWidthMode = "comfortable"
 }) => {
   const { t } = useTranslation(["playground", "common"])
   const isMobile = useMobile()
@@ -2261,9 +2288,10 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       "playground:chat.connectionErrorGeneric",
       "Unable to reach server. Please retry."
     )
+  const contentMaxWidthClass = "max-w-none"
 
   return (
-    <div className="flex min-h-[calc(100vh-10rem)] flex-col">
+    <div className="flex h-full w-full min-h-0 flex-1 flex-col">
       {messageContextHolder}
 
       {/* Context indicator */}
@@ -2272,7 +2300,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       {/* Connection banner */}
       {showConnectionBanner && (
         <div className="border-b border-error/30 bg-error/5 px-4 py-2">
-          <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
+          <div className={`mx-auto flex w-full ${contentMaxWidthClass} items-center justify-between gap-3`}>
             <div className="flex min-w-0 items-center gap-2 text-sm text-error">
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span className="truncate">
@@ -2296,7 +2324,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
       {/* Chat controls */}
       <div className="border-b border-border bg-surface px-4 py-2">
-        <div className="mx-auto flex max-w-3xl items-center justify-end">
+        <div className={`mx-auto flex w-full ${contentMaxWidthClass} items-center justify-end`}>
           <button
             type="button"
             onClick={handleClearChat}
@@ -2312,7 +2340,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
       {hasMessages && (
         <div className="border-b border-border bg-surface px-4 py-2">
-          <div className="mx-auto max-w-3xl space-y-2">
+          <div className={`mx-auto w-full ${contentMaxWidthClass} space-y-2`}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-medium text-text">Lorebook Activity</p>
               <div className="flex flex-wrap items-center gap-2">
@@ -2400,20 +2428,16 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       )}
 
       {/* Chat messages area */}
-      <div className="relative flex flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col">
         <div
           ref={containerRef}
           role="log"
           aria-live="polite"
           aria-relevant="additions"
           aria-label={t("playground:aria.chatTranscript", "Chat messages")}
-          className="custom-scrollbar overflow-x-hidden overflow-y-auto px-4"
-          style={{
-            minHeight: CHAT_TRANSCRIPT_MIN_HEIGHT,
-            maxHeight: CHAT_TRANSCRIPT_MAX_HEIGHT
-          }}
+          className="custom-scrollbar flex-1 min-h-0 overflow-x-hidden overflow-y-auto px-4"
         >
-          <div className="mx-auto w-full max-w-3xl pb-6">
+          <div className={`mx-auto w-full ${contentMaxWidthClass} pb-6`}>
             {hasMessages ? (
               <div className="space-y-4 py-4">
                 {messages.map((msg, idx) => {
@@ -2510,12 +2534,16 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                 })}
               </div>
             ) : (
-              <WorkspaceChatEmpty
-                hasSelectedSources={hasSelectedSources}
-                sourceCount={selectedSources.length}
-                selectedSourceTypes={selectedSources.map((source) => source.type)}
-                isMobile={isMobile}
-              />
+              <div className="flex min-h-full flex-col justify-end">
+                <WorkspaceChatEmpty
+                  hasSelectedSources={hasSelectedSources}
+                  sourceCount={selectedSources.length}
+                  selectedSourceTypes={selectedSources.map((source) => source.type)}
+                  isMobile={isMobile}
+                  layoutMode={contentWidthMode}
+                  onExamplePromptSelect={(prompt) => setSeededPrompt(prompt)}
+                />
+              </div>
             )}
           </div>
         </div>
@@ -2550,11 +2578,11 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
         onDragOver={handleDropZoneDragOver}
         onDrop={handleDropZoneDrop}
         onDragLeave={handleDropZoneDragLeave}
-        className={`sticky bottom-0 border-t border-border bg-surface transition-colors ${
+        className={`sticky bottom-0 z-20 border-t border-border bg-surface/95 backdrop-blur supports-[backdrop-filter]:bg-surface/85 transition-colors ${
           dropZoneActive ? "bg-primary/5" : ""
         }`}
       >
-        <div className="mx-auto max-w-3xl px-4 py-3">
+        <div className={`mx-auto w-full ${contentMaxWidthClass} px-4 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-2.5`}>
           {dropZoneActive && (
             <div className="mb-2 rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-xs text-primary">
               {t(
@@ -2584,12 +2612,17 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
               </button>
             </div>
           )}
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="inline-flex rounded-md border border-border bg-surface2 p-0.5">
+          <div
+            data-testid="workspace-chat-controls-toolbar"
+            role="toolbar"
+            aria-label={t("playground:chat.controlsToolbarAria", "Chat controls")}
+            className="mb-2 flex flex-wrap items-center gap-1.5 text-xs"
+          >
+            <div className="inline-flex items-center rounded-full border border-border/70 bg-surface/80 p-0.5 shadow-sm">
               <button
                 type="button"
                 onClick={() => setPreferredChatMode("normal")}
-                className={`rounded px-2.5 py-1 text-xs font-medium transition ${
+                className={`rounded-full px-2.5 py-1 text-xs font-medium transition ${
                   effectiveChatMode === "normal"
                     ? "bg-primary text-white"
                     : "text-text-muted hover:text-text"
@@ -2612,7 +2645,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                   type="button"
                   disabled={!hasSelectedSources}
                   onClick={() => setPreferredChatMode("rag")}
-                  className={`rounded px-2.5 py-1 text-xs font-medium transition ${
+                  className={`rounded-full px-2.5 py-1 text-xs font-medium transition ${
                     effectiveChatMode === "rag"
                       ? "bg-primary text-white"
                       : "text-text-muted hover:text-text"
@@ -2623,24 +2656,48 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                 </button>
               </Tooltip>
             </div>
-            <div className="flex items-center gap-2">
-              {/* Model badge (UX-009) */}
-              {provenanceEnabled && modelDisplayLabel && (
-                <Tooltip
-                  title={t(
-                    "playground:chat.currentModelTooltip",
-                    "Current model: {{model}}",
-                    { model: modelDisplayLabel }
-                  ).replace("{{model}}", modelDisplayLabel)}
-                >
-                  <span className="inline-flex items-center gap-1 rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text-muted">
-                    <Cpu className="h-3 w-3" />
-                    <span className="max-w-[120px] truncate">{modelDisplayLabel}</span>
-                  </span>
-                </Tooltip>
-              )}
+            {hasSelectedSources && (
+              <label
+                className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-surface/80 px-2 py-1 text-[11px] text-text-muted"
+                title={
+                  t(
+                    "playground:chat.includeFullSourcesHint",
+                    "Inject complete extracted source text with your question (helpful for synopsis-style prompts)."
+                  ) as string
+                }
+              >
+                <span className="whitespace-nowrap">
+                  {t(
+                    "playground:chat.includeFullSourcesCompactLabel",
+                    "Full source text"
+                  )}
+                </span>
+                <Switch
+                  size="small"
+                  checked={includeFullSourceContents}
+                  onChange={setIncludeFullSourceContents}
+                  aria-label={t(
+                    "playground:chat.includeFullSourcesAria",
+                    "Include full source contents"
+                  )}
+                />
+              </label>
+            )}
+            <div className="ml-auto flex flex-wrap items-center gap-1">
               {provenanceEnabled && (loadingModels || availableModels.length > 0) && (
-                <label className="inline-flex items-center gap-1 rounded border border-border bg-surface2 px-2 py-1 text-[11px] text-text-muted">
+                <label
+                  className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-surface/80 px-2 py-1 text-[11px] text-text-muted"
+                  title={
+                    modelDisplayLabel
+                      ? t(
+                          "playground:chat.currentModelTooltip",
+                          "Current model: {{model}}",
+                          { model: modelDisplayLabel }
+                        ).replace("{{model}}", modelDisplayLabel)
+                      : undefined
+                  }
+                >
+                  <Cpu className="h-3 w-3" />
                   <span>{t("playground:chat.modelPickerLabel", "Model")}</span>
                   <select
                     aria-label={t(
@@ -2676,7 +2733,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                     type="button"
                     onClick={handleShareConversation}
                     disabled={sharingConversation}
-                    className="inline-flex items-center gap-1 rounded border border-border bg-surface2 px-2 py-1 text-xs text-text-muted transition hover:bg-surface hover:text-text disabled:opacity-50"
+                    className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-surface/80 px-2 py-1 text-xs text-text-muted transition hover:bg-surface2 hover:text-text disabled:opacity-50"
                     aria-label={t("playground:chat.shareConversation", "Share conversation")}
                   >
                     {sharingConversation ? (
@@ -2702,7 +2759,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                   onClick={() =>
                     setShowAdvancedRagSettings((current) => !current)
                   }
-                  className="inline-flex items-center gap-1 rounded border border-border bg-surface2 px-2 py-1 text-xs text-text-muted transition hover:bg-surface hover:text-text"
+                  className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-surface/80 px-2 py-1 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
                   aria-expanded={showAdvancedRagSettings}
                 >
                   <SlidersHorizontal className="h-3.5 w-3.5" />
@@ -2722,33 +2779,6 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
               )}
             </p>
           )}
-          {hasSelectedSources && (
-            <div className="mb-2 flex items-start justify-between gap-3 rounded-md border border-border bg-surface2/40 px-3 py-2">
-              <div className="min-w-0">
-                <p className="text-xs font-medium text-text">
-                  {t(
-                    "playground:chat.includeFullSourcesLabel",
-                    "Include full source contents"
-                  )}
-                </p>
-                <p className="mt-0.5 text-[11px] text-text-muted">
-                  {t(
-                    "playground:chat.includeFullSourcesHint",
-                    "Inject complete extracted source text with your question (helpful for synopsis-style prompts)."
-                  )}
-                </p>
-              </div>
-              <Switch
-                size="small"
-                checked={includeFullSourceContents}
-                onChange={setIncludeFullSourceContents}
-                aria-label={t(
-                  "playground:chat.includeFullSourcesAria",
-                  "Include full source contents"
-                )}
-              />
-            </div>
-          )}
           {preparingSourceContext && (
             <p className="mb-2 flex items-center gap-1.5 text-xs text-text-muted">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2759,7 +2789,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
             </p>
           )}
           {hasSelectedSources && showAdvancedRagSettings && (
-            <div className="mb-3 rounded-md border border-border bg-surface2/40 p-3">
+            <div className="mb-2 rounded-lg border border-border/70 bg-surface2/40 p-3">
               <div className="space-y-3">
                 <div>
                   <div className="mb-1 flex items-center justify-between text-xs text-text-muted">

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react"
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   Button,
   Drawer,
@@ -12,13 +12,21 @@ import {
 import { Download, ExternalLink } from "lucide-react"
 import DOMPurify from "dompurify"
 import { useTranslation } from "react-i18next"
-import { downloadWatchlistOutput } from "@/services/watchlists"
+import { downloadWatchlistOutput, downloadWatchlistOutputBinary } from "@/services/watchlists"
 import type { WatchlistOutput } from "@/types/watchlists"
 import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
+import {
   getDeliveryStatusColor,
+  getOutputArtifactLabel,
+  getOutputFileExtension,
   getOutputDeliveryStatuses,
+  getOutputMimeType,
   getOutputTemplateName,
-  getOutputTemplateVersion
+  getOutputTemplateVersion,
+  isAudioOutput
 } from "./outputMetadata"
 
 interface OutputPreviewDrawerProps {
@@ -35,40 +43,98 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
   const { t } = useTranslation(["watchlists", "common"])
   const [loading, setLoading] = useState(false)
   const [content, setContent] = useState<string | null>(null)
+  const [audioObjectUrl, setAudioObjectUrl] = useState<string | null>(null)
+  const audioObjectUrlRef = useRef<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<"rendered" | "source">("rendered")
+  const outputIsAudio = useMemo(() => isAudioOutput(output), [output])
+  const restoreFocusTargetRef = useRef<HTMLElement | null>(null)
+  const wasOpenRef = useRef(false)
+
+  useLayoutEffect(() => {
+    if (open) {
+      if (!wasOpenRef.current) {
+        restoreFocusTargetRef.current = getFocusableActiveElement()
+      }
+      wasOpenRef.current = true
+      return
+    }
+
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      restoreFocusToElement(restoreFocusTargetRef.current)
+    }
+  }, [open])
+
+  const updateAudioObjectUrl = useCallback((nextUrl: string | null) => {
+    if (audioObjectUrlRef.current && audioObjectUrlRef.current !== nextUrl) {
+      URL.revokeObjectURL(audioObjectUrlRef.current)
+    }
+    audioObjectUrlRef.current = nextUrl
+    setAudioObjectUrl(nextUrl)
+  }, [])
 
   // Fetch content when drawer opens
   useEffect(() => {
     if (open && output) {
       setLoading(true)
       setError(null)
-      downloadWatchlistOutput(output.id)
-        .then((result) => setContent(result))
-        .catch((err) => {
-          console.error("Failed to fetch output content:", err)
-          setError(err.message || "Failed to load content")
-        })
-        .finally(() => {
-          setLoading(false)
-        })
+      if (outputIsAudio) {
+        setContent(null)
+        downloadWatchlistOutputBinary(output.id)
+          .then((result) => {
+            const blob = new Blob([result], { type: getOutputMimeType(output.format) })
+            const nextUrl = URL.createObjectURL(blob)
+            updateAudioObjectUrl(nextUrl)
+          })
+          .catch((err) => {
+            console.error("Failed to fetch audio output content:", err)
+            setError(err.message || "Failed to load content")
+          })
+          .finally(() => {
+            setLoading(false)
+          })
+      } else {
+        updateAudioObjectUrl(null)
+        downloadWatchlistOutput(output.id)
+          .then((result) => setContent(result))
+          .catch((err) => {
+            console.error("Failed to fetch output content:", err)
+            setError(err.message || "Failed to load content")
+          })
+          .finally(() => {
+            setLoading(false)
+          })
+      }
     } else {
       setContent(null)
       setError(null)
+      updateAudioObjectUrl(null)
+      setViewMode("rendered")
     }
-  }, [open, output])
+  }, [open, output, outputIsAudio, updateAudioObjectUrl])
+
+  useEffect(() => {
+    return () => {
+      if (audioObjectUrlRef.current) {
+        URL.revokeObjectURL(audioObjectUrlRef.current)
+      }
+      audioObjectUrlRef.current = null
+    }
+  }, [])
 
   // Handle download
   const handleDownload = async () => {
     if (!output) return
     try {
-      const content = await downloadWatchlistOutput(output.id)
-      const mimeType = output.format === "html" ? "text/html" : "text/markdown"
-      const blob = new Blob([content], { type: mimeType })
+      const mimeType = getOutputMimeType(output.format)
+      const blob = outputIsAudio
+        ? new Blob([await downloadWatchlistOutputBinary(output.id)], { type: mimeType })
+        : new Blob([await downloadWatchlistOutput(output.id)], { type: mimeType })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = `${output.title || `output-${output.id}`}.${output.format}`
+      a.download = `${output.title || `output-${output.id}`}.${getOutputFileExtension(output)}`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -96,6 +162,9 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
   const templateVersion = useMemo(() => {
     return getOutputTemplateVersion(output?.metadata)
   }, [output?.metadata])
+  const artifactLabel = useMemo(() => {
+    return getOutputArtifactLabel(output)
+  }, [output])
 
   // Open in new tab (for HTML)
   const handleOpenInNewTab = () => {
@@ -143,9 +212,9 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
         </div>
       ) : error ? (
         <div className="text-center py-12 text-danger">{error}</div>
-      ) : content ? (
+      ) : outputIsAudio ? (
         <div className="space-y-4">
-          {(templateName || templateVersion || deliveryStatuses.length > 0 || output?.chatbook_path) && (
+          {output && (
             <div className="rounded-lg border border-border p-3 space-y-2 bg-surface">
               {(templateName || templateVersion) && (
                 <div className="text-sm text-text">
@@ -154,6 +223,106 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
                   </span>{" "}
                   {templateName || t("watchlists:outputs.templateUnknown", "Unknown")}
                   {templateVersion ? ` v${templateVersion}` : ""}
+                </div>
+              )}
+              {output && (
+                <div className="space-y-1" data-testid="output-preview-provenance">
+                  <div className="text-sm font-medium text-text">
+                    {t("watchlists:outputs.provenanceLabel", "Provenance")}
+                  </div>
+                  <div className="text-xs text-text-muted">
+                    {t(
+                      "watchlists:outputs.provenanceDescription",
+                      "Monitor #{{job}} • Run #{{run}} • Artifact: {{artifact}}",
+                      {
+                        job: output.job_id,
+                        run: output.run_id,
+                        artifact: artifactLabel
+                      }
+                    )}
+                  </div>
+                </div>
+              )}
+              {deliveryStatuses.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-sm font-medium text-text">
+                    {t("watchlists:outputs.deliveryStatusLabel", "Delivery status")}
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {deliveryStatuses.map((delivery, index) => (
+                      <Tooltip
+                        key={`${delivery.channel}-${delivery.status}-${index}`}
+                        title={delivery.detail}
+                      >
+                        <Tag color={getDeliveryStatusColor(delivery.status)}>
+                          {delivery.channel}: {delivery.status}
+                        </Tag>
+                      </Tooltip>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {output?.chatbook_path && (
+                <div className="text-xs text-text-muted">
+                  Chatbook: {output.chatbook_path}
+                </div>
+              )}
+              {output?.storage_path && (
+                <div className="text-xs text-text-muted">
+                  {t("watchlists:outputs.storagePath", "Stored file")}: {output.storage_path}
+                </div>
+              )}
+            </div>
+          )}
+
+          {audioObjectUrl ? (
+            <div className="rounded-lg border border-border bg-surface p-4">
+              <div className="mb-2 text-sm text-text-muted">
+                {t("watchlists:outputs.audioPlayerLabel", "Audio playback")}
+              </div>
+              <audio controls preload="metadata" className="w-full" src={audioObjectUrl}>
+                {t(
+                  "watchlists:outputs.audioPlayerUnsupported",
+                  "Your browser does not support audio playback."
+                )}
+              </audio>
+            </div>
+          ) : (
+            <Empty
+              description={t("watchlists:outputs.noContent", "No content available")}
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          )}
+        </div>
+      ) : content ? (
+        <div className="space-y-4">
+          {output && (
+            <div className="rounded-lg border border-border p-3 space-y-2 bg-surface">
+              {(templateName || templateVersion) && (
+                <div className="text-sm text-text">
+                  <span className="font-medium">
+                    {t("watchlists:outputs.templateLabel", "Template")}:
+                  </span>{" "}
+                  {templateName || t("watchlists:outputs.templateUnknown", "Unknown")}
+                  {templateVersion ? ` v${templateVersion}` : ""}
+                </div>
+              )}
+              {output && (
+                <div className="space-y-1" data-testid="output-preview-provenance">
+                  <div className="text-sm font-medium text-text">
+                    {t("watchlists:outputs.provenanceLabel", "Provenance")}
+                  </div>
+                  <div className="text-xs text-text-muted">
+                    {t(
+                      "watchlists:outputs.provenanceDescription",
+                      "Monitor #{{job}} • Run #{{run}} • Artifact: {{artifact}}",
+                      {
+                        job: output.job_id,
+                        run: output.run_id,
+                        artifact: artifactLabel
+                      }
+                    )}
+                  </div>
                 </div>
               )}
               {deliveryStatuses.length > 0 && (

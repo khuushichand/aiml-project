@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+from tldw_Server_API.tests.Audio.ws_test_helpers import ws_session_or_skip
 
 
 @pytest.mark.asyncio
@@ -31,7 +32,7 @@ async def test_audio_ws_idle_timeout_increments_metric(monkeypatch):
             pytest.skip("audio WebSocket endpoint not available in this build")
 
         # Let idle loop trigger on the server
-        with ws:
+        with ws_session_or_skip(ws):
             time.sleep(0.25)
             # The server should have closed the socket by now due to idle
             # Client context exit will ignore closure exceptions

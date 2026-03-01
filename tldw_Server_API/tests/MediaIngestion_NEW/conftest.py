@@ -398,7 +398,7 @@ def valid_validation_result():
     return ValidationResult(
         is_valid=True,
         issues=[],
-        file_path=Path("/tmp/valid_file.txt"),
+        file_path=Path("/tmp/valid_file.txt"),  # nosec B108
         detected_mime_type="text/plain",
         detected_extension=".txt"
     )
@@ -409,7 +409,7 @@ def invalid_validation_result():
     return ValidationResult(
         is_valid=False,
         issues=["File type not allowed", "File size exceeds limit"],
-        file_path=Path("/tmp/invalid_file.exe"),
+        file_path=Path("/tmp/invalid_file.exe"),  # nosec B108
         detected_mime_type="application/x-executable",
         detected_extension=".exe"
     )

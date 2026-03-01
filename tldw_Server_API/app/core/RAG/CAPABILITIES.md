@@ -41,7 +41,11 @@ curl -s "http://127.0.0.1:8000/api/v1/rag/capabilities" | jq
       "styles": ["APA", "MLA", "Chicago", "Harvard", "IEEE"],
       "include_page_numbers": true
     },
-    "answer_generation": {"supported": true, "configurable_model": true},
+    "answer_generation": {
+      "supported": true,
+      "configurable_model": true,
+      "pre_retrieval_clarification": true
+    },
     "reranking": {
       "supported": true,
       "strategies": ["flashrank", "cross_encoder", "hybrid", "llama_cpp"],
@@ -74,7 +78,12 @@ curl -s "http://127.0.0.1:8000/api/v1/rag/capabilities" | jq
     "monitoring": {"supported": true, "observability": true, "trace_id": true},
     "analytics": {"supported": true},
     "batch_processing": {"supported": true, "concurrent": true, "defaults": {"max_concurrent": 5}, "limits": {"max_concurrent_max": 20}},
-    "resilience": {"supported": true, "retries": true, "circuit_breakers": true},
+    "resilience": {
+      "supported": true,
+      "retries": true,
+      "circuit_breakers": true,
+      "research_action_dedup": true
+    },
     "streaming": {"supported": true, "endpoint": "/api/v1/rag/search/stream", "media_type": "application/x-ndjson", "events": ["delta", "claims_overlay", "final_claims"]},
     "quick_wins": {"supported": true, "parameters": ["highlight_results", "highlight_query_terms", "track_cost", "debug_mode"]},
     "user_context": {"supported": true, "fields": ["user_id", "session_id"]}

@@ -4,6 +4,7 @@
  */
 
 import { createWithEqualityFn } from "zustand/traditional"
+import type { WatchlistsOverviewHealthModel } from "@/services/watchlists-overview"
 import type {
   WatchlistGroup,
   WatchlistJob,
@@ -82,6 +83,18 @@ interface SettingsState {
   settings: WatchlistSettings | null
   settingsLoading: boolean
   settingsError: string | null
+}
+
+interface ItemsTriageState {
+  itemsSelectedSourceId: number | null
+  itemsStatusFilter: string
+  itemsSmartFilter: string
+  itemsSearchQuery: string
+}
+
+interface OverviewHealthState {
+  overviewHealth: WatchlistsOverviewHealthModel | null
+  overviewHealthUpdatedAt: string | null
 }
 
 interface UIState {
@@ -171,6 +184,20 @@ interface SettingsActions {
   setSettingsError: (error: string | null) => void
 }
 
+interface ItemsTriageActions {
+  setItemsSelectedSourceId: (sourceId: number | null) => void
+  setItemsStatusFilter: (status: string) => void
+  setItemsSmartFilter: (smartFilter: string) => void
+  setItemsSearchQuery: (query: string) => void
+}
+
+interface OverviewHealthActions {
+  setOverviewHealth: (
+    health: WatchlistsOverviewHealthModel | null,
+    updatedAt?: string | null
+  ) => void
+}
+
 interface UIActions {
   setActiveTab: (tab: WatchlistTab) => void
   openSourceForm: (editId?: number | null) => void
@@ -196,6 +223,8 @@ export type WatchlistsState = SourcesState &
   OutputsState &
   TemplatesState &
   SettingsState &
+  ItemsTriageState &
+  OverviewHealthState &
   UIState &
   SourcesActions &
   JobsActions &
@@ -203,6 +232,8 @@ export type WatchlistsState = SourcesState &
   OutputsActions &
   TemplatesActions &
   SettingsActions &
+  ItemsTriageActions &
+  OverviewHealthActions &
   UIActions
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -273,6 +304,18 @@ const initialSettingsState: SettingsState = {
   settingsError: null
 }
 
+const initialItemsTriageState: ItemsTriageState = {
+  itemsSelectedSourceId: null,
+  itemsStatusFilter: "all",
+  itemsSmartFilter: "all",
+  itemsSearchQuery: ""
+}
+
+const initialOverviewHealthState: OverviewHealthState = {
+  overviewHealth: null,
+  overviewHealthUpdatedAt: null
+}
+
 const initialUIState: UIState = {
   activeTab: "overview",
   sourceFormOpen: false,
@@ -292,6 +335,8 @@ const initialState = {
   ...initialOutputsState,
   ...initialTemplatesState,
   ...initialSettingsState,
+  ...initialItemsTriageState,
+  ...initialOverviewHealthState,
   ...initialUIState
 }
 
@@ -446,6 +491,15 @@ export const useWatchlistsStore = createWithEqualityFn<WatchlistsState>()((set) 
   setSettings: (settings) => set({ settings }),
   setSettingsLoading: (settingsLoading) => set({ settingsLoading }),
   setSettingsError: (settingsError) => set({ settingsError }),
+
+  setItemsSelectedSourceId: (itemsSelectedSourceId) =>
+    set({ itemsSelectedSourceId }),
+  setItemsStatusFilter: (itemsStatusFilter) => set({ itemsStatusFilter }),
+  setItemsSmartFilter: (itemsSmartFilter) => set({ itemsSmartFilter }),
+  setItemsSearchQuery: (itemsSearchQuery) => set({ itemsSearchQuery }),
+
+  setOverviewHealth: (overviewHealth, overviewHealthUpdatedAt = null) =>
+    set({ overviewHealth, overviewHealthUpdatedAt }),
 
   // ─────────────────────────────────────────────────────────────────────────
   // UI Actions

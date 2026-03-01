@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   deleteWatchlistSourceMock: vi.fn(),
   restoreWatchlistSourceMock: vi.fn(),
   updateWatchlistSourceMock: vi.fn(),
+  tableColumnsRef: { current: [] as Array<Record<string, unknown>> },
   storeStateRef: { current: {} as Record<string, any> },
   tMock: (key: string, defaultValue?: unknown, options?: Record<string, unknown>) => {
     if (typeof defaultValue !== "string") return key
@@ -30,7 +31,7 @@ vi.mock("react-i18next", () => ({
 }))
 
 vi.mock("antd", () => {
-  const Button = ({ children, onClick, loading, ...rest }: any) => (
+  const Button = ({ children, onClick, loading, danger: _danger, ...rest }: any) => (
     <button
       type="button"
       disabled={Boolean(loading)}
@@ -86,8 +87,30 @@ vi.mock("antd", () => {
     Modal: { confirm: vi.fn() },
     Select,
     Space: ({ children }: any) => <>{children}</>,
-    Switch: () => <button type="button">switch</button>,
-    Table: () => <div data-testid="sources-table" />,
+    Switch: ({ "aria-label": ariaLabel }: any) => (
+      <button type="button" aria-label={ariaLabel}>
+        switch
+      </button>
+    ),
+    Table: ({ dataSource = [], columns = [], "aria-label": ariaLabel }: any) => {
+      mocks.tableColumnsRef.current = Array.isArray(columns) ? columns : []
+      return (
+        <table data-testid="sources-table" role="table" aria-label={ariaLabel}>
+          <tbody>
+            {dataSource.map((record: any, rowIndex: number) => (
+              <tr key={record.id ?? rowIndex}>
+                {columns.map((column: any, columnIndex: number) => {
+                  const key = String(column.key ?? column.dataIndex ?? columnIndex)
+                  const value = column.dataIndex ? record[column.dataIndex] : undefined
+                  const content = column.render ? column.render(value, record, rowIndex) : value
+                  return <td key={key}>{content}</td>
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )
+    },
     Tag: ({ children }: any) => <span>{children}</span>,
     Tooltip: ({ children }: any) => <>{children}</>,
     message: {
@@ -180,6 +203,7 @@ describe("SourcesTab load-error retry", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.storeStateRef.current = baseState()
+    mocks.tableColumnsRef.current = []
     mocks.fetchWatchlistTagsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.fetchWatchlistGroupsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.fetchWatchlistJobsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
@@ -208,6 +232,39 @@ describe("SourcesTab load-error retry", () => {
 
     await waitFor(() => {
       expect(mocks.fetchWatchlistSourcesMock).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it("labels the feeds table and exposes explicit active-state text", async () => {
+    const sourceRecord = {
+      id: 44,
+      name: "AI Feed",
+      url: "https://example.com/feed.xml",
+      source_type: "rss",
+      active: true,
+      tags: [],
+      group_ids: [],
+      created_at: "2026-02-18T00:00:00Z",
+      last_scraped_at: null,
+      status: "healthy"
+    }
+    mocks.storeStateRef.current = baseState({
+      sources: [sourceRecord],
+      sourcesTotal: 1
+    })
+
+    mocks.fetchWatchlistSourcesMock.mockResolvedValue({
+      items: [sourceRecord],
+      total: 1,
+      has_more: false
+    })
+
+    render(<SourcesTab />)
+
+    await waitFor(() => {
+      expect(screen.getByRole("table", { name: "Feeds table" })).toBeInTheDocument()
+      expect(screen.getByText("Enabled")).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: "Toggle active for AI Feed" })).toBeInTheDocument()
     })
   })
 })

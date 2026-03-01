@@ -10,7 +10,7 @@ import re
 from collections import Counter
 from typing import Any, NoReturn
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse
 from loguru import logger
 
@@ -19,6 +19,12 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers_async
 from tldw_Server_API.app.api.v1.schemas.writing_schemas import (
     WritingCapabilitiesResponse,
+    WritingContextCapabilities,
+    WritingDefaultTemplate,
+    WritingDefaultTheme,
+    WritingDefaultsResponse,
+    WritingDetokenizeRequest,
+    WritingDetokenizeResponse,
     WritingProviderCapabilities,
     WritingRequestedCapabilities,
     WritingServerCapabilities,
@@ -28,6 +34,13 @@ from tldw_Server_API.app.api.v1.schemas.writing_schemas import (
     WritingSessionListResponse,
     WritingSessionResponse,
     WritingSessionUpdate,
+    WritingSnapshotCounts,
+    WritingSnapshotExportResponse,
+    WritingSnapshotImportRequest,
+    WritingSnapshotImportResponse,
+    WritingSnapshotSessionItem,
+    WritingSnapshotTemplateItem,
+    WritingSnapshotThemeItem,
     WritingTemplateCreate,
     WritingTemplateListResponse,
     WritingTemplateResponse,
@@ -41,6 +54,7 @@ from tldw_Server_API.app.api.v1.schemas.writing_schemas import (
     WritingTokenizeMeta,
     WritingTokenizeRequest,
     WritingTokenizeResponse,
+    WritingTokenProbabilitiesCapabilities,
     WritingTokenizerSupport,
     WritingVersionResponse,
     WritingWordcloudMeta,
@@ -58,8 +72,21 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.exceptions import TokenizerUnavailable
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import get_allowed_fields
+from tldw_Server_API.app.core.LLM_Calls.extra_body_compat_catalog import (
+    get_model_extra_body_compat,
+    get_provider_extra_body_compat,
+)
+from tldw_Server_API.app.core.LLM_Calls.tokenizer_resolver import (
+    ProviderNativeTokenizerHTTPAdapter as _SharedProviderNativeTokenizerHTTPAdapter,
+    normalize_provider_for_tokenizer as _shared_normalize_provider_for_tokenizer,
+    resolve_provider_native_tokenizer as _resolve_provider_native_tokenizer_shared,
+    resolve_tiktoken_encoding as _resolve_tiktoken_encoding_shared,
+    resolve_tokenizer as _resolve_tokenizer_shared,
+    strict_token_counting_enabled as _strict_token_counting_enabled_shared,
+)
 from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter()
@@ -86,6 +113,8 @@ _WRITING_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     json.JSONDecodeError,
 )
+
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 async def _enforce_rate_limit(rate_limiter: RateLimiter, user_id: int, scope: str) -> None:
@@ -140,31 +169,208 @@ def _handle_db_errors(exc: Exception, entity_label: str) -> NoReturn:
     ) from exc
 
 
-@functools.lru_cache(maxsize=128)
 def _resolve_tiktoken_encoding(model: str) -> Any:
     """Resolve a tiktoken encoding for the given model name."""
-    try:
-        import tiktoken  # type: ignore
-    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - dependency missing
-        raise TokenizerUnavailable("Tokenizer library unavailable") from exc
-    try:
-        return tiktoken.encoding_for_model(model)
-    except KeyError as exc:
-        raise TokenizerUnavailable("Tokenizer not available for provider/model") from exc
+    return _resolve_tiktoken_encoding_shared(model)
 
 
-def _resolve_tokenizer(provider: str, model: str) -> tuple[Any, str]:
-    """Resolve a tokenizer using tiktoken (OpenAI-style model mappings only).
+def _normalize_provider_for_tokenizer(provider: str) -> str:
+    return _shared_normalize_provider_for_tokenizer(provider)
 
-    Provider is validated but not used for resolution; non-OpenAI models may be unavailable.
-    """
+
+_ProviderNativeTokenizerHTTPAdapter = _SharedProviderNativeTokenizerHTTPAdapter
+
+
+def _strict_token_counting_enabled() -> bool:
+    return _strict_token_counting_enabled_shared(default=False)
+
+
+def _resolve_provider_native_tokenizer(
+    provider: str,
+    model: str,
+) -> tuple[Any, str, str, str, bool]:
+    resolution = _resolve_provider_native_tokenizer_shared(
+        provider,
+        model,
+        strict_mode_effective=_strict_token_counting_enabled(),
+        config_loader=load_comprehensive_config,
+        adapter_cls=_ProviderNativeTokenizerHTTPAdapter,
+        runtime_probe_exact=True,
+        runtime_probe_timeout_seconds=2.0,
+        runtime_probe_text="",
+    )
+    if not resolution.available or resolution.encoding is None:
+        raise TokenizerUnavailable(resolution.error or "Provider-native tokenizer is not configured for provider")
+    return (
+        resolution.encoding,
+        resolution.tokenizer or "unknown",
+        resolution.kind or "provider-native",
+        resolution.source or "provider-native.tokenize",
+        bool(resolution.detokenize_available),
+    )
+
+
+def _resolve_tokenizer(provider: str, model: str) -> tuple[Any, str, str, str, bool, str, bool]:
+    """Resolve tokenizer metadata via shared resolver with compatibility overrides."""
     if not provider or not provider.strip():
         raise TokenizerUnavailable("Provider is required")
     if not model or not model.strip():
         raise TokenizerUnavailable("Model is required")
-    encoding = _resolve_tiktoken_encoding(model.strip())
-    tokenizer_name = getattr(encoding, "name", "unknown")
-    return encoding, f"tiktoken:{tokenizer_name}"
+
+    strict_mode_effective = _strict_token_counting_enabled()
+    normalized_provider = _normalize_provider_for_tokenizer(provider)
+    normalized_model = model.strip()
+
+    # Keep local wrapper path first for test monkeypatch compatibility.
+    if normalized_provider != "mlx":
+        try:
+            encoding, tokenizer_name, tokenizer_kind, tokenizer_source, detok_available = (
+                _resolve_provider_native_tokenizer(normalized_provider, normalized_model)
+            )
+            # Defensive runtime probe so local monkeypatch paths cannot claim exactness when
+            # the underlying provider-native endpoint is unavailable.
+            if tokenizer_kind in {"provider-native", "provider-native-count"}:
+                _tokenizer_count(encoding, "")
+            return (
+                encoding,
+                tokenizer_name,
+                tokenizer_kind,
+                tokenizer_source,
+                detok_available,
+                "exact",
+                strict_mode_effective,
+            )
+        except TokenizerUnavailable:
+            pass
+
+    resolution = _resolve_tokenizer_shared(
+        provider,
+        model,
+        strict_mode_effective=strict_mode_effective,
+        config_loader=load_comprehensive_config,
+        adapter_cls=_ProviderNativeTokenizerHTTPAdapter,
+        runtime_probe_exact=True,
+        runtime_probe_timeout_seconds=2.0,
+        runtime_probe_text="",
+    )
+    if not resolution.available or resolution.encoding is None:
+        raise TokenizerUnavailable(resolution.error or "Tokenizer not available for provider/model")
+    return (
+        resolution.encoding,
+        resolution.tokenizer or "unknown",
+        resolution.kind or "tiktoken",
+        resolution.source or "tiktoken.encoding_for_model",
+        bool(resolution.detokenize_available),
+        resolution.count_accuracy or "unavailable",
+        bool(resolution.strict_mode_effective),
+    )
+
+
+def _resolve_tokenizer_details(
+    provider: str,
+    model: str,
+) -> tuple[Any, str, str, str, bool, str, bool]:
+    """Resolve tokenizer plus compatibility metadata.
+
+    Keeps backward compatibility with tests that monkeypatch `_resolve_tokenizer`
+    to return a 2-tuple `(encoding, tokenizer_name)`.
+    """
+    resolved = _resolve_tokenizer(provider, model)
+    if not isinstance(resolved, tuple) or len(resolved) < 2:
+        raise TokenizerUnavailable("Tokenizer resolver returned invalid payload")
+
+    encoding = resolved[0]
+    tokenizer_name = str(resolved[1])
+    tokenizer_kind = "tiktoken"
+    tokenizer_source = "tiktoken.encoding_for_model"
+    detokenize_available = True
+    count_accuracy = "unavailable"
+    strict_mode_effective = _strict_token_counting_enabled()
+
+    if len(resolved) >= 3 and isinstance(resolved[2], str) and resolved[2].strip():
+        tokenizer_kind = resolved[2].strip()
+    if len(resolved) >= 4 and isinstance(resolved[3], str) and resolved[3].strip():
+        tokenizer_source = resolved[3].strip()
+    if len(resolved) >= 5:
+        detokenize_available = bool(resolved[4])
+    if len(resolved) >= 6 and isinstance(resolved[5], str) and resolved[5].strip():
+        count_accuracy = resolved[5].strip()
+    elif tokenizer_kind in {"provider-native", "provider-native-count"}:
+        count_accuracy = "exact"
+    if len(resolved) >= 7:
+        strict_mode_effective = bool(resolved[6])
+    if count_accuracy not in {"exact", "unavailable"}:
+        count_accuracy = "unavailable"
+
+    return (
+        encoding,
+        tokenizer_name,
+        tokenizer_kind,
+        tokenizer_source,
+        detokenize_available,
+        count_accuracy,
+        strict_mode_effective,
+    )
+
+
+def _tokenizer_encode(tokenizer: Any, text: str) -> list[int]:
+    encode_fn = getattr(tokenizer, "encode", None)
+    if not callable(encode_fn):
+        raise TokenizerUnavailable("Tokenize not available for provider/model")
+    try:
+        encoded = encode_fn(text, disallowed_special=())
+    except TypeError:
+        try:
+            encoded = encode_fn(text)
+        except Exception as exc:
+            raise TokenizerUnavailable(f"Unable to tokenize text: {exc}") from exc
+    except Exception as exc:
+        raise TokenizerUnavailable(f"Unable to tokenize text: {exc}") from exc
+    if not isinstance(encoded, list):
+        try:
+            encoded = list(encoded)
+        except Exception as exc:
+            raise TokenizerUnavailable("Tokenizer returned non-iterable token ids") from exc
+    try:
+        return [int(token_id) for token_id in encoded]
+    except Exception as exc:
+        raise TokenizerUnavailable("Tokenizer returned invalid token ids") from exc
+
+
+def _tokenizer_decode(tokenizer: Any, token_ids: list[int]) -> str:
+    decode_fn = getattr(tokenizer, "decode", None)
+    if not callable(decode_fn):
+        raise TokenizerUnavailable("Detokenize not available for provider/model")
+    try:
+        decoded = decode_fn(token_ids)
+    except Exception as exc:
+        raise TokenizerUnavailable(f"Unable to detokenize ids: {exc}") from exc
+    if not isinstance(decoded, str):
+        raise TokenizerUnavailable("Tokenizer returned invalid decoded text")
+    return decoded
+
+
+def _tokenizer_decode_single(tokenizer: Any, token_id: int) -> str:
+    return _tokenizer_decode(tokenizer, [int(token_id)])
+
+
+def _tokenizer_count(tokenizer: Any, text: str) -> int:
+    count_fn = getattr(tokenizer, "count_tokens", None)
+    if callable(count_fn):
+        try:
+            counted = count_fn(text)
+        except Exception as exc:
+            raise TokenizerUnavailable(f"Unable to count tokens: {exc}") from exc
+        if isinstance(counted, bool):
+            raise TokenizerUnavailable("Tokenizer count returned invalid payload")
+        if isinstance(counted, (int, float)):
+            token_count = int(counted)
+            if token_count < 0:
+                raise TokenizerUnavailable("Tokenizer count returned invalid payload")
+            return token_count
+        raise TokenizerUnavailable("Tokenizer count returned invalid payload")
+
+    return len(_tokenizer_encode(tokenizer, text))
 
 
 def _provider_features(provider: str) -> dict[str, bool]:
@@ -198,19 +404,181 @@ def _coerce_model_name(model: Any) -> str | None:
     return None
 
 
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUE_VALUES
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def _runtime_context() -> dict[str, Any]:
+    strict_openai_compat = False
+    try:
+        config_parser = load_comprehensive_config()
+        if config_parser.has_section("Local-API") and config_parser.has_option("Local-API", "strict_openai_compat"):
+            strict_openai_compat = _truthy(
+                config_parser.get("Local-API", "strict_openai_compat", fallback="false")
+            )
+    except Exception:  # noqa: BLE001 - capabilities metadata should fail open
+        strict_openai_compat = False
+
+    env_override = os.getenv("LOCAL_LLM_STRICT_OPENAI_COMPAT")
+    if env_override is not None:
+        strict_openai_compat = _truthy(env_override)
+
+    return {"strict_openai_compat": strict_openai_compat}
+
+
+def _fallback_extra_body_compat() -> dict[str, Any]:
+    return {
+        "supported": False,
+        "effective_reason": "unsupported for deployment/runtime configuration",
+        "known_params": [],
+        "param_groups": [],
+        "notes": "No extra_body compatibility metadata registered for this provider/model.",
+        "example": {"extra_body": {}},
+        "source": "catalog+runtime",
+    }
+
+
+def _safe_provider_extra_body_compat(provider: str, runtime_context: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return get_provider_extra_body_compat(provider, runtime_context=runtime_context)
+    except Exception:  # noqa: BLE001 - capabilities metadata should fail open
+        return _fallback_extra_body_compat()
+
+
+def _safe_model_extra_body_compat(provider: str, model: str, runtime_context: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return get_model_extra_body_compat(provider, model, runtime_context=runtime_context)
+    except Exception:  # noqa: BLE001 - capabilities metadata should fail open
+        return _fallback_extra_body_compat()
+
+
 def _normalize_theme_response(theme: dict[str, Any]) -> dict[str, Any]:
     """Normalize DB theme dict to API response format."""
     theme["order"] = theme.pop("order_index", 0)
     return theme
 
 
+def _list_all_writing_sessions(db: CharactersRAGDB, *, batch_size: int = 500) -> list[dict[str, Any]]:
+    sessions: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        batch = db.list_writing_sessions(limit=batch_size, offset=offset)
+        if not batch:
+            break
+        sessions.extend(batch)
+        if len(batch) < batch_size:
+            break
+        offset += batch_size
+    return sessions
+
+
+def _list_all_writing_templates(db: CharactersRAGDB, *, batch_size: int = 500) -> list[dict[str, Any]]:
+    templates: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        batch = db.list_writing_templates(limit=batch_size, offset=offset)
+        if not batch:
+            break
+        templates.extend(batch)
+        if len(batch) < batch_size:
+            break
+        offset += batch_size
+    return templates
+
+
+def _list_all_writing_themes(db: CharactersRAGDB, *, batch_size: int = 500) -> list[dict[str, Any]]:
+    themes: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        batch = db.list_writing_themes(limit=batch_size, offset=offset)
+        if not batch:
+            break
+        themes.extend(batch)
+        if len(batch) < batch_size:
+            break
+        offset += batch_size
+    return themes
+
+
+def _restore_soft_deleted_writing_session(
+    db: CharactersRAGDB,
+    *,
+    session_id: str,
+    name: str,
+    payload: dict[str, Any],
+    schema_version: int,
+    version_parent_id: str | None,
+) -> None:
+    """Restore a soft-deleted writing session while preserving its ID."""
+    existing = db.get_writing_session(session_id, include_deleted=True)
+    if not existing:
+        raise ConflictError(
+            f"Session with ID '{session_id}' already exists.",
+            entity="writing_sessions",
+            entity_id=session_id,
+        )
+    payload_json = json.dumps(payload, ensure_ascii=True)
+    next_version = int(existing.get("version") or 1) + 1
+    db.execute_query(
+        """
+        UPDATE writing_sessions
+           SET name = ?,
+               payload_json = ?,
+               schema_version = ?,
+               version_parent_id = ?,
+               deleted = 0,
+               last_modified = CURRENT_TIMESTAMP,
+               version = ?,
+               client_id = ?
+         WHERE id = ?
+        """,
+        (
+            name,
+            payload_json,
+            int(schema_version),
+            version_parent_id,
+            next_version,
+            db.client_id,
+            session_id,
+        ),
+        commit=True,
+    )
+
+
 def _tokenizer_support(provider: str, model: str) -> WritingTokenizerSupport:
     """Build tokenizer support metadata for a provider/model pair."""
     try:
-        _, tokenizer_name = _resolve_tokenizer(provider, model)
-        return WritingTokenizerSupport(available=True, tokenizer=tokenizer_name)
+        (
+            _encoding,
+            tokenizer_name,
+            tokenizer_kind,
+            tokenizer_source,
+            detokenize_available,
+            count_accuracy,
+            strict_mode_effective,
+        ) = _resolve_tokenizer_details(provider, model)
+        return WritingTokenizerSupport(
+            available=True,
+            tokenizer=tokenizer_name,
+            kind=tokenizer_kind,
+            source=tokenizer_source,
+            detokenize=detokenize_available,
+            count_accuracy=count_accuracy,
+            strict_mode_effective=strict_mode_effective,
+        )
     except TokenizerUnavailable as exc:
-        return WritingTokenizerSupport(available=False, error=str(exc))
+        return WritingTokenizerSupport(
+            available=False,
+            count_accuracy="unavailable",
+            strict_mode_effective=_strict_token_counting_enabled(),
+            error=str(exc),
+        )
 
 
 WORDCLOUD_ALGO_VERSION = 1
@@ -346,6 +714,26 @@ DEFAULT_WORDCLOUD_STOPWORDS = {
     "yourself",
     "yourselves",
 }
+
+DEFAULT_WRITING_TEMPLATE_CATALOG: list[WritingDefaultTemplate] = [
+    WritingDefaultTemplate(
+        name="default",
+        payload={},
+        schema_version=1,
+        is_default=True,
+    )
+]
+
+DEFAULT_WRITING_THEME_CATALOG: list[WritingDefaultTheme] = [
+    WritingDefaultTheme(
+        name="default",
+        class_name="",
+        css="",
+        schema_version=1,
+        is_default=True,
+        order=0,
+    )
+]
 
 
 def _is_test_mode() -> bool:
@@ -500,13 +888,25 @@ async def get_writing_capabilities(
         sessions=True,
         templates=True,
         themes=True,
+        defaults_catalog=True,
+        snapshots=True,
         tokenize=True,
+        detokenize=True,
         token_count=True,
         wordclouds=True,
+        token_probabilities=WritingTokenProbabilitiesCapabilities(
+            inline_reroll=True,
+        ),
+        context=WritingContextCapabilities(
+            author_note_depth_mode="insertion",
+            context_order=True,
+            context_budget=True,
+        ),
     )
 
     providers_payload: list[WritingProviderCapabilities] | None = None
     default_provider = None
+    runtime_ctx = _runtime_context()
     if include_providers:
         providers_info = await get_configured_providers_async(include_deprecated=include_deprecated)
         default_provider = providers_info.get("default_provider")
@@ -524,6 +924,10 @@ async def get_writing_capabilities(
             tokenizers = None
             if models:
                 tokenizers = {model: _tokenizer_support(name, model) for model in models}
+            model_extra_body_compat = {
+                model_name: _safe_model_extra_body_compat(name, model_name, runtime_ctx)
+                for model_name in models
+            }
             providers_payload.append(
                 WritingProviderCapabilities(
                     name=name,
@@ -532,6 +936,8 @@ async def get_writing_capabilities(
                     supported_fields=supported_fields,
                     features=_provider_features(name),
                     tokenizers=tokenizers,
+                    extra_body_compat=_safe_provider_extra_body_compat(name, runtime_ctx),
+                    model_extra_body_compat=model_extra_body_compat or None,
                 )
             )
 
@@ -543,13 +949,30 @@ async def get_writing_capabilities(
         features = _provider_features(provider_name) if provider_name else {}
         tokenizer_available = False
         tokenizer_name = None
+        tokenizer_kind = None
+        tokenizer_source = None
+        detokenize_available = False
+        count_accuracy = "unavailable"
+        strict_mode_effective = _strict_token_counting_enabled()
         tokenization_error = None
+        extra_body_compat = None
         if provider_name and model_name:
             try:
-                _, tokenizer_name = _resolve_tokenizer(provider_name, model_name)
+                (
+                    _encoding,
+                    tokenizer_name,
+                    tokenizer_kind,
+                    tokenizer_source,
+                    detokenize_available,
+                    count_accuracy,
+                    strict_mode_effective,
+                ) = _resolve_tokenizer_details(provider_name, model_name)
                 tokenizer_available = True
             except TokenizerUnavailable as exc:
                 tokenization_error = str(exc)
+            extra_body_compat = _safe_model_extra_body_compat(provider_name, model_name, runtime_ctx)
+        elif provider_name:
+            extra_body_compat = _safe_provider_extra_body_compat(provider_name, runtime_ctx)
         requested = WritingRequestedCapabilities(
             provider=provider_name,
             model=model_name,
@@ -557,7 +980,13 @@ async def get_writing_capabilities(
             features=features,
             tokenizer_available=tokenizer_available,
             tokenizer=tokenizer_name,
+            tokenizer_kind=tokenizer_kind,
+            tokenizer_source=tokenizer_source,
+            detokenize_available=detokenize_available,
+            count_accuracy=count_accuracy,
+            strict_mode_effective=strict_mode_effective,
             tokenization_error=tokenization_error,
+            extra_body_compat=extra_body_compat,
         )
 
     return WritingCapabilitiesResponse(
@@ -566,6 +995,26 @@ async def get_writing_capabilities(
         default_provider=default_provider,
         providers=providers_payload,
         requested=requested,
+    )
+
+
+@router.get(
+    "/defaults",
+    response_model=WritingDefaultsResponse,
+    summary="Writing Playground default template/theme catalog",
+    tags=["writing"],
+)
+async def get_writing_defaults(
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("writing.defaults.get")),
+) -> WritingDefaultsResponse:
+    """Return server-advertised default templates/themes for restore actions."""
+    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.defaults.get")
+    return WritingDefaultsResponse(
+        version=1,
+        templates=DEFAULT_WRITING_TEMPLATE_CATALOG,
+        themes=DEFAULT_WRITING_THEME_CATALOG,
     )
 
 
@@ -699,6 +1148,7 @@ async def update_writing_session(
 @router.delete(
     "/sessions/{session_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a writing session",
     tags=["writing"],
 )
@@ -709,12 +1159,12 @@ async def delete_writing_session(
     rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.sessions.delete")),
-) -> None:
+) -> Response:
     """Soft-delete a writing session."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.sessions.delete")
     try:
         db.soft_delete_writing_session(session_id, expected_version)
-        return None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing session")
 
@@ -880,6 +1330,7 @@ async def update_writing_template(
 @router.delete(
     "/templates/{name}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a writing template",
     tags=["writing"],
 )
@@ -890,12 +1341,12 @@ async def delete_writing_template(
     rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.templates.delete")),
-) -> None:
+) -> Response:
     """Soft-delete a writing template."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.templates.delete")
     try:
         db.soft_delete_writing_template(name, expected_version)
-        return None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing template")
 
@@ -1043,6 +1494,7 @@ async def update_writing_theme(
 @router.delete(
     "/themes/{name}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a writing theme",
     tags=["writing"],
 )
@@ -1053,21 +1505,246 @@ async def delete_writing_theme(
     rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.themes.delete")),
-) -> None:
+) -> Response:
     """Soft-delete a writing theme."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.themes.delete")
     try:
         db.soft_delete_writing_theme(name, expected_version)
-        return None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing theme")
+
+
+@router.get(
+    "/snapshot/export",
+    response_model=WritingSnapshotExportResponse,
+    summary="Export writing snapshot",
+    tags=["writing"],
+)
+async def export_writing_snapshot(
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("writing.snapshot.export")),
+) -> WritingSnapshotExportResponse:
+    """Export sessions, templates, and themes as a single snapshot payload."""
+    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.snapshot.export")
+    try:
+        session_items: list[WritingSnapshotSessionItem] = []
+        for session_summary in _list_all_writing_sessions(db):
+            session_id = str(session_summary.get("id") or "").strip()
+            if not session_id:
+                continue
+            session = db.get_writing_session(session_id)
+            if not session:
+                continue
+            session_items.append(
+                WritingSnapshotSessionItem(
+                    id=session_id,
+                    name=str(session.get("name") or ""),
+                    payload=session.get("payload") or {},
+                    schema_version=int(session.get("schema_version") or 1),
+                    version_parent_id=session.get("version_parent_id"),
+                )
+            )
+
+        template_items = [
+            WritingSnapshotTemplateItem(
+                name=str(template.get("name") or ""),
+                payload=template.get("payload") or {},
+                schema_version=int(template.get("schema_version") or 1),
+                version_parent_id=template.get("version_parent_id"),
+                is_default=bool(template.get("is_default")),
+            )
+            for template in _list_all_writing_templates(db)
+        ]
+
+        theme_items: list[WritingSnapshotThemeItem] = []
+        for theme in _list_all_writing_themes(db):
+            normalized = dict(theme)
+            _normalize_theme_response(normalized)
+            theme_items.append(
+                WritingSnapshotThemeItem(
+                    name=str(normalized.get("name") or ""),
+                    class_name=normalized.get("class_name"),
+                    css=normalized.get("css"),
+                    schema_version=int(normalized.get("schema_version") or 1),
+                    version_parent_id=normalized.get("version_parent_id"),
+                    is_default=bool(normalized.get("is_default")),
+                    order=int(normalized.get("order") or 0),
+                )
+            )
+
+        counts = WritingSnapshotCounts(
+            sessions=len(session_items),
+            templates=len(template_items),
+            themes=len(theme_items),
+        )
+        return WritingSnapshotExportResponse(
+            version=1,
+            counts=counts,
+            sessions=session_items,
+            templates=template_items,
+            themes=theme_items,
+        )
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
+        _handle_db_errors(exc, "writing snapshot export")
+
+
+@router.post(
+    "/snapshot/import",
+    response_model=WritingSnapshotImportResponse,
+    summary="Import writing snapshot",
+    tags=["writing"],
+)
+async def import_writing_snapshot(
+    payload: WritingSnapshotImportRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("writing.snapshot.import")),
+) -> WritingSnapshotImportResponse:
+    """Import sessions, templates, and themes from a snapshot payload."""
+    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.snapshot.import")
+    try:
+        if payload.mode == "replace":
+            for session in _list_all_writing_sessions(db):
+                session_id = str(session.get("id") or "")
+                if not session_id:
+                    continue
+                db.soft_delete_writing_session(session_id, int(session.get("version") or 1))
+            for template in _list_all_writing_templates(db):
+                template_name = str(template.get("name") or "")
+                if not template_name:
+                    continue
+                db.soft_delete_writing_template(template_name, int(template.get("version") or 1))
+            for theme in _list_all_writing_themes(db):
+                theme_name = str(theme.get("name") or "")
+                if not theme_name:
+                    continue
+                db.soft_delete_writing_theme(theme_name, int(theme.get("version") or 1))
+
+        imported_sessions = 0
+        for session_item in payload.snapshot.sessions:
+            session_name = session_item.name.strip()
+            if not session_name:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Session name cannot be empty")
+            session_id = session_item.id.strip() if isinstance(session_item.id, str) and session_item.id.strip() else None
+            try:
+                db.add_writing_session(
+                    name=session_name,
+                    payload=session_item.payload,
+                    schema_version=int(session_item.schema_version),
+                    session_id=session_id,
+                    version_parent_id=session_item.version_parent_id,
+                )
+            except ConflictError:
+                if not session_id:
+                    raise
+                existing = db.get_writing_session(session_id, include_deleted=True)
+                if not existing:
+                    raise
+                if bool(existing.get("deleted")):
+                    _restore_soft_deleted_writing_session(
+                        db,
+                        session_id=session_id,
+                        name=session_name,
+                        payload=session_item.payload,
+                        schema_version=int(session_item.schema_version),
+                        version_parent_id=session_item.version_parent_id,
+                    )
+                else:
+                    db.update_writing_session(
+                        session_id,
+                        {
+                            "name": session_name,
+                            "payload": session_item.payload,
+                            "schema_version": int(session_item.schema_version),
+                            "version_parent_id": session_item.version_parent_id,
+                        },
+                        int(existing.get("version") or 1),
+                    )
+            imported_sessions += 1
+
+        imported_templates = 0
+        for template_item in payload.snapshot.templates:
+            template_name = template_item.name.strip()
+            if not template_name:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Template name cannot be empty")
+            try:
+                db.add_writing_template(
+                    name=template_name,
+                    payload=template_item.payload,
+                    schema_version=int(template_item.schema_version),
+                    version_parent_id=template_item.version_parent_id,
+                    is_default=bool(template_item.is_default),
+                )
+            except ConflictError:
+                existing = db.get_writing_template_by_name(template_name)
+                if not existing:
+                    raise
+                db.update_writing_template(
+                    template_name,
+                    {
+                        "payload": template_item.payload,
+                        "schema_version": int(template_item.schema_version),
+                        "version_parent_id": template_item.version_parent_id,
+                        "is_default": bool(template_item.is_default),
+                    },
+                    int(existing.get("version") or 1),
+                )
+            imported_templates += 1
+
+        imported_themes = 0
+        for theme_item in payload.snapshot.themes:
+            theme_name = theme_item.name.strip()
+            if not theme_name:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Theme name cannot be empty")
+            try:
+                db.add_writing_theme(
+                    name=theme_name,
+                    class_name=theme_item.class_name,
+                    css=theme_item.css,
+                    schema_version=int(theme_item.schema_version),
+                    version_parent_id=theme_item.version_parent_id,
+                    is_default=bool(theme_item.is_default),
+                    order_index=int(theme_item.order),
+                )
+            except ConflictError:
+                existing = db.get_writing_theme_by_name(theme_name)
+                if not existing:
+                    raise
+                db.update_writing_theme(
+                    theme_name,
+                    {
+                        "class_name": theme_item.class_name,
+                        "css": theme_item.css,
+                        "schema_version": int(theme_item.schema_version),
+                        "version_parent_id": theme_item.version_parent_id,
+                        "is_default": bool(theme_item.is_default),
+                        "order_index": int(theme_item.order),
+                    },
+                    int(existing.get("version") or 1),
+                )
+            imported_themes += 1
+
+        return WritingSnapshotImportResponse(
+            mode=payload.mode,
+            imported=WritingSnapshotCounts(
+                sessions=imported_sessions,
+                templates=imported_templates,
+                themes=imported_themes,
+            ),
+        )
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
+        _handle_db_errors(exc, "writing snapshot import")
 
 
 @router.post(
     "/tokenize",
     response_model=WritingTokenizeResponse,
     summary="Tokenize text for a provider/model",
-    description="Uses tiktoken encodings (OpenAI-style). Special tokens are allowed (disallowed_special=()).",
+    description="Uses provider-native tokenizers when available with tiktoken fallback. Special tokens are allowed for tiktoken paths (disallowed_special=()).",
     tags=["writing"],
 )
 async def tokenize_writing_text(
@@ -1082,17 +1759,43 @@ async def tokenize_writing_text(
     if payload.options is not None:
         include_strings = bool(payload.options.include_strings)
     try:
-        encoding, tokenizer_name = _resolve_tokenizer(payload.provider, payload.model)
+        (
+            encoding,
+            tokenizer_name,
+            tokenizer_kind,
+            tokenizer_source,
+            detokenize_available,
+            count_accuracy,
+            strict_mode_effective,
+        ) = _resolve_tokenizer_details(payload.provider, payload.model)
     except TokenizerUnavailable as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    token_ids = encoding.encode(payload.text, disallowed_special=())
+    if strict_mode_effective and count_accuracy != "exact":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Exact tokenizer unavailable for provider/model",
+        )
+    try:
+        token_ids = _tokenizer_encode(encoding, payload.text)
+    except TokenizerUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     token_strings = None
     if include_strings:
-        token_strings = [encoding.decode([token_id]) for token_id in token_ids]
+        try:
+            token_strings = [
+                _tokenizer_decode_single(encoding, token_id) for token_id in token_ids
+            ]
+        except TokenizerUnavailable as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     meta = WritingTokenizeMeta(
         provider=payload.provider,
         model=payload.model,
         tokenizer=tokenizer_name,
+        tokenizer_kind=tokenizer_kind,
+        tokenizer_source=tokenizer_source,
+        detokenize_available=detokenize_available,
+        count_accuracy=count_accuracy,
+        strict_mode_effective=strict_mode_effective,
         input_chars=len(payload.text),
         token_count=len(token_ids),
         warnings=[],
@@ -1101,10 +1804,80 @@ async def tokenize_writing_text(
 
 
 @router.post(
+    "/detokenize",
+    response_model=WritingDetokenizeResponse,
+    summary="Detokenize token IDs for a provider/model",
+    description="Decodes token IDs into text fragments using the provider/model tokenizer.",
+    tags=["writing"],
+)
+async def detokenize_writing_tokens(
+    payload: WritingDetokenizeRequest,
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("writing.tokenize")),
+) -> WritingDetokenizeResponse:
+    """Detokenize IDs for the requested provider/model."""
+    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.tokenize")
+    try:
+        (
+            encoding,
+            tokenizer_name,
+            tokenizer_kind,
+            tokenizer_source,
+            detokenize_available,
+            count_accuracy,
+            strict_mode_effective,
+        ) = _resolve_tokenizer_details(payload.provider, payload.model)
+    except TokenizerUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    if strict_mode_effective and count_accuracy != "exact":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Exact tokenizer unavailable for provider/model",
+        )
+
+    if not detokenize_available:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Detokenize not available for provider/model",
+        )
+
+    try:
+        normalized_ids = [int(token_id) for token_id in payload.ids]
+        token_strings = [_tokenizer_decode_single(encoding, token_id) for token_id in normalized_ids]
+        text = _tokenizer_decode(encoding, normalized_ids)
+    except TokenizerUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - invalid token id payloads
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unable to detokenize ids: {exc}",
+        ) from exc
+
+    meta = WritingTokenizeMeta(
+        provider=payload.provider,
+        model=payload.model,
+        tokenizer=tokenizer_name,
+        tokenizer_kind=tokenizer_kind,
+        tokenizer_source=tokenizer_source,
+        detokenize_available=detokenize_available,
+        count_accuracy=count_accuracy,
+        strict_mode_effective=strict_mode_effective,
+        input_chars=len(text),
+        token_count=len(normalized_ids),
+        warnings=[],
+    )
+    return WritingDetokenizeResponse(text=text, strings=token_strings, meta=meta)
+
+
+@router.post(
     "/token-count",
     response_model=WritingTokenCountResponse,
     summary="Count tokens for a provider/model",
-    description="Uses tiktoken encodings (OpenAI-style). Special tokens are allowed (disallowed_special=()).",
+    description="Uses provider-native tokenizers when available with tiktoken fallback. Special tokens are allowed for tiktoken paths (disallowed_special=()).",
     tags=["writing"],
 )
 async def count_writing_tokens(
@@ -1116,19 +1889,40 @@ async def count_writing_tokens(
     """Count tokens for the requested provider/model."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.token_count")
     try:
-        encoding, tokenizer_name = _resolve_tokenizer(payload.provider, payload.model)
+        (
+            encoding,
+            tokenizer_name,
+            tokenizer_kind,
+            tokenizer_source,
+            detokenize_available,
+            count_accuracy,
+            strict_mode_effective,
+        ) = _resolve_tokenizer_details(payload.provider, payload.model)
     except TokenizerUnavailable as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    token_ids = encoding.encode(payload.text, disallowed_special=())
+    if strict_mode_effective and count_accuracy != "exact":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Exact tokenizer unavailable for provider/model",
+        )
+    try:
+        token_count = _tokenizer_count(encoding, payload.text)
+    except TokenizerUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     meta = WritingTokenizeMeta(
         provider=payload.provider,
         model=payload.model,
         tokenizer=tokenizer_name,
+        tokenizer_kind=tokenizer_kind,
+        tokenizer_source=tokenizer_source,
+        detokenize_available=detokenize_available,
+        count_accuracy=count_accuracy,
+        strict_mode_effective=strict_mode_effective,
         input_chars=len(payload.text),
-        token_count=len(token_ids),
+        token_count=token_count,
         warnings=[],
     )
-    return WritingTokenCountResponse(count=len(token_ids), meta=meta)
+    return WritingTokenCountResponse(count=token_count, meta=meta)
 
 
 @router.post(

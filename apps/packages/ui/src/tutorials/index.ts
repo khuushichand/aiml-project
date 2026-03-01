@@ -23,3 +23,8 @@ export { workspacePlaygroundTutorials } from "./definitions/workspace-playground
 export { mediaTutorials } from "./definitions/media"
 export { knowledgeTutorials } from "./definitions/knowledge"
 export { charactersTutorials } from "./definitions/characters"
+export { promptsTutorials } from "./definitions/prompts"
+export { evaluationsTutorials } from "./definitions/evaluations"
+export { notesTutorials } from "./definitions/notes"
+export { flashcardsTutorials } from "./definitions/flashcards"
+export { worldBooksTutorials } from "./definitions/world-books"

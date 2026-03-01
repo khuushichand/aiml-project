@@ -8,12 +8,16 @@ the user might want to ask next. Inspired by Perplexica's suggestion agent.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    StructuredOutputParseError,
+    parse_structured_output,
+)
 
 # ---------------------------------------------------------------------------
 # Prompt templates
@@ -237,29 +241,19 @@ def _parse_suggestions(text: str, expected: int) -> list[str]:
     """Parse a JSON array of suggestion strings from LLM output."""
     text = text.strip()
 
-    # Strip markdown code fences
-    if text.startswith("```"):
-        lines = text.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        text = "\n".join(lines).strip()
-
-    # Try direct JSON parse
     try:
-        parsed = json.loads(text)
+        parsed = parse_structured_output(
+            text,
+            options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+        )
         if isinstance(parsed, list):
             return [str(s).strip() for s in parsed if isinstance(s, str) and s.strip()]
-    except json.JSONDecodeError:
+        if isinstance(parsed, dict):
+            wrapped = parsed.get("suggestions")
+            if isinstance(wrapped, list):
+                return [str(s).strip() for s in wrapped if isinstance(s, str) and s.strip()]
+    except StructuredOutputParseError:
         pass
-
-    # Try finding a JSON array in the text
-    match = re.search(r"\[.*\]", text, re.DOTALL)
-    if match:
-        try:
-            parsed = json.loads(match.group())
-            if isinstance(parsed, list):
-                return [str(s).strip() for s in parsed if isinstance(s, str) and s.strip()]
-        except json.JSONDecodeError:
-            pass
 
     # Try line-by-line extraction (numbered list)
     lines = [l.strip() for l in text.split("\n") if l.strip()]

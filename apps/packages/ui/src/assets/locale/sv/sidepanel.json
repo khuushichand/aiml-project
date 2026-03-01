@@ -200,5 +200,16 @@
       "html": "HTML",
       "xml": "XML"
     }
+  },
+  "persona": {
+    "unsavedStateDiscardPrompt": "Du har osparade ändringar i tillståndsdokumentet. Vill du kassera lokala utkast?",
+    "unsavedStateDiscardPromptConnect": "Du har osparade ändringar i tillståndsdokumentet. Vill du ansluta och kassera lokala utkast?",
+    "unsavedStateDiscardPromptDisconnect": "Du har osparade ändringar i tillståndsdokumentet. Vill du koppla från och kassera lokala utkast?",
+    "unsavedStateDiscardPromptReloadState": "Du har osparade ändringar i tillståndsdokumentet. Vill du läsa in tillstånd och kassera lokala utkast?",
+    "unsavedStateDiscardPromptPersonaSwitch": "Du har osparade ändringar i tillståndsdokumentet. Vill du byta persona och kassera lokala utkast?",
+    "unsavedStateDiscardPromptSessionSwitch": "Du har osparade ändringar i tillståndsdokumentet. Vill du byta session och kassera lokala utkast?",
+    "unsavedStateDiscardPromptRestoreState": "Du har osparade ändringar i tillståndsdokumentet. Vill du återställa den här tillståndsversionen och kassera lokala utkast?",
+    "unsavedStateDiscardPromptRouteTransition": "Du har osparade ändringar i tillståndsdokumentet. Vill du lämna den här sidan och kassera lokala utkast?",
+    "unsavedStateBeforeUnloadPrompt": "Du har osparade ändringar i tillståndsdokumentet. Vill du lämna den här sidan utan att spara?"
   }
 }

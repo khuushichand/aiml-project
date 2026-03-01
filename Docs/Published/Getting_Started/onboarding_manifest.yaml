@@ -1,0 +1,21 @@
+profiles:
+  local_single_user:
+    title: "Local single-user"
+    path: "Docs/Getting_Started/Profile_Local_Single_User.md"
+    published_path: "Getting_Started/Profile_Local_Single_User.md"
+    profile_type: "local"
+  docker_single_user:
+    title: "Docker single-user"
+    path: "Docs/Getting_Started/Profile_Docker_Single_User.md"
+    published_path: "Getting_Started/Profile_Docker_Single_User.md"
+    profile_type: "docker"
+  docker_multi_user_postgres:
+    title: "Docker multi-user + Postgres"
+    path: "Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md"
+    published_path: "Getting_Started/Profile_Docker_Multi_User_Postgres.md"
+    profile_type: "docker_postgres"
+  gpu_stt_addon:
+    title: "GPU/STT Add-on"
+    path: "Docs/Getting_Started/GPU_STT_Addon.md"
+    published_path: "Getting_Started/GPU_STT_Addon.md"
+    profile_type: "addon"

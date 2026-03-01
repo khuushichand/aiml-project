@@ -28,6 +28,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim_span
 from tldw_Server_API.app.core.Claims_Extraction.claims_clustering import rebuild_claim_clusters_embeddings
 from tldw_Server_API.app.core.Claims_Extraction.claims_embeddings import claim_embedding_id
 from tldw_Server_API.app.core.Claims_Extraction.claims_notifications import (
@@ -40,8 +41,13 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     record_claims_review_metrics,
     record_claims_webhook_delivery,
 )
-from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim_span
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import coerce_llm_response_text
+from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
+    resolve_claims_alignment_config,
+    resolve_claims_context_window_chars,
+    resolve_claims_extraction_passes,
+    resolve_claims_prompt_validation_config,
+)
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
@@ -94,6 +100,12 @@ _REVIEW_TRANSITIONS = {
 }
 _PLATFORM_ADMIN_ROLES = frozenset({"admin", "owner", "super_admin"})
 _ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+_CLAIMS_PROMPT_VALIDATION_MODES = frozenset({"off", "warning", "error"})
+_CLAIMS_ALIGNMENT_MODES = frozenset({"off", "exact", "fuzzy"})
+_CLAIMS_CONTEXT_WINDOW_CHARS_MAX = 20000
+_CLAIMS_EXTRACTION_PASSES_MAX = 10
+_TRUTHY_STRINGS = frozenset({"1", "true", "yes", "on", "enabled"})
+_FALSY_STRINGS = frozenset({"0", "false", "no", "off", "disabled"})
 
 
 def _normalized_claim_values(values: list[Any] | tuple[Any, ...] | set[Any] | None) -> set[str]:
@@ -102,6 +114,48 @@ def _normalized_claim_values(values: list[Any] | tuple[Any, ...] | set[Any] | No
         for value in (values or [])
         if str(value).strip()
     }
+
+
+def _normalize_setting_mode(value: Any, *, allowed: frozenset[str]) -> str | None:
+    try:
+        normalized = str(value).strip().lower()
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+        return None
+    if not normalized or normalized not in allowed:
+        return None
+    return normalized
+
+
+def _coerce_setting_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    try:
+        normalized = str(value).strip().lower()
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+        return bool(value)
+    if normalized in _TRUTHY_STRINGS:
+        return True
+    if normalized in _FALSY_STRINGS:
+        return False
+    return bool(value)
+
+
+def _parse_clamped_float(value: Any, *, minimum: float, maximum: float) -> float | None:
+    try:
+        parsed = float(value)
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+        return None
+    if math.isnan(parsed) or math.isinf(parsed):
+        return None
+    return max(minimum, min(maximum, parsed))
+
+
+def _parse_clamped_int(value: Any, *, minimum: int, maximum: int) -> int | None:
+    try:
+        parsed = int(value)
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+        return None
+    return max(minimum, min(maximum, parsed))
 
 
 def _principal_has_platform_admin_claims(principal: AuthPrincipal | None) -> bool:
@@ -122,9 +176,7 @@ def _legacy_user_has_platform_admin_claims(current_user: User | Any | None) -> b
     permissions = _normalized_claim_values(getattr(current_user, "permissions", None))
     if role in _PLATFORM_ADMIN_ROLES or roles & _PLATFORM_ADMIN_ROLES:
         return True
-    if permissions & _ADMIN_CLAIM_PERMISSIONS:
-        return True
-    return False
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 def _is_db_pool_object(db: Any) -> bool:
@@ -1100,6 +1152,19 @@ def _refresh_claim_embedding(
 
 
 def _claims_settings_snapshot() -> dict[str, Any]:
+    claims_prompt_validation_mode, claims_prompt_validation_strict = resolve_claims_prompt_validation_config(
+        settings,
+        default_mode="warning",
+        default_strict=False,
+    )
+    claims_alignment_mode, claims_alignment_threshold = resolve_claims_alignment_config(
+        settings,
+        default_mode="fuzzy",
+        default_threshold=0.75,
+    )
+    claims_context_window_chars = resolve_claims_context_window_chars(settings, default=0)
+    claims_extraction_passes = resolve_claims_extraction_passes(settings, default=1)
+
     return {
         "enable_ingestion_claims": bool(settings.get("ENABLE_INGESTION_CLAIMS", False)),
         "claim_extractor_mode": str(settings.get("CLAIM_EXTRACTOR_MODE", "heuristic")),
@@ -1113,8 +1178,12 @@ def _claims_settings_snapshot() -> dict[str, Any]:
         "claims_llm_temperature": float(settings.get("CLAIMS_LLM_TEMPERATURE", 0.1)),
         "claims_llm_model": str(settings.get("CLAIMS_LLM_MODEL", "")),
         "claims_json_parse_mode": str(settings.get("CLAIMS_JSON_PARSE_MODE", "lenient")),
-        "claims_alignment_mode": str(settings.get("CLAIMS_ALIGNMENT_MODE", "fuzzy")),
-        "claims_alignment_threshold": float(settings.get("CLAIMS_ALIGNMENT_THRESHOLD", 0.75)),
+        "claims_prompt_validation_mode": claims_prompt_validation_mode,
+        "claims_prompt_validation_strict": claims_prompt_validation_strict,
+        "claims_alignment_mode": claims_alignment_mode,
+        "claims_alignment_threshold": claims_alignment_threshold,
+        "claims_context_window_chars": claims_context_window_chars,
+        "claims_extraction_passes": claims_extraction_passes,
         "claims_rebuild_enabled": bool(settings.get("CLAIMS_REBUILD_ENABLED", False)),
         "claims_rebuild_interval_sec": int(settings.get("CLAIMS_REBUILD_INTERVAL_SEC", 3600)),
         "claims_rebuild_policy": str(settings.get("CLAIMS_REBUILD_POLICY", "missing")),
@@ -2037,10 +2106,44 @@ def update_claims_settings(
         updates["CLAIMS_LLM_MODEL"] = str(payload["claims_llm_model"])
     if payload.get("claims_json_parse_mode") is not None:
         updates["CLAIMS_JSON_PARSE_MODE"] = str(payload["claims_json_parse_mode"]).strip().lower()
+    if payload.get("claims_prompt_validation_mode") is not None:
+        mode = _normalize_setting_mode(
+            payload["claims_prompt_validation_mode"],
+            allowed=_CLAIMS_PROMPT_VALIDATION_MODES,
+        )
+        if mode is not None:
+            updates["CLAIMS_PROMPT_VALIDATION_MODE"] = mode
+    if payload.get("claims_prompt_validation_strict") is not None:
+        updates["CLAIMS_PROMPT_VALIDATION_STRICT"] = _coerce_setting_bool(
+            payload["claims_prompt_validation_strict"]
+        )
     if payload.get("claims_alignment_mode") is not None:
-        updates["CLAIMS_ALIGNMENT_MODE"] = str(payload["claims_alignment_mode"]).strip().lower()
+        mode = _normalize_setting_mode(
+            payload["claims_alignment_mode"],
+            allowed=_CLAIMS_ALIGNMENT_MODES,
+        )
+        if mode is not None:
+            updates["CLAIMS_ALIGNMENT_MODE"] = mode
     if payload.get("claims_alignment_threshold") is not None:
-        updates["CLAIMS_ALIGNMENT_THRESHOLD"] = float(payload["claims_alignment_threshold"])
+        threshold = _parse_clamped_float(payload["claims_alignment_threshold"], minimum=0.0, maximum=1.0)
+        if threshold is not None:
+            updates["CLAIMS_ALIGNMENT_THRESHOLD"] = threshold
+    if payload.get("claims_context_window_chars") is not None:
+        context_window_chars = _parse_clamped_int(
+            payload["claims_context_window_chars"],
+            minimum=0,
+            maximum=_CLAIMS_CONTEXT_WINDOW_CHARS_MAX,
+        )
+        if context_window_chars is not None:
+            updates["CLAIMS_CONTEXT_WINDOW_CHARS"] = context_window_chars
+    if payload.get("claims_extraction_passes") is not None:
+        extraction_passes = _parse_clamped_int(
+            payload["claims_extraction_passes"],
+            minimum=1,
+            maximum=_CLAIMS_EXTRACTION_PASSES_MAX,
+        )
+        if extraction_passes is not None:
+            updates["CLAIMS_EXTRACTION_PASSES"] = extraction_passes
     if payload.get("claims_rebuild_enabled") is not None:
         updates["CLAIMS_REBUILD_ENABLED"] = bool(payload["claims_rebuild_enabled"])
     if payload.get("claims_rebuild_interval_sec") is not None:

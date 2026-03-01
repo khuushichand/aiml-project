@@ -6,21 +6,29 @@ import {
   DatePicker,
   Button,
   Popconfirm,
-  Space
+  Space,
+  message
 } from "antd"
-import { Trash2, MoveRight } from "lucide-react"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { Trash2, Archive, Copy, Send } from "lucide-react"
 import dayjs from "dayjs"
 
-import type { Card, CardUpdate, ListWithCards, PriorityType } from "@/types/kanban"
+import type { Card, CardUpdate, ListWithCards, PriorityType, Comment } from "@/types/kanban"
+import { copyCard, listComments, createComment, generateClientId } from "@/services/kanban"
+import { LabelManager } from "./LabelManager"
+import { ChecklistSection } from "./ChecklistSection"
 
 interface CardDetailPanelProps {
   card: Card | null
+  boardId: number
   lists: ListWithCards[]
   open: boolean
   onClose: () => void
   onSave: (cardId: number, data: CardUpdate) => void
   onDelete: (cardId: number) => void
+  onArchive?: (cardId: number, cardTitle: string) => void
   onMove: (cardId: number, targetListId: number) => void
+  onCopied?: () => void
 }
 
 const PRIORITY_OPTIONS = [
@@ -32,22 +40,62 @@ const PRIORITY_OPTIONS = [
 
 export const CardDetailPanel = ({
   card,
+  boardId,
   lists,
   open,
   onClose,
   onSave,
   onDelete,
-  onMove
+  onArchive,
+  onMove,
+  onCopied
 }: CardDetailPanelProps) => {
+  const queryClient = useQueryClient()
+
   // Form state
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
   const [dueDate, setDueDate] = useState<dayjs.Dayjs | null>(null)
   const [priority, setPriority] = useState<PriorityType | null>(null)
-  const [moveToListId, setMoveToListId] = useState<number | null>(null)
+  const [newComment, setNewComment] = useState("")
 
   // Track if form is dirty
   const [isDirty, setIsDirty] = useState(false)
+
+  // Copy card mutation
+  const copyCardMutation = useMutation({
+    mutationFn: (cardId: number) => copyCard(cardId),
+    onSuccess: () => {
+      message.success("Card copied")
+      onCopied?.()
+    },
+    onError: () => {
+      message.error("Failed to copy card. Please try again.")
+    }
+  })
+
+  // Comments query
+  const { data: comments = [] } = useQuery({
+    queryKey: ["kanban-card-comments", card?.id],
+    queryFn: () => listComments(card!.id),
+    enabled: !!card?.id && open,
+    staleTime: 30 * 1000
+  })
+
+  // Add comment mutation
+  const addCommentMutation = useMutation({
+    mutationFn: ({ cardId, content }: { cardId: number; content: string }) =>
+      createComment(cardId, { content, client_id: generateClientId() }),
+    onSuccess: () => {
+      setNewComment("")
+      queryClient.invalidateQueries({
+        queryKey: ["kanban-card-comments", card?.id]
+      })
+    },
+    onError: () => {
+      message.error("Failed to add comment. Please try again.")
+    }
+  })
 
   // Sync form state when card changes
   useEffect(() => {
@@ -56,7 +104,6 @@ export const CardDetailPanel = ({
       setDescription(card.description || "")
       setDueDate(card.due_date ? dayjs(card.due_date) : null)
       setPriority(card.priority || null)
-      setMoveToListId(null)
       setIsDirty(false)
     }
   }, [card])
@@ -96,10 +143,10 @@ export const CardDetailPanel = ({
     setIsDirty(false)
   }
 
-  const handleMove = () => {
-    if (!card || !moveToListId || moveToListId === card.list_id) return
-    onMove(card.id, moveToListId)
-    setMoveToListId(null)
+  // Move-to-list: immediate move on select change
+  const handleMoveToList = (targetListId: number) => {
+    if (!card || targetListId === card.list_id) return
+    onMove(card.id, targetListId)
   }
 
   const currentList = lists.find((l) => l.id === card?.list_id)
@@ -116,25 +163,43 @@ export const CardDetailPanel = ({
         <div className="flex items-center justify-between">
           <span>Edit Card</span>
           {card && (
-            <Popconfirm
-              title="Delete this card?"
-              description="This action cannot be undone."
-              onConfirm={() => onDelete(card.id)}
-              okText="Delete"
-              okType="danger"
-            >
+            <Space size={4}>
               <Button
-                danger
                 type="text"
-                icon={<Trash2 className="w-4 h-4" />}
+                icon={<Copy className="w-4 h-4" />}
+                onClick={() => copyCardMutation.mutate(card.id)}
+                loading={copyCardMutation.isPending}
+                title="Copy card"
               />
-            </Popconfirm>
+              {onArchive && (
+                <Button
+                  type="text"
+                  icon={<Archive className="w-4 h-4" />}
+                  onClick={() => onArchive(card.id, card.title)}
+                  title="Archive card"
+                />
+              )}
+              <Popconfirm
+                title="Delete this card?"
+                description="This card will be removed. This cannot be undone."
+                onConfirm={() => onDelete(card.id)}
+                okText="Delete"
+                okType="danger"
+              >
+                <Button
+                  danger
+                  type="text"
+                  icon={<Trash2 className="w-4 h-4" />}
+                  title="Delete card"
+                />
+              </Popconfirm>
+            </Space>
           )}
         </div>
       }
       open={open}
       onClose={onClose}
-      size={400}
+      width={400}
       footer={
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
@@ -159,28 +224,44 @@ export const CardDetailPanel = ({
             />
           </div>
 
-          {/* Current list indicator and move option */}
+          {/* Current list indicator — immediate move on select */}
           <div>
             <label className="block text-sm font-medium mb-1">
               In list: <span className="font-normal">{currentList?.name}</span>
             </label>
-            <div className="flex gap-2">
-              <Select
-                placeholder="Move to..."
-                style={{ flex: 1 }}
-                value={moveToListId}
-                onChange={setMoveToListId}
-                options={listOptions}
-                allowClear
-              />
-              <Button
-                icon={<MoveRight className="w-4 h-4" />}
-                onClick={handleMove}
-                disabled={!moveToListId || moveToListId === card.list_id}
-              >
-                Move
-              </Button>
-            </div>
+            <Select
+              placeholder="Move to..."
+              style={{ width: "100%" }}
+              value={card.list_id}
+              onChange={handleMoveToList}
+              options={listOptions}
+            />
+          </div>
+
+          {/* Labels */}
+          <div>
+            <label className="block text-sm font-medium mb-1">Labels</label>
+            {card.labels && card.labels.length > 0 && (
+              <div className="flex gap-1 flex-wrap mb-2">
+                {card.labels.map((label) => (
+                  <span
+                    key={label.id}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs text-white"
+                    style={{ backgroundColor: label.color }}
+                  >
+                    {label.name}
+                  </span>
+                ))}
+              </div>
+            )}
+            <LabelManager
+              boardId={boardId}
+              cardId={card.id}
+              assignedLabelIds={(card.labels ?? []).map((l) => l.id)}
+              onChanged={() => {
+                // CardDetailPanel doesn't own the query, parent will invalidate
+              }}
+            />
           </div>
 
           {/* Description */}
@@ -242,10 +323,89 @@ export const CardDetailPanel = ({
             />
           </div>
 
+          {/* Checklists */}
+          <ChecklistSection cardId={card.id} />
+
+          {/* Comments */}
+          <div>
+            <label className="block text-sm font-medium mb-2">Comments</label>
+            {comments.length > 0 && (
+              <div className="space-y-2 mb-3 max-h-60 overflow-y-auto">
+                {comments.map((comment: Comment) => (
+                  <div
+                    key={comment.id}
+                    className="bg-surface rounded p-2 text-sm"
+                  >
+                    <div className="text-text-muted text-xs mb-1">
+                      {new Date(comment.created_at).toLocaleString(undefined, {
+                        year: "numeric",
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit"
+                      })}
+                    </div>
+                    <div className="whitespace-pre-wrap">{comment.content}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Input.TextArea
+                value={newComment}
+                onChange={(e) => setNewComment(e.target.value)}
+                placeholder="Add a comment..."
+                autoSize={{ minRows: 1, maxRows: 4 }}
+                onPressEnter={(e) => {
+                  if (e.shiftKey) return
+                  e.preventDefault()
+                  if (newComment.trim() && card) {
+                    addCommentMutation.mutate({
+                      cardId: card.id,
+                      content: newComment.trim()
+                    })
+                  }
+                }}
+              />
+              <Button
+                type="primary"
+                icon={<Send className="w-3.5 h-3.5" />}
+                onClick={() => {
+                  if (newComment.trim() && card) {
+                    addCommentMutation.mutate({
+                      cardId: card.id,
+                      content: newComment.trim()
+                    })
+                  }
+                }}
+                loading={addCommentMutation.isPending}
+                disabled={!newComment.trim()}
+              />
+            </div>
+          </div>
+
           {/* Metadata (read-only info) */}
           <div className="pt-4 border-t text-xs text-text-muted space-y-1">
-            <div>Created: {new Date(card.created_at).toLocaleString()}</div>
-            <div>Updated: {new Date(card.updated_at).toLocaleString()}</div>
+            <div>
+              Created:{" "}
+              {new Date(card.created_at).toLocaleString(undefined, {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit"
+              })}
+            </div>
+            <div>
+              Updated:{" "}
+              {new Date(card.updated_at).toLocaleString(undefined, {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit"
+              })}
+            </div>
             <div>ID: {card.id}</div>
           </div>
         </div>

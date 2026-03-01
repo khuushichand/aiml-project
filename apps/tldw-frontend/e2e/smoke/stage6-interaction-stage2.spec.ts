@@ -1,7 +1,7 @@
-import { test, expect, seedAuth } from "./smoke.setup"
+import { test, expect, seedAuth, SMOKE_LOAD_TIMEOUT } from "./smoke.setup"
 import type { Locator, Route } from "@playwright/test"
 
-const LOAD_TIMEOUT = 30_000
+const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT
 
 const fulfillJson = async (route: Route, status: number, data: unknown) => {
   await route.fulfill({

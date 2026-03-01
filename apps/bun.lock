@@ -129,6 +129,7 @@
         "@dnd-kit/helpers": "^0.1.21",
         "@dnd-kit/react": "^0.1.21",
         "@heroicons/react": "^2.2.0",
+        "@monaco-editor/react": "^4.6.0",
         "@mozilla/readability": "^0.6.0",
         "@plasmohq/storage": "^1.15.0",
         "@tanstack/react-query": "^5.0.0",

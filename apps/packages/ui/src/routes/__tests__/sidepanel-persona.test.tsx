@@ -9,6 +9,12 @@ const mocks = vi.hoisted(() => ({
     loading: false
   } as { capabilities: { hasPersona: boolean } | null; loading: boolean },
   navigate: vi.fn(),
+  useBlocker: vi.fn(),
+  blocker: {
+    state: "unblocked" as "unblocked" | "blocked" | "proceeding",
+    proceed: vi.fn(),
+    reset: vi.fn()
+  },
   getConfig: vi.fn(),
   fetchWithAuth: vi.fn(),
   buildPersonaWebSocketUrl: vi.fn(() => "ws://persona.test/api/v1/persona/stream")
@@ -28,7 +34,9 @@ vi.mock("react-router-dom", async () => {
   )
   return {
     ...actual,
-    useNavigate: () => mocks.navigate
+    useNavigate: () => mocks.navigate,
+    useBlocker: (...args: unknown[]) =>
+      (mocks.useBlocker as (...args: unknown[]) => unknown)(...args)
   }
 })
 
@@ -185,10 +193,16 @@ describe("SidepanelPersona", () => {
 
   beforeEach(() => {
     MockWebSocket.instances = []
+    window.localStorage.clear()
     mocks.isOnline = true
     mocks.capabilitiesState.capabilities = { hasPersona: true }
     mocks.capabilitiesState.loading = false
     mocks.navigate.mockReset()
+    mocks.useBlocker.mockReset()
+    mocks.blocker.state = "unblocked"
+    mocks.blocker.proceed.mockReset()
+    mocks.blocker.reset.mockReset()
+    mocks.useBlocker.mockImplementation(() => mocks.blocker)
     mocks.getConfig.mockReset()
     mocks.fetchWithAuth.mockReset()
     mocks.buildPersonaWebSocketUrl.mockReset()
@@ -227,6 +241,10 @@ describe("SidepanelPersona", () => {
 
       expect(screen.getByLabelText("Resume session")).toBeInTheDocument()
       expect(screen.getByTestId("persona-memory-toggle")).toBeInTheDocument()
+      expect(screen.getByTestId("persona-state-context-toggle")).toBeInTheDocument()
+      expect(
+        screen.getByTestId("persona-state-context-default-toggle")
+      ).toBeInTheDocument()
       expect(screen.getByLabelText("Memory results")).toBeInTheDocument()
       expect(screen.getByText("Memory results: 3")).toBeInTheDocument()
       expect(screen.queryByText("k=3")).not.toBeInTheDocument()
@@ -581,6 +599,7 @@ describe("SidepanelPersona", () => {
     await screen.findByText("applied results: 2")
 
     fireEvent.click(screen.getByTestId("persona-memory-toggle"))
+    fireEvent.click(screen.getByTestId("persona-state-context-toggle"))
     fireEvent.change(screen.getByPlaceholderText("Ask Persona..."), {
       target: { value: "memory toggle payload" }
     })
@@ -591,7 +610,1491 @@ describe("SidepanelPersona", () => {
       const userMessage = sentPayloads.find((payload) => payload.type === "user_message")
       expect(userMessage).toBeTruthy()
       expect(userMessage?.use_memory_context).toBe(false)
+      expect(userMessage?.use_persona_state_context).toBe(false)
       expect(userMessage?.memory_top_k).toBe(3)
     })
+  })
+
+  it("updates persona state-context profile default and applies it to outgoing messages", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: null,
+            identity_md: null,
+            heartbeat_md: null
+          })
+        })
+      }
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        if (String(init?.method || "GET").toUpperCase() === "PATCH") {
+          const nextDefault = Boolean(init?.body?.use_persona_state_context_default)
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              id: "research_assistant",
+              use_persona_state_context_default: nextDefault
+            })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: false
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-state-default" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    const stateToggleInput = screen.getByTestId(
+      "persona-state-context-toggle"
+    ) as HTMLInputElement
+    const stateDefaultToggleInput = screen.getByTestId(
+      "persona-state-context-default-toggle"
+    ) as HTMLInputElement
+
+    await waitFor(() => {
+      expect(stateToggleInput).not.toBeChecked()
+      expect(stateDefaultToggleInput).not.toBeChecked()
+      expect(stateDefaultToggleInput).not.toBeDisabled()
+    })
+
+    fireEvent.click(screen.getByTestId("persona-state-context-default-toggle"))
+
+    await waitFor(() => {
+      const patchCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes("/persona/profiles/research_assistant") &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "PATCH"
+      )
+      expect(patchCall).toBeTruthy()
+      expect(
+        (patchCall?.[1] as { body?: { use_persona_state_context_default?: boolean } } | undefined)
+          ?.body
+      ).toEqual({ use_persona_state_context_default: true })
+      expect(stateToggleInput).toBeChecked()
+      expect(stateDefaultToggleInput).toBeChecked()
+    })
+
+    fireEvent.change(screen.getByPlaceholderText("Ask Persona..."), {
+      target: { value: "state default payload" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+
+    await waitFor(() => {
+      const sentPayloads = getSentPayloads(ws)
+      const userMessage = sentPayloads.find((payload) => payload.type === "user_message")
+      expect(userMessage).toBeTruthy()
+      expect(userMessage?.use_persona_state_context).toBe(true)
+    })
+  })
+
+  it("loads, saves, and restores persona state docs from sidepanel controls", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      const method = String(init?.method || "GET").toUpperCase()
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state/history")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            entries: [
+              {
+                entry_id: "hist-1",
+                field: "soul_md",
+                content: "archived soul version",
+                is_active: false,
+                version: 1
+              }
+            ]
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state/restore")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "restored soul version",
+            identity_md: "initial identity",
+            heartbeat_md: "initial heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        if (method === "PUT") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              persona_id: "research_assistant",
+              soul_md: init?.body?.soul_md ?? null,
+              identity_md: init?.body?.identity_md ?? null,
+              heartbeat_md: init?.body?.heartbeat_md ?? null,
+              last_modified: "2026-02-22T08:00:00Z"
+            })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "initial soul",
+            identity_md: "initial identity",
+            heartbeat_md: "initial heartbeat",
+            last_modified: "2026-02-22T07:00:00Z"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-state-docs" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+
+    const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
+    const identityInput = screen.getByTestId(
+      "persona-state-identity-input"
+    ) as HTMLTextAreaElement
+    const heartbeatInput = screen.getByTestId(
+      "persona-state-heartbeat-input"
+    ) as HTMLTextAreaElement
+
+    await waitFor(() => {
+      expect(soulInput.value).toBe("initial soul")
+      expect(identityInput.value).toBe("initial identity")
+      expect(heartbeatInput.value).toBe("initial heartbeat")
+    })
+
+    fireEvent.change(soulInput, { target: { value: "updated soul draft" } })
+    fireEvent.click(screen.getByTestId("persona-state-save-button"))
+
+    await waitFor(() => {
+      const putCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes("/persona/profiles/research_assistant/state") &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "PUT"
+      )
+      expect(putCall).toBeTruthy()
+      expect(
+        (putCall?.[1] as { body?: { soul_md?: string } } | undefined)?.body?.soul_md
+      ).toBe("updated soul draft")
+    })
+
+    fireEvent.click(screen.getByTestId("persona-state-history-button"))
+    await screen.findByText("archived soul version")
+
+    fireEvent.click(screen.getByTestId("persona-state-restore-hist-1"))
+    await waitFor(() => {
+      const restoreCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes("/persona/profiles/research_assistant/state/restore") &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "POST"
+      )
+      expect(restoreCall).toBeTruthy()
+      expect(
+        (
+          restoreCall?.[1] as { body?: { entry_id?: string } } | undefined
+        )?.body?.entry_id
+      ).toBe("hist-1")
+      expect(soulInput.value).toBe("restored soul version")
+    })
+  })
+
+  it("targets catalog-resolved persona for profile and state writes when connected", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      const method = String(init?.method || "GET").toUpperCase()
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "builder_bot", name: "Builder Bot" }]
+        })
+      }
+      if (path.includes("/persona/profiles/builder_bot/state")) {
+        if (method === "PUT") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              persona_id: "builder_bot",
+              soul_md: init?.body?.soul_md ?? null,
+              identity_md: init?.body?.identity_md ?? null,
+              heartbeat_md: init?.body?.heartbeat_md ?? null
+            })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "builder_bot",
+            soul_md: "builder soul",
+            identity_md: "builder identity",
+            heartbeat_md: "builder heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/builder_bot")) {
+        if (method === "PATCH") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              id: "builder_bot",
+              use_persona_state_context_default: Boolean(
+                init?.body?.use_persona_state_context_default
+              )
+            })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "builder_bot",
+            use_persona_state_context_default: false
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-builder",
+            persona: { id: "builder_bot" }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+
+    await waitFor(() => {
+      const sessionCall = mocks.fetchWithAuth.mock.calls.find(([calledPath]) =>
+        String(calledPath).includes("/persona/sessions?persona_id=builder_bot")
+      )
+      expect(sessionCall).toBeTruthy()
+      const profileGetCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes("/persona/profiles/builder_bot") &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "GET"
+      )
+      expect(profileGetCall).toBeTruthy()
+    })
+
+    fireEvent.click(screen.getByTestId("persona-state-context-default-toggle"))
+    fireEvent.change(screen.getByTestId("persona-state-soul-input"), {
+      target: { value: "builder state update" }
+    })
+    fireEvent.click(screen.getByTestId("persona-state-save-button"))
+
+    await waitFor(() => {
+      const profilePatchCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes("/persona/profiles/builder_bot") &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "PATCH"
+      )
+      expect(profilePatchCall).toBeTruthy()
+      const statePutCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes("/persona/profiles/builder_bot/state") &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "PUT"
+      )
+      expect(statePutCall).toBeTruthy()
+      expect(
+        String(profilePatchCall?.[0]).includes("/persona/profiles/research_assistant")
+      ).toBe(false)
+      expect(
+        String(statePutCall?.[0]).includes("/persona/profiles/research_assistant/state")
+      ).toBe(false)
+    })
+  })
+
+  it("tracks dirty state and supports reverting state docs without saving", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "stable soul",
+            identity_md: "stable identity",
+            heartbeat_md: "stable heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-dirty-revert" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+
+    const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
+    const dirtyTag = screen.getByTestId("persona-state-dirty-tag")
+    const saveButton = screen.getByTestId("persona-state-save-button")
+    const revertButton = screen.getByTestId("persona-state-revert-button")
+
+    await waitFor(() => {
+      expect(soulInput.value).toBe("stable soul")
+      expect(dirtyTag).toHaveTextContent("saved")
+      expect(saveButton).toBeDisabled()
+      expect(revertButton).toBeDisabled()
+    })
+
+    fireEvent.change(soulInput, { target: { value: "edited soul" } })
+    await waitFor(() => {
+      expect(dirtyTag).toHaveTextContent("unsaved")
+      expect(saveButton).not.toBeDisabled()
+      expect(revertButton).not.toBeDisabled()
+    })
+
+    fireEvent.click(revertButton)
+    await waitFor(() => {
+      expect(soulInput.value).toBe("stable soul")
+      expect(dirtyTag).toHaveTextContent("saved")
+      expect(saveButton).toBeDisabled()
+      expect(revertButton).toBeDisabled()
+    })
+
+    const putCall = mocks.fetchWithAuth.mock.calls.find(
+      ([calledPath, calledInit]) =>
+        String(calledPath).includes("/persona/profiles/research_assistant/state") &&
+        String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+          "PUT"
+    )
+    expect(putCall).toBeUndefined()
+  })
+
+  it("registers and removes beforeunload guard based on draft dirty state", async () => {
+    const addEventListenerSpy = vi.spyOn(window, "addEventListener")
+    const removeEventListenerSpy = vi.spyOn(window, "removeEventListener")
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "stable soul",
+            identity_md: "stable identity",
+            heartbeat_md: "stable heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-beforeunload-guard" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+
+    const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
+    const revertButton = screen.getByTestId("persona-state-revert-button")
+    await waitFor(() => {
+      expect(soulInput.value).toBe("stable soul")
+    })
+
+    fireEvent.change(soulInput, { target: { value: "unsaved beforeunload draft" } })
+
+    let beforeUnloadHandler: ((event: BeforeUnloadEvent) => string | undefined) | null = null
+    await waitFor(() => {
+      const beforeUnloadCall = addEventListenerSpy.mock.calls.find(
+        ([eventName]) => eventName === "beforeunload"
+      )
+      expect(beforeUnloadCall).toBeTruthy()
+      beforeUnloadHandler = beforeUnloadCall?.[1] as
+        | ((event: BeforeUnloadEvent) => string | undefined)
+        | null
+      expect(beforeUnloadHandler).toBeTruthy()
+    })
+
+    const beforeUnloadEvent = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent
+    const beforeUnloadResult = beforeUnloadHandler?.(beforeUnloadEvent)
+    expect(beforeUnloadEvent.defaultPrevented).toBe(true)
+    expect(String(beforeUnloadResult || "")).toContain(
+      "You have unsaved state-doc changes"
+    )
+    expect(String(beforeUnloadResult || "")).toContain("Leave this page without saving")
+
+    fireEvent.click(revertButton)
+    await waitFor(() => {
+      expect(soulInput.value).toBe("stable soul")
+      const removeCall = removeEventListenerSpy.mock.calls.find(
+        ([eventName, handler]) =>
+          eventName === "beforeunload" && handler === beforeUnloadHandler
+      )
+      expect(removeCall).toBeTruthy()
+    })
+
+    addEventListenerSpy.mockRestore()
+    removeEventListenerSpy.mockRestore()
+  })
+
+  it("resets blocked in-app navigation when unsaved draft discard is declined", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm")
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "stable soul",
+            identity_md: "stable identity",
+            heartbeat_md: "stable heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-router-block-decline" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+
+    const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
+    await waitFor(() => {
+      expect(soulInput.value).toBe("stable soul")
+    })
+    fireEvent.change(soulInput, { target: { value: "dirty route blocker draft" } })
+
+    await waitFor(() => {
+      expect(mocks.useBlocker.mock.calls.some(([when]) => when === true)).toBe(true)
+    })
+
+    confirmSpy.mockClear()
+    mocks.blocker.proceed.mockClear()
+    mocks.blocker.reset.mockClear()
+    mocks.blocker.state = "blocked"
+    confirmSpy.mockReturnValueOnce(false)
+    fireEvent.change(soulInput, { target: { value: "dirty route blocker draft v2" } })
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalled()
+      expect(mocks.blocker.reset).toHaveBeenCalledTimes(1)
+      expect(mocks.blocker.proceed).not.toHaveBeenCalled()
+    })
+    expect(String(confirmSpy.mock.calls[0]?.[0] || "")).toContain(
+      "Leave this page and discard local drafts"
+    )
+    confirmSpy.mockRestore()
+  })
+
+  it("proceeds blocked in-app navigation when unsaved draft discard is confirmed", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm")
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "stable soul",
+            identity_md: "stable identity",
+            heartbeat_md: "stable heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-router-block-confirm" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+
+    const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
+    await waitFor(() => {
+      expect(soulInput.value).toBe("stable soul")
+    })
+    fireEvent.change(soulInput, { target: { value: "dirty route blocker confirm draft" } })
+
+    await waitFor(() => {
+      expect(mocks.useBlocker.mock.calls.some(([when]) => when === true)).toBe(true)
+    })
+
+    confirmSpy.mockClear()
+    mocks.blocker.proceed.mockClear()
+    mocks.blocker.reset.mockClear()
+    mocks.blocker.state = "blocked"
+    confirmSpy.mockReturnValueOnce(true)
+    fireEvent.change(soulInput, { target: { value: "dirty route blocker confirm draft v2" } })
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalled()
+      expect(mocks.blocker.proceed).toHaveBeenCalledTimes(1)
+      expect(mocks.blocker.reset).not.toHaveBeenCalled()
+    })
+    expect(String(confirmSpy.mock.calls[0]?.[0] || "")).toContain(
+      "Leave this page and discard local drafts"
+    )
+    confirmSpy.mockRestore()
+  })
+
+  it("refreshes loaded state history after saving updated state docs", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    let historyFetchCount = 0
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      const method = String(init?.method || "GET").toUpperCase()
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state/history")) {
+        historyFetchCount += 1
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            entries: [
+              {
+                entry_id: "hist-refresh",
+                field: "soul_md",
+                content: "history value",
+                is_active: false,
+                version: historyFetchCount
+              }
+            ]
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        if (method === "PUT") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              persona_id: "research_assistant",
+              soul_md: init?.body?.soul_md ?? null,
+              identity_md: init?.body?.identity_md ?? null,
+              heartbeat_md: init?.body?.heartbeat_md ?? null
+            })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "history base soul",
+            identity_md: "history base identity",
+            heartbeat_md: "history base heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-history-refresh" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(screen.getByTestId("persona-state-history-button"))
+    await waitFor(() => {
+      expect(historyFetchCount).toBe(1)
+    })
+
+    fireEvent.change(screen.getByTestId("persona-state-soul-input"), {
+      target: { value: "history refresh update" }
+    })
+    fireEvent.click(screen.getByTestId("persona-state-save-button"))
+
+    await waitFor(() => {
+      expect(historyFetchCount).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  it("orders state history entries and displays metadata", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state/history")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            entries: [
+              {
+                entry_id: "older-entry",
+                field: "soul_md",
+                content: "older history content",
+                is_active: false,
+                version: 1,
+                created_at: "2026-02-20T01:00:00Z",
+                last_modified: "2026-02-20T01:10:00Z"
+              },
+              {
+                entry_id: "newer-entry",
+                field: "soul_md",
+                content: "newer history content",
+                is_active: false,
+                version: 2,
+                created_at: "2026-02-21T01:00:00Z",
+                last_modified: "2026-02-21T01:10:00Z"
+              }
+            ]
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "base soul",
+            identity_md: "base identity",
+            heartbeat_md: "base heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-history-order" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(screen.getByTestId("persona-state-history-button"))
+    await screen.findByText("newer history content")
+    await screen.findByText("older history content")
+
+    const newestCards = screen.getAllByTestId(/persona-state-history-entry-/)
+    expect(newestCards[0]).toHaveTextContent("newer history content")
+    expect(screen.getByTestId("persona-state-history-meta-newer-entry")).toHaveTextContent(
+      "created 2026-02-21T01:00:00Z"
+    )
+    expect(screen.getByTestId("persona-state-history-meta-newer-entry")).toHaveTextContent(
+      "updated 2026-02-21T01:10:00Z"
+    )
+
+    fireEvent.click(screen.getByTestId("persona-state-history-order-oldest-button"))
+    const oldestCards = screen.getAllByTestId(/persona-state-history-entry-/)
+    expect(oldestCards[0]).toHaveTextContent("older history content")
+  })
+
+  it("restores and persists state history/editor preferences via localStorage", async () => {
+    window.localStorage.setItem("sidepanel:persona:state-editor-expanded", "false")
+    window.localStorage.setItem("sidepanel:persona:state-history-order", "oldest")
+
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state/history")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            entries: [
+              {
+                entry_id: "pref-older",
+                field: "soul_md",
+                content: "pref older content",
+                is_active: false,
+                version: 1,
+                created_at: "2026-02-20T01:00:00Z"
+              },
+              {
+                entry_id: "pref-newer",
+                field: "soul_md",
+                content: "pref newer content",
+                is_active: false,
+                version: 2,
+                created_at: "2026-02-21T01:00:00Z"
+              }
+            ]
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "pref soul",
+            identity_md: "pref identity",
+            heartbeat_md: "pref heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-pref-persist" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    expect(screen.queryByTestId("persona-state-soul-input")).not.toBeInTheDocument()
+    expect(screen.getByText("Show editor")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("persona-state-editor-toggle-button"))
+    expect(screen.getByTestId("persona-state-soul-input")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("persona-state-history-button"))
+    await screen.findByText("pref older content")
+    await screen.findByText("pref newer content")
+
+    const oldestDefaultCards = screen.getAllByTestId(/persona-state-history-entry-/)
+    expect(oldestDefaultCards[0]).toHaveTextContent("pref older content")
+
+    fireEvent.click(screen.getByTestId("persona-state-history-order-newest-button"))
+    const newestCards = screen.getAllByTestId(/persona-state-history-entry-/)
+    expect(newestCards[0]).toHaveTextContent("pref newer content")
+    expect(window.localStorage.getItem("sidepanel:persona:state-history-order")).toBe(
+      "newest"
+    )
+
+    fireEvent.click(screen.getByTestId("persona-state-editor-toggle-button"))
+    expect(window.localStorage.getItem("sidepanel:persona:state-editor-expanded")).toBe(
+      "false"
+    )
+  })
+
+  it("blocks connect when unsaved drafts exist and discard prompt is declined", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false)
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "server soul",
+            identity_md: "server identity",
+            heartbeat_md: "server heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-connect-guard" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.change(screen.getByTestId("persona-state-soul-input"), {
+      target: { value: "local draft soul" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalled()
+      expect(mocks.fetchWithAuth).not.toHaveBeenCalled()
+      expect(MockWebSocket.instances).toHaveLength(0)
+    })
+    expect(String(confirmSpy.mock.calls[0]?.[0] || "")).toContain(
+      "Connect and discard local drafts"
+    )
+    confirmSpy.mockRestore()
+  })
+
+  it("keeps session connected when unsaved drafts exist and disconnect prompt is declined", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm")
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "connected soul",
+            identity_md: "connected identity",
+            heartbeat_md: "connected heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-disconnect-guard" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.change(screen.getByTestId("persona-state-soul-input"), {
+      target: { value: "unsaved disconnect draft" }
+    })
+
+    confirmSpy.mockReturnValueOnce(false)
+    fireEvent.click(screen.getByRole("button", { name: /Disconnect/i }))
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalled()
+    })
+    expect(String(confirmSpy.mock.calls[0]?.[0] || "")).toContain(
+      "Disconnect and discard local drafts"
+    )
+    expect(screen.getByRole("button", { name: /Disconnect/i })).toBeInTheDocument()
+
+    confirmSpy.mockReturnValueOnce(true)
+    fireEvent.click(screen.getByRole("button", { name: /Disconnect/i }))
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /^(?:loading)?Connect$/i })
+      ).toBeInTheDocument()
+    })
+    confirmSpy.mockRestore()
+  })
+
+  it("blocks restore when unsaved drafts exist until discard is confirmed", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm")
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation(
+      (path: string, init?: { method?: string; body?: Record<string, unknown> }) => {
+        const method = String(init?.method || "GET").toUpperCase()
+        if (path.includes("/persona/catalog")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+          })
+        }
+        if (path.includes("/persona/profiles/research_assistant/state/history")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              persona_id: "research_assistant",
+              entries: [
+                {
+                  entry_id: "restore-guard-entry",
+                  field: "soul_md",
+                  content: "history soul version",
+                  is_active: false,
+                  version: 1
+                }
+              ]
+            })
+          })
+        }
+        if (path.includes("/persona/profiles/research_assistant/state/restore")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              persona_id: "research_assistant",
+              soul_md: "restored from history",
+              identity_md: "initial identity",
+              heartbeat_md: "initial heartbeat"
+            })
+          })
+        }
+        if (path.includes("/persona/profiles/research_assistant/state")) {
+          if (method === "PUT") {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                persona_id: "research_assistant",
+                soul_md: init?.body?.soul_md ?? null,
+                identity_md: init?.body?.identity_md ?? null,
+                heartbeat_md: init?.body?.heartbeat_md ?? null
+              })
+            })
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              persona_id: "research_assistant",
+              soul_md: "initial soul",
+              identity_md: "initial identity",
+              heartbeat_md: "initial heartbeat"
+            })
+          })
+        }
+        if (path.includes("/persona/profiles/research_assistant")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              id: "research_assistant",
+              use_persona_state_context_default: true
+            })
+          })
+        }
+        if (path.includes("/persona/sessions")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => []
+          })
+        }
+        if (path.includes("/persona/session")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ session_id: "sess-restore-guard" })
+          })
+        }
+        return Promise.resolve({
+          ok: false,
+          error: `unhandled path: ${path}`,
+          json: async () => ({})
+        })
+      }
+    )
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
+    await waitFor(() => {
+      expect(soulInput.value).toBe("initial soul")
+    })
+    fireEvent.click(screen.getByTestId("persona-state-history-button"))
+    await screen.findByText("history soul version")
+
+    fireEvent.change(soulInput, {
+      target: { value: "unsaved local draft before restore" }
+    })
+
+    confirmSpy.mockReturnValueOnce(false)
+    fireEvent.click(screen.getByTestId("persona-state-restore-restore-guard-entry"))
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalled()
+    })
+    expect(String(confirmSpy.mock.calls[0]?.[0] || "")).toContain(
+      "Restore this state version and discard local drafts"
+    )
+    const declinedRestoreCall = mocks.fetchWithAuth.mock.calls.find(
+      ([calledPath, calledInit]) =>
+        String(calledPath).includes("/persona/profiles/research_assistant/state/restore") &&
+        String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+          "POST"
+    )
+    expect(declinedRestoreCall).toBeFalsy()
+    expect(soulInput.value).toBe("unsaved local draft before restore")
+
+    confirmSpy.mockReturnValueOnce(true)
+    fireEvent.click(screen.getByTestId("persona-state-restore-restore-guard-entry"))
+    await waitFor(() => {
+      const acceptedRestoreCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes("/persona/profiles/research_assistant/state/restore") &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "POST"
+      )
+      expect(acceptedRestoreCall).toBeTruthy()
+      expect(soulInput.value).toBe("restored from history")
+    })
+    confirmSpy.mockRestore()
+  })
+
+  it("shows empty history message and supports state editor collapse/expand", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state/history")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            entries: []
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "state soul",
+            identity_md: "state identity",
+            heartbeat_md: "state heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-empty-history" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(screen.getByTestId("persona-state-history-button"))
+    await screen.findByTestId("persona-state-history-empty")
+    expect(screen.getByText("No state history entries yet.")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("persona-state-editor-toggle-button"))
+    expect(screen.queryByTestId("persona-state-soul-input")).not.toBeInTheDocument()
+    expect(screen.getByText("Show editor")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("persona-state-editor-toggle-button"))
+    expect(screen.getByTestId("persona-state-soul-input")).toBeInTheDocument()
+    expect(screen.getByText("Hide editor")).toBeInTheDocument()
   })
 })

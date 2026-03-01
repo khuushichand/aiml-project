@@ -1,0 +1,21 @@
+{
+  "items": {
+    "queuedForBriefing": "Für Briefing vorgemerkt",
+    "includeInNextBriefing": "In nächstes Briefing aufnehmen",
+    "removeFromBriefingQueue": "Aus Briefing-Warteschlange entfernen",
+    "briefingAlreadyIncluded": "Dieses Element ist bereits in Briefing-Ausgaben enthalten.",
+    "briefingIncluded": "Zur nächsten Briefing-Warteschlange hinzugefügt.",
+    "briefingRemoved": "Aus der Briefing-Warteschlange entfernt.",
+    "briefingIncludeError": "Element konnte nicht in das Briefing aufgenommen werden.",
+    "queuedTag": "In Warteschlange",
+    "queue": {
+      "runPlaceholder": "Lauf auswählen",
+      "runOption": "Lauf #{{id}}",
+      "runRequired": "Wählen Sie einen Lauf aus, um einen Bericht aus der Warteschlange zu erstellen.",
+      "empty": "Keine Elemente in der Warteschlange für diesen Lauf gefunden.",
+      "generated": "Bericht aus {{count}} Warteschlangen-Element{{plural}} erstellt.",
+      "generateError": "Bericht aus Warteschlangen-Elementen konnte nicht erstellt werden.",
+      "generateReport": "Bericht aus Warteschlange erstellen"
+    }
+  }
+}

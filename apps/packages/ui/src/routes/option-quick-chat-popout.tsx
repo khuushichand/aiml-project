@@ -1,7 +1,7 @@
-import React, { useEffect, useRef } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import { Select, Segmented } from "antd"
 import { useQuery } from "@tanstack/react-query"
-import { useLocation, useNavigate, useSearchParams } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { useQuickChatStore } from "@/store/quick-chat"
 import { useQuickChat } from "@/hooks/useQuickChat"
@@ -10,16 +10,16 @@ import { QuickChatMessage as QuickChatMessageView } from "@/components/Common/Qu
 import { QuickChatInput } from "@/components/Common/QuickChatHelper/QuickChatInput"
 import { AlertCircle } from "lucide-react"
 import { useChatModelsSelect } from "@/hooks/useChatModelsSelect"
-import type { QuickChatMessage } from "@/store/quick-chat"
 import { QuickChatGuidesPanel } from "@/components/Common/QuickChatHelper/QuickChatGuidesPanel"
+import { parseQuickChatPopoutState } from "@/components/Common/QuickChatHelper/popout-state"
 
 const QuickChatPopout: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const navigate = useNavigate()
-  const location = useLocation()
   const [searchParams] = useSearchParams()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const hasRestoredRef = useRef(false)
+  const [sourceRouteContext, setSourceRouteContext] = useState<string | null>(null)
   const { assistantMode, setAssistantMode } = useQuickChatStore()
 
   const {
@@ -69,57 +69,14 @@ const QuickChatPopout: React.FC = () => {
       if (!savedState) return
 
       const parsed = JSON.parse(savedState) as unknown
-      // Validate parsed state structure before restoring
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        "messages" in parsed &&
-        Array.isArray((parsed as { messages: unknown }).messages)
-      ) {
-        const parsedState = parsed as {
-          messages: unknown[]
-          modelOverride?: unknown
-          assistantMode?: unknown
-        }
-        const isValidMsg = (m: unknown): m is QuickChatMessage => {
-          if (!m || typeof m !== "object") return false
-          if (
-            !("id" in m) ||
-            !("role" in m) ||
-            !("content" in m) ||
-            !("timestamp" in m)
-          ) {
-            return false
-          }
-          const candidate = m as {
-            id: unknown
-            role: unknown
-            content: unknown
-            timestamp: unknown
-          }
-          return (
-            typeof candidate.id === "string" &&
-            (candidate.role === "user" || candidate.role === "assistant") &&
-            typeof candidate.content === "string" &&
-            typeof candidate.timestamp === "number"
-          )
-        }
-
-        const nextMessages = parsedState.messages.filter(isValidMsg)
-        const nextModelOverride =
-          typeof parsedState.modelOverride === "string"
-            ? parsedState.modelOverride
-            : null
-        const nextAssistantMode =
-          parsedState.assistantMode === "docs_rag" ||
-          parsedState.assistantMode === "browse_guides"
-            ? parsedState.assistantMode
-            : "chat"
+      const parsedState = parseQuickChatPopoutState(parsed)
+      if (parsedState) {
         useQuickChatStore.getState().restoreFromState({
-          messages: nextMessages,
-          modelOverride: nextModelOverride,
-          assistantMode: nextAssistantMode
+          messages: parsedState.messages,
+          modelOverride: parsedState.modelOverride,
+          assistantMode: parsedState.assistantMode
         })
+        setSourceRouteContext(parsedState.sourceRoute)
       } else {
         console.warn("Invalid quick chat state structure in sessionStorage")
       }
@@ -178,6 +135,7 @@ const QuickChatPopout: React.FC = () => {
     })
   const docsModeActive = assistantMode === "docs_rag"
   const browseModeActive = assistantMode === "browse_guides"
+  const currentRouteContext = sourceRouteContext
   const handleModeChange = (value: string | number) => {
     if (value === "chat" || value === "docs_rag" || value === "browse_guides") {
       setAssistantMode(value)
@@ -186,7 +144,7 @@ const QuickChatPopout: React.FC = () => {
   const handleSendFromInput = (message: string) => {
     void sendMessage(message, {
       mode: docsModeActive ? "docs_rag" : "chat",
-      currentRoute: location.pathname
+      currentRoute: currentRouteContext
     })
   }
   const openWorkflowRoute = (route: string) => {
@@ -197,7 +155,7 @@ const QuickChatPopout: React.FC = () => {
     setAssistantMode("docs_rag")
     void sendMessage(question, {
       mode: "docs_rag",
-      currentRoute: location.pathname
+      currentRoute: currentRouteContext
     })
   }
 
@@ -270,7 +228,7 @@ const QuickChatPopout: React.FC = () => {
             onAskGuide={handleAskGuide}
             onOpenRoute={openWorkflowRoute}
             askDisabled={false}
-            currentRoute={location.pathname}
+            currentRoute={currentRouteContext}
           />
         </div>
       ) : (

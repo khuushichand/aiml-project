@@ -18,6 +18,33 @@ pytestmark = [
 ]
 
 
+def _run_metric(run_payload: dict, key: str) -> int:
+    """Read run counters from current (`stats`) and legacy (top-level) payloads."""
+    stats = run_payload.get("stats")
+    if isinstance(stats, dict):
+        value = stats.get(key)
+        if isinstance(value, (int, float)):
+            return int(value)
+    legacy = run_payload.get(key)
+    if isinstance(legacy, (int, float)):
+        return int(legacy)
+    return 0
+
+
+def _preview_count(preview_payload: dict) -> int:
+    """Read source-test preview counts across response variants."""
+    direct = preview_payload.get("items_found")
+    if isinstance(direct, (int, float)):
+        return int(direct)
+    total = preview_payload.get("total")
+    if isinstance(total, (int, float)):
+        return int(total)
+    items = preview_payload.get("items")
+    if isinstance(items, list):
+        return len(items)
+    return 0
+
+
 @pytest.fixture()
 def client_with_user(monkeypatch, tmp_path):
     async def override_user():
@@ -81,8 +108,8 @@ def test_real_xkcd_rss_to_briefing(client_with_user: TestClient):
     assert run.status_code == 200, run.text
     run_data = run.json()
     run_id = run_data["id"]
-    assert run_data.get("items_found", 0) >= 1
-    assert run_data.get("items_ingested", 0) >= 1
+    assert _run_metric(run_data, "items_found") >= 1
+    assert _run_metric(run_data, "items_ingested") >= 1
 
     # Verify items have expected fields
     items_resp = c.get("/api/v1/watchlists/items", params={"run_id": run_id, "limit": 5})
@@ -134,10 +161,10 @@ def test_real_hnrss_best_to_briefing(client_with_user: TestClient):
     run = c.post(f"/api/v1/watchlists/jobs/{job.json()['id']}/run")
     assert run.status_code == 200, run.text
     run_data = run.json()
-    assert run_data.get("items_found", 0) >= 1
+    assert _run_metric(run_data, "items_found") >= 1
 
     # Generate output only if items were ingested
-    if run_data.get("items_ingested", 0) > 0:
+    if _run_metric(run_data, "items_ingested") > 0:
         output = c.post(
             "/api/v1/watchlists/outputs",
             json={"run_id": run_data["id"], "type": "briefing_markdown", "temporary": True},
@@ -168,7 +195,7 @@ def test_source_test_with_real_feed(client_with_user: TestClient):
     assert test_resp.status_code == 200, test_resp.text
     data = test_resp.json()
     # Should return some preview items
-    assert data.get("items_found", 0) >= 1
+    assert _preview_count(data) >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -206,9 +233,9 @@ def test_multi_feed_aggregation(client_with_user: TestClient):
     assert run.status_code == 200, run.text
     run_data = run.json()
     # Should have items from at least one feed
-    assert run_data.get("items_found", 0) >= 1
+    assert _run_metric(run_data, "items_found") >= 1
 
-    if run_data.get("items_ingested", 0) > 0:
+    if _run_metric(run_data, "items_ingested") > 0:
         output = c.post(
             "/api/v1/watchlists/outputs",
             json={"run_id": run_data["id"], "type": "briefing_markdown", "temporary": True},

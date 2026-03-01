@@ -34,6 +34,10 @@ class SessionSpec:
     env: dict[str, str] = field(default_factory=dict)
     labels: dict[str, str] = field(default_factory=dict)
     trust_level: TrustLevel | None = None  # Defaults to standard if not specified
+    persona_id: str | None = None
+    workspace_id: str | None = None
+    workspace_group_id: str | None = None
+    scope_snapshot_id: str | None = None
 
 
 @dataclass
@@ -42,6 +46,10 @@ class Session:
     runtime: RuntimeType
     base_image: str | None
     expires_at: datetime | None
+    persona_id: str | None = None
+    workspace_id: str | None = None
+    workspace_group_id: str | None = None
+    scope_snapshot_id: str | None = None
 
 
 @dataclass
@@ -73,6 +81,10 @@ class RunSpec:
     run_as_root: bool | None = None
     # When false, skip --read-only on the root filesystem (runtime-specific)
     read_only_root: bool | None = None
+    persona_id: str | None = None
+    workspace_id: str | None = None
+    workspace_group_id: str | None = None
+    scope_snapshot_id: str | None = None
 
 
 class RunPhase(str, Enum):
@@ -102,3 +114,11 @@ class RunStatus:
     resource_usage: dict[str, int] | None = None
     artifacts: dict[str, bytes] | None = None
     estimated_start_time: datetime | None = None
+    session_id: str | None = None
+    persona_id: str | None = None
+    workspace_id: str | None = None
+    workspace_group_id: str | None = None
+    scope_snapshot_id: str | None = None
+    # Optional execution-claim metadata for durable claim fencing.
+    claim_owner: str | None = None
+    claim_expires_at: datetime | None = None

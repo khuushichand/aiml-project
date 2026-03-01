@@ -30,7 +30,7 @@ import {
   Download,
   Upload
 } from "lucide-react"
-import type { SavedWorkspace } from "@/types/workspace"
+import type { SavedWorkspace, WorkspaceBannerImage } from "@/types/workspace"
 import { useWorkspaceStore } from "@/store/workspace"
 import { useConnectionStore } from "@/store/connection"
 import { deriveConnectionUxState } from "@/types/connection"
@@ -59,6 +59,10 @@ import {
   formatWorkspaceLastAccessed
 } from "./workspace-header.utils"
 import {
+  normalizeWorkspaceBannerImage,
+  WorkspaceBannerImageNormalizationError
+} from "./workspace-banner-image"
+import {
   WORKSPACE_UNDO_WINDOW_MS,
   scheduleWorkspaceUndoAction,
   undoWorkspaceAction
@@ -79,8 +83,16 @@ interface WorkspaceHeaderProps {
   hideToggles?: boolean
   /** Approximate persisted workspace payload bytes in local storage */
   storageUsedBytes?: number
-  /** Estimated available local storage budget for workspace data */
+  /** Estimated available local storage budget for workspace payload data */
   storageQuotaBytes?: number
+  /** Aggregate storage used by this browser profile/origin (if available). */
+  storageOriginUsedBytes?: number
+  /** Aggregate storage quota for this browser profile/origin (if available). */
+  storageOriginQuotaBytes?: number
+  /** Server-side storage used by the current user account (if available). */
+  storageAccountUsedBytes?: number
+  /** Server-side storage quota for the current user account (if available). */
+  storageAccountQuotaBytes?: number
   /** Rollout gate for provenance surfaces (retrieval transparency, telemetry tools). */
   provenanceEnabled?: boolean
   /** Rollout gate for status/guardrails surfaces (connectivity/quota/conflict state). */
@@ -122,6 +134,10 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   hideToggles = false,
   storageUsedBytes,
   storageQuotaBytes,
+  storageOriginUsedBytes,
+  storageOriginQuotaBytes,
+  storageAccountUsedBytes,
+  storageAccountQuotaBytes,
   provenanceEnabled = true,
   statusGuardrailsEnabled = true
 }) => {
@@ -145,8 +161,18 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     research_studio_status_guardrails_v1: 100
   })
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = React.useState("")
+  const [bannerModalOpen, setBannerModalOpen] = React.useState(false)
+  const [bannerTitleDraft, setBannerTitleDraft] = React.useState("")
+  const [bannerSubtitleDraft, setBannerSubtitleDraft] = React.useState("")
+  const [bannerImageDraft, setBannerImageDraft] =
+    React.useState<WorkspaceBannerImage | null>(null)
+  const [bannerImageUploading, setBannerImageUploading] = React.useState(false)
+  const [bannerModalError, setBannerModalError] = React.useState<string | null>(
+    null
+  )
   const lastConnectivityStatusRef = React.useRef<string | null>(null)
   const importFileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const bannerFileInputRef = React.useRef<HTMLInputElement | null>(null)
   const telemetrySummaryEnabled = provenanceEnabled || statusGuardrailsEnabled
   const shortcutModifierLabel = React.useMemo(() => {
     if (typeof navigator === "undefined") return "Cmd/Ctrl"
@@ -172,8 +198,44 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       Number.isInteger(roundedQuota) || Math.abs(roundedQuota - Math.round(roundedQuota)) < 0.05
         ? String(Math.round(roundedQuota))
         : roundedQuota.toFixed(1)
+    const workspaceRatio = Math.max(0, Math.min(1, storageUsedBytes / storageQuotaBytes))
 
-    const ratio = Math.max(0, Math.min(1, storageUsedBytes / storageQuotaBytes))
+    const hasOriginUsage =
+      typeof storageOriginUsedBytes === "number" &&
+      Number.isFinite(storageOriginUsedBytes) &&
+      storageOriginUsedBytes >= 0 &&
+      typeof storageOriginQuotaBytes === "number" &&
+      Number.isFinite(storageOriginQuotaBytes) &&
+      storageOriginQuotaBytes > 0
+
+    const hasAccountUsage =
+      typeof storageAccountUsedBytes === "number" &&
+      Number.isFinite(storageAccountUsedBytes) &&
+      storageAccountUsedBytes >= 0 &&
+      typeof storageAccountQuotaBytes === "number" &&
+      Number.isFinite(storageAccountQuotaBytes) &&
+      storageAccountQuotaBytes > 0
+
+    let accountUsageShortLabel: string | null = null
+    let accountRatio: number | null = null
+    if (hasAccountUsage) {
+      const accountUsedMb = storageAccountUsedBytes / (1024 * 1024)
+      const accountQuotaMb = storageAccountQuotaBytes / (1024 * 1024)
+      const roundedAccountUsed = Math.round(accountUsedMb * 10) / 10
+      const roundedAccountQuota = Math.round(accountQuotaMb * 10) / 10
+      const accountQuotaLabel =
+        Number.isInteger(roundedAccountQuota) ||
+        Math.abs(roundedAccountQuota - Math.round(roundedAccountQuota)) < 0.05
+          ? String(Math.round(roundedAccountQuota))
+          : roundedAccountQuota.toFixed(1)
+      accountUsageShortLabel = `${roundedAccountUsed.toFixed(1)}/${accountQuotaLabel} MB`
+      accountRatio = Math.max(
+        0,
+        Math.min(1, storageAccountUsedBytes / storageAccountQuotaBytes)
+      )
+    }
+
+    const ratio = accountRatio ?? workspaceRatio
     const toneClass =
       ratio >= 0.95
         ? "border-error/40 bg-error/10 text-error"
@@ -181,20 +243,79 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           ? "border-warning/40 bg-warning/10 text-warning"
           : "border-border bg-surface2 text-text-muted"
 
+    let profileUsageShortLabel: string | null = null
+    if (hasOriginUsage) {
+      const originUsedMb = storageOriginUsedBytes / (1024 * 1024)
+      const originQuotaMb = storageOriginQuotaBytes / (1024 * 1024)
+      const roundedOriginUsed = Math.round(originUsedMb * 10) / 10
+      const roundedOriginQuota = Math.round(originQuotaMb * 10) / 10
+      const originQuotaLabel =
+        Number.isInteger(roundedOriginQuota) ||
+        Math.abs(roundedOriginQuota - Math.round(roundedOriginQuota)) < 0.05
+          ? String(Math.round(roundedOriginQuota))
+          : roundedOriginQuota.toFixed(1)
+      profileUsageShortLabel = `${roundedOriginUsed.toFixed(1)}/${originQuotaLabel} MB`
+    }
+
+    const workspaceShortLabel = `${roundedUsed.toFixed(1)}/${quotaLabel} MB`
+    const workspaceShortSegment = `Payload ${workspaceShortLabel}`
+    const shortLabel = accountUsageShortLabel
+      ? `${workspaceShortSegment} | Account ${accountUsageShortLabel}`
+      : profileUsageShortLabel
+        ? `${workspaceShortSegment} | Browser ${profileUsageShortLabel}`
+        : workspaceShortSegment
+
+    const longLabel = accountUsageShortLabel
+      ? profileUsageShortLabel
+        ? t(
+            "playground:workspace.storageUsageLabelWithAccountAndProfile",
+            "Workspace payload: {{workspace}}. Account storage: {{account}}. Browser profile storage: {{profile}}.",
+            {
+              workspace: workspaceShortLabel,
+              account: accountUsageShortLabel,
+              profile: profileUsageShortLabel
+            }
+          )
+        : t(
+            "playground:workspace.storageUsageLabelWithAccount",
+            "Workspace payload: {{workspace}}. Account storage: {{account}}.",
+            {
+              workspace: workspaceShortLabel,
+              account: accountUsageShortLabel
+            }
+          )
+      : profileUsageShortLabel
+        ? t(
+            "playground:workspace.storageUsageLabelWithProfile",
+            "Workspace payload: {{workspace}}. Browser profile storage: {{profile}}.",
+            {
+              workspace: workspaceShortLabel,
+              profile: profileUsageShortLabel
+            }
+          )
+        : t(
+            "playground:workspace.storageUsageLabelWorkspaceOnly",
+            "Workspace payload storage: {{workspace}}",
+            {
+              workspace: workspaceShortLabel
+            }
+          )
+
     return {
       ratio,
       toneClass,
-      shortLabel: `${roundedUsed.toFixed(1)}/${quotaLabel} MB`,
-      longLabel: t(
-        "playground:workspace.storageUsageLabel",
-        "Workspace storage: {{used}} of {{quota}} MB",
-        {
-          used: roundedUsed.toFixed(1),
-          quota: quotaLabel
-        }
-      )
+      shortLabel,
+      longLabel
     }
-  }, [storageQuotaBytes, storageUsedBytes, t])
+  }, [
+    storageAccountQuotaBytes,
+    storageAccountUsedBytes,
+    storageOriginQuotaBytes,
+    storageOriginUsedBytes,
+    storageQuotaBytes,
+    storageUsedBytes,
+    t
+  ])
   const connectionState = useConnectionStore((s) => s.state)
   const connectionIndicator = React.useMemo(() => {
     const uxState = deriveConnectionUxState(connectionState)
@@ -243,8 +364,19 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   const workspaceName = useWorkspaceStore((s) => s.workspaceName)
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
   const workspaceTag = useWorkspaceStore((s) => s.workspaceTag)
+  const workspaceBanner = useWorkspaceStore((s) => s.workspaceBanner) || {
+    title: "",
+    subtitle: "",
+    image: null
+  }
   const sources = useWorkspaceStore((s) => s.sources)
   const setWorkspaceName = useWorkspaceStore((s) => s.setWorkspaceName)
+  const setWorkspaceBanner =
+    useWorkspaceStore((s) => s.setWorkspaceBanner) || (() => undefined)
+  const clearWorkspaceBannerImage =
+    useWorkspaceStore((s) => s.clearWorkspaceBannerImage) || (() => undefined)
+  const resetWorkspaceBanner =
+    useWorkspaceStore((s) => s.resetWorkspaceBanner) || (() => undefined)
   const setCurrentNote = useWorkspaceStore((s) => s.setCurrentNote)
   const savedWorkspaces = useWorkspaceStore((s) => s.savedWorkspaces)
   const archivedWorkspaces = useWorkspaceStore((s) => s.archivedWorkspaces)
@@ -360,6 +492,118 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
 
   const handleCloseShortcutsModal = () => {
     setShortcutsModalOpen(false)
+  }
+
+  const handleOpenCustomizeBannerModal = () => {
+    setBannerTitleDraft(workspaceBanner.title || "")
+    setBannerSubtitleDraft(workspaceBanner.subtitle || "")
+    setBannerImageDraft(workspaceBanner.image || null)
+    setBannerModalError(null)
+    setBannerModalOpen(true)
+  }
+
+  const handleCloseCustomizeBannerModal = () => {
+    setBannerModalOpen(false)
+    setBannerModalError(null)
+    setBannerImageUploading(false)
+  }
+
+  const handleSaveCustomizeBanner = () => {
+    if (workspaceBanner.image && !bannerImageDraft) {
+      clearWorkspaceBannerImage()
+    }
+    setWorkspaceBanner({
+      title: bannerTitleDraft,
+      subtitle: bannerSubtitleDraft,
+      image: bannerImageDraft
+    })
+    setBannerModalOpen(false)
+    setBannerModalError(null)
+    messageApi.success(
+      t("playground:workspace.customizeBannerSaved", "Banner updated")
+    )
+  }
+
+  const handleResetCustomizeBanner = () => {
+    Modal.confirm({
+      title: t("playground:workspace.customizeBannerResetTitle", "Reset banner?"),
+      content: t(
+        "playground:workspace.customizeBannerResetMessage",
+        "This clears title, subtitle, and image for this workspace banner."
+      ),
+      okText: t("playground:workspace.customizeBannerReset", "Reset banner"),
+      okButtonProps: { danger: true },
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: () => {
+        resetWorkspaceBanner()
+        setBannerTitleDraft("")
+        setBannerSubtitleDraft("")
+        setBannerImageDraft(null)
+        setBannerModalOpen(false)
+        setBannerModalError(null)
+      },
+      centered: true,
+      maskClosable: false
+    })
+  }
+
+  const handleBannerImageFileChange = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0]
+    event.target.value = ""
+    if (!file) return
+
+    setBannerImageUploading(true)
+    setBannerModalError(null)
+    try {
+      const normalizedImage = await normalizeWorkspaceBannerImage(file)
+      setBannerImageDraft(normalizedImage)
+    } catch (error) {
+      if (error instanceof WorkspaceBannerImageNormalizationError) {
+        if (error.code === "unsupported_mime_type") {
+          setBannerModalError(
+            t(
+              "playground:workspace.customizeBannerUnsupportedType",
+              "Upload a JPG, PNG, or WebP image."
+            )
+          )
+        } else if (error.code === "image_too_large") {
+          setBannerModalError(
+            t(
+              "playground:workspace.customizeBannerTooLarge",
+              "Image is too large after processing. Try a smaller image."
+            )
+          )
+        } else {
+          setBannerModalError(
+            t(
+              "playground:workspace.customizeBannerProcessingError",
+              "Could not process that image. Try another file."
+            )
+          )
+        }
+      } else {
+        setBannerModalError(
+          t(
+            "playground:workspace.customizeBannerProcessingError",
+            "Could not process that image. Try another file."
+          )
+        )
+      }
+      return
+    } finally {
+      setBannerImageUploading(false)
+    }
+  }
+
+  const handlePromptBannerImageUpload = () => {
+    bannerFileInputRef.current?.click()
+  }
+
+  const handleRemoveBannerImage = () => {
+    setBannerImageDraft(null)
+    setBannerModalError(null)
   }
 
   const loadTelemetrySummary = React.useCallback(async () => {
@@ -967,6 +1211,15 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             ),
             onClick: handleArchiveCurrentWorkspace
           },
+          {
+            key: "customize-banner",
+            icon: <Pencil className="h-4 w-4" />,
+            label: t(
+              "playground:workspace.customizeBanner",
+              "Customize banner"
+            ),
+            onClick: handleOpenCustomizeBannerModal
+          },
           { type: "divider" as const, key: "divider-current-actions" }
         ]
       : []),
@@ -1084,11 +1337,13 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   return (
     <header
       data-testid="workspace-header"
-      className="flex items-center justify-between border-b border-border bg-surface px-4 py-3"
+      className="flex items-center justify-between border-b border-border/70 bg-[linear-gradient(90deg,var(--surface)_0%,var(--surface-2)_100%)] px-4 py-3.5"
     >
       {messageContextHolder}
       <div className="flex items-center gap-3">
-        <FlaskConical className="h-5 w-5 text-primary" />
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-primary/30 bg-primary/10">
+          <FlaskConical className="h-4 w-4 text-primary" />
+        </span>
         <div className="flex items-center gap-2">
           {isEditing ? (
             <div className="flex items-center gap-1">
@@ -1141,35 +1396,43 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div
+        data-testid="workspace-header-actions"
+        className="flex items-center gap-2"
+      >
         {statusGuardrailsEnabled && (
-          <Tooltip
-            title={
-              connectionIndicator.description
-                ? `${connectionIndicator.detail}: ${connectionIndicator.description}`
-                : connectionIndicator.detail
-            }
+          <div
+            data-testid="workspace-header-status-group"
+            className="flex items-center gap-1 rounded-lg border border-border/60 bg-surface2/30 px-1.5 py-1"
           >
-            <span
-              data-testid="workspace-connection-status-indicator"
-              className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${connectionIndicator.toneClass}`}
-              aria-live="polite"
+            <Tooltip
+              title={
+                connectionIndicator.description
+                  ? `${connectionIndicator.detail}: ${connectionIndicator.description}`
+                  : connectionIndicator.detail
+              }
             >
-              <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current" />
-              {connectionIndicator.label}
-            </span>
-          </Tooltip>
-        )}
-        {statusGuardrailsEnabled && formattedStorageUsage && (
-          <Tooltip title={formattedStorageUsage.longLabel}>
-            <span
-              data-testid="workspace-storage-usage-indicator"
-              className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${formattedStorageUsage.toneClass}`}
-            >
-              {t("playground:workspace.storage", "Storage")}{" "}
-              {formattedStorageUsage.shortLabel}
-            </span>
-          </Tooltip>
+              <span
+                data-testid="workspace-connection-status-indicator"
+                className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${connectionIndicator.toneClass}`}
+                aria-live="polite"
+              >
+                <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current" />
+                {connectionIndicator.label}
+              </span>
+            </Tooltip>
+            {formattedStorageUsage && (
+              <Tooltip title={formattedStorageUsage.longLabel}>
+                <span
+                  data-testid="workspace-storage-usage-indicator"
+                  className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${formattedStorageUsage.toneClass}`}
+                >
+                  {t("playground:workspace.capacity", "Capacity")}{" "}
+                  {formattedStorageUsage.shortLabel}
+                </span>
+              </Tooltip>
+            )}
+          </div>
         )}
         {/* Left pane expand button (only shown when collapsed) */}
         {!hideToggles && !leftPaneOpen && (
@@ -1224,7 +1487,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           <button
             type="button"
             data-testid="workspace-workspaces-button"
-            className="ml-2 flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text transition hover:bg-surface2"
+            className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text transition hover:bg-surface2"
           >
             <span>{t("playground:workspace.workspaces", "Workspaces")}</span>
             <ChevronDown className="h-4 w-4 text-text-muted" />
@@ -1242,6 +1505,116 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           void handleImportWorkspaceFile(event)
         }}
       />
+
+      <input
+        ref={bannerFileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        className="hidden"
+        data-testid="workspace-banner-upload-input"
+        onChange={(event) => {
+          void handleBannerImageFileChange(event)
+        }}
+      />
+
+      <Modal
+        title={t("playground:workspace.customizeBanner", "Customize banner")}
+        open={bannerModalOpen}
+        onCancel={handleCloseCustomizeBannerModal}
+        onOk={handleSaveCustomizeBanner}
+        okText={t("common:save", "Save")}
+        cancelText={t("common:cancel", "Cancel")}
+        width={560}
+        destroyOnHidden
+        footer={[
+          <Button
+            key="reset-banner"
+            danger
+            type="default"
+            onClick={handleResetCustomizeBanner}
+          >
+            {t("playground:workspace.customizeBannerReset", "Reset banner")}
+          </Button>,
+          <Button key="cancel-banner" onClick={handleCloseCustomizeBannerModal}>
+            {t("common:cancel", "Cancel")}
+          </Button>,
+          <Button key="save-banner" type="primary" onClick={handleSaveCustomizeBanner}>
+            {t("common:save", "Save")}
+          </Button>
+        ]}
+      >
+        <div className="space-y-3">
+          <Input
+            value={bannerTitleDraft}
+            onChange={(event) => setBannerTitleDraft(event.target.value)}
+            placeholder={t(
+              "playground:workspace.customizeBannerTitlePlaceholder",
+              "Banner title"
+            )}
+            maxLength={80}
+            data-testid="workspace-banner-title-input"
+          />
+          <Input.TextArea
+            value={bannerSubtitleDraft}
+            onChange={(event) => setBannerSubtitleDraft(event.target.value)}
+            placeholder={t(
+              "playground:workspace.customizeBannerSubtitlePlaceholder",
+              "Banner subtitle"
+            )}
+            maxLength={180}
+            rows={3}
+            data-testid="workspace-banner-subtitle-input"
+          />
+          <div
+            data-testid="workspace-banner-preview"
+            className="overflow-hidden rounded-xl border border-border/70"
+            style={{
+              backgroundImage: bannerImageDraft?.dataUrl
+                ? `linear-gradient(125deg, rgba(8, 12, 18, 0.68) 0%, rgba(8, 12, 18, 0.2) 100%), url(${bannerImageDraft.dataUrl})`
+                : "linear-gradient(125deg, color-mix(in oklab, var(--primary) 24%, transparent) 0%, color-mix(in oklab, var(--surface-2) 76%, transparent) 100%)",
+              backgroundPosition: "center",
+              backgroundSize: "cover"
+            }}
+          >
+            <div className="min-h-[132px] space-y-1 px-4 py-3 text-white">
+              <p className="line-clamp-2 text-lg font-semibold">
+                {bannerTitleDraft.trim() || workspaceName || "Research Workspace"}
+              </p>
+              {bannerSubtitleDraft.trim().length > 0 && (
+                <p className="line-clamp-2 text-sm text-white/90">
+                  {bannerSubtitleDraft.trim()}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              onClick={handlePromptBannerImageUpload}
+              loading={bannerImageUploading}
+              data-testid="workspace-banner-upload-trigger"
+            >
+              {t("playground:workspace.customizeBannerUpload", "Upload image")}
+            </Button>
+            {bannerImageDraft && (
+              <Button
+                danger
+                onClick={handleRemoveBannerImage}
+                data-testid="workspace-banner-remove-image"
+              >
+                {t("playground:workspace.customizeBannerRemoveImage", "Remove image")}
+              </Button>
+            )}
+          </div>
+          {bannerModalError && (
+            <p
+              data-testid="workspace-banner-modal-error"
+              className="rounded border border-error/40 bg-error/10 px-3 py-2 text-sm text-error"
+            >
+              {bannerModalError}
+            </p>
+          )}
+        </div>
+      </Modal>
 
       <Modal
         title={t("playground:workspace.allWorkspaces", "All Workspaces")}

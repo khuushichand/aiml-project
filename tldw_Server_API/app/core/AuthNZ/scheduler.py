@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatch
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
+from tldw_Server_API.app.core.AuthNZ.repos.byok_oauth_state_repo import AuthnzByokOAuthStateRepo
 from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 
@@ -96,6 +97,7 @@ class AuthNZScheduler:
             self._register_api_key_cleanup()
             self._register_audit_log_cleanup()
             self._register_expired_registration_cleanup()
+            self._register_byok_oauth_state_cleanup()
 
             # Register monitoring jobs
             self._register_auth_failure_monitor()
@@ -265,6 +267,18 @@ class AuthNZScheduler:
             max_instances=1
         )
         logger.debug("Registered registration code cleanup job (daily at 1:30 AM)")
+
+    def _register_byok_oauth_state_cleanup(self):
+        """Register job to purge consumed/expired BYOK OAuth state records."""
+        self.scheduler.add_job(
+            self._cleanup_byok_oauth_state,
+            trigger=CronTrigger(hour=1, minute=45),
+            id='byok_oauth_state_cleanup',
+            name='Clean up BYOK OAuth state records',
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.debug("Registered BYOK OAuth state cleanup job (daily at 1:45 AM)")
 
     def _register_auth_failure_monitor(self):
         """Register job to monitor authentication failures"""
@@ -591,6 +605,18 @@ class AuthNZScheduler:
                 logger.info(f"Deactivated {count} expired registration codes")
         except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to cleanup registration codes: {e}")
+
+    async def _cleanup_byok_oauth_state(self):
+        """Purge consumed and expired BYOK OAuth state records."""
+        try:
+            db_pool = await get_db_pool()
+            repo = AuthnzByokOAuthStateRepo(db_pool)
+            await repo.ensure_tables()
+            purged = await repo.purge_expired()
+            if purged:
+                logger.info(f"Purged {purged} BYOK OAuth state rows")
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Failed to cleanup BYOK OAuth state: {e}")
 
     # Monitoring Jobs
 

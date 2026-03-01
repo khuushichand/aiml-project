@@ -2,6 +2,7 @@
 # Description: This file contains the API endpoints for managing Llama.cpp server operations in tldw_Server_API.
 #
 # Imports
+import inspect
 from typing import Any, Optional
 
 #
@@ -9,7 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, require_roles
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler import LlamaCppHandler
 
@@ -67,7 +68,7 @@ def _resolve_llm_manager(request: Request) -> LLMInferenceManager:
     return mgr  # type: ignore[return-value]
 
 def _llamacpp_unavailable(detail: Optional[str] = None) -> HTTPException:
-    base = "Llama.cpp backend is not configured."
+    base = "Managed llama.cpp backend is not configured."
     guidance = "Enable [LlamaCpp] enabled=true in Config_Files/config.txt and restart the server."
     message = f"{base} ({detail}) {guidance}" if detail else f"{base} {guidance}"
     return HTTPException(status_code=503, detail=message)
@@ -87,7 +88,11 @@ def _resolve_llamacpp_target(llm_manager: LLMInferenceManager, required: tuple[s
 
 
 # --- Llama.cpp Specific Endpoints ---
-@router.post("/llamacpp/start_server", summary="Start or Swap Llama.cpp Server Model")
+@router.post(
+    "/llamacpp/start_server",
+    summary="Start or Swap Llama.cpp Server Model",
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
+)
 async def start_llamacpp_server_endpoint(
         model_filename: str = Body(..., embed=True,
                                    description="Filename of the GGUF model to load (e.g., 'mistral-7b-v0.1.Q4_K_M.gguf')"),
@@ -106,6 +111,9 @@ async def start_llamacpp_server_endpoint(
             result = await target.start_server(model_filename=model_filename, server_args=server_args)
         else:
             result = await target.start_server(backend="llamacpp", model_name=model_filename, server_args=server_args)
+        if isinstance(result, dict):
+            result.setdefault("status", "started")
+            result.setdefault("backend", "llamacpp")
         return result
     except HTTPException:
         raise
@@ -118,7 +126,11 @@ async def start_llamacpp_server_endpoint(
         raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
-@router.post("/llamacpp/stop_server", summary="Stop Llama.cpp Server")
+@router.post(
+    "/llamacpp/stop_server",
+    summary="Stop Llama.cpp Server",
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
+)
 async def stop_llamacpp_server_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
         target = _resolve_llamacpp_target(llm_manager, ("stop_server",))
@@ -126,7 +138,7 @@ async def stop_llamacpp_server_endpoint(llm_manager: LLMInferenceManager = Depen
             result = await target.stop_server()
         else:
             result = await target.stop_server(backend="llamacpp")
-        return {"message": result}
+        return {"status": "stopped", "message": result, "backend": "llamacpp"}
     except HTTPException:
         raise
     except InferenceError as e:
@@ -138,7 +150,11 @@ async def stop_llamacpp_server_endpoint(llm_manager: LLMInferenceManager = Depen
         raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
-@router.get("/llamacpp/status", summary="Get Llama.cpp Server Status")
+@router.get(
+    "/llamacpp/status",
+    summary="Get Llama.cpp Server Status",
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
+)
 async def get_llamacpp_status_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
         target = _resolve_llamacpp_target(llm_manager, ("get_server_status",))
@@ -146,6 +162,8 @@ async def get_llamacpp_status_endpoint(llm_manager: LLMInferenceManager = Depend
             status = await target.get_server_status()
         else:
             status = await target.get_server_status(backend="llamacpp")  # Via manager
+        if isinstance(status, dict):
+            status.setdefault("backend", "llamacpp")
         return status
     except HTTPException:
         raise
@@ -156,11 +174,20 @@ async def get_llamacpp_status_endpoint(llm_manager: LLMInferenceManager = Depend
         raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
-@router.get("/llamacpp/metrics", summary="Get Llama.cpp Metrics")
+@router.get(
+    "/llamacpp/metrics",
+    summary="Get Llama.cpp Metrics",
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
+)
 async def get_llamacpp_metrics_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
         handler = _resolve_llamacpp_target(llm_manager, ("get_metrics",))
-        return handler.get_metrics()
+        metrics = handler.get_metrics()
+        if inspect.isawaitable(metrics):
+            metrics = await metrics
+        if isinstance(metrics, dict):
+            metrics.setdefault("backend", "llamacpp")
+        return metrics
     except HTTPException:
         raise
     except InferenceError as e:
@@ -186,19 +213,21 @@ async def get_llamafile_metrics_endpoint(llm_manager: LLMInferenceManager = Depe
         raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
-@router.get("/llamacpp/models", summary="List available Llama.cpp models")
+@router.get(
+    "/llamacpp/models",
+    summary="List available Llama.cpp models",
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
+)
 async def list_llamacpp_models_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
         handler = getattr(llm_manager, "llamacpp", None)
-        if handler is None:
-            raise _llamacpp_unavailable()
-        if hasattr(handler, "list_models"):
+        if handler is not None and hasattr(handler, "list_models"):
             models = await handler.list_models()
         elif hasattr(llm_manager, "list_local_models"):
             models = await llm_manager.list_local_models(backend="llamacpp")
         else:
             raise _llamacpp_unavailable()
-        return {"available_models": models}
+        return {"available_models": models, "backend": "llamacpp"}
     except HTTPException:
         raise
     except InferenceError as e:
@@ -222,8 +251,6 @@ async def run_llamacpp_inference_endpoint(
     """
     try:
         handler = getattr(llm_manager, "llamacpp", None)
-        if handler is None:
-            raise _llamacpp_unavailable()
         # Prefer handler methods when available; fallback to manager for compatibility with tests
         if handler and hasattr(handler, "get_server_status") and hasattr(handler, "inference"):
             status = await handler.get_server_status()
@@ -246,6 +273,8 @@ async def run_llamacpp_inference_endpoint(
             )
         else:
             raise _llamacpp_unavailable()
+        if isinstance(result, dict):
+            result.setdefault("backend", "llamacpp")
         return result
     except HTTPException:
         raise

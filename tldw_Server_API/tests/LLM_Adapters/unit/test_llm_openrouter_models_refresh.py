@@ -1,4 +1,5 @@
 import configparser
+import asyncio
 
 
 def _fake_config_openrouter():
@@ -23,8 +24,9 @@ class _FakeResponse:
         return None
 
 
-def test_llm_models_metadata_refresh_openrouter_includes_live_models(monkeypatch, client_user_only):
+def test_llm_models_metadata_refresh_openrouter_includes_live_models(monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_providers
+    import tldw_Server_API.app.core.LLM_Calls.openrouter_model_inventory as openrouter_inventory
 
     calls = {"count": 0}
 
@@ -45,18 +47,28 @@ def test_llm_models_metadata_refresh_openrouter_includes_live_models(monkeypatch
     monkeypatch.setattr(llm_providers, "get_api_keys", lambda: {"openrouter": "sk-or-test"})
     monkeypatch.setattr(llm_providers, "list_image_models_for_catalog", lambda: [])
     monkeypatch.setattr(llm_providers, "_http_fetch", _fake_fetch)
-    monkeypatch.setattr(llm_providers, "_OPENROUTER_MODEL_CACHE", {})
+    openrouter_inventory.clear_openrouter_model_cache()
 
-    client = client_user_only
-
-    refreshed = client.get("/api/v1/llm/models/metadata?refresh_openrouter=true")
-    assert refreshed.status_code == 200
-    refreshed_names = {m.get("name") for m in refreshed.json().get("models", [])}
+    refreshed = asyncio.run(
+        llm_providers.get_models_metadata(
+            refresh_openrouter=True,
+            model_type=None,
+            input_modality=None,
+            output_modality=None,
+        )
+    )
+    refreshed_names = {m.get("name") for m in refreshed.get("models", [])}
     assert "z-ai/glm-4.6" in refreshed_names
     assert calls["count"] == 1
 
-    cached = client.get("/api/v1/llm/models/metadata")
-    assert cached.status_code == 200
-    cached_names = {m.get("name") for m in cached.json().get("models", [])}
+    cached = asyncio.run(
+        llm_providers.get_models_metadata(
+            refresh_openrouter=False,
+            model_type=None,
+            input_modality=None,
+            output_modality=None,
+        )
+    )
+    cached_names = {m.get("name") for m in cached.get("models", [])}
     assert "z-ai/glm-4.6" in cached_names
     assert calls["count"] == 1

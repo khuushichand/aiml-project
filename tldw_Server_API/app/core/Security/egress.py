@@ -55,6 +55,7 @@ PRIVATE_RANGES = [
 class URLPolicyResult:
     allowed: bool
     reason: str | None = None
+    resolved_ips: tuple[str, ...] = ()
 
 
 def _normalize_hostname(host: str) -> str:
@@ -149,6 +150,20 @@ def _is_private_ip(ip: str) -> bool:
         return True
 
 
+def _normalize_resolved_ips(ips: Sequence[str] | None) -> tuple[str, ...]:
+    if not ips:
+        return ()
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in ips:
+        ip = str(raw).strip()
+        if not ip or ip in seen:
+            continue
+        seen.add(ip)
+        out.append(ip)
+    return tuple(out)
+
+
 def _resolve_and_check_private(host: str) -> tuple[bool, list[str]]:
     ips: list[str] = []
     # If the host is already an IP address, check directly
@@ -180,6 +195,7 @@ def evaluate_url_policy(
     allowlist: Sequence[str] | None = None,
     denylist: Sequence[str] | None = None,
     block_private_override: bool | None = None,
+    resolved_ips_override: Sequence[str] | None = None,
 ) -> URLPolicyResult:
     """Evaluate whether a URL passes the egress policy."""
     try:
@@ -261,14 +277,25 @@ def evaluate_url_policy(
         if allowlist and not _host_matches_allowlist(host, allowlist):
             return URLPolicyResult(False, "Host not in allowlist")
 
+    resolved_ips: tuple[str, ...] = ()
     if _should_block_private_env(block_private_override):
-        ok, ips = _resolve_and_check_private(host)
-        if not ok:
-            if not ips:
+        if resolved_ips_override is not None:
+            resolved_ips = _normalize_resolved_ips(resolved_ips_override)
+            if not resolved_ips:
                 return URLPolicyResult(False, "Host could not be resolved")
-            return URLPolicyResult(False, "URL resolves to a private or reserved address")
+            if any(_is_private_ip(ip) for ip in resolved_ips):
+                return URLPolicyResult(False, "URL resolves to a private or reserved address", resolved_ips)
+        else:
+            ok, ips = _resolve_and_check_private(host)
+            resolved_ips = _normalize_resolved_ips(ips)
+            if not ok:
+                if not resolved_ips:
+                    return URLPolicyResult(False, "Host could not be resolved")
+                return URLPolicyResult(False, "URL resolves to a private or reserved address", resolved_ips)
+    else:
+        resolved_ips = _normalize_resolved_ips(resolved_ips_override)
 
-    return URLPolicyResult(True, None)
+    return URLPolicyResult(True, None, resolved_ips)
 
 
 def is_private_ip(ip: str) -> bool:

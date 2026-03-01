@@ -69,3 +69,33 @@ def test_transcriptions_health_warm_uses_whisper_model(monkeypatch, client: Test
     warm = data.get("warm") or {}
     assert warm.get("ok") is True
     assert calls.get("model_name") is not None
+    assert data.get("available") is True
+    assert data.get("usable") is True
+
+
+@pytest.mark.unit
+def test_transcriptions_health_exposes_usable_for_non_whisper(monkeypatch, client: TestClient):
+    """
+    Non-Whisper providers can be usable even when they report not-locally-ready.
+    Surface `usable` explicitly so clients can avoid hard-disabling dictation.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
+
+    def fake_status(_model_name: str):
+        return {
+            "available": False,
+            "usable": True,
+            "provider": "parakeet",
+            "model": "parakeet-mlx",
+            "message": "Parakeet can initialize on first use.",
+        }
+
+    monkeypatch.setattr(audio_files, "check_transcription_model_status", fake_status)
+
+    r = client.get("/api/v1/audio/transcriptions/health", params={"model": "parakeet-mlx"})
+    assert r.status_code == 200
+    data = r.json()
+
+    assert data.get("provider") == "parakeet"
+    assert data.get("available") is False
+    assert data.get("usable") is True

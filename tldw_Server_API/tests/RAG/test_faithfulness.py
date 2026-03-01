@@ -226,6 +226,16 @@ class TestParseJsonArray:
         result = _parse_json_array(text)
         assert result == ["claim A", "claim B"]
 
+    def test_fenced_array_with_think_tags(self):
+        text = (
+            "<think>internal reasoning</think>\n"
+            "```json\n"
+            '["claim A", "claim B"]\n'
+            "```"
+        )
+        result = _parse_json_array(text)
+        assert result == ["claim A", "claim B"]
+
     def test_not_an_array_returns_empty(self):
         """If the JSON is valid but not an array, return empty list."""
         result = _parse_json_array('{"key": "value"}')
@@ -295,6 +305,17 @@ class TestParseJsonObject:
         text = 'Sure, here is the verification:\n{"supported": false, "reasoning": "not found"}'
         result = _parse_json_object(text)
         assert result["supported"] is False
+
+    def test_fenced_object_with_think_tags(self):
+        text = (
+            "<think>internal reasoning</think>\n"
+            "```json\n"
+            '{"supported": true, "reasoning": "in context"}\n'
+            "```"
+        )
+        result = _parse_json_object(text)
+        assert result["supported"] is True
+        assert result["reasoning"] == "in context"
 
     def test_not_an_object_returns_empty(self):
         """If the JSON is valid but not a dict, return empty dict."""

@@ -875,6 +875,13 @@ def _parse_host_from_url(url: str) -> str:
         return ""
 
 
+def _normalize_dns_pin_host(host: str) -> str:
+    out = (host or "").strip().lower().rstrip(".")
+    if "%" in out:
+        out = out.split("%", 1)[0]
+    return out
+
+
 def _inject_trace_headers(headers: dict[str, str] | None) -> dict[str, str]:
     out = dict(headers or {})
     if _OTEL_AVAILABLE:
@@ -899,7 +906,11 @@ def _inject_trace_headers(headers: dict[str, str] | None) -> dict[str, str]:
     return out
 
 
-def _validate_egress_or_raise(url: str) -> None:
+def _validate_egress_or_raise(
+    url: str,
+    *,
+    dns_pin_cache: dict[str, tuple[str, ...]] | None = None,
+) -> None:
     from urllib.parse import urlparse as _urlparse
 
     from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
@@ -909,6 +920,9 @@ def _validate_egress_or_raise(url: str) -> None:
     # enforce the default private IP policy so security-focused tests remain
     # accurate.
     block_override: bool | None = None
+    host = ""
+    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
+        host = ((_urlparse(url).hostname or "").strip())
     if is_explicit_pytest_runtime() or env_flag_enabled("TESTING") or is_test_mode():
         try:
             parsed = _urlparse(url)
@@ -926,7 +940,28 @@ def _validate_egress_or_raise(url: str) -> None:
         if not is_ip:
             block_override = False
 
-    res = evaluate_url_policy(url, block_private_override=block_override)
+    cache_host = _normalize_dns_pin_host(host)
+    pinned_ips: tuple[str, ...] | None = None
+    if dns_pin_cache is not None and cache_host:
+        pinned_ips = dns_pin_cache.get(cache_host)
+
+    if pinned_ips:
+        res = evaluate_url_policy(
+            url,
+            block_private_override=block_override,
+            resolved_ips_override=pinned_ips,
+        )
+    else:
+        res = evaluate_url_policy(url, block_private_override=block_override)
+        if dns_pin_cache is not None and cache_host:
+            resolved_ips = tuple(
+                str(ip).strip()
+                for ip in (getattr(res, "resolved_ips", ()) or ())
+                if str(ip).strip()
+            )
+            if resolved_ips:
+                dns_pin_cache[cache_host] = resolved_ips
+
     if not getattr(res, "allowed", False):
         reason = res.reason or "URL not allowed by egress policy"
         # metrics
@@ -1983,7 +2018,8 @@ async def _afetch_httpx(
         raise RuntimeError("httpx is not available")  # noqa: TRY003
     retry = retry or RetryPolicy()
     _validate_retry_files_seekable(files, retry)
-    _validate_egress_or_raise(url)
+    dns_pin_cache: dict[str, tuple[str, ...]] = {}
+    _validate_egress_or_raise(url, dns_pin_cache=dns_pin_cache)
     _validate_proxies_or_raise(proxies)
 
     attempts = max(1, retry.attempts)
@@ -2080,7 +2116,7 @@ async def _afetch_httpx(
 
                 # Manual redirect handling inside each attempt
                 while True:
-                    _validate_egress_or_raise(cur_url)
+                    _validate_egress_or_raise(cur_url, dns_pin_cache=dns_pin_cache)
                     resp, reason = await _do_once(ac, cur_url)
                     if resp is None:
                         # Special HEAD fallbacks: disable HTTP/2, then GET with Range 0-0
@@ -2307,7 +2343,8 @@ async def _afetch_aiohttp(
         raise RuntimeError("aiohttp is not available")  # noqa: TRY003
     retry = retry or RetryPolicy()
     _validate_retry_files_seekable(files, retry)
-    _validate_egress_or_raise(url)
+    dns_pin_cache: dict[str, tuple[str, ...]] = {}
+    _validate_egress_or_raise(url, dns_pin_cache=dns_pin_cache)
     _validate_proxies_or_raise(proxies)
 
     attempts = max(1, retry.attempts)
@@ -2383,7 +2420,7 @@ async def _afetch_aiohttp(
             redirects = 0
 
             while True:
-                _validate_egress_or_raise(cur_url)
+                _validate_egress_or_raise(cur_url, dns_pin_cache=dns_pin_cache)
                 resp, reason = await _do_once(session, cur_url)
                 if resp is None:
                     if method_upper == "HEAD" and not _head_get_range_tried:
@@ -2661,7 +2698,8 @@ def _fetch_httpx_response(
         raise RuntimeError("httpx is not available")  # noqa: TRY003
     retry = retry or RetryPolicy()
     _validate_retry_files_seekable(files, retry)
-    _validate_egress_or_raise(url)
+    dns_pin_cache: dict[str, tuple[str, ...]] = {}
+    _validate_egress_or_raise(url, dns_pin_cache=dns_pin_cache)
     _validate_proxies_or_raise(proxies)
 
     attempts = max(1, retry.attempts)
@@ -2733,7 +2771,7 @@ def _fetch_httpx_response(
                 cur_url = url
                 redirects = 0
                 while True:
-                    _validate_egress_or_raise(cur_url)
+                    _validate_egress_or_raise(cur_url, dns_pin_cache=dns_pin_cache)
                     resp, reason = _do_once(sc, cur_url)
                     if resp is None:
                         if method_upper == "HEAD":
@@ -3401,7 +3439,8 @@ async def _astream_sse_httpx(
     if headers:
         hdrs.update(headers)
     retry = retry or RetryPolicy()
-    _validate_egress_or_raise(url)
+    dns_pin_cache: dict[str, tuple[str, ...]] = {}
+    _validate_egress_or_raise(url, dns_pin_cache=dns_pin_cache)
     _validate_proxies_or_raise(proxies)
 
     need_close = False
@@ -3420,7 +3459,7 @@ async def _astream_sse_httpx(
         for attempt in range(1, attempts + 1):
             # manual redirect handling before starting to read body
             while True:
-                _validate_egress_or_raise(cur_url)
+                _validate_egress_or_raise(cur_url, dns_pin_cache=dns_pin_cache)
                 try:
                     # Optional cert pinning
                     try:
@@ -3537,7 +3576,8 @@ async def _astream_sse_aiohttp(
     if headers:
         hdrs.update(headers)
     retry = retry or RetryPolicy()
-    _validate_egress_or_raise(url)
+    dns_pin_cache: dict[str, tuple[str, ...]] = {}
+    _validate_egress_or_raise(url, dns_pin_cache=dns_pin_cache)
     _validate_proxies_or_raise(proxies)
 
     session = client or _get_aiohttp_session()
@@ -3549,7 +3589,7 @@ async def _astream_sse_aiohttp(
 
     for attempt in range(1, attempts + 1):
         while True:
-            _validate_egress_or_raise(cur_url)
+            _validate_egress_or_raise(cur_url, dns_pin_cache=dns_pin_cache)
             try:
                 # Optional cert pinning
                 try:

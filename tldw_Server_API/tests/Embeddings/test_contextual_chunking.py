@@ -16,10 +16,10 @@ class TestContextualChunking:
     """Test suite for contextual chunking features."""
 
     @pytest.fixture
-    def mock_config(self):
+    def mock_config(self, tmp_path):
         """Create a mock configuration with contextual settings."""
         return {
-            "USER_DB_BASE_DIR": "/tmp/test_db",
+            "USER_DB_BASE_DIR": str(tmp_path / "test_db"),
             "embedding_config": {
                 "default_model_id": "test-model",
                 "enable_contextual_chunking": False,  # Default to false

@@ -46,8 +46,8 @@ def claims_extraction_enabled(form_data: Any) -> bool:
     """
     Determine whether claim extraction should run for this request.
 
-    This mirrors `_legacy_media._claims_extraction_enabled` so behaviour
-    remains unchanged while the logic lives in core.
+    This mirrors prior endpoint-local claims gating behavior so semantics
+    remain unchanged while the logic lives in core.
     """
     value = getattr(form_data, "perform_claims_extraction", None)
     if value is not None:
@@ -94,7 +94,7 @@ def prepare_claims_chunks(
     Build a chunk list and index->text map suitable for claim extraction.
 
     Prefers existing chunks, falls back to segments, and finally full content.
-    Mirrors `_legacy_media._prepare_claims_chunks`.
+    Mirrors the earlier endpoint-local chunk preparation behavior.
     """
     prepared_chunks: list[dict[str, Any]] = []
     chunk_text_map: dict[int, str] = {}
@@ -147,7 +147,7 @@ async def extract_claims_if_requested(
     Optionally extract claims for a processing result.
 
     This is the core implementation used by ingestion helpers; it
-    mirrors `_legacy_media._extract_claims_if_requested`.
+    mirrors the earlier endpoint-local claims extraction behavior.
     """
     process_result.setdefault("claims", None)
     process_result.setdefault("claims_details", None)
@@ -272,7 +272,7 @@ async def persist_claims_if_applicable(
     """
     Persist extracted claims to the database when a media id is available.
 
-    Shared between legacy ingestion and core helpers so behaviour remains
+    Shared between endpoint ingestion and core helpers so behavior remains
     consistent regardless of the entrypoint.
     """
     details = process_result.get("claims_details")

@@ -6,7 +6,6 @@ import configparser
 import contextlib
 import json
 import os
-import sys
 from collections.abc import MutableMapping
 from functools import lru_cache
 from pathlib import Path
@@ -992,18 +991,50 @@ def load_settings():
     SANDBOX_NETWORK_DEFAULT = _sbx_env_or_cfg("SANDBOX_NETWORK_DEFAULT", "network_default", "deny_all").lower()
     SANDBOX_MAX_UPLOAD_MB = _sbx_int("SANDBOX_MAX_UPLOAD_MB", "max_upload_mb", 64)
     SANDBOX_ARTIFACT_TTL_HOURS = _sbx_int("SANDBOX_ARTIFACT_TTL_HOURS", "artifact_ttl_hours", 24)
+    SANDBOX_ARTIFACT_JANITOR_BACKGROUND_ENABLED = is_truthy(
+        os.getenv("SANDBOX_ARTIFACT_JANITOR_BACKGROUND_ENABLED")
+        or _sbx_get("artifact_janitor_background_enabled", "true")
+        or "true"
+    )
     SANDBOX_MAX_CONCURRENT_RUNS = _sbx_int("SANDBOX_MAX_CONCURRENT_RUNS", "max_concurrent_runs", 8)
+    SANDBOX_ACTIVE_MAX_PER_USER = _sbx_int("SANDBOX_ACTIVE_MAX_PER_USER", "active_max_per_user", 0)
+    SANDBOX_ACTIVE_MAX_PER_PERSONA = _sbx_int("SANDBOX_ACTIVE_MAX_PER_PERSONA", "active_max_per_persona", 0)
+    SANDBOX_ACTIVE_MAX_PER_WORKSPACE = _sbx_int("SANDBOX_ACTIVE_MAX_PER_WORKSPACE", "active_max_per_workspace", 0)
+    SANDBOX_ACTIVE_MAX_PER_WORKSPACE_GROUP = _sbx_int("SANDBOX_ACTIVE_MAX_PER_WORKSPACE_GROUP", "active_max_per_workspace_group", 0)
+    SANDBOX_SESSION_DELETE_DRAIN_TIMEOUT_SEC = _sbx_int(
+        "SANDBOX_SESSION_DELETE_DRAIN_TIMEOUT_SEC",
+        "session_delete_drain_timeout_sec",
+        10,
+    )
+    SANDBOX_ARTIFACT_JANITOR_INTERVAL_SEC = _sbx_int("SANDBOX_ARTIFACT_JANITOR_INTERVAL_SEC", "artifact_janitor_interval_sec", 30)
+    SANDBOX_ARTIFACT_RECONCILE_INTERVAL_SEC = _sbx_int(
+        "SANDBOX_ARTIFACT_RECONCILE_INTERVAL_SEC",
+        "artifact_reconcile_interval_sec",
+        300,
+    )
+    SANDBOX_SNAPSHOT_MAX_COUNT = _sbx_int("SANDBOX_SNAPSHOT_MAX_COUNT", "snapshot_max_count", 10)
+    SANDBOX_SNAPSHOT_MAX_SIZE_MB = _sbx_int("SANDBOX_SNAPSHOT_MAX_SIZE_MB", "snapshot_max_size_mb", 256)
     SANDBOX_MAX_LOG_BYTES = _sbx_int("SANDBOX_MAX_LOG_BYTES", "max_log_bytes", 10 * 1024 * 1024)
     SANDBOX_PIDS_LIMIT = _sbx_int("SANDBOX_PIDS_LIMIT", "pids_limit", 256)
     SANDBOX_MAX_CPU = _sbx_float("SANDBOX_MAX_CPU", "max_cpu", 4.0)
     SANDBOX_MAX_MEM_MB = _sbx_int("SANDBOX_MAX_MEM_MB", "max_mem_mb", 8192)
     SANDBOX_WORKSPACE_CAP_MB = _sbx_int("SANDBOX_WORKSPACE_CAP_MB", "workspace_cap_mb", 256)
     # Queue/backpressure defaults for sandbox orchestrator
-    _sbx_int("SANDBOX_QUEUE_MAX_LENGTH", "queue_max_length", 100)
-    _sbx_int("SANDBOX_QUEUE_TTL_SEC", "queue_ttl_sec", 120)
+    SANDBOX_QUEUE_MAX_LENGTH = _sbx_int("SANDBOX_QUEUE_MAX_LENGTH", "queue_max_length", 100)
+    SANDBOX_QUEUE_TTL_SEC = _sbx_int("SANDBOX_QUEUE_TTL_SEC", "queue_ttl_sec", 120)
+    SANDBOX_QUEUE_MAX_PER_USER = _sbx_int("SANDBOX_QUEUE_MAX_PER_USER", "queue_max_per_user", 0)
+    SANDBOX_QUEUE_MAX_PER_PERSONA = _sbx_int("SANDBOX_QUEUE_MAX_PER_PERSONA", "queue_max_per_persona", 0)
+    SANDBOX_QUEUE_MAX_PER_WORKSPACE = _sbx_int("SANDBOX_QUEUE_MAX_PER_WORKSPACE", "queue_max_per_workspace", 0)
+    SANDBOX_QUEUE_MAX_PER_WORKSPACE_GROUP = _sbx_int("SANDBOX_QUEUE_MAX_PER_WORKSPACE_GROUP", "queue_max_per_workspace_group", 0)
+    SANDBOX_RUN_CLAIM_LEASE_SEC = _sbx_int("SANDBOX_RUN_CLAIM_LEASE_SEC", "run_claim_lease_sec", 30)
     # WebSocket server poll timeout (seconds) for sandbox log streams
     # Tests may override to a smaller value (e.g., 1) via env to speed disconnects
     SANDBOX_WS_POLL_TIMEOUT_SEC = _sbx_int("SANDBOX_WS_POLL_TIMEOUT_SEC", "ws_poll_timeout_sec", 30)
+    SANDBOX_WS_MAX_CONNECTIONS_TOTAL = _sbx_int("SANDBOX_WS_MAX_CONNECTIONS_TOTAL", "ws_max_connections_total", 1024)
+    SANDBOX_WS_MAX_CONNECTIONS_PER_USER = _sbx_int("SANDBOX_WS_MAX_CONNECTIONS_PER_USER", "ws_max_connections_per_user", 64)
+    SANDBOX_WS_MAX_CONNECTIONS_PER_PERSONA = _sbx_int("SANDBOX_WS_MAX_CONNECTIONS_PER_PERSONA", "ws_max_connections_per_persona", 32)
+    SANDBOX_WS_MAX_CONNECTIONS_PER_SESSION = _sbx_int("SANDBOX_WS_MAX_CONNECTIONS_PER_SESSION", "ws_max_connections_per_session", 16)
+    SANDBOX_WS_MAX_CONNECTIONS_PER_RUN = _sbx_int("SANDBOX_WS_MAX_CONNECTIONS_PER_RUN", "ws_max_connections_per_run", 8)
     # Optional: signed WS URLs for log_stream_url issuance
     SANDBOX_WS_SIGNED_URL_TTL_SEC = _sbx_int("SANDBOX_WS_SIGNED_URL_TTL_SEC", "ws_signed_url_ttl_sec", 60)
     SANDBOX_WS_SIGNED_URLS = is_truthy(
@@ -1011,7 +1042,7 @@ def load_settings():
         or _sbx_get("ws_signed_urls", "false")
         or "false"
     )
-    os.getenv("SANDBOX_WS_SIGNING_SECRET") or _sbx_get("ws_signing_secret", None)
+    SANDBOX_WS_SIGNING_SECRET = os.getenv("SANDBOX_WS_SIGNING_SECRET") or _sbx_get("ws_signing_secret", None)
     # Test-only helper: when true, the WS endpoint will publish synthetic
     # start/end frames to ensure subscribers see frames immediately. Disabled
     # by default; tests should set SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS=true.
@@ -1045,7 +1076,7 @@ def load_settings():
     # Store backend (sqlite|memory) and path
     # Default to in-memory store for MVP to align with PRD (can be overridden to 'sqlite')
     SANDBOX_STORE_BACKEND = _sbx_env_or_cfg("SANDBOX_STORE_BACKEND", "store_backend", "memory").lower()
-    SANDBOX_STORE_DB_PATH = _sbx_get("store_db_path", None)
+    SANDBOX_STORE_DB_PATH = os.getenv("SANDBOX_STORE_DB_PATH") or _sbx_get("store_db_path", None)
 
     config_dict = {
         # General App
@@ -1132,7 +1163,17 @@ def load_settings():
         "SANDBOX_NETWORK_DEFAULT": SANDBOX_NETWORK_DEFAULT,
         "SANDBOX_MAX_UPLOAD_MB": SANDBOX_MAX_UPLOAD_MB,
         "SANDBOX_ARTIFACT_TTL_HOURS": SANDBOX_ARTIFACT_TTL_HOURS,
+        "SANDBOX_ARTIFACT_JANITOR_BACKGROUND_ENABLED": SANDBOX_ARTIFACT_JANITOR_BACKGROUND_ENABLED,
         "SANDBOX_MAX_CONCURRENT_RUNS": SANDBOX_MAX_CONCURRENT_RUNS,
+        "SANDBOX_ACTIVE_MAX_PER_USER": SANDBOX_ACTIVE_MAX_PER_USER,
+        "SANDBOX_ACTIVE_MAX_PER_PERSONA": SANDBOX_ACTIVE_MAX_PER_PERSONA,
+        "SANDBOX_ACTIVE_MAX_PER_WORKSPACE": SANDBOX_ACTIVE_MAX_PER_WORKSPACE,
+        "SANDBOX_ACTIVE_MAX_PER_WORKSPACE_GROUP": SANDBOX_ACTIVE_MAX_PER_WORKSPACE_GROUP,
+        "SANDBOX_SESSION_DELETE_DRAIN_TIMEOUT_SEC": SANDBOX_SESSION_DELETE_DRAIN_TIMEOUT_SEC,
+        "SANDBOX_ARTIFACT_JANITOR_INTERVAL_SEC": SANDBOX_ARTIFACT_JANITOR_INTERVAL_SEC,
+        "SANDBOX_ARTIFACT_RECONCILE_INTERVAL_SEC": SANDBOX_ARTIFACT_RECONCILE_INTERVAL_SEC,
+        "SANDBOX_SNAPSHOT_MAX_COUNT": SANDBOX_SNAPSHOT_MAX_COUNT,
+        "SANDBOX_SNAPSHOT_MAX_SIZE_MB": SANDBOX_SNAPSHOT_MAX_SIZE_MB,
         "SANDBOX_MAX_LOG_BYTES": SANDBOX_MAX_LOG_BYTES,
         "SANDBOX_PIDS_LIMIT": SANDBOX_PIDS_LIMIT,
         "SANDBOX_MAX_CPU": SANDBOX_MAX_CPU,
@@ -1181,6 +1222,7 @@ def load_settings():
         "SANDBOX_DOCKER_APPARMOR_PROFILE": SANDBOX_DOCKER_APPARMOR_PROFILE,
         "SANDBOX_STORE_BACKEND": SANDBOX_STORE_BACKEND,
         "SANDBOX_STORE_DB_PATH": SANDBOX_STORE_DB_PATH,
+        "SANDBOX_RUN_CLAIM_LEASE_SEC": SANDBOX_RUN_CLAIM_LEASE_SEC,
         # Email ingestion/search rollout controls
         "EMAIL_NATIVE_PERSIST_ENABLED": is_truthy(
             os.getenv("EMAIL_NATIVE_PERSIST_ENABLED", "true")
@@ -1195,6 +1237,7 @@ def load_settings():
         )(
             str(os.getenv("EMAIL_MEDIA_SEARCH_DELEGATION_MODE", "opt_in")).strip().lower()
         ),
+        "GOVERNANCE_ROLLOUT_MODE": resolve_governance_rollout_mode(),
         "EMAIL_GMAIL_CONNECTOR_ENABLED": is_truthy(
             os.getenv("EMAIL_GMAIL_CONNECTOR_ENABLED", "false")
         ),
@@ -1334,6 +1377,29 @@ def load_settings():
                                 _cp.get('Claims', 'CLAIMS_LOCAL_NER_MODEL_MAP', fallback='') if _cp else ''
                             )
                         ),
+                        "CLAIMS_PROMPT_VALIDATION_MODE": (
+                            _env.get("CLAIMS_PROMPT_VALIDATION_MODE")
+                            if _env.get("CLAIMS_PROMPT_VALIDATION_MODE") is not None else (
+                                _cp.get('Claims', 'CLAIMS_PROMPT_VALIDATION_MODE', fallback='warning') if _cp else 'warning'
+                            )
+                        ),
+                        "CLAIMS_PROMPT_VALIDATION_STRICT": (
+                            (_env.get("CLAIMS_PROMPT_VALIDATION_STRICT").lower() == "true") if _env.get("CLAIMS_PROMPT_VALIDATION_STRICT") is not None else (
+                                _cp.getboolean('Claims', 'CLAIMS_PROMPT_VALIDATION_STRICT', fallback=False) if _cp else False
+                            )
+                        ),
+                        "CLAIMS_CONTEXT_WINDOW_CHARS": (
+                            _safe_int(
+                                _env.get("CLAIMS_CONTEXT_WINDOW_CHARS"),
+                                int(_cp.getint('Claims', 'CLAIMS_CONTEXT_WINDOW_CHARS', fallback=0)) if _cp else 0,
+                            )
+                        ),
+                        "CLAIMS_EXTRACTION_PASSES": (
+                            _safe_int(
+                                _env.get("CLAIMS_EXTRACTION_PASSES"),
+                                int(_cp.getint('Claims', 'CLAIMS_EXTRACTION_PASSES', fallback=1)) if _cp else 1,
+                            )
+                        ),
                     }
                 ))({
                     k: os.getenv(k) for k in [
@@ -1342,7 +1408,9 @@ def load_settings():
                         "CLAIMS_CLUSTER_SIMILARITY_THRESHOLD", "CLAIMS_CLUSTER_BATCH_SIZE",
                         "CLAIMS_LLM_PROVIDER", "CLAIMS_LLM_TEMPERATURE", "CLAIMS_JOB_BUDGET_ENABLED",
                         "CLAIMS_JOB_MAX_COST_USD", "CLAIMS_JOB_MAX_TOKENS", "CLAIMS_JOB_BUDGET_STRICT",
-                        "CLAIMS_LOCAL_NER_MODEL", "CLAIMS_EXTRACTOR_LANGUAGE_DEFAULT", "CLAIMS_LOCAL_NER_MODEL_MAP"
+                        "CLAIMS_LOCAL_NER_MODEL", "CLAIMS_EXTRACTOR_LANGUAGE_DEFAULT", "CLAIMS_LOCAL_NER_MODEL_MAP",
+                        "CLAIMS_PROMPT_VALIDATION_MODE", "CLAIMS_PROMPT_VALIDATION_STRICT",
+                        "CLAIMS_CONTEXT_WINDOW_CHARS", "CLAIMS_EXTRACTION_PASSES"
                     ]
                 })
             ))(load_comprehensive_config())
@@ -1662,6 +1730,18 @@ def load_settings():
         "PERSONA_MAX_TOOL_STEPS": (lambda _cp: (
             int(_cp.get('persona', 'max_tool_steps', fallback='3')) if _cp and _cp.has_section('persona') else 3
         ))(load_comprehensive_config()),
+        "PERSONA_MEMORY_READ_MODE": (lambda _env, _cp: (
+            str(_env).strip().lower() if _env is not None else (
+                _cp.get('persona', 'persona_memory_read_mode', fallback='legacy_only').strip().lower()
+                if _cp and _cp.has_section('persona') else 'legacy_only'
+            )
+        ))(os.getenv('PERSONA_MEMORY_READ_MODE'), load_comprehensive_config()),
+        "PERSONA_MEMORY_WRITE_MODE": (lambda _env, _cp: (
+            str(_env).strip().lower() if _env is not None else (
+                _cp.get('persona', 'persona_memory_write_mode', fallback='legacy_only').strip().lower()
+                if _cp and _cp.has_section('persona') else 'legacy_only'
+            )
+        ))(os.getenv('PERSONA_MEMORY_WRITE_MODE'), load_comprehensive_config()),
         "PERSONA_RBAC_ALLOW_EXPORT": (lambda _cp: (
             _cp.getboolean('persona.rbac', 'allow_export', fallback=False) if _cp and _cp.has_section('persona.rbac') else False
         ))(load_comprehensive_config()),
@@ -2394,6 +2474,52 @@ def get_llamacpp_handler_config() -> Optional["LlamaCppConfig"]:
         return None
 
 
+_GOVERNANCE_ROLLOUT_MODES = {"off", "shadow", "enforce"}
+
+
+def resolve_governance_rollout_mode(
+    raw_mode: Optional[str] = None,
+    *,
+    default: str = "off",
+) -> str:
+    """
+    Resolve governance rollout mode with deterministic fallback.
+
+    Precedence:
+    1) explicit `raw_mode` argument
+    2) `GOVERNANCE_ROLLOUT_MODE` environment variable
+    3) config.txt `[Governance] rollout_mode`
+    4) provided default (fallbacks to `off` if invalid)
+    """
+
+    safe_default = str(default or "off").strip().lower()
+    if safe_default not in _GOVERNANCE_ROLLOUT_MODES:
+        safe_default = "off"
+
+    if raw_mode is not None:
+        candidate = str(raw_mode).strip().lower()
+        return candidate if candidate in _GOVERNANCE_ROLLOUT_MODES else safe_default
+
+    env_mode = os.getenv("GOVERNANCE_ROLLOUT_MODE")
+    if env_mode is not None:
+        candidate = str(env_mode).strip().lower()
+        return candidate if candidate in _GOVERNANCE_ROLLOUT_MODES else safe_default
+
+    try:
+        cp = load_comprehensive_config()
+        if cp and cp.has_section("Governance"):
+            candidate = cp.get("Governance", "rollout_mode", fallback="").strip().lower()
+            if candidate in _GOVERNANCE_ROLLOUT_MODES:
+                return candidate
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
+        _log_warning(
+            f"resolve_governance_rollout_mode: unable to read [Governance] rollout_mode; "
+            f"falling back to '{safe_default}': {exc}"
+        )
+
+    return safe_default
+
+
 def rg_policy_store(default: str = "file") -> str:
     v = os.getenv("RG_POLICY_STORE")
     if v is None:
@@ -2725,7 +2851,11 @@ def _route_toggle_policy() -> dict:
     # rely on route toggling without mutating shared config files.
     allow_env_overrides = False
     try:
-        allow_env_overrides = bool(is_explicit_pytest_runtime())
+        # Route toggles are frequently consumed at import-time during test
+        # collection, before PYTEST_CURRENT_TEST is set. Honor env overrides
+        # whenever explicit pytest runtime is active OR server-side test mode
+        # is enabled.
+        allow_env_overrides = bool(is_explicit_pytest_runtime() or is_test_mode())
     except _CONFIG_NONCRITICAL_EXCEPTIONS:
         allow_env_overrides = False
 
@@ -2920,6 +3050,7 @@ def load_and_log_configs():
         qwen_api_timeout = config_parser_object.get('API', 'qwen_api_timeout', fallback='90')
         qwen_api_retries = config_parser_object.get('API', 'qwen_api_retry', fallback='3')
         qwen_api_retry_delay = config_parser_object.get('API', 'qwen_api_retry_delay', fallback='1')
+        qwen_api_region = config_parser_object.get('API', 'qwen_api_region', fallback='sg')
         qwen_api_base_url = config_parser_object.get(
             'API', 'qwen_api_base_url', fallback='https://dashscope-intl.aliyuncs.com/compatible-mode/v1'
         )
@@ -3423,6 +3554,22 @@ def load_and_log_configs():
         tmp_default_transcriber = _normalize_stt_provider_name(raw_default_transcriber)
         # If default_transcriber is not set explicitly, fall back to default_stt_provider
         default_transcriber = tmp_default_transcriber or default_stt_provider
+        default_batch_transcription_model = (
+            config_parser_object.get(
+                'STT-Settings',
+                'default_batch_transcription_model',
+                fallback='parakeet-onnx',
+            ).strip()
+            or 'parakeet-onnx'
+        )
+        default_streaming_transcription_model = (
+            config_parser_object.get(
+                'STT-Settings',
+                'default_streaming_transcription_model',
+                fallback='parakeet-onnx',
+            ).strip()
+            or 'parakeet-onnx'
+        )
         nemo_model_variant = config_parser_object.get('STT-Settings', 'nemo_model_variant', fallback='standard')
         nemo_device = config_parser_object.get('STT-Settings', 'nemo_device', fallback='cuda')
         nemo_cache_dir = config_parser_object.get('STT-Settings', 'nemo_cache_dir', fallback='./models/nemo')
@@ -3483,6 +3630,60 @@ def load_and_log_configs():
             s = str(raw).strip()
             return s if s != "" else default
 
+        def _to_optional_int(raw: str | None) -> int | None:
+            """Parse an optional integer config value, returning ``None`` when absent/invalid."""
+            if raw is None:
+                return None
+            try:
+                return int(str(raw).strip())
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
+                return None
+
+        def _to_optional_float(raw: str | None) -> float | None:
+            """Parse an optional float config value, returning ``None`` when absent/invalid."""
+            if raw is None:
+                return None
+            try:
+                return float(str(raw).strip())
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
+                return None
+
+        # Parakeet MLX settings
+        mlx_model_id = _get_str('STT-Settings', 'mlx_model_id', 'mlx-community/parakeet-tdt-0.6b-v3')
+        mlx_cache_dir = _get_str('STT-Settings', 'mlx_cache_dir', '') or ''
+        parakeet_onnx_model_id = (
+            _get_str('STT-Settings', 'parakeet_onnx_model_id', 'istupakov/parakeet-tdt-0.6b-v3-onnx')
+            or 'istupakov/parakeet-tdt-0.6b-v3-onnx'
+        )
+        parakeet_onnx_revision = _get_str('STT-Settings', 'parakeet_onnx_revision', None)
+        mlx_chunk_duration = _get_float('STT-Settings', 'mlx_chunk_duration', 30.0)
+        mlx_overlap_duration = _get_float('STT-Settings', 'mlx_overlap_duration', 5.0)
+        buffered_chunk_duration = _get_float('STT-Settings', 'buffered_chunk_duration', mlx_chunk_duration)
+        buffered_total_buffer = _to_optional_float(_get_str('STT-Settings', 'buffered_total_buffer', None))
+        buffered_merge_algo = _get_str('STT-Settings', 'buffered_merge_algo', 'middle') or 'middle'
+        streaming_fallback_to_whisper = _get_bool(
+            'STT-Settings',
+            'streaming_fallback_to_whisper',
+            default=False,
+        )
+
+        mlx_decoding_mode = _get_str('STT-Settings', 'mlx_decoding_mode', '') or ''
+        mlx_beam_size = _to_optional_int(_get_str('STT-Settings', 'mlx_beam_size', None))
+        mlx_length_penalty = _to_optional_float(_get_str('STT-Settings', 'mlx_length_penalty', None))
+        mlx_patience = _to_optional_float(_get_str('STT-Settings', 'mlx_patience', None))
+        mlx_duration_reward = _to_optional_float(_get_str('STT-Settings', 'mlx_duration_reward', None))
+        mlx_sentence_max_words = _to_optional_int(_get_str('STT-Settings', 'mlx_sentence_max_words', None))
+        mlx_sentence_silence_gap = _to_optional_float(_get_str('STT-Settings', 'mlx_sentence_silence_gap', None))
+        mlx_sentence_max_duration = _to_optional_float(_get_str('STT-Settings', 'mlx_sentence_max_duration', None))
+        mlx_stream_context_left = _get_int('STT-Settings', 'mlx_stream_context_left', 256)
+        mlx_stream_context_right = _get_int('STT-Settings', 'mlx_stream_context_right', 256)
+        mlx_stream_depth = _get_int('STT-Settings', 'mlx_stream_depth', 1)
+        mlx_stream_keep_original_attention = _get_bool(
+            'STT-Settings',
+            'mlx_stream_keep_original_attention',
+            default=False,
+        )
+
         def _env_or_cfg_bool(env_key: str, section: str, key: str, default: bool) -> bool:
             env_val = os.getenv(env_key)
             if env_val is not None:
@@ -3506,13 +3707,13 @@ def load_and_log_configs():
             return _get_str(section, key, default)
 
         # VibeVoice-ASR settings (local inference + optional vLLM HTTP path)
-        vibevoice_enabled = _get_bool('STT-Settings', 'vibevoice_enabled', False)
+        vibevoice_enabled = _get_bool('STT-Settings', 'vibevoice_enabled', default=False)
         vibevoice_model_id = _get_str('STT-Settings', 'vibevoice_model_id', 'microsoft/VibeVoice-ASR') or 'microsoft/VibeVoice-ASR'
         vibevoice_device = _get_str('STT-Settings', 'vibevoice_device', 'cuda') or 'cuda'
         vibevoice_dtype = _get_str('STT-Settings', 'vibevoice_dtype', 'bfloat16') or 'bfloat16'
         vibevoice_cache_dir = _get_str('STT-Settings', 'vibevoice_cache_dir', './models/vibevoice') or './models/vibevoice'
-        vibevoice_allow_download = _get_bool('STT-Settings', 'vibevoice_allow_download', True)
-        vibevoice_vllm_enabled = _get_bool('STT-Settings', 'vibevoice_vllm_enabled', False)
+        vibevoice_allow_download = _get_bool('STT-Settings', 'vibevoice_allow_download', default=True)
+        vibevoice_vllm_enabled = _get_bool('STT-Settings', 'vibevoice_vllm_enabled', default=False)
         vibevoice_vllm_base_url = _get_str('STT-Settings', 'vibevoice_vllm_base_url', '') or ''
         vibevoice_vllm_model_id = _get_str('STT-Settings', 'vibevoice_vllm_model_id', vibevoice_model_id) or vibevoice_model_id
         vibevoice_vllm_api_key = _get_str('STT-Settings', 'vibevoice_vllm_api_key', None)
@@ -3837,6 +4038,7 @@ def load_and_log_configs():
                 'api_timeout': qwen_api_timeout,
                 'api_retries': qwen_api_retries,
                 'api_retry_delay': qwen_api_retry_delay,
+                'region': qwen_api_region,
                 'api_base_url': qwen_api_base_url
             },
             'google_api': {
@@ -4200,9 +4402,33 @@ def load_and_log_configs():
             'STT_Settings': {
                 'default_stt_provider': default_stt_provider,
                 'default_transcriber': default_transcriber,
+                'default_batch_transcription_model': default_batch_transcription_model,
+                'default_streaming_transcription_model': default_streaming_transcription_model,
                 'nemo_model_variant': nemo_model_variant,
                 'nemo_device': nemo_device,
                 'nemo_cache_dir': nemo_cache_dir,
+                'streaming_fallback_to_whisper': streaming_fallback_to_whisper,
+                'parakeet_onnx_model_id': parakeet_onnx_model_id,
+                'parakeet_onnx_revision': parakeet_onnx_revision,
+                'mlx_model_id': mlx_model_id,
+                'mlx_cache_dir': mlx_cache_dir,
+                'mlx_chunk_duration': mlx_chunk_duration,
+                'mlx_overlap_duration': mlx_overlap_duration,
+                'buffered_chunk_duration': buffered_chunk_duration,
+                'buffered_total_buffer': buffered_total_buffer,
+                'buffered_merge_algo': buffered_merge_algo,
+                'mlx_decoding_mode': mlx_decoding_mode,
+                'mlx_beam_size': mlx_beam_size,
+                'mlx_length_penalty': mlx_length_penalty,
+                'mlx_patience': mlx_patience,
+                'mlx_duration_reward': mlx_duration_reward,
+                'mlx_sentence_max_words': mlx_sentence_max_words,
+                'mlx_sentence_silence_gap': mlx_sentence_silence_gap,
+                'mlx_sentence_max_duration': mlx_sentence_max_duration,
+                'mlx_stream_context_left': mlx_stream_context_left,
+                'mlx_stream_context_right': mlx_stream_context_right,
+                'mlx_stream_depth': mlx_stream_depth,
+                'mlx_stream_keep_original_attention': mlx_stream_keep_original_attention,
                 # VibeVoice-ASR settings
                 'vibevoice_enabled': vibevoice_enabled,
                 'vibevoice_model_id': vibevoice_model_id,
@@ -4228,9 +4454,33 @@ def load_and_log_configs():
             'STT-Settings': {
                 'default_stt_provider': default_stt_provider,
                 'default_transcriber': default_transcriber,
+                'default_batch_transcription_model': default_batch_transcription_model,
+                'default_streaming_transcription_model': default_streaming_transcription_model,
                 'nemo_model_variant': nemo_model_variant,
                 'nemo_device': nemo_device,
                 'nemo_cache_dir': nemo_cache_dir,
+                'streaming_fallback_to_whisper': streaming_fallback_to_whisper,
+                'parakeet_onnx_model_id': parakeet_onnx_model_id,
+                'parakeet_onnx_revision': parakeet_onnx_revision,
+                'mlx_model_id': mlx_model_id,
+                'mlx_cache_dir': mlx_cache_dir,
+                'mlx_chunk_duration': mlx_chunk_duration,
+                'mlx_overlap_duration': mlx_overlap_duration,
+                'buffered_chunk_duration': buffered_chunk_duration,
+                'buffered_total_buffer': buffered_total_buffer,
+                'buffered_merge_algo': buffered_merge_algo,
+                'mlx_decoding_mode': mlx_decoding_mode,
+                'mlx_beam_size': mlx_beam_size,
+                'mlx_length_penalty': mlx_length_penalty,
+                'mlx_patience': mlx_patience,
+                'mlx_duration_reward': mlx_duration_reward,
+                'mlx_sentence_max_words': mlx_sentence_max_words,
+                'mlx_sentence_silence_gap': mlx_sentence_silence_gap,
+                'mlx_sentence_max_duration': mlx_sentence_max_duration,
+                'mlx_stream_context_left': mlx_stream_context_left,
+                'mlx_stream_context_right': mlx_stream_context_right,
+                'mlx_stream_depth': mlx_stream_depth,
+                'mlx_stream_keep_original_attention': mlx_stream_keep_original_attention,
                 # VibeVoice-ASR settings
                 'vibevoice_enabled': vibevoice_enabled,
                 'vibevoice_model_id': vibevoice_model_id,

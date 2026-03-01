@@ -34,6 +34,7 @@ import {
 import { FEATURE_FLAGS, useFeatureFlag } from "@/hooks/useFeatureFlags"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 import { WorkspaceHeader } from "./WorkspaceHeader"
+import { WorkspaceBanner } from "./WorkspaceBanner"
 import { SourcesPane } from "./SourcesPane"
 import { ChatPane } from "./ChatPane"
 import { StudioPane } from "./StudioPane"
@@ -51,8 +52,14 @@ import {
 const WORKSPACE_SWITCH_TRANSITION_MS = 420
 const WORKSPACE_SOURCE_STATUS_POLL_INTERVAL_MS = 5000
 const WORKSPACE_NOTE_SEARCH_LIMIT = 75
-const WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES = 5 * 1024 * 1024
+const WORKSPACE_STORAGE_PAYLOAD_BUDGET_DEFAULT_MB = 5
+const WORKSPACE_STORAGE_PAYLOAD_BUDGET_VITE_ENV =
+  "VITE_WORKSPACE_STORAGE_PAYLOAD_BUDGET_MB"
+const WORKSPACE_STORAGE_PAYLOAD_BUDGET_NEXT_ENV =
+  "NEXT_PUBLIC_WORKSPACE_STORAGE_PAYLOAD_BUDGET_MB"
+const WORKSPACE_STORAGE_SPLIT_KEY_PREFIX = `${WORKSPACE_STORAGE_KEY}:workspace:`
 const WORKSPACE_STORAGE_USAGE_REFRESH_DELAY_MS = 120
+const ACCOUNT_STORAGE_USAGE_REFRESH_DELAY_MS = 1400
 const WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY =
   "tldw:workspace-playground:onboarding-dismissed:v1"
 const WORKSPACE_REFRESH_LOOP_TRACE_SESSION_KEY =
@@ -63,6 +70,7 @@ const WORKSPACE_REFRESH_LOOP_WINDOW_MS = 45_000
 const WORKSPACE_REFRESH_LOOP_THRESHOLD = 3
 const WORKSPACE_CONFLICT_TRACKED_FIELDS = [
   "workspaceName",
+  "workspaceBanner",
   "sources",
   "selectedSourceIds",
   "generatedArtifacts",
@@ -72,6 +80,7 @@ const WORKSPACE_CONFLICT_TRACKED_FIELDS = [
 ] as const
 const WORKSPACE_CONFLICT_FIELD_LABELS: Record<string, string> = {
   workspaceName: "workspace name",
+  workspaceBanner: "workspace banner",
   sources: "sources",
   selectedSourceIds: "source selection",
   generatedArtifacts: "generated outputs",
@@ -109,6 +118,15 @@ type WorkspaceNotesSearchResponse =
       results?: WorkspaceNoteSearchItem[]
       items?: WorkspaceNoteSearchItem[]
     }
+
+type WorkspaceStorageUsageState = {
+  usedBytes: number
+  quotaBytes: number
+  originUsedBytes: number | null
+  originQuotaBytes: number | null
+  accountUsedBytes: number | null
+  accountQuotaBytes: number | null
+}
 
 const parseNoteKeyword = (
   keyword: WorkspaceNoteKeywordLike | null | undefined
@@ -198,6 +216,63 @@ const estimateUtf8ByteLength = (value: string): number => {
   }
   return unescape(encodeURIComponent(value)).length
 }
+
+const parseStorageBudgetCandidateMb = (
+  candidate: unknown
+): number | null => {
+  if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+    return candidate
+  }
+  if (typeof candidate !== "string") return null
+  const parsed = Number(candidate.trim())
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return parsed
+}
+
+const resolveWorkspacePayloadBudgetBytes = (): number => {
+  const viteEnv = (import.meta as unknown as { env?: Record<string, unknown> }).env
+  const viteBudgetMb = parseStorageBudgetCandidateMb(
+    viteEnv?.[WORKSPACE_STORAGE_PAYLOAD_BUDGET_VITE_ENV]
+  )
+  if (viteBudgetMb != null) {
+    return Math.round(viteBudgetMb * 1024 * 1024)
+  }
+
+  const nextProcess =
+    typeof globalThis !== "undefined"
+      ? (globalThis as { process?: { env?: Record<string, string | undefined> } })
+          .process
+      : undefined
+  const nextBudgetMb = parseStorageBudgetCandidateMb(
+    nextProcess?.env?.[WORKSPACE_STORAGE_PAYLOAD_BUDGET_NEXT_ENV]
+  )
+  if (nextBudgetMb != null) {
+    return Math.round(nextBudgetMb * 1024 * 1024)
+  }
+
+  return WORKSPACE_STORAGE_PAYLOAD_BUDGET_DEFAULT_MB * 1024 * 1024
+}
+
+const isWorkspacePersistenceStorageKey = (key: string): boolean =>
+  key === WORKSPACE_STORAGE_KEY || key.startsWith(WORKSPACE_STORAGE_SPLIT_KEY_PREFIX)
+
+const estimateWorkspacePersistedPayloadBytes = (
+  storage: Storage
+): number => {
+  let totalBytes = 0
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index)
+    if (!key || !isWorkspacePersistenceStorageKey(key)) continue
+    const value = storage.getItem(key)
+    if (value == null) continue
+    totalBytes += estimateUtf8ByteLength(key)
+    totalBytes += estimateUtf8ByteLength(value)
+  }
+  return totalBytes
+}
+
+const WORKSPACE_STORAGE_PAYLOAD_BUDGET_BYTES =
+  resolveWorkspacePayloadBudgetBytes()
 
 const sanitizeRefreshLoopTimestamps = (
   candidate: unknown
@@ -311,7 +386,37 @@ const parsePersistedWorkspaceState = (
       return null
     }
 
-    return candidateState as Record<string, unknown>
+    const baseState = candidateState as Record<string, unknown>
+    const workspaceId =
+      typeof baseState.workspaceId === "string" ? baseState.workspaceId : null
+    const snapshotsCandidate = baseState.workspaceSnapshots
+    const snapshots =
+      snapshotsCandidate && typeof snapshotsCandidate === "object"
+        ? (snapshotsCandidate as Record<string, unknown>)
+        : null
+    const activeSnapshot =
+      workspaceId && snapshots && snapshots[workspaceId] && typeof snapshots[workspaceId] === "object"
+        ? (snapshots[workspaceId] as Record<string, unknown>)
+        : null
+
+    if (!activeSnapshot) {
+      return baseState
+    }
+
+    return {
+      ...baseState,
+      workspaceName:
+        baseState.workspaceName ?? activeSnapshot.workspaceName ?? null,
+      workspaceBanner:
+        baseState.workspaceBanner ?? activeSnapshot.workspaceBanner ?? null,
+      sources: baseState.sources ?? activeSnapshot.sources ?? null,
+      selectedSourceIds:
+        baseState.selectedSourceIds ?? activeSnapshot.selectedSourceIds ?? null,
+      generatedArtifacts:
+        baseState.generatedArtifacts ?? activeSnapshot.generatedArtifacts ?? null,
+      currentNote: baseState.currentNote ?? activeSnapshot.currentNote ?? null,
+      audioSettings: baseState.audioSettings ?? activeSnapshot.audioSettings ?? null
+    }
   } catch {
     return null
   }
@@ -528,9 +633,14 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const [crossTabChangedFields, setCrossTabChangedFields] = React.useState<
     string[]
   >([])
-  const [workspaceStorageUsage, setWorkspaceStorageUsage] = React.useState({
+  const [workspaceStorageUsage, setWorkspaceStorageUsage] =
+    React.useState<WorkspaceStorageUsageState>({
     usedBytes: 0,
-    quotaBytes: WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES
+    quotaBytes: WORKSPACE_STORAGE_PAYLOAD_BUDGET_BYTES,
+    originUsedBytes: null,
+    originQuotaBytes: null,
+    accountUsedBytes: null,
+    accountQuotaBytes: null
   })
   const lastCrossTabSyncWarningRef = React.useRef(0)
   const [showOnboardingOverlay, setShowOnboardingOverlay] =
@@ -539,6 +649,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
   // Workspace store
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
+  const workspaceName = useWorkspaceStore((s) => s.workspaceName) || ""
+  const workspaceBanner = useWorkspaceStore((s) => s.workspaceBanner) || {
+    title: "",
+    subtitle: "",
+    image: null
+  }
   const initializeWorkspace = useWorkspaceStore((s) => s.initializeWorkspace)
   const createNewWorkspace = useWorkspaceStore((s) => s.createNewWorkspace)
   const addSources = useWorkspaceStore((s) => s.addSources)
@@ -573,6 +689,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
   const leftPaneOpen = !leftPaneCollapsed
   const rightPaneOpen = !rightPaneCollapsed
+  const desktopChatContentWidthMode: "comfortable" | "expanded" | "full" =
+    leftPaneOpen && rightPaneOpen
+      ? "comfortable"
+      : leftPaneOpen || rightPaneOpen
+        ? "expanded"
+        : "full"
 
   const workspaceChatMessages = React.useMemo(
     () => (workspaceId ? workspaceChatSessions[workspaceId]?.messages || [] : []),
@@ -656,19 +778,79 @@ const WorkspacePlaygroundBody: React.FC = () => {
     })
   }, [activeWorkspaceOperations, statusGuardrailsEnabled, workspaceId])
 
-  const refreshWorkspaceStorageUsage = React.useCallback(() => {
+  const refreshWorkspaceStorageUsage = React.useCallback(async () => {
     if (typeof window === "undefined") return
     try {
-      const serializedWorkspace = window.localStorage.getItem(WORKSPACE_STORAGE_KEY)
-      const usedBytes = serializedWorkspace
-        ? estimateUtf8ByteLength(serializedWorkspace)
-        : 0
-      setWorkspaceStorageUsage({
+      const usedBytes = estimateWorkspacePersistedPayloadBytes(window.localStorage)
+      let originUsedBytes: number | null = null
+      let originQuotaBytes: number | null = null
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.storage &&
+        typeof navigator.storage.estimate === "function"
+      ) {
+        try {
+          const estimate = await navigator.storage.estimate()
+          const usage = estimate?.usage
+          const quota = estimate?.quota
+          if (typeof usage === "number" && Number.isFinite(usage) && usage >= 0) {
+            originUsedBytes = usage
+          }
+          if (typeof quota === "number" && Number.isFinite(quota) && quota > 0) {
+            originQuotaBytes = quota
+          }
+        } catch {
+          // Ignore storage estimate failures.
+        }
+      }
+      setWorkspaceStorageUsage((previousState) => ({
+        ...previousState,
         usedBytes,
-        quotaBytes: WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES
-      })
+        quotaBytes: WORKSPACE_STORAGE_PAYLOAD_BUDGET_BYTES,
+        originUsedBytes,
+        originQuotaBytes
+      }))
     } catch {
       // Ignore storage read errors.
+    }
+  }, [])
+
+  const refreshAccountStorageUsage = React.useCallback(async () => {
+    if (typeof tldwClient.getCurrentUserStorageQuota !== "function") return
+    try {
+      const response = await tldwClient.getCurrentUserStorageQuota()
+      const usedMb = Number(response?.storage_used_mb)
+      const quotaMb = Number(response?.storage_quota_mb)
+      const accountUsedBytes =
+        Number.isFinite(usedMb) && usedMb >= 0 ? usedMb * 1024 * 1024 : null
+      const accountQuotaBytes =
+        Number.isFinite(quotaMb) && quotaMb > 0 ? quotaMb * 1024 * 1024 : null
+      setWorkspaceStorageUsage((previousState) => ({
+        ...previousState,
+        accountUsedBytes,
+        accountQuotaBytes
+      }))
+    } catch {
+      if (typeof tldwClient.getCurrentUserProfile !== "function") return
+      try {
+        const profile = await tldwClient.getCurrentUserProfile({
+          sections: "quotas"
+        })
+        const quotas = (profile as { quotas?: Record<string, unknown> } | null)?.quotas
+        const usedMb = Number(quotas?.storage_used_mb)
+        const quotaMb = Number(quotas?.storage_quota_mb)
+        const accountUsedBytes =
+          Number.isFinite(usedMb) && usedMb >= 0 ? usedMb * 1024 * 1024 : null
+        const accountQuotaBytes =
+          Number.isFinite(quotaMb) && quotaMb > 0 ? quotaMb * 1024 * 1024 : null
+        setWorkspaceStorageUsage((previousState) => ({
+          ...previousState,
+          accountUsedBytes,
+          accountQuotaBytes
+        }))
+      } catch {
+        // Ignore account storage fetch failures and keep existing values.
+      }
     }
   }, [])
 
@@ -1001,13 +1183,17 @@ const WorkspacePlaygroundBody: React.FC = () => {
   }, [isStoreHydrated, statusGuardrailsEnabled, workspaceId])
 
   useEffect(() => {
-    refreshWorkspaceStorageUsage()
+    void refreshWorkspaceStorageUsage()
   }, [refreshWorkspaceStorageUsage])
+
+  useEffect(() => {
+    void refreshAccountStorageUsage()
+  }, [refreshAccountStorageUsage])
 
   useEffect(() => {
     if (typeof window === "undefined") return
     const timer = window.setTimeout(() => {
-      refreshWorkspaceStorageUsage()
+      void refreshWorkspaceStorageUsage()
     }, WORKSPACE_STORAGE_USAGE_REFRESH_DELAY_MS)
     return () => {
       window.clearTimeout(timer)
@@ -1021,6 +1207,21 @@ const WorkspacePlaygroundBody: React.FC = () => {
     selectedSourceIds.length,
     sources.length,
     workspaceChatMessages.length,
+    workspaceId
+  ])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const timer = window.setTimeout(() => {
+      void refreshAccountStorageUsage()
+    }, ACCOUNT_STORAGE_USAGE_REFRESH_DELAY_MS)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [
+    generatedArtifacts.length,
+    refreshAccountStorageUsage,
+    sources.length,
     workspaceId
   ])
 
@@ -1217,7 +1418,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
       const customEvent = event as CustomEvent<WorkspaceStorageQuotaEventDetail>
       if (customEvent.detail?.key !== WORKSPACE_STORAGE_KEY) return
       setShowStorageQuotaWarning(true)
-      refreshWorkspaceStorageUsage()
+      void refreshWorkspaceStorageUsage()
       void trackWorkspacePlaygroundTelemetry({
         type: "quota_warning_seen",
         workspace_id: workspaceId || null,
@@ -1272,7 +1473,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
       if (event.key !== WORKSPACE_STORAGE_KEY) return
       if (event.newValue === event.oldValue) return
       if (event.storageArea && event.storageArea !== window.localStorage) return
-      refreshWorkspaceStorageUsage()
+      void refreshWorkspaceStorageUsage()
       surfaceCrossTabSyncWarning(event.oldValue, event.newValue)
     }
 
@@ -1296,7 +1497,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
     const handleBroadcastUpdate = (event: MessageEvent<unknown>) => {
       if (!isWorkspaceBroadcastUpdateMessage(event.data)) return
       if (event.data.key !== WORKSPACE_STORAGE_KEY) return
-      refreshWorkspaceStorageUsage()
+      void refreshWorkspaceStorageUsage()
       surfaceCrossTabSyncWarning()
     }
 
@@ -1503,6 +1704,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
         <ChatPane
           provenanceEnabled={provenanceEnabled}
           statusGuardrailsEnabled={statusGuardrailsEnabled}
+          contentWidthMode="full"
         />
       )
     },
@@ -1523,12 +1725,25 @@ const WorkspacePlaygroundBody: React.FC = () => {
     }
   ]
 
+  const sessionSummaryItems = [
+    {
+      key: "sources",
+      label: t("playground:sources.title", "Sources"),
+      count: selectedSourceIds.length
+    },
+    {
+      key: "outputs",
+      label: t("playground:studio.generatedOutputs", "Generated Outputs"),
+      count: generatedArtifacts.length
+    }
+  ]
+
   if (!isStoreHydrated) {
     return <WorkspacePlaygroundSkeleton isMobile={isMobile} />
   }
 
   return (
-    <div className="relative flex h-full flex-col bg-bg text-text">
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,var(--surface-2),var(--bg)_45%)] text-text">
       {messageContextHolder}
       <a
         href="#workspace-main-content"
@@ -1632,18 +1847,6 @@ const WorkspacePlaygroundBody: React.FC = () => {
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {statusGuardrailsEnabled && activeWorkspaceOperations.length > 0 && (
-        <div
-          data-testid="workspace-activity-rail"
-          role="status"
-          aria-live="polite"
-          className="flex items-center gap-2 border-b border-border bg-surface2/60 px-3 py-2 text-xs text-text-muted"
-        >
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-          <span>{activeWorkspaceOperations.join(" • ")}</span>
         </div>
       )}
 
@@ -1778,9 +1981,52 @@ const WorkspacePlaygroundBody: React.FC = () => {
             hideToggles
             storageUsedBytes={workspaceStorageUsage.usedBytes}
             storageQuotaBytes={workspaceStorageUsage.quotaBytes}
+            storageOriginUsedBytes={workspaceStorageUsage.originUsedBytes ?? undefined}
+            storageOriginQuotaBytes={workspaceStorageUsage.originQuotaBytes ?? undefined}
+            storageAccountUsedBytes={workspaceStorageUsage.accountUsedBytes ?? undefined}
+            storageAccountQuotaBytes={workspaceStorageUsage.accountQuotaBytes ?? undefined}
             provenanceEnabled={provenanceEnabled}
             statusGuardrailsEnabled={statusGuardrailsEnabled}
           />
+
+          <WorkspaceBanner
+            banner={workspaceBanner}
+            workspaceName={workspaceName}
+            isMobile
+          />
+
+          <div
+            data-testid="workspace-session-status-strip"
+            className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/70 bg-[linear-gradient(120deg,var(--surface)_0%,var(--surface-2)_100%)] px-3 py-2 shadow-card"
+          >
+            <div className="flex flex-wrap items-center gap-1.5">
+              {sessionSummaryItems.map((item) => (
+                <span
+                  key={item.key}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface/90 px-2.5 py-1 text-xs text-text-muted"
+                >
+                  <span>{item.label}</span>
+                  <span className="font-semibold text-text">{item.count}</span>
+                </span>
+              ))}
+              {currentNote.isDirty && (
+                <span className="inline-flex items-center rounded border border-warning/40 bg-warning/10 px-2 py-1 text-xs font-medium text-warning">
+                  {t("playground:studio.unsaved", "Unsaved")}
+                </span>
+              )}
+            </div>
+            {statusGuardrailsEnabled && activeWorkspaceOperations.length > 0 && (
+              <div
+                data-testid="workspace-activity-rail"
+                role="status"
+                aria-live="polite"
+                className="flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-2 py-1 text-xs text-text-muted"
+              >
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                <span>{activeWorkspaceOperations.join(" • ")}</span>
+              </div>
+            )}
+          </div>
 
           <Tabs
             activeKey={activeTab}
@@ -1800,17 +2046,60 @@ const WorkspacePlaygroundBody: React.FC = () => {
             onToggleRightPane={handleToggleRightPane}
             storageUsedBytes={workspaceStorageUsage.usedBytes}
             storageQuotaBytes={workspaceStorageUsage.quotaBytes}
+            storageOriginUsedBytes={workspaceStorageUsage.originUsedBytes ?? undefined}
+            storageOriginQuotaBytes={workspaceStorageUsage.originQuotaBytes ?? undefined}
+            storageAccountUsedBytes={workspaceStorageUsage.accountUsedBytes ?? undefined}
+            storageAccountQuotaBytes={workspaceStorageUsage.accountQuotaBytes ?? undefined}
             provenanceEnabled={provenanceEnabled}
             statusGuardrailsEnabled={statusGuardrailsEnabled}
           />
 
-          <div className="flex min-h-0 flex-1">
+          <WorkspaceBanner
+            banner={workspaceBanner}
+            workspaceName={workspaceName}
+            isMobile={false}
+          />
+
+          <div
+            data-testid="workspace-session-status-strip"
+            className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/70 bg-[linear-gradient(120deg,var(--surface)_0%,var(--surface-2)_100%)] px-3 py-2 shadow-card"
+          >
+            <div className="flex flex-wrap items-center gap-1.5">
+              {sessionSummaryItems.map((item) => (
+                <span
+                  key={item.key}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface/90 px-2.5 py-1 text-xs text-text-muted"
+                >
+                  <span>{item.label}</span>
+                  <span className="font-semibold text-text">{item.count}</span>
+                </span>
+              ))}
+              {currentNote.isDirty && (
+                <span className="inline-flex items-center rounded border border-warning/40 bg-warning/10 px-2 py-1 text-xs font-medium text-warning">
+                  {t("playground:studio.unsaved", "Unsaved")}
+                </span>
+              )}
+            </div>
+            {statusGuardrailsEnabled && activeWorkspaceOperations.length > 0 && (
+              <div
+                data-testid="workspace-activity-rail"
+                role="status"
+                aria-live="polite"
+                className="flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-2 py-1 text-xs text-text-muted"
+              >
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                <span>{activeWorkspaceOperations.join(" • ")}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex min-h-0 flex-1 gap-2 px-2 py-2">
             {leftPaneOpen && (
               <aside
                 id="workspace-sources-panel"
                 role="complementary"
                 aria-label={t("playground:workspace.sourcesPanel", "Sources panel")}
-                className="hidden w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col"
+                className="hidden w-72 shrink-0 overflow-hidden rounded-xl border border-border/80 bg-surface/90 shadow-card lg:flex lg:flex-col"
               >
                 <SourcesPane
                   onHide={() => setLeftPaneCollapsed(true)}
@@ -1838,11 +2127,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
             <main
               id="workspace-main-content"
-              className="flex min-w-0 flex-1 flex-col"
+              className="flex min-w-0 flex-1 overflow-hidden rounded-xl border border-border/80 bg-surface/90 shadow-card"
             >
               <ChatPane
                 provenanceEnabled={provenanceEnabled}
                 statusGuardrailsEnabled={statusGuardrailsEnabled}
+                contentWidthMode={desktopChatContentWidthMode}
               />
             </main>
 
@@ -1851,7 +2141,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
                 id="workspace-studio-panel"
                 role="complementary"
                 aria-label={t("playground:workspace.studioPanel", "Studio panel")}
-                className="hidden min-h-0 w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col"
+                className="hidden min-h-0 w-80 shrink-0 overflow-hidden rounded-xl border border-border/80 bg-surface/90 shadow-card lg:flex lg:flex-col"
               >
                 <StudioPane onHide={() => setRightPaneCollapsed(true)} />
               </aside>

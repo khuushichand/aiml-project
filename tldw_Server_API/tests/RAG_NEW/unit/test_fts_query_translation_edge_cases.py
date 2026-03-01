@@ -36,7 +36,7 @@ def test_fts_query_builder_hyphen_and_unicode():
 
 
     from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import MediaDBRetriever
-    r = MediaDBRetriever(db_path="/tmp/test.db")  # path used for constructing object only
+    r = MediaDBRetriever(db_path="/tmp/test.db")  # path used for constructing object only  # nosec B108
 
     q1 = "state-of-the-art models"
     built1 = r._build_fts_query(q1)

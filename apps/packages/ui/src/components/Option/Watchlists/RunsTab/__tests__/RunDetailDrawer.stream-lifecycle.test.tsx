@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getRunDetailsMock: vi.fn(),
   fetchScrapedItemsMock: vi.fn(),
   fetchWatchlistSourcesMock: vi.fn(),
+  fetchWatchlistOutputsMock: vi.fn(),
   updateScrapedItemMock: vi.fn(),
   exportRunTalliesCsvMock: vi.fn(),
   triggerWatchlistRunMock: vi.fn(),
@@ -16,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   updateRunInListMock: vi.fn(),
   addRunMock: vi.fn(),
   setActiveTabMock: vi.fn(),
+  setOutputsJobFilterMock: vi.fn(),
+  setOutputsRunFilterMock: vi.fn(),
   openJobFormMock: vi.fn(),
   messageErrorMock: vi.fn(),
   messageSuccessMock: vi.fn(),
@@ -38,14 +41,27 @@ vi.mock("react-i18next", () => ({
 }))
 
 vi.mock("antd", () => {
-  const Drawer = ({ open, children, title, extra }: any) =>
-    open ? (
+  const Drawer = ({ open, children, title, extra, onClose, afterOpenChange }: any) => {
+    const closeRef = React.useRef<HTMLButtonElement | null>(null)
+    React.useEffect(() => {
+      afterOpenChange?.(open)
+      if (open) {
+        closeRef.current?.focus()
+      }
+    }, [afterOpenChange, open])
+
+    if (!open) return null
+    return (
       <div>
         <div>{title}</div>
         {extra}
+        <button type="button" ref={closeRef} onClick={() => onClose?.()}>
+          Close drawer
+        </button>
         {children}
       </div>
-    ) : null
+    )
+  }
 
   const Tabs = ({ items = [] }: any) => (
     <div>
@@ -99,9 +115,10 @@ vi.mock("antd", () => {
   )
 
   return {
-    Alert: ({ title, description, action, children }: any) => (
+    Alert: ({ title, message, description, action, children }: any) => (
       <div>
         {title ? <div>{title}</div> : null}
+        {message ? <div>{message}</div> : null}
         {description ? <div>{description}</div> : null}
         {action}
         {children}
@@ -131,6 +148,8 @@ vi.mock("@/store/watchlists", () => ({
       updateRunInList: mocks.updateRunInListMock,
       addRun: mocks.addRunMock,
       setActiveTab: mocks.setActiveTabMock,
+      setOutputsJobFilter: mocks.setOutputsJobFilterMock,
+      setOutputsRunFilter: mocks.setOutputsRunFilterMock,
       openJobForm: mocks.openJobFormMock
     })
 }))
@@ -139,6 +158,7 @@ vi.mock("@/services/watchlists", () => ({
   cancelWatchlistRun: (...args: any[]) => mocks.cancelWatchlistRunMock(...args),
   exportRunTalliesCsv: (...args: any[]) => mocks.exportRunTalliesCsvMock(...args),
   fetchScrapedItems: (...args: any[]) => mocks.fetchScrapedItemsMock(...args),
+  fetchWatchlistOutputs: (...args: any[]) => mocks.fetchWatchlistOutputsMock(...args),
   fetchWatchlistSources: (...args: any[]) => mocks.fetchWatchlistSourcesMock(...args),
   getRunDetails: (...args: any[]) => mocks.getRunDetailsMock(...args),
   triggerWatchlistRun: (...args: any[]) => mocks.triggerWatchlistRunMock(...args),
@@ -257,6 +277,13 @@ describe("RunDetailDrawer stream lifecycle", () => {
       total: 0,
       page: 1,
       size: 1000,
+      has_more: false
+    })
+    mocks.fetchWatchlistOutputsMock.mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      size: 1,
       has_more: false
     })
     mocks.updateScrapedItemMock.mockResolvedValue({})
@@ -458,5 +485,27 @@ describe("RunDetailDrawer stream lifecycle", () => {
     const logText = pre?.textContent || ""
     expect(logText.length).toBe(200_000)
     expect(logText.endsWith("a")).toBe(true)
+  })
+
+  it("restores focus to the launch control after drawer closes", async () => {
+    const trigger = document.createElement("button")
+    trigger.type = "button"
+    trigger.textContent = "Open run detail"
+    document.body.appendChild(trigger)
+    trigger.focus()
+
+    const { rerender } = render(<RunDetailDrawer open runId={10} onClose={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Close drawer" })).toHaveFocus()
+    })
+
+    rerender(<RunDetailDrawer open={false} runId={10} onClose={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(trigger).toHaveFocus()
+    })
+
+    trigger.remove()
   })
 })

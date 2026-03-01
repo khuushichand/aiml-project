@@ -58,7 +58,10 @@ def test_chatbooks_async_cancel(api_client):
     # Cancel the job
     try:
         c = api_client.client.delete(f"/api/v1/chatbooks/export/jobs/{job_id}")
-        # In some configurations, cancellation may be immediate/no-op
+        # In some configurations, cancellation may be immediate/no-op, or the job
+        # may complete before cancellation can be applied.
+        if c.status_code == 400 and "Cannot cancel" in c.text:
+            pytest.skip("Export job completed before it could be cancelled")
         assert c.status_code in (200, 202, 404)
         # Status check (best-effort)
         s = api_client.client.get(f"/api/v1/chatbooks/export/jobs/{job_id}")

@@ -557,7 +557,7 @@ if "error_message" in data:
 
 ## Next Steps
 
-- **[User Guide](../User_Guides/Evaluations_User_Guide.md)** - Detailed usage patterns and examples
+- **[User Guide](../User_Guides/Server/Evaluations_User_Guide.md)** - Detailed usage patterns and examples
 - **[API Reference](../API-related/Evaluations_API_Reference.md)** - Complete endpoint documentation
 - **[Developer Guide](../Code_Documentation/Evaluations_Developer_Guide.md)** - Extend the evaluation system
 - **Interactive API Docs** - http://localhost:8000/docs when server is running

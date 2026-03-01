@@ -1,5 +1,6 @@
 import React from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import axe from 'axe-core'
 import MediaReviewPage from '../MediaReviewPage'
@@ -138,6 +139,27 @@ vi.mock('@/services/settings/registry', async (importOriginal) => {
   }
 })
 
+vi.mock('@/services/settings/ui-settings', () => ({
+  DISCUSS_MEDIA_PROMPT_SETTING: { key: 'discussMediaPrompt', defaultValue: null },
+  LAST_MEDIA_ID_SETTING: { key: 'lastMediaId', defaultValue: null },
+  MEDIA_HIDE_TRANSCRIPT_TIMINGS_SETTING: { key: 'mediaHideTranscriptTimings', defaultValue: true },
+  MEDIA_REVIEW_AUTO_VIEW_MODE_SETTING: { key: 'mediaReviewAutoViewMode', defaultValue: true },
+  MEDIA_REVIEW_FILTERS_COLLAPSED_SETTING: { key: 'mediaReviewFiltersCollapsed', defaultValue: false },
+  MEDIA_REVIEW_FOCUSED_ID_SETTING: { key: 'mediaReviewFocusedId', defaultValue: null },
+  MEDIA_REVIEW_ORIENTATION_SETTING: { key: 'mediaReviewOrientation', defaultValue: 'vertical' },
+  MEDIA_REVIEW_SELECTION_SETTING: { key: 'mediaReviewSelection', defaultValue: [] },
+  MEDIA_REVIEW_VIEW_MODE_SETTING: { key: 'mediaReviewViewMode', defaultValue: 'spread' }
+}))
+
+vi.mock('@/utils/media-detail-content', () => ({
+  extractMediaDetailContent: (detail: any) =>
+    detail?.content ||
+    detail?.transcription ||
+    detail?.text ||
+    detail?.analysis ||
+    ''
+}))
+
 vi.mock('@/components/Media/DiffViewModal', () => ({
   DiffViewModal: ({
     open,
@@ -200,13 +222,16 @@ vi.mock('antd', async (importOriginal) => {
   const Empty = ({ description }: any) => <div>{description}</div>
   ;(Empty as any).PRESENTED_IMAGE_SIMPLE = null
 
-  const Checkbox = ({ checked, onChange, ...rest }: any) => (
-    <input
-      type="checkbox"
-      checked={checked}
-      onChange={(event) => onChange?.({ target: { checked: event.target.checked } })}
-      {...rest}
-    />
+  const Checkbox = ({ checked, onChange, children, ...rest }: any) => (
+    <label>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange?.({ target: { checked: event.target.checked } })}
+        {...rest}
+      />
+      {children}
+    </label>
   )
 
   const SelectComponent = ({ value, onChange, options = [], children, mode, ...rest }: any) => {
@@ -318,6 +343,19 @@ vi.mock('antd', async (importOriginal) => {
     )
   }
 
+  const Drawer = ({ open, title, onClose, children }: any) => {
+    if (!open) return null
+    return (
+      <div role="dialog" aria-label={typeof title === 'string' ? title : 'Selected items'}>
+        <h2>{title}</h2>
+        <button type="button" onClick={onClose}>
+          Close drawer
+        </button>
+        {children}
+      </div>
+    )
+  }
+
   return {
     ...actual,
     Input,
@@ -336,7 +374,8 @@ vi.mock('antd', async (importOriginal) => {
     Alert,
     Collapse: ({ children }: any) => <div>{children}</div>,
     Dropdown,
-    Modal
+    Modal,
+    Drawer
   }
 })
 
@@ -754,6 +793,52 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     })
   })
 
+  it('hides transcript timings by default in cards and copy, with toggle to show', async () => {
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      const idMatch = path.match(/\/api\/v1\/media\/([^?]+)/)
+      const id = idMatch ? Number(idMatch[1]) : null
+      return {
+        id: id ?? 1,
+        title: `Item ${id ?? 1}`,
+        type: 'audio',
+        content: `00:12 Content ${id ?? 1}`
+      }
+    })
+
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Content 1')).toBeInTheDocument()
+      expect(screen.queryByText('00:12 Content 1')).not.toBeInTheDocument()
+    })
+
+    const copyContentButton = await screen.findByRole('button', { name: 'Copy Content' })
+    fireEvent.click(copyContentButton)
+
+    await waitFor(() => {
+      expect(mocks.clipboardWriteText).toHaveBeenCalledWith('Content 1')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show timings' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('00:12 Content 1')).toBeInTheDocument()
+    })
+
+    fireEvent.click(copyContentButton)
+
+    await waitFor(() => {
+      expect(mocks.clipboardWriteText).toHaveBeenCalledWith('00:12 Content 1')
+    })
+  })
+
   it('preserves failed-item recovery behavior by allowing reselection retry', async () => {
     const attempts = new Map<number, number>()
     mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
@@ -899,6 +984,206 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     ).toBe(true)
   })
 
+  it('preserves existing non-visible selection when Ctrl+A selects visible items', async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(getResultRowByTitle('Item 31'))
+    await waitFor(() => {
+      expect(screen.getByText('1 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.keyDown(document, { key: 'a', ctrlKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('30 / 30 selected')).toBeInTheDocument()
+    })
+    expect(within(getResultRowByTitle('Item 31')).getByRole('checkbox')).toBeChecked()
+  })
+
+  it('shows explicit add/replace selection actions in the options menu', async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /options/i }))
+
+    expect(
+      screen.getByRole('button', {
+        name: /add visible to selection/i
+      })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', {
+        name: /replace selection with visible/i
+      })
+    ).toBeInTheDocument()
+  })
+
+  it('shows cross-page selection scope text for current selection count', async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+    fireEvent.click(getResultRowByTitle('Item 2'))
+
+    await waitFor(() => {
+      expect(screen.getByText(/selected across pages: 2/i)).toBeInTheDocument()
+    })
+  })
+
+  it('opens selected-items drawer and allows removing a selected item', async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+    fireEvent.click(getResultRowByTitle('Item 2'))
+
+    await waitFor(() => {
+      expect(screen.getByText('2 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId('view-selected-items-button'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /selected items/i })).toBeInTheDocument()
+    })
+
+    const drawer = screen.getByRole('dialog', { name: /selected items/i })
+    fireEvent.click(within(drawer).getAllByRole('button', { name: 'Remove from selection' })[0])
+
+    await waitFor(() => {
+      expect(screen.getByText('1 / 30 selected')).toBeInTheDocument()
+    })
+  })
+
+  it('shows explicit IA guidance linking sidebar, viewer, and open-items jump controls', async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    expect(
+      screen.getByText(/search\/filter here, then click to stack/i)
+    ).toBeInTheDocument()
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/search\/filter in sidebar, inspect in viewer, jump using open items/i)
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('shows inline auto-mode transition banner when view mode auto-switches', async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+    fireEvent.click(getResultRowByTitle('Item 2'))
+    fireEvent.click(getResultRowByTitle('Item 3'))
+    fireEvent.click(getResultRowByTitle('Item 4'))
+    fireEvent.click(getResultRowByTitle('Item 5'))
+
+    await waitFor(() => {
+      expect(screen.getByText(/auto-switched to stack view/i)).toBeInTheDocument()
+    })
+  })
+
+  it('uses remove-from-selection label in compare cards instead of unstack', async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+    fireEvent.click(getResultRowByTitle('Item 2'))
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: 'Remove from selection' }).length).toBeGreaterThan(0)
+    })
+    expect(screen.queryByRole('button', { name: 'Unstack' })).not.toBeInTheDocument()
+  })
+
+  it('wraps long open-item labels instead of forcing one horizontal minimap line', async () => {
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      const idMatch = path.match(/\/api\/v1\/media\/([^?]+)/)
+      const id = idMatch ? Number(idMatch[1]) : null
+      return {
+        id: id ?? 1,
+        title: `Extremely long selected media title ${id ?? 1} that should wrap into another line in the open items strip`,
+        type: 'document',
+        content: `Content ${id ?? 1}`
+      }
+    })
+
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+    fireEvent.click(getResultRowByTitle('Item 2'))
+
+    const openItemsRow = await screen.findByTestId('media-review-open-items')
+    expect(openItemsRow).not.toHaveClass('overflow-x-auto')
+
+    const firstOpenItemButton = screen.getByRole('button', {
+      name: /1\.\s*Extremely long selected media title/i
+    })
+    expect(firstOpenItemButton.className).toContain('max-w-[42ch]')
+    expect(firstOpenItemButton.className).toContain('whitespace-normal')
+  })
+
+  it('exposes named controls and keyboard focus progression for selection management actions', async () => {
+    const user = userEvent.setup()
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+    fireEvent.click(getResultRowByTitle('Item 2'))
+
+    await waitFor(() => {
+      expect(screen.getByText(/selected across pages: 2/i)).toBeInTheDocument()
+    })
+
+    const optionsButton = screen.getByRole('button', { name: /options/i })
+    const viewSelectedItemsButton = screen.getByTestId('view-selected-items-button')
+    const selectionStatus = screen.getByTestId('media-multi-selection-status')
+
+    expect(optionsButton).toHaveAttribute('aria-haspopup', 'menu')
+    expect(viewSelectedItemsButton).toBeInTheDocument()
+    expect(selectionStatus).toHaveTextContent(/selection status:/i)
+
+    optionsButton.focus()
+    expect(optionsButton).toHaveFocus()
+    await user.tab()
+    expect(document.activeElement).not.toBe(optionsButton)
+    expect((document.activeElement as HTMLElement).tagName.toLowerCase()).toBe('button')
+  })
+
   it('has no axe violations for core aria naming and region rules', async () => {
     const { container } = render(<MediaReviewPage />)
 
@@ -910,10 +1195,13 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       runOnly: {
         type: 'rule',
         values: [
+          'aria-command-name',
+          'aria-input-field-name',
           'aria-required-attr',
           'aria-valid-attr',
           'aria-valid-attr-value',
           'button-name',
+          'focus-order-semantics',
           'region'
         ]
       }

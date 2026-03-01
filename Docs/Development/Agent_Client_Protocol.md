@@ -167,6 +167,21 @@ The server automatically determines the permission tier based on the tool name u
 
 Pattern matching is case-insensitive and checks if the tool name contains any of the patterns.
 
+## Governance Integration
+
+ACP now uses a shared governance coordinator for both prompt and permission flows.
+
+Contract details:
+- Prompt checks and permission checks go through `ACPGovernanceCoordinator`.
+- Permission outcome is unified to one path: `approve`, `deny`, or `prompt`.
+- Governance `require_approval` is merged into the same approval prompt path as tiered ACP approvals, preventing duplicate prompts.
+- Governance deny decisions raise `ACPGovernanceDeniedError` with structured governance metadata.
+
+Compatibility and migration notes:
+- MCP wire compatibility is unchanged; governance metadata is additive on MCP errors.
+- ACP moves toward the unified governance contract and deprecates legacy split approval behavior.
+- Rollout configuration is shared via `GOVERNANCE_ROLLOUT_MODE` (`off`, `shadow`, `enforce`).
+
 ## Configuration
 
 ### Server config.txt
@@ -208,11 +223,14 @@ pip install -e ".[acp]"
 
 ### Build the ACP Image
 
-The Dockerfile expects `tldw-agent` to be in the build context:
+With sibling repos (`../tldw-agent` next to `tldw_server2`), build from the parent directory:
 
 ```bash
-# From repo root (or a parent that includes tldw-agent/)
-docker build -f Dockerfiles/ACP/Dockerfile -t tldw/acp-agent:latest .
+# From tldw_server2/
+docker build -f Dockerfiles/ACP/Dockerfile \
+  --build-arg TLDW_SERVER_DIR=tldw_server2 \
+  --build-arg TLDW_AGENT_DIR=tldw-agent \
+  -t tldw/acp-agent:latest ..
 ```
 
 ### Config
@@ -228,6 +246,9 @@ network_policy = allow_all
 agent_command = claude
 agent_args = ["code"]
 ```
+
+`agent_command` must be the downstream coding agent executable (`claude`, `codex`, `opencode`, etc).  
+Do not set it to `tldw-agent-acp` (that recursively launches the runner and fails with `resource temporarily unavailable`).
 
 ### Required Env
 

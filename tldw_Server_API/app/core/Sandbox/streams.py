@@ -157,6 +157,21 @@ class RunStreamHub:
             self._queues.setdefault(run_id, []).append((loop, q))
             return q
 
+    def unsubscribe(self, run_id: str, q: asyncio.Queue) -> None:
+        """Remove a subscriber queue for a run.
+
+        This is best-effort and safe to call multiple times.
+        """
+        with self._lock:
+            subs = self._queues.get(run_id) or []
+            if not subs:
+                return
+            remaining = [(lp, sq) for (lp, sq) in subs if sq is not q]
+            if remaining:
+                self._queues[run_id] = remaining
+            else:
+                self._queues.pop(run_id, None)
+
     def _next_seq(self, run_id: str) -> int:
         with self._lock:
             cur = self._seq.get(run_id, 0) + 1

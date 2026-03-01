@@ -30,9 +30,38 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
   const dropdownRef = React.useRef<HTMLDivElement>(null)
   const [position, setPosition] = React.useState({ top: 0, left: 0 })
 
+  const groupedTabs = React.useMemo(() => {
+    if (tabs.length === 0) return []
+    const groups = new Map<string, TabInfo[]>()
+    for (const tab of tabs) {
+      let category = "Other"
+      try {
+        const host = new URL(tab.url).hostname.replace(/^www\./i, "").trim()
+        category = host || "Other"
+      } catch {
+        category = "Other"
+      }
+      const existing = groups.get(category)
+      if (existing) {
+        existing.push(tab)
+      } else {
+        groups.set(category, [tab])
+      }
+    }
+    return Array.from(groups.entries()).map(([category, items]) => ({
+      category,
+      items
+    }))
+  }, [tabs])
+
+  const orderedTabs = React.useMemo(
+    () => groupedTabs.flatMap((group) => group.items),
+    [groupedTabs]
+  )
+
   React.useEffect(() => {
     setSelectedIndex(0)
-  }, [tabs])
+  }, [orderedTabs])
 
   React.useEffect(() => {
     if (show && textareaRef.current && dropdownRef.current) {
@@ -44,7 +73,7 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
         left: 0
       })
     }
-  }, [show, tabs])
+  }, [show, orderedTabs])
 
   React.useEffect(() => {
     if (show) {
@@ -58,19 +87,21 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
 
       switch (e.key) {
         case "ArrowDown":
-          if (tabs.length === 0) return
+          if (orderedTabs.length === 0) return
           e.preventDefault()
-          setSelectedIndex((prev) => (prev + 1) % tabs.length)
+          setSelectedIndex((prev) => (prev + 1) % orderedTabs.length)
           break
         case "ArrowUp":
-          if (tabs.length === 0) return
+          if (orderedTabs.length === 0) return
           e.preventDefault()
-          setSelectedIndex((prev) => (prev - 1 + tabs.length) % tabs.length)
+          setSelectedIndex(
+            (prev) => (prev - 1 + orderedTabs.length) % orderedTabs.length
+          )
           break
         case "Enter":
           e.preventDefault()
-          if (tabs[selectedIndex]) {
-            onSelectTab(tabs[selectedIndex])
+          if (orderedTabs[selectedIndex]) {
+            onSelectTab(orderedTabs[selectedIndex])
           }
           break
         case "Escape":
@@ -84,7 +115,7 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
       document.addEventListener("keydown", handleKeyDown)
       return () => document.removeEventListener("keydown", handleKeyDown)
     }
-  }, [show, tabs, selectedIndex, onSelectTab, onClose])
+  }, [show, orderedTabs, selectedIndex, onSelectTab, onClose])
 
   const handleRefreshTabs = async () => {
     if (isRefreshing) return
@@ -142,44 +173,61 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
       </div>
 
       <div className="max-h-56 overflow-y-auto">
-        {tabs.map((tab, index) => (
-          <button
-            key={tab.id}
-            onClick={() => onSelectTab(tab)}
-            title={tab.title}
-            className={`w-full text-left p-3 hover:bg-surface2 flex items-center gap-3 transition-colors ${
-              index === selectedIndex
-                ? "bg-surface2 border-r-2 border-primary"
-                : ""
-            }`}>
-            <div className="flex-shrink-0">
-              {tab.favIconUrl ? (
-                <img
-                  src={tab.favIconUrl}
-                  alt=""
-                  className="w-4 h-4 rounded"
-                  onError={(e) => {
-                    const target = e.target as HTMLImageElement
-                    target.style.display = "none"
-                    target.nextElementSibling?.classList.remove("hidden")
-                  }}
-                />
-              ) : null}
-              <Globe
-                className={`w-4 h-4 text-text-subtle ${tab.favIconUrl ? "hidden" : ""}`}
-              />
-            </div>
-
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-text truncate">
-                {tab.title}
+        {(() => {
+          let globalIndex = 0
+          return groupedTabs.map(({ category, items }) => (
+            <div key={category}>
+              <div
+                className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-text-subtle"
+                data-testid={`mentions-category-${category}`}
+              >
+                {category}
               </div>
+              {items.map((tab) => {
+                const index = globalIndex
+                globalIndex += 1
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => onSelectTab(tab)}
+                    title={tab.title}
+                    className={`w-full text-left p-3 hover:bg-surface2 flex items-center gap-3 transition-colors ${
+                      index === selectedIndex
+                        ? "bg-surface2 border-r-2 border-primary"
+                        : ""
+                    }`}>
+                    <div className="flex-shrink-0">
+                      {tab.favIconUrl ? (
+                        <img
+                          src={tab.favIconUrl}
+                          alt=""
+                          className="w-4 h-4 rounded"
+                          onError={(e) => {
+                            const target = e.target as HTMLImageElement
+                            target.style.display = "none"
+                            target.nextElementSibling?.classList.remove("hidden")
+                          }}
+                        />
+                      ) : null}
+                      <Globe
+                        className={`w-4 h-4 text-text-subtle ${tab.favIconUrl ? "hidden" : ""}`}
+                      />
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-text truncate">
+                        {tab.title}
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
             </div>
-          </button>
-        ))}
+          ))
+        })()}
       </div>
 
-      {tabs.length === 0 && (
+      {orderedTabs.length === 0 && (
         <div className="p-4 text-center text-text-subtle text-sm">
           {mentionPosition?.query ? (
             <p>

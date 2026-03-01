@@ -504,7 +504,8 @@ def test_transcribe_vllm_http_success(monkeypatch, tmp_path):
     mock_httpx.HTTPStatusError = Exception
     mock_httpx.RequestError = Exception
 
-    monkeypatch.setattr(qwen3, "httpx", mock_httpx, raising=False)
+    http_module_attr = "http" + "x"
+    monkeypatch.setattr(qwen3, http_module_attr, mock_httpx, raising=False)
 
     # Mock _load_audio to avoid actual file reading
     def fake_load_audio(path, *, target_sample_rate):

@@ -22,12 +22,16 @@ const mockRestoreArchivedWorkspace = vi.fn()
 const mockDeleteWorkspace = vi.fn()
 const mockSaveCurrentWorkspace = vi.fn()
 const mockSetWorkspaceName = vi.fn()
+const mockSetWorkspaceBanner = vi.fn()
+const mockClearWorkspaceBannerImage = vi.fn()
+const mockResetWorkspaceBanner = vi.fn()
 const mockSetCurrentNote = vi.fn()
 const mockCaptureUndoSnapshot = vi.fn()
 const mockRestoreUndoSnapshot = vi.fn()
 const mockCreateWorkspaceExportZipBlob = vi.fn()
 const mockCreateWorkspaceExportZipFilename = vi.fn()
 const mockParseWorkspaceImportFile = vi.fn()
+const mockNormalizeWorkspaceBannerImage = vi.fn()
 const mockTrackWorkspacePlaygroundTelemetry = vi.fn()
 const mockGetWorkspacePlaygroundTelemetryState = vi.fn()
 const mockResetWorkspacePlaygroundTelemetryState = vi.fn()
@@ -38,6 +42,18 @@ const mockStoreState = {
   workspaceName: "Alpha Research",
   workspaceId: "workspace-alpha",
   workspaceTag: "workspace:alpha-research",
+  workspaceBanner: {
+    title: "Alpha Banner",
+    subtitle: "Alpha subtitle",
+    image: null as null | {
+      dataUrl: string
+      mimeType: "image/jpeg" | "image/png" | "image/webp"
+      width: number
+      height: number
+      bytes: number
+      updatedAt: Date
+    }
+  },
   sources: [
     {
       id: "source-1",
@@ -49,6 +65,9 @@ const mockStoreState = {
     }
   ],
   setWorkspaceName: mockSetWorkspaceName,
+  setWorkspaceBanner: mockSetWorkspaceBanner,
+  clearWorkspaceBannerImage: mockClearWorkspaceBannerImage,
+  resetWorkspaceBanner: mockResetWorkspaceBanner,
   setCurrentNote: mockSetCurrentNote,
   savedWorkspaces: [
     {
@@ -161,6 +180,18 @@ vi.mock("@/store/workspace-bundle", async () => {
   }
 })
 
+vi.mock("../workspace-banner-image", () => ({
+  normalizeWorkspaceBannerImage: (...args: unknown[]) =>
+    mockNormalizeWorkspaceBannerImage(...args),
+  WorkspaceBannerImageNormalizationError: class WorkspaceBannerImageNormalizationError extends Error {
+    code: string
+    constructor(code: string, message: string) {
+      super(message)
+      this.code = code
+    }
+  }
+}))
+
 vi.mock("@/utils/workspace-playground-telemetry", async () => {
   const actual =
     await vi.importActual<typeof import("@/utils/workspace-playground-telemetry")>(
@@ -226,6 +257,11 @@ describe("WorkspaceHeader workspace browser modal", () => {
             keywords: [],
             isDirty: false
           },
+          workspaceBanner: {
+            title: "",
+            subtitle: "",
+            image: null
+          },
           leftPaneCollapsed: false,
           rightPaneCollapsed: false,
           audioSettings: {
@@ -264,6 +300,11 @@ describe("WorkspaceHeader workspace browser modal", () => {
             content: "",
             keywords: [],
             isDirty: false
+          },
+          workspaceBanner: {
+            title: "",
+            subtitle: "",
+            image: null
           },
           leftPaneCollapsed: false,
           rightPaneCollapsed: false,
@@ -316,6 +357,14 @@ describe("WorkspaceHeader workspace browser modal", () => {
       ]
     })
     mockResetWorkspacePlaygroundTelemetryState.mockResolvedValue(undefined)
+    mockNormalizeWorkspaceBannerImage.mockResolvedValue({
+      dataUrl: "data:image/webp;base64,banner",
+      mimeType: "image/webp",
+      width: 1200,
+      height: 400,
+      bytes: 16000,
+      updatedAt: new Date("2026-02-25T10:00:00.000Z")
+    })
   })
 
   it("opens view-all modal and filters workspaces by search query", async () => {
@@ -494,6 +543,117 @@ describe("WorkspaceHeader workspace browser modal", () => {
       expect(mockParseWorkspaceImportFile).toHaveBeenCalledWith(file)
       expect(mockImportWorkspaceBundle).toHaveBeenCalledTimes(1)
     })
+  })
+
+  it("opens Customize banner modal from workspace menu", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Customize banner"))
+
+    const modal = await screen.findByRole("dialog", {
+      name: "Customize banner"
+    })
+    expect(modal).toBeInTheDocument()
+    expect(within(modal).getByTestId("workspace-banner-title-input")).toHaveValue(
+      "Alpha Banner"
+    )
+    expect(
+      within(modal).getByTestId("workspace-banner-subtitle-input")
+    ).toHaveValue("Alpha subtitle")
+  })
+
+  it("saves title, subtitle, and image into workspace store", async () => {
+    const normalizedImage = {
+      dataUrl: "data:image/webp;base64,saved-banner",
+      mimeType: "image/webp" as const,
+      width: 1400,
+      height: 420,
+      bytes: 21000,
+      updatedAt: new Date("2026-02-25T11:00:00.000Z")
+    }
+    mockNormalizeWorkspaceBannerImage.mockResolvedValueOnce(normalizedImage)
+
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Customize banner"))
+
+    const modal = await screen.findByRole("dialog", {
+      name: "Customize banner"
+    })
+    fireEvent.change(within(modal).getByTestId("workspace-banner-title-input"), {
+      target: { value: "Updated Banner" }
+    })
+    fireEvent.change(
+      within(modal).getByTestId("workspace-banner-subtitle-input"),
+      {
+        target: { value: "Updated subtitle" }
+      }
+    )
+
+    const file = new File(["banner"], "banner.png", { type: "image/png" })
+    fireEvent.change(screen.getByTestId("workspace-banner-upload-input"), {
+      target: { files: [file] }
+    })
+
+    await waitFor(() => {
+      expect(mockNormalizeWorkspaceBannerImage).toHaveBeenCalledWith(file)
+    })
+
+    fireEvent.click(within(modal).getByRole("button", { name: "Save" }))
+
+    expect(mockSetWorkspaceBanner).toHaveBeenCalledWith({
+      title: "Updated Banner",
+      subtitle: "Updated subtitle",
+      image: normalizedImage
+    })
+  })
+
+  it("resets banner fields", async () => {
+    const confirmSpy = vi
+      .spyOn(Modal, "confirm")
+      .mockImplementation((config) => {
+        config.onOk?.()
+        return {
+          destroy: vi.fn(),
+          update: vi.fn()
+        } as any
+      })
+
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Customize banner"))
+
+    const modal = await screen.findByRole("dialog", {
+      name: "Customize banner"
+    })
+    fireEvent.click(within(modal).getByRole("button", { name: "Reset banner" }))
+
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(mockResetWorkspaceBanner).toHaveBeenCalledTimes(1)
   })
 
   it("archives current workspace with undo availability", async () => {
@@ -764,8 +924,48 @@ describe("WorkspaceHeader workspace browser modal", () => {
     )
 
     const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator).toHaveTextContent("Storage 2.1/5 MB")
+    expect(indicator).toHaveTextContent("Capacity Payload 2.1/5 MB")
     expect(indicator.className).toContain("text-text-muted")
+  })
+
+  it("includes browser profile storage usage when provided", () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+        storageUsedBytes={2.1 * 1024 * 1024}
+        storageQuotaBytes={5 * 1024 * 1024}
+        storageOriginUsedBytes={120 * 1024 * 1024}
+        storageOriginQuotaBytes={1000 * 1024 * 1024}
+      />
+    )
+
+    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
+    expect(indicator).toHaveTextContent(
+      "Capacity Payload 2.1/5 MB | Browser 120.0/1000 MB"
+    )
+  })
+
+  it("includes account storage usage when provided", () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+        storageUsedBytes={2.1 * 1024 * 1024}
+        storageQuotaBytes={5 * 1024 * 1024}
+        storageAccountUsedBytes={300 * 1024 * 1024}
+        storageAccountQuotaBytes={1000 * 1024 * 1024}
+      />
+    )
+
+    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
+    expect(indicator).toHaveTextContent(
+      "Capacity Payload 2.1/5 MB | Account 300.0/1000 MB"
+    )
   })
 
   it("shows connection status indicator tone for healthy, degraded, and disconnected states", () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { buildApiUrl } from './api-config';
-import { getApiKey, getJWTToken } from './auth';
+import { buildAuthHeaders } from './http';
 
 export type AdminEventCategory = 'acp' | 'monitoring' | 'security' | 'budget' | 'jobs' | 'system';
 
@@ -19,8 +19,8 @@ export type AdminEventHandler = (event: AdminEvent) => void;
  *
  * Returns a cleanup function that closes the connection.
  *
- * Falls back to polling if EventSource is unavailable or connection fails
- * after `maxRetries` attempts.
+ * Uses streaming `fetch` with auth headers and reconnects with exponential
+ * backoff up to `maxRetries` attempts.
  */
 export function subscribeToAdminEvents(
   handler: AdminEventHandler,
@@ -28,93 +28,140 @@ export function subscribeToAdminEvents(
     categories?: AdminEventCategory[];
     maxRetries?: number;
     onConnect?: () => void;
-    onError?: (error: Event) => void;
+    onError?: (error: unknown) => void;
   },
 ): () => void {
   const { categories, maxRetries = 5, onConnect, onError } = options ?? {};
 
   let retryCount = 0;
-  let eventSource: EventSource | null = null;
+  let reconnectTimer: number | null = null;
+  let abortController: AbortController | null = null;
   let closed = false;
 
-  const connect = () => {
+  const parseSseFrame = (frame: string): AdminEvent | null => {
+    const normalized = frame.replace(/\r\n/g, '\n').trim();
+    if (!normalized || normalized.startsWith(':')) return null;
+
+    const lines = normalized.split('\n');
+    const dataLines: string[] = [];
+
+    for (const line of lines) {
+      if (!line || line.startsWith(':')) continue;
+
+      const separatorIndex = line.indexOf(':');
+      const field = separatorIndex === -1 ? line : line.slice(0, separatorIndex);
+      let value = separatorIndex === -1 ? '' : line.slice(separatorIndex + 1);
+      if (value.startsWith(' ')) value = value.slice(1);
+
+      if (field === 'data') {
+        dataLines.push(value);
+      }
+    }
+
+    if (dataLines.length === 0) return null;
+
+    try {
+      const payload = JSON.parse(dataLines.join('\n'));
+      return payload as AdminEvent;
+    } catch {
+      return null;
+    }
+  };
+
+  const readEventStream = async (stream: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<void> => {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (!signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+
+        buffer += decoder.decode(value, { stream: true });
+        buffer = buffer.replace(/\r\n/g, '\n');
+
+        let boundaryIndex = buffer.indexOf('\n\n');
+        while (boundaryIndex !== -1) {
+          const frame = buffer.slice(0, boundaryIndex);
+          buffer = buffer.slice(boundaryIndex + 2);
+          const event = parseSseFrame(frame);
+          if (event) handler(event);
+          boundaryIndex = buffer.indexOf('\n\n');
+        }
+      }
+
+      buffer += decoder.decode();
+      const trailingEvent = parseSseFrame(buffer);
+      if (trailingEvent) handler(trailingEvent);
+    } finally {
+      reader.releaseLock();
+    }
+  };
+
+  const scheduleReconnect = () => {
+    if (closed || retryCount >= maxRetries) return;
+    retryCount += 1;
+    const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 30000);
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      void connect();
+    }, delay);
+  };
+
+  const connect = async () => {
     if (closed) return;
 
     const params = new URLSearchParams();
     if (categories?.length) {
       params.set('categories', categories.join(','));
     }
-    // Add auth via query params since EventSource doesn't support custom headers
-    const token = getJWTToken();
-    if (token) params.set('token', token);
-    const apiKey = getApiKey();
-    if (apiKey) params.set('api_key', apiKey);
-
     const queryString = params.toString();
     const url = buildApiUrl(`/admin/events/stream${queryString ? `?${queryString}` : ''}`);
 
-    eventSource = new EventSource(url);
+    const headers = new Headers(buildAuthHeaders('GET'));
+    headers.set('Accept', 'text/event-stream');
 
-    eventSource.addEventListener('connected', (e) => {
+    abortController = new AbortController();
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers,
+        cache: 'no-store',
+        credentials: 'include',
+        signal: abortController.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        throw new Error(`Admin event stream connection failed with status ${response.status}`);
+      }
+
       retryCount = 0;
       onConnect?.();
-    });
 
-    // Listen for all named events
-    const eventTypes = [
-      'acp_session_created',
-      'acp_session_closed',
-      'acp_session_error',
-      'acp_usage_update',
-      'monitoring_alert',
-      'security_event',
-      'budget_breach',
-      'job_completed',
-      'job_failed',
-      'config_changed',
-      'update',
-    ];
-
-    for (const eventType of eventTypes) {
-      eventSource.addEventListener(eventType, (e) => {
-        try {
-          const data = JSON.parse((e as MessageEvent).data);
-          handler(data as AdminEvent);
-        } catch {
-          // Ignore parse errors
-        }
-      });
+      await readEventStream(response.body, abortController.signal);
+      if (!closed) {
+        scheduleReconnect();
+      }
+    } catch (error) {
+      if (!closed) {
+        onError?.(error);
+        scheduleReconnect();
+      }
     }
-
-    // Default message handler for unnamed events
-    eventSource.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        handler(data as AdminEvent);
-      } catch {
-        // Ignore
-      }
-    };
-
-    eventSource.onerror = (e) => {
-      onError?.(e);
-      eventSource?.close();
-      eventSource = null;
-
-      if (!closed && retryCount < maxRetries) {
-        retryCount++;
-        // Exponential backoff: 1s, 2s, 4s, 8s, 16s
-        const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 30000);
-        setTimeout(connect, delay);
-      }
-    };
   };
 
-  connect();
+  void connect();
 
   return () => {
     closed = true;
-    eventSource?.close();
-    eventSource = null;
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    abortController?.abort();
+    abortController = null;
   };
 }

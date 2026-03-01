@@ -290,12 +290,13 @@ describe("ChatPane Stage 1 reliability and controls", () => {
     })
   })
 
-  it("caps transcript growth at roughly two viewport heights before scrolling", () => {
+  it("keeps transcript as a scrollable flex region anchored above the composer", () => {
     render(<ChatPane />)
 
     const transcript = screen.getByRole("log", { name: "Chat messages" })
-    expect((transcript as HTMLElement).style.maxHeight).toContain("200vh")
     expect((transcript as HTMLElement).className).toContain("overflow-y-auto")
+    expect((transcript as HTMLElement).className).toContain("flex-1")
+    expect((transcript as HTMLElement).className).toContain("min-h-0")
   })
 
   it("clears chat with confirmation and persists empty session state", () => {

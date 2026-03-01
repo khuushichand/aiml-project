@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
+  Alert,
   Button,
   InputNumber,
   Input,
@@ -29,20 +30,31 @@ import {
   fetchWatchlistJobs,
   fetchWatchlistOutputs,
   fetchWatchlistTemplates,
-  downloadWatchlistOutput
+  downloadWatchlistOutput,
+  downloadWatchlistOutputBinary
 } from "@/services/watchlists"
 import type { WatchlistJob, WatchlistOutput, WatchlistTemplate } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
+import { trackWatchlistsOnboardingTelemetry } from "@/utils/watchlists-onboarding-telemetry"
 import { OutputPreviewDrawer } from "./OutputPreviewDrawer"
 import {
   buildDeliveryDisclosureSummary,
   buildRegenerateOutputRequest,
   getDeliveryStatusColor,
   getDeliveryStatusLabel,
+  getOutputArtifactLabel,
+  getOutputArtifactTagColor,
   getOutputDeliveryStatuses,
+  getOutputFileExtension,
+  getOutputMimeType,
   getOutputTemplateName,
-  getOutputTemplateVersion
+  getOutputTemplateVersion,
+  isAudioOutput
 } from "./outputMetadata"
+import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
 
 const OUTPUTS_ADVANCED_FILTERS_STORAGE_KEY = "watchlists:outputs:advanced-filters:v1"
 
@@ -67,6 +79,25 @@ const persistDisclosureState = (key: string, value: boolean): void => {
   }
 }
 
+const normalizeDeliverySnapshot = (metadata: unknown): string => {
+  const deliveries = getOutputDeliveryStatuses(metadata)
+  if (!deliveries.length) return ""
+  return deliveries
+    .map((delivery) => `${delivery.channel}:${delivery.status}`.toLowerCase())
+    .sort()
+    .join("|")
+}
+
+const normalizeDeliveryStatusValue = (value: unknown): string =>
+  String(value || "").trim().toLowerCase()
+
+const DELIVERY_ISSUE_STATUSES = new Set(["failed", "error", "partial", "warning"])
+
+const hasOutputDeliveryIssue = (output: WatchlistOutput): boolean =>
+  getOutputDeliveryStatuses(output.metadata).some((delivery) =>
+    DELIVERY_ISSUE_STATUSES.has(normalizeDeliveryStatusValue(delivery.status))
+  )
+
 export const OutputsTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
 
@@ -77,6 +108,7 @@ export const OutputsTab: React.FC = () => {
   const outputsPage = useWatchlistsStore((s) => s.outputsPage)
   const outputsPageSize = useWatchlistsStore((s) => s.outputsPageSize)
   const outputsJobFilter = useWatchlistsStore((s) => s.outputsJobFilter)
+  const outputsRunFilter = useWatchlistsStore((s) => s.outputsRunFilter)
   const outputPreviewOpen = useWatchlistsStore((s) => s.outputPreviewOpen)
   const selectedOutputId = useWatchlistsStore((s) => s.selectedOutputId)
 
@@ -86,8 +118,14 @@ export const OutputsTab: React.FC = () => {
   const setOutputsPage = useWatchlistsStore((s) => s.setOutputsPage)
   const setOutputsPageSize = useWatchlistsStore((s) => s.setOutputsPageSize)
   const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
+  const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
+  const setRunsJobFilter = useWatchlistsStore((s) => s.setRunsJobFilter)
+  const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
+  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const openJobForm = useWatchlistsStore((s) => s.openJobForm)
   const openOutputPreview = useWatchlistsStore((s) => s.openOutputPreview)
   const closeOutputPreview = useWatchlistsStore((s) => s.closeOutputPreview)
+  const setRunsStatusFilter = useWatchlistsStore((s) => s.setRunsStatusFilter)
 
   const [jobs, setJobs] = useState<WatchlistJob[]>([])
   const [regenOpen, setRegenOpen] = useState(false)
@@ -98,11 +136,24 @@ export const OutputsTab: React.FC = () => {
   const [selectedTemplateVersion, setSelectedTemplateVersion] = useState<number | null>(null)
   const [customTitle, setCustomTitle] = useState("")
   const [regenLoading, setRegenLoading] = useState(false)
-  const hasActiveOutputFilters = Boolean(outputsJobFilter)
+  const [outputsLiveAnnouncement, setOutputsLiveAnnouncement] = useState("")
+  const regenOutputIsAudio = useMemo(() => isAudioOutput(regenOutput), [regenOutput])
+  const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<string | null>(null)
+  const normalizedDeliveryStatusFilter = normalizeDeliveryStatusValue(deliveryStatusFilter)
+  const hasActiveOutputFilters = Boolean(
+    outputsJobFilter || outputsRunFilter || normalizedDeliveryStatusFilter
+  )
   const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(() => {
     const stored = readStoredDisclosureState(OUTPUTS_ADVANCED_FILTERS_STORAGE_KEY)
     return stored ?? hasActiveOutputFilters
   })
+  const previousDeliverySnapshotRef = useRef<Map<number, string>>(new Map())
+  const hasOutputAnnouncementBaselineRef = useRef(false)
+  const regenTriggerRef = useRef<HTMLElement | null>(null)
+  const wasRegenOpenRef = useRef(false)
+  const regenTemplateFieldId = "outputs-regenerate-template-field"
+  const regenTemplateVersionFieldId = "outputs-regenerate-template-version-field"
+  const regenTitleFieldId = "outputs-regenerate-title-field"
 
   const selectedTemplateVersionOptions = useMemo(() => {
     if (!selectedTemplate) return []
@@ -120,17 +171,37 @@ export const OutputsTab: React.FC = () => {
     try {
       const result = await fetchWatchlistOutputs({
         job_id: outputsJobFilter || undefined,
+        run_id: outputsRunFilter || undefined,
         page: outputsPage,
         size: outputsPageSize
       })
       setOutputs(result.items, result.total)
+      const firstOutput = Array.isArray(result.items) ? result.items[0] : null
+      if (firstOutput) {
+        void trackWatchlistsOnboardingTelemetry({
+          type: "first_output_succeeded",
+          outputId: firstOutput.id,
+          format: typeof firstOutput.format === "string" ? firstOutput.format : null
+        })
+      }
     } catch (err) {
       console.error("Failed to fetch outputs:", err)
       message.error(t("watchlists:outputs.fetchError", "Failed to load outputs"))
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.loadError", "Reports refresh failed.")
+      )
     } finally {
       setOutputsLoading(false)
     }
-  }, [outputsJobFilter, outputsPage, outputsPageSize, setOutputs, setOutputsLoading, t])
+  }, [
+    outputsJobFilter,
+    outputsRunFilter,
+    outputsPage,
+    outputsPageSize,
+    setOutputs,
+    setOutputsLoading,
+    t
+  ])
 
   // Load jobs for filter dropdown
   const loadJobs = useCallback(async () => {
@@ -168,6 +239,18 @@ export const OutputsTab: React.FC = () => {
   }, [regenOpen, loadTemplates])
 
   useEffect(() => {
+    if (regenOpen) {
+      wasRegenOpenRef.current = true
+      return
+    }
+
+    if (wasRegenOpenRef.current) {
+      wasRegenOpenRef.current = false
+      restoreFocusToElement(regenTriggerRef.current)
+    }
+  }, [regenOpen])
+
+  useEffect(() => {
     if (hasActiveOutputFilters && !showAdvancedFilters) {
       setShowAdvancedFilters(true)
     }
@@ -176,6 +259,47 @@ export const OutputsTab: React.FC = () => {
   useEffect(() => {
     persistDisclosureState(OUTPUTS_ADVANCED_FILTERS_STORAGE_KEY, showAdvancedFilters)
   }, [showAdvancedFilters])
+
+  const getOutputAccessibleTitle = useCallback((output: WatchlistOutput) => {
+    const title = typeof output.title === "string" ? output.title.trim() : ""
+    return title.length > 0 ? title : `Output #${output.id}`
+  }, [])
+
+  useEffect(() => {
+    const outputItems = Array.isArray(outputs) ? outputs : []
+    const nextSnapshot = new Map<number, string>()
+    outputItems.forEach((output) => {
+      nextSnapshot.set(output.id, normalizeDeliverySnapshot(output.metadata))
+    })
+
+    if (!hasOutputAnnouncementBaselineRef.current) {
+      hasOutputAnnouncementBaselineRef.current = true
+      previousDeliverySnapshotRef.current = nextSnapshot
+      return
+    }
+
+    const changedOutputs = outputItems.filter((output) => {
+      const previousSnapshot = previousDeliverySnapshotRef.current.get(output.id)
+      const currentSnapshot = nextSnapshot.get(output.id)
+      return Boolean(previousSnapshot) && previousSnapshot !== currentSnapshot
+    })
+
+    if (changedOutputs.length === 1) {
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.deliveryChangedSingle", "Delivery status updated for {{title}}.", {
+          title: getOutputAccessibleTitle(changedOutputs[0])
+        })
+      )
+    } else if (changedOutputs.length > 1) {
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.deliveryChangedMultiple", "Delivery status updated for {{count}} reports.", {
+          count: changedOutputs.length
+        })
+      )
+    }
+
+    previousDeliverySnapshotRef.current = nextSnapshot
+  }, [getOutputAccessibleTitle, outputs, t])
 
   // Get job name by ID
   const getJobName = useCallback(
@@ -186,31 +310,126 @@ export const OutputsTab: React.FC = () => {
     [jobs]
   )
 
+  const activeOutputFilterSummary = useMemo(() => {
+    const parts: string[] = []
+    if (outputsJobFilter) {
+      parts.push(
+        t("watchlists:outputs.activeFiltersJob", "Monitor: {{name}}", {
+          name: getJobName(Number(outputsJobFilter))
+        })
+      )
+    }
+    if (outputsRunFilter) {
+      parts.push(
+        t("watchlists:outputs.activeFiltersRun", "Run: #{{id}}", {
+          id: outputsRunFilter
+        })
+      )
+    }
+    if (normalizedDeliveryStatusFilter) {
+      parts.push(
+        t("watchlists:outputs.activeFiltersDelivery", "Delivery: {{status}}", {
+          status: getDeliveryStatusLabel(normalizedDeliveryStatusFilter)
+        })
+      )
+    }
+    return parts.join(" • ")
+  }, [getJobName, normalizedDeliveryStatusFilter, outputsJobFilter, outputsRunFilter, t])
+
+  const filteredOutputs = useMemo(() => {
+    const outputItems = Array.isArray(outputs) ? outputs : []
+    if (!normalizedDeliveryStatusFilter) return outputItems
+    return outputItems.filter((output) =>
+      getOutputDeliveryStatuses(output.metadata).some(
+        (delivery) =>
+          normalizeDeliveryStatusValue(delivery.status) === normalizedDeliveryStatusFilter
+      )
+    )
+  }, [normalizedDeliveryStatusFilter, outputs])
+
+  const outputsWithDeliveryIssues = useMemo(
+    () => filteredOutputs.filter((output) => hasOutputDeliveryIssue(output)),
+    [filteredOutputs]
+  )
+
+  const openFailedRuns = useCallback((jobId: number | null = null) => {
+    setRunsStatusFilter("failed")
+    setRunsJobFilter(jobId)
+    setActiveTab("runs")
+  }, [setActiveTab, setRunsJobFilter, setRunsStatusFilter])
+
+  const openOutputMonitor = useCallback((jobId: number) => {
+    setActiveTab("jobs")
+    openJobForm(jobId)
+  }, [openJobForm, setActiveTab])
+
+  const openOutputRun = useCallback((output: WatchlistOutput) => {
+    setRunsJobFilter(output.job_id)
+    setRunsStatusFilter(null)
+    setActiveTab("runs")
+    openRunDetail(output.run_id)
+  }, [openRunDetail, setActiveTab, setRunsJobFilter, setRunsStatusFilter])
+
+  const deliveryStatusFilterOptions = useMemo(
+    () => [
+      { label: t("watchlists:outputs.deliveryStatus.failed", "Failed"), value: "failed" },
+      { label: t("watchlists:outputs.deliveryStatus.partial", "Partial"), value: "partial" },
+      { label: t("watchlists:outputs.deliveryStatus.pending", "Pending"), value: "pending" },
+      { label: t("watchlists:outputs.deliveryStatus.sent", "Sent"), value: "sent" },
+      { label: t("watchlists:outputs.deliveryStatus.stored", "Stored"), value: "stored" }
+    ],
+    [t]
+  )
+
+  const handleJumpToMonitor = useCallback((jobId: number) => {
+    setActiveTab("jobs")
+    openJobForm(jobId)
+  }, [openJobForm, setActiveTab])
+
+  const handleJumpToRun = useCallback((runId: number, jobId: number) => {
+    setRunsJobFilter(jobId)
+    setActiveTab("runs")
+    openRunDetail(runId)
+  }, [openRunDetail, setActiveTab, setRunsJobFilter])
+
   // Handle download
   const handleDownload = async (output: WatchlistOutput) => {
     try {
-      const content = await downloadWatchlistOutput(output.id)
-      const mimeType = output.format === "html" ? "text/html" : "text/markdown"
-      const blob = new Blob([content], { type: mimeType })
+      const mimeType = getOutputMimeType(output.format)
+      const blob = isAudioOutput(output)
+        ? new Blob([await downloadWatchlistOutputBinary(output.id)], { type: mimeType })
+        : new Blob([await downloadWatchlistOutput(output.id)], { type: mimeType })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = `${output.title || `output-${output.id}`}.${output.format}`
+      a.download = `${output.title || `output-${output.id}`}.${getOutputFileExtension(output)}`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
       message.success(t("watchlists:outputs.downloaded", "Output downloaded"))
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.downloaded", "Downloaded {{title}}.", {
+          title: getOutputAccessibleTitle(output)
+        })
+      )
     } catch (err) {
       console.error("Failed to download output:", err)
       message.error(t("watchlists:outputs.downloadError", "Failed to download output"))
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.downloadError", "Failed to download {{title}}.", {
+          title: getOutputAccessibleTitle(output)
+        })
+      )
     }
   }
 
   const openRegenerate = (output: WatchlistOutput) => {
+    regenTriggerRef.current = getFocusableActiveElement()
+    const outputIsAudio = isAudioOutput(output)
     setRegenOutput(output)
-    setSelectedTemplate(getOutputTemplateName(output.metadata) || null)
-    setSelectedTemplateVersion(getOutputTemplateVersion(output.metadata) || null)
+    setSelectedTemplate(outputIsAudio ? null : (getOutputTemplateName(output.metadata) || null))
+    setSelectedTemplateVersion(outputIsAudio ? null : (getOutputTemplateVersion(output.metadata) || null))
     setCustomTitle(output.title || "")
     setRegenOpen(true)
   }
@@ -222,15 +441,26 @@ export const OutputsTab: React.FC = () => {
       const regeneratePayload = buildRegenerateOutputRequest(regenOutput, {
         title: customTitle,
         templateName: selectedTemplate,
-        templateVersion: selectedTemplateVersion
+        templateVersion: selectedTemplateVersion,
+        allowTemplateOverrides: !regenOutputIsAudio
       })
       await createWatchlistOutput(regeneratePayload)
       message.success(t("watchlists:outputs.regenerated", "Output regenerated"))
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.regenerated", "Regenerated {{title}}.", {
+          title: getOutputAccessibleTitle(regenOutput)
+        })
+      )
       setRegenOpen(false)
       loadOutputs()
     } catch (err) {
       console.error("Failed to regenerate output:", err)
       message.error(t("watchlists:outputs.regenerateError", "Failed to regenerate output"))
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.regenerateError", "Failed to regenerate {{title}}.", {
+          title: getOutputAccessibleTitle(regenOutput)
+        })
+      )
     } finally {
       setRegenLoading(false)
     }
@@ -266,8 +496,11 @@ export const OutputsTab: React.FC = () => {
       key: "title",
       ellipsis: true,
       render: (title: string | null, record) => (
-        <span className="font-medium">
-          {title || `Output #${record.id}`}
+        <span className="inline-flex items-center gap-2">
+          <span className="font-medium">{title || `Output #${record.id}`}</span>
+          <Tag color={getOutputArtifactTagColor(record)}>
+            {getOutputArtifactLabel(record)}
+          </Tag>
         </span>
       )
     },
@@ -277,9 +510,15 @@ export const OutputsTab: React.FC = () => {
       width: 180,
       ellipsis: true,
       render: (_, record) => (
-        <span className="text-sm text-text-muted">
+        <Button
+          type="link"
+          size="small"
+          className="px-0"
+          onClick={() => openOutputMonitor(record.job_id)}
+          data-testid={`watchlists-output-open-job-${record.id}`}
+        >
           {getJobName(record.job_id)}
-        </span>
+        </Button>
       )
     },
     {
@@ -287,8 +526,16 @@ export const OutputsTab: React.FC = () => {
       dataIndex: "run_id",
       key: "run_id",
       width: 100,
-      render: (runId: number) => (
-        <span className="text-sm text-text-muted">#{runId}</span>
+      render: (runId: number, record) => (
+        <Button
+          type="link"
+          size="small"
+          className="px-0"
+          onClick={() => openOutputRun(record)}
+          data-testid={`watchlists-output-open-run-${record.id}`}
+        >
+          #{runId}
+        </Button>
       )
     },
     {
@@ -296,9 +543,9 @@ export const OutputsTab: React.FC = () => {
       dataIndex: "format",
       key: "format",
       width: 100,
-      render: (format: string) => (
-        <Tag color={format === "html" ? "blue" : "green"}>
-          {format.toUpperCase()}
+      render: (_format: string, record) => (
+        <Tag color={getOutputArtifactTagColor(record)}>
+          {getOutputArtifactLabel(record)}
         </Tag>
       )
     },
@@ -431,13 +678,32 @@ export const OutputsTab: React.FC = () => {
       )
     }
   ]
-  const defaultColumnKeys = new Set(["title", "job", "created_at", "delivery", "actions"])
+  const resolveColumnKey = (column: ColumnsType<WatchlistOutput>[number]): string => {
+    if (column.key != null) return String(column.key)
+    if ("dataIndex" in column && column.dataIndex != null) {
+      return Array.isArray(column.dataIndex)
+        ? column.dataIndex.map((entry) => String(entry)).join(".")
+        : String(column.dataIndex)
+    }
+    return ""
+  }
+  const defaultColumnKeys = new Set(["title", "job", "run_id", "created_at", "delivery", "actions"])
   const columns = showAdvancedFilters
     ? allColumns
-    : allColumns.filter((column) => defaultColumnKeys.has(String(column.key || column.dataIndex || "")))
+    : allColumns.filter((column) => defaultColumnKeys.has(resolveColumnKey(column)))
 
   return (
     <div className="space-y-4">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        data-testid="watchlists-outputs-live-region"
+      >
+        {outputsLiveAnnouncement}
+      </div>
+
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
@@ -454,12 +720,16 @@ export const OutputsTab: React.FC = () => {
           {!showAdvancedFilters && hasActiveOutputFilters && (
             <>
               <span className="text-sm text-text-muted" data-testid="watchlists-outputs-active-filters-summary">
-                {t("watchlists:outputs.activeFilters", "Active filters")}: {getJobName(Number(outputsJobFilter))}
+                {t("watchlists:outputs.activeFilters", "Active filters")}: {activeOutputFilterSummary}
               </span>
               <Button
                 size="small"
                 type="text"
-                onClick={() => setOutputsJobFilter(null)}
+                onClick={() => {
+                  setOutputsJobFilter(null)
+                  setOutputsRunFilter(null)
+                  setDeliveryStatusFilter(null)
+                }}
               >
                 {t("common:clear", "Clear")}
               </Button>
@@ -477,6 +747,37 @@ export const OutputsTab: React.FC = () => {
                 label: j.name,
                 value: j.id
               }))}
+            />
+          )}
+          {showAdvancedFilters && (
+            <InputNumber
+              data-testid="watchlists-outputs-run-filter"
+              placeholder={t("watchlists:outputs.filterByRun", "Filter by run ID")}
+              value={outputsRunFilter ?? undefined}
+              onChange={(value) =>
+                setOutputsRunFilter(
+                  typeof value === "number" && Number.isInteger(value) && value > 0
+                    ? value
+                    : null
+                )
+              }
+              min={1}
+              precision={0}
+              className="w-40"
+            />
+          )}
+          {showAdvancedFilters && (
+            <Select
+              data-testid="watchlists-outputs-delivery-filter"
+              placeholder={t("watchlists:outputs.filterByDelivery", "Filter by delivery status")}
+              value={normalizedDeliveryStatusFilter || null}
+              onChange={(value) => {
+                setDeliveryStatusFilter(typeof value === "string" ? value : null)
+                setOutputsPage(1)
+              }}
+              allowClear
+              className="w-44"
+              options={deliveryStatusFilterOptions}
             />
           )}
           {!showAdvancedFilters && (
@@ -499,16 +800,60 @@ export const OutputsTab: React.FC = () => {
         {t("watchlists:outputs.description", "Generated briefings and reports from your watchlist monitors.")}
       </div>
 
+      {outputsWithDeliveryIssues.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          data-testid="watchlists-outputs-delivery-issues-banner"
+          message={t(
+            "watchlists:outputs.deliveryIssuesBannerTitle",
+            "Delivery issues detected in {{count}} report{{plural}}.",
+            {
+              count: outputsWithDeliveryIssues.length,
+              plural: outputsWithDeliveryIssues.length === 1 ? "" : "s"
+            }
+          )}
+          description={t(
+            "watchlists:outputs.deliveryIssuesBannerDescription",
+            "Review failed or partial deliveries and open Activity to investigate monitor/run failures."
+          )}
+          action={(
+            <Space size={8} wrap>
+              <Button
+                size="small"
+                data-testid="watchlists-outputs-banner-show-failed"
+                onClick={() => {
+                  setShowAdvancedFilters(true)
+                  setDeliveryStatusFilter("failed")
+                  setOutputsPage(1)
+                }}
+              >
+                {t("watchlists:outputs.deliveryIssuesShowFailed", "Show failed only")}
+              </Button>
+              <Button
+                size="small"
+                type="link"
+                data-testid="watchlists-outputs-banner-open-runs"
+                onClick={() => openFailedRuns(null)}
+              >
+                {t("watchlists:outputs.deliveryIssuesOpenRuns", "Open failed runs")}
+              </Button>
+            </Space>
+          )}
+        />
+      )}
+
       {/* Table */}
       <Table
-        dataSource={Array.isArray(outputs) ? outputs : []}
+        dataSource={filteredOutputs}
         columns={columns}
         rowKey="id"
+        aria-label={t("watchlists:outputs.tableAria", "Reports table")}
         loading={outputsLoading}
         pagination={{
           current: outputsPage,
           pageSize: outputsPageSize,
-          total: outputsTotal,
+          total: normalizedDeliveryStatusFilter ? filteredOutputs.length : outputsTotal,
           showSizeChanger: true,
           showTotal: (total) =>
             t("watchlists:outputs.totalItems", "{{total}} outputs", { total }),
@@ -540,66 +885,84 @@ export const OutputsTab: React.FC = () => {
         confirmLoading={regenLoading}
       >
         <div className="space-y-3">
-          <div>
-            <div className="text-xs font-medium text-text-muted mb-1">
-              {t("watchlists:outputs.templateLabel", "Template")}
+          {!regenOutputIsAudio ? (
+            <>
+              <div>
+                <label className="text-xs font-medium text-text-muted mb-1 block" htmlFor={regenTemplateFieldId}>
+                  {t("watchlists:outputs.templateLabel", "Template")}
+                </label>
+                <Select
+                  id={regenTemplateFieldId}
+                  data-testid="outputs-regenerate-template"
+                  value={selectedTemplate ?? undefined}
+                  onChange={(value) => {
+                    const nextTemplate = value ?? null
+                    if (nextTemplate !== selectedTemplate) {
+                      setSelectedTemplateVersion(null)
+                    }
+                    setSelectedTemplate(nextTemplate)
+                  }}
+                  placeholder={t("watchlists:outputs.templatePlaceholder", "Select a template")}
+                  options={templates.map((template) => ({
+                    label: template.name,
+                    value: template.name
+                  }))}
+                  loading={templatesLoading}
+                  allowClear
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-text-muted mb-1 block" htmlFor={regenTemplateVersionFieldId}>
+                  {t("watchlists:outputs.templateVersionLabel", "Template version")}
+                </label>
+                {selectedTemplateVersionOptions.length > 0 ? (
+                  <Select
+                    id={regenTemplateVersionFieldId}
+                    data-testid="outputs-regenerate-template-version-select"
+                    value={selectedTemplateVersion ?? undefined}
+                    onChange={(value) =>
+                      setSelectedTemplateVersion(typeof value === "number" ? value : null)
+                    }
+                    placeholder={t("watchlists:outputs.templateVersionPlaceholder", "Latest/default")}
+                    options={selectedTemplateVersionOptions}
+                    disabled={!selectedTemplate}
+                    allowClear
+                    className="w-full"
+                  />
+                ) : (
+                  <InputNumber
+                    id={regenTemplateVersionFieldId}
+                    data-testid="outputs-regenerate-template-version-input"
+                    value={selectedTemplateVersion ?? undefined}
+                    min={1}
+                    precision={0}
+                    onChange={(value) =>
+                      setSelectedTemplateVersion(
+                        typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null
+                      )
+                    }
+                    disabled={!selectedTemplate}
+                    placeholder={t("watchlists:outputs.templateVersionPlaceholder", "Latest/default")}
+                    className="w-full"
+                  />
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="rounded-lg border border-border bg-surface p-3 text-xs text-text-muted">
+              {t(
+                "watchlists:outputs.regenerateAudioTemplateHint",
+                "Audio outputs regenerate using run audio settings. Template overrides are unavailable."
+              )}
             </div>
-            <Select
-              value={selectedTemplate ?? undefined}
-              onChange={(value) => {
-                const nextTemplate = value ?? null
-                if (nextTemplate !== selectedTemplate) {
-                  setSelectedTemplateVersion(null)
-                }
-                setSelectedTemplate(nextTemplate)
-              }}
-              placeholder={t("watchlists:outputs.templatePlaceholder", "Select a template")}
-              options={templates.map((template) => ({
-                label: template.name,
-                value: template.name
-              }))}
-              loading={templatesLoading}
-              allowClear
-              className="w-full"
-            />
-          </div>
+          )}
           <div>
-            <div className="text-xs font-medium text-text-muted mb-1">
-              {t("watchlists:outputs.templateVersionLabel", "Template version")}
-            </div>
-            {selectedTemplateVersionOptions.length > 0 ? (
-              <Select
-                value={selectedTemplateVersion ?? undefined}
-                onChange={(value) =>
-                  setSelectedTemplateVersion(typeof value === "number" ? value : null)
-                }
-                placeholder={t("watchlists:outputs.templateVersionPlaceholder", "Latest/default")}
-                options={selectedTemplateVersionOptions}
-                disabled={!selectedTemplate}
-                allowClear
-                className="w-full"
-              />
-            ) : (
-              <InputNumber
-                value={selectedTemplateVersion ?? undefined}
-                min={1}
-                precision={0}
-                onChange={(value) =>
-                  setSelectedTemplateVersion(
-                    typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null
-                  )
-                }
-                disabled={!selectedTemplate}
-                placeholder={t("watchlists:outputs.templateVersionPlaceholder", "Latest/default")}
-                className="w-full"
-              />
-            )}
-          </div>
-          <div>
-            <div className="text-xs font-medium text-text-muted mb-1">
+            <label className="text-xs font-medium text-text-muted mb-1 block" htmlFor={regenTitleFieldId}>
               {t("watchlists:outputs.titleLabel", "Title")}
-            </div>
+            </label>
             <Input
+              id={regenTitleFieldId}
               value={customTitle}
               onChange={(e) => setCustomTitle(e.target.value)}
               placeholder={t("watchlists:outputs.titlePlaceholder", "Optional title override")}

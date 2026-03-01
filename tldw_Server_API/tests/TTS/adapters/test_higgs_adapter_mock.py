@@ -266,15 +266,15 @@ class TestHiggsAdapterMock:
         adapter = HiggsAdapter({})
 
         # Mock voice reference processing
-        with patch.object(adapter, '_prepare_voice_reference', return_value="/tmp/voice.wav"):
+        with patch.object(adapter, '_prepare_voice_reference', return_value="/tmp/voice.wav"):  # nosec B108
             request = TTSRequest(
                 text="Clone my voice",
                 voice_reference=b"fake_audio_data"
             )
 
-            chat_ml = adapter._prepare_higgs_chat_ml(request, "/tmp/voice.wav")
+            chat_ml = adapter._prepare_higgs_chat_ml(request, "/tmp/voice.wav")  # nosec B108
 
-            assert chat_ml["reference_audio_path"] == "/tmp/voice.wav"
+            assert chat_ml["reference_audio_path"] == "/tmp/voice.wav"  # nosec B108
             assert chat_ml["voice"] == "cloned"
 
     async def test_chat_ml_includes_assistant_audio_with_voice_reference(self):
@@ -284,7 +284,7 @@ class TestHiggsAdapterMock:
             text="Hello world",
             voice="narrator",
         )
-        voice_ref_path = "/tmp/ref.wav"
+        voice_ref_path = "/tmp/ref.wav"  # nosec B108
         chat_ml = adapter._prepare_higgs_chat_ml(request, voice_ref_path)
         assert "messages" in chat_ml
         msgs = chat_ml["messages"]

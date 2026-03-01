@@ -111,19 +111,7 @@ vi.mock('@/lib/api-client', () => ({
   },
 }));
 
-type ApiMock = {
-  getUsers: ReturnType<typeof vi.fn>;
-  getOrganizations: ReturnType<typeof vi.fn>;
-  getOrgInvites: ReturnType<typeof vi.fn>;
-  getUserMfaStatus: ReturnType<typeof vi.fn>;
-  deleteUser: ReturnType<typeof vi.fn>;
-  updateUser: ReturnType<typeof vi.fn>;
-  createUser: ReturnType<typeof vi.fn>;
-  resetUserPassword: ReturnType<typeof vi.fn>;
-  setUserMfaRequirement: ReturnType<typeof vi.fn>;
-};
-
-const apiMock = api as unknown as ApiMock;
+const apiMock = vi.mocked(api);
 
 const makeUser = (overrides: Partial<Record<string, unknown>> = {}) => ({
   id: 1,

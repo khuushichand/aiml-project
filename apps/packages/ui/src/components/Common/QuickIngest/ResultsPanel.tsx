@@ -21,7 +21,7 @@ type ResultsPanelProps = {
       done: number
       pct: number
       elapsedLabel?: string | null
-      state?: "running" | "failed" | "complete" | "ready"
+      state?: "running" | "failed" | "complete" | "cancelled" | "ready"
       error?: string | null
     }
     filters: {
@@ -116,7 +116,13 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
     })
   }, [enrichmentCache, visibleResults])
   const hasErrors = React.useMemo(
-    () => results.some((item) => item.status === "error"),
+    () =>
+      results.some((item) => {
+        if (item.status !== "error") return false
+        if (item.outcome === "cancelled") return false
+        const text = String(item.error || "").toLowerCase()
+        return !(text.includes("cancelled") || text.includes("canceled"))
+      }),
     [results]
   )
   const handleRetryClick = React.useCallback(() => {
@@ -159,12 +165,16 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
       ? qi("ingestProgressTitle", "Current ingest progress")
       : progressState === "failed"
         ? qi("ingestFailedTitle", "Last ingest run failed")
+        : progressState === "cancelled"
+          ? qi("ingestCancelledTitle", "Ingest run cancelled")
         : progressState === "complete"
           ? qi("ingestCompleteTitle", "Ingest run completed")
           : qi("itemsReadyTitle", "Items ready to ingest")
   const progressContainerClassName =
     progressState === "failed"
       ? "mb-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+      : progressState === "cancelled"
+        ? "mb-3 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn"
       : "mb-3 rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text"
 
   if (!hasResults && !hasProgress) return null
@@ -260,7 +270,12 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
           data-testid="quick-ingest-complete"
         >
           <div className="font-medium">
-            {resultSummary.failCount === 0
+            {resultSummary.cancelledCount > 0
+              ? t(
+                  "quickIngest.summaryCancelled",
+                  "Quick ingest was cancelled."
+                )
+              : resultSummary.failCount === 0
               ? t(
                   "quickIngest.summaryAllSucceeded",
                   "Quick ingest completed successfully."
@@ -271,10 +286,20 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                 )}
           </div>
           <div className="mt-1">
-            {t("quickIngest.summaryCounts", "{{success}} succeeded \u00b7 {{failed}} failed", {
-              success: resultSummary.successCount,
-              failed: resultSummary.failCount
-            })}
+            {resultSummary.cancelledCount > 0
+              ? t(
+                  "quickIngest.summaryCountsWithCancelled",
+                  "{{success}} succeeded \u00b7 {{failed}} failed \u00b7 {{cancelled}} cancelled",
+                  {
+                    success: resultSummary.successCount,
+                    failed: resultSummary.failCount,
+                    cancelled: resultSummary.cancelledCount
+                  }
+                )
+              : t("quickIngest.summaryCounts", "{{success}} succeeded \u00b7 {{failed}} failed", {
+                  success: resultSummary.successCount,
+                  failed: resultSummary.failCount
+                })}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {shouldStoreRemote && firstResultWithMedia && (

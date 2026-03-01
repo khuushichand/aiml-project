@@ -6,8 +6,6 @@ Tests the async write buffer, improved worker pool, and resource management.
 
 import pytest
 import asyncio
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime, timedelta
 
@@ -27,7 +25,7 @@ class TestAsyncWriteBuffer:
     """Test the async write buffer implementation."""
 
     @pytest.mark.asyncio
-    async def test_non_blocking_add(self):
+    async def test_non_blocking_add(self, tmp_path):
         """Test that add operations don't block during flush."""
         # Create mock backend
         backend = MagicMock()
@@ -46,7 +44,7 @@ class TestAsyncWriteBuffer:
             database_url=':memory:',
             write_buffer_size=2,
             write_buffer_flush_interval=10.0,
-            base_path=Path('/tmp/test')
+            base_path=tmp_path / 'non_blocking_add'
         )
 
         buffer = AsyncWriteBuffer(backend, config, FlushStrategy.BLOCK)
@@ -81,7 +79,7 @@ class TestAsyncWriteBuffer:
             await buffer.close(timeout=0.1)
 
     @pytest.mark.asyncio
-    async def test_flush_strategies(self):
+    async def test_flush_strategies(self, tmp_path):
         """Test different flush strategies."""
         backend = MagicMock()
         backend.bulk_enqueue = AsyncMock(return_value=['task-1', 'task-2'])
@@ -90,7 +88,7 @@ class TestAsyncWriteBuffer:
             database_url=':memory:',
             write_buffer_size=2,
             write_buffer_flush_interval=10.0,
-            base_path=Path('/tmp/test')
+            base_path=tmp_path / 'flush_strategies'
         )
 
         # Test DROP_OLDEST strategy
@@ -137,7 +135,7 @@ class TestAsyncWriteBuffer:
             await buffer2.close(timeout=0.1)
 
     @pytest.mark.asyncio
-    async def test_adaptive_flush_interval(self):
+    async def test_adaptive_flush_interval(self, tmp_path):
         """Test that flush interval adapts to performance."""
         backend = MagicMock()
 
@@ -152,7 +150,7 @@ class TestAsyncWriteBuffer:
             database_url=':memory:',
             write_buffer_size=2,
             write_buffer_flush_interval=1.0,
-            base_path=Path('/tmp/test')
+            base_path=tmp_path / 'adaptive_flush_interval'
         )
 
         buffer = AsyncWriteBuffer(backend, config)

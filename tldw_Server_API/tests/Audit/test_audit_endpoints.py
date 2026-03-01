@@ -52,7 +52,7 @@ async def _get_client(monkeypatch):
     from tldw_Server_API.app.main import app
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=None) as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=None) as client:  # nosec B113
         try:
             yield client, app
         finally:

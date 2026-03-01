@@ -10,6 +10,13 @@ This document describes the Ingestion_Media_Processing module: responsibilities,
   - MIME detection in the validator uses `puremagic.from_file(..., mime=True)`; the API layer can optionally
     configure `python-magic` via `MAGIC_FILE_PATH`, but the upload validator itself does not depend on it.
 
+## Deprecation Window (Media Processing)
+
+Media ingestion endpoint adapters are currently in a one-release compatibility window while legacy shim paths are reduced.
+
+- Release N: compatibility shims stay active and legacy input forms may trigger additive `Deprecation`, `Sunset`, and `Link` headers.
+- Release N+1: compatibility shims are removed after parity and stability gates remain green.
+
 ## Directory Structure
 
 ```
@@ -28,17 +35,17 @@ tldw_Server_API/app/core/Ingestion_Media_Processing/
 ```
 
 - Submodule docs and references:
-  - `Audio/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Audio.md))
-  - `Books/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Ebooks.md))
-  - `Claims/` ([docs](Docs/Code_Documentation/Claims_Extraction.md))
-  - `MediaWiki/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_MediaWiki.md))
-  - `OCR/` ([docs](Docs/API-related/OCR_API_Documentation.md))
-  - `PDF/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_PDF.md))
-  - `Plaintext/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Documents.md))
-  - `Video/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Video.md))
-  - `Media_Update_lib.py` ([code](tldw_Server_API/app/core/Ingestion_Media_Processing/Media_Update_lib.py))
-  - `Upload_Sink.py` ([code](tldw_Server_API/app/core/Ingestion_Media_Processing/Upload_Sink.py))
-  - `XML_Ingestion_Lib.py` ([code](tldw_Server_API/app/core/Ingestion_Media_Processing/XML_Ingestion_Lib.py))
+  - `Audio/` ([docs](Ingestion_Pipeline_Audio.md))
+  - `Books/` ([docs](Ingestion_Pipeline_Ebooks.md))
+  - `Claims/` ([docs](Claims_Extraction.md))
+  - `MediaWiki/` ([docs](Ingestion_Pipeline_MediaWiki.md))
+  - `OCR/` ([docs](../API-related/OCR_API_Documentation.md))
+  - `PDF/` ([docs](Ingestion_Pipeline_PDF.md))
+  - `Plaintext/` ([docs](Ingestion_Pipeline_Documents.md))
+  - `Video/` ([docs](Ingestion_Pipeline_Video.md))
+  - `Media_Update_lib.py` (source file: `tldw_Server_API/app/core/Ingestion_Media_Processing/Media_Update_lib.py`)
+  - `Upload_Sink.py` (source file: `tldw_Server_API/app/core/Ingestion_Media_Processing/Upload_Sink.py`)
+  - `XML_Ingestion_Lib.py` (source file: `tldw_Server_API/app/core/Ingestion_Media_Processing/XML_Ingestion_Lib.py`)
 
 ## Validation & Security: `Upload_Sink.py`
 

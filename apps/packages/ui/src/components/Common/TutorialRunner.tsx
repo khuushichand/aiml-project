@@ -15,6 +15,54 @@ import { useTranslation } from "react-i18next"
 import { useActiveTutorial } from "@/store/tutorials"
 import { getTutorialById, type TutorialDefinition } from "@/tutorials"
 
+const TARGET_RETRY_DELAY_MS = 350
+const MAX_TARGET_RETRY_ATTEMPTS = 4
+
+const resolveTargetElement = (
+  target: Step["target"]
+): HTMLElement | null => {
+  if (!target) return null
+
+  if (typeof target !== "string") {
+    return target instanceof HTMLElement ? target : null
+  }
+
+  const selectors = target
+    .split(",")
+    .map((selector) => selector.trim())
+    .filter((selector) => selector.length > 0)
+
+  for (const selector of selectors) {
+    const element = document.querySelector(selector)
+    if (element instanceof HTMLElement) {
+      return element
+    }
+  }
+
+  return null
+}
+
+const isElementVisible = (element: HTMLElement): boolean => {
+  const style = window.getComputedStyle(element)
+  if (
+    style.display === "none" ||
+    style.visibility === "hidden" ||
+    Number(style.opacity || "1") === 0
+  ) {
+    return false
+  }
+
+  const rect = element.getBoundingClientRect()
+  return rect.width > 0 && rect.height > 0
+}
+
+const isStepTargetReady = (step: Step | undefined): boolean => {
+  if (!step) return false
+  const element = resolveTargetElement(step.target)
+  if (!element) return false
+  return isElementVisible(element)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,6 +130,32 @@ export const TutorialRunner: React.FC = () => {
     setStepIndex,
     markComplete
   } = useActiveTutorial()
+  const retryAttemptsRef = React.useRef<Map<string, number>>(new Map())
+  const retryTimersRef = React.useRef<Map<string, number>>(new Map())
+  const activeTutorialRef = React.useRef<string | null>(null)
+  const [retryNonce, setRetryNonce] = React.useState(0)
+
+  const clearRetryState = React.useCallback(() => {
+    retryTimersRef.current.forEach((timerId) => {
+      window.clearTimeout(timerId)
+    })
+    retryTimersRef.current.clear()
+    retryAttemptsRef.current.clear()
+  }, [])
+
+  React.useEffect(() => {
+    activeTutorialRef.current = activeTutorialId
+  }, [activeTutorialId])
+
+  React.useEffect(() => {
+    clearRetryState()
+  }, [activeTutorialId, clearRetryState])
+
+  React.useEffect(() => {
+    return () => {
+      clearRetryState()
+    }
+  }, [clearRetryState])
 
   // Get the tutorial definition
   const tutorial: TutorialDefinition | undefined = activeTutorialId
@@ -129,6 +203,7 @@ export const TutorialRunner: React.FC = () => {
 
       // Tutorial finished or skipped
       if (status === STATUS.FINISHED || status === STATUS.SKIPPED) {
+        clearRetryState()
         if (status === STATUS.FINISHED && activeTutorialId) {
           markComplete(activeTutorialId)
         }
@@ -138,6 +213,14 @@ export const TutorialRunner: React.FC = () => {
 
       // Step progression
       if (type === EVENTS.STEP_AFTER) {
+        const retryKey = `${activeTutorialId ?? "unknown"}:${index}`
+        retryAttemptsRef.current.delete(retryKey)
+        const retryTimer = retryTimersRef.current.get(retryKey)
+        if (typeof retryTimer === "number") {
+          window.clearTimeout(retryTimer)
+          retryTimersRef.current.delete(retryKey)
+        }
+
         if (action === ACTIONS.NEXT) {
           setStepIndex(index + 1)
         } else if (action === ACTIONS.PREV) {
@@ -145,30 +228,76 @@ export const TutorialRunner: React.FC = () => {
         }
       }
 
-      // Target not found - skip to next step or end
+      // Target not found - retry briefly for delayed mount/collapsed UI, then fallback.
       if (type === EVENTS.TARGET_NOT_FOUND) {
+        const retryKey = `${activeTutorialId ?? "unknown"}:${index}`
+        const currentAttempts = retryAttemptsRef.current.get(retryKey) ?? 0
+        const currentStep = joyrideSteps[index]
+
+        if (currentStep && currentAttempts < MAX_TARGET_RETRY_ATTEMPTS) {
+          retryAttemptsRef.current.set(retryKey, currentAttempts + 1)
+
+          const existingTimer = retryTimersRef.current.get(retryKey)
+          if (typeof existingTimer === "number") {
+            window.clearTimeout(existingTimer)
+          }
+
+          const tutorialIdAtSchedule = activeTutorialId
+          const timerId = window.setTimeout(() => {
+            retryTimersRef.current.delete(retryKey)
+            if (activeTutorialRef.current !== tutorialIdAtSchedule) {
+              return
+            }
+
+            const refreshedTarget = resolveTargetElement(currentStep.target)
+            if (refreshedTarget) {
+              refreshedTarget.scrollIntoView({
+                block: "center",
+                inline: "nearest",
+                behavior: "smooth"
+              })
+            }
+
+            if (isStepTargetReady(currentStep)) {
+              retryAttemptsRef.current.delete(retryKey)
+            }
+
+            setStepIndex(index)
+            setRetryNonce((value) => value + 1)
+          }, TARGET_RETRY_DELAY_MS)
+
+          retryTimersRef.current.set(retryKey, timerId)
+          return
+        }
+
+        retryAttemptsRef.current.delete(retryKey)
+        const finalRetryTimer = retryTimersRef.current.get(retryKey)
+        if (typeof finalRetryTimer === "number") {
+          window.clearTimeout(finalRetryTimer)
+          retryTimersRef.current.delete(retryKey)
+        }
+
         console.warn(
           `[TutorialRunner] Target not found for step ${index}:`,
-          joyrideSteps[index]?.target
+          currentStep?.target
         )
-        // Try to move to the next step
+
+        // After retries are exhausted, skip to next step (or end without completion).
         if (index < joyrideSteps.length - 1) {
           setStepIndex(index + 1)
         } else {
-          // Last step, end the tutorial
-          if (activeTutorialId) {
-            markComplete(activeTutorialId)
-          }
+          // Last step target never resolved, so end without granting completion.
           endTutorial()
         }
       }
     },
     [
       activeTutorialId,
+      clearRetryState,
       endTutorial,
       markComplete,
       setStepIndex,
-      joyrideSteps.length
+      joyrideSteps
     ]
   )
 
@@ -179,6 +308,7 @@ export const TutorialRunner: React.FC = () => {
 
   return (
     <Joyride
+      key={`${activeTutorialId}-${retryNonce}`}
       steps={joyrideSteps}
       run={true}
       stepIndex={activeStepIndex}

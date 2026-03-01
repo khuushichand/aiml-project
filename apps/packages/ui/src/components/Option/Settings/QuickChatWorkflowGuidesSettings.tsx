@@ -126,7 +126,7 @@ export const QuickChatWorkflowGuidesSettings: React.FC = () => {
         <p className="text-xs text-text-muted">
           {t(
             "generalSettings.settings.quickChatWorkflowGuides.hint",
-            "JSON must be an array of cards with id, title, question, answer, route, routeLabel, and tags."
+            "JSON must be an array of cards with title, question, answer, and route. id, routeLabel, and tags are optional."
           )}
         </p>
       )}

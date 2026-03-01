@@ -741,6 +741,6 @@ evaluation = await svc.create_evaluation(
 
 ## Resources
 - [Unified API Reference](../API-related/Evaluations_API_Unified_Reference.md)
-- [User Guide](../User_Guides/Evaluations_User_Guide.md)
+- [User Guide](../User_Guides/Server/Evaluations_User_Guide.md)
 - [OpenAI Evals](https://github.com/openai/evals) - Compatible format
 - [Test Suite](/tests/Evaluations/) - Example implementations

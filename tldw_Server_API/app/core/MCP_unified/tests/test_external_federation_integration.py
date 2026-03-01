@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -172,15 +173,21 @@ def _federation_registry_payload(port: int, *, request_seconds: float) -> dict[s
 
 
 @pytest.mark.asyncio
-async def test_external_manager_integration_discovery_execute_error_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_external_manager_integration_discovery_execute_error_and_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     stub = await _StubExternalMCPServer.start()
     try:
         cfg = parse_external_server_registry(
             _federation_registry_payload(stub.port, request_seconds=0.1)
         )
+        external_config = tmp_path / "external_servers.yaml"
+        cfg_payload = cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()
+        external_config.write_text(json.dumps(cfg_payload), encoding="utf-8")
         monkeypatch.setattr(manager_mod, "load_external_server_registry", lambda _path=None: cfg)
 
-        manager = ExternalServerManager(config_path="/tmp/unused.yaml")
+        manager = ExternalServerManager(config_path=str(external_config))
         try:
             await manager.initialize()
             virtual_names = [tool.virtual_name for tool in manager.list_virtual_tools()]
@@ -207,18 +214,24 @@ async def test_external_manager_integration_discovery_execute_error_and_timeout(
 
 
 @pytest.mark.asyncio
-async def test_external_federation_module_integration_exposes_and_executes_virtual_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_external_federation_module_integration_exposes_and_executes_virtual_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     stub = await _StubExternalMCPServer.start()
     try:
         cfg = parse_external_server_registry(
             _federation_registry_payload(stub.port, request_seconds=0.4)
         )
+        external_config = tmp_path / "external_servers.yaml"
+        cfg_payload = cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()
+        external_config.write_text(json.dumps(cfg_payload), encoding="utf-8")
         monkeypatch.setattr(manager_mod, "load_external_server_registry", lambda _path=None: cfg)
 
         module = ExternalFederationModule(
             ModuleConfig(
                 name="external_federation",
-                settings={"external_servers_config_path": "/tmp/unused.yaml"},
+                settings={"external_servers_config_path": str(external_config)},
             )
         )
         try:

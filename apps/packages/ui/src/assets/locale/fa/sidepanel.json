@@ -474,5 +474,16 @@
     },
     "createNewCharacter": "ایجاد شخصیت جدید+",
     "importCharacter": "وارد کردن شخصیت"
+  },
+  "persona": {
+    "unsavedStateDiscardPrompt": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. پیش نویس های محلی حذف شوند؟",
+    "unsavedStateDiscardPromptConnect": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. اتصال انجام شود و پیش نویس های محلی حذف شوند؟",
+    "unsavedStateDiscardPromptDisconnect": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. اتصال قطع شود و پیش نویس های محلی حذف شوند؟",
+    "unsavedStateDiscardPromptReloadState": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. وضعیت بارگذاری شود و پیش نویس های محلی حذف شوند؟",
+    "unsavedStateDiscardPromptPersonaSwitch": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. پرسونا عوض شود و پیش نویس های محلی حذف شوند؟",
+    "unsavedStateDiscardPromptSessionSwitch": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. نشست عوض شود و پیش نویس های محلی حذف شوند؟",
+    "unsavedStateDiscardPromptRestoreState": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. این نسخهٔ وضعیت بازیابی شود و پیش نویس های محلی حذف شوند؟",
+    "unsavedStateDiscardPromptRouteTransition": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. این صفحه ترک شود و پیش نویس های محلی حذف شوند؟",
+    "unsavedStateBeforeUnloadPrompt": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. بدون ذخیره از این صفحه خارج شوید؟"
   }
 }

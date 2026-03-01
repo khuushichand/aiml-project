@@ -53,3 +53,58 @@ async def test_transcriber_emits_segment_metadata(monkeypatch):
     assert result2["segment_start"] == pytest.approx(expected_start, abs=1e-6)
     assert result2["segment_end"] == pytest.approx(expected_end, abs=1e-6)
     assert result2["overlap"] == pytest.approx(config.overlap_duration, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_mlx_transcriber_uses_native_stream_session_when_available(monkeypatch):
+    class _StubSession:
+        def __init__(self):
+            self.calls = 0
+
+        def add_audio(self, _audio_np, sample_rate=16000):
+            self.calls += 1
+            return {
+                "text": f"mlx stream {self.calls}",
+                "sentences": [
+                    {
+                        "text": f"mlx stream {self.calls}",
+                        "start": 0.0,
+                        "end": 1.0,
+                        "duration": 1.0,
+                        "confidence": 0.9,
+                        "tokens": [],
+                    }
+                ],
+            }
+
+        def close(self):
+            return None
+
+    session = _StubSession()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified.create_parakeet_mlx_streaming_session",
+        lambda **kwargs: session,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified.transcribe_with_parakeet_mlx",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("legacy MLX path should not be used")),
+    )
+
+    config = StreamingConfig(
+        model_variant="mlx",
+        sample_rate=16000,
+        chunk_duration=1.0,
+        overlap_duration=0.25,
+        enable_partial=False,
+    )
+    transcriber = ParakeetStreamingTranscriber(config)
+    transcriber.initialize()
+
+    chunk_samples = int(config.sample_rate * config.chunk_duration)
+    audio_chunk = np.zeros(chunk_samples, dtype=np.float32).tobytes()
+
+    result = await transcriber.process_audio_chunk(audio_chunk)
+    assert result is not None
+    assert result["type"] == "final"
+    assert result["text"] == "mlx stream 1"

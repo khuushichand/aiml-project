@@ -1,5 +1,7 @@
-"""Local test config for Audio tests.
+"""Local pytest configuration for Audio tests."""
 
-The legacy local_chat_calls stub is no longer needed — all provider routing
-goes through the adapter registry now.
-"""
+import os
+
+# Audio test modules assert against /api/v1/audio REST and WS routes.
+# Keep global MINIMAL_TEST_APP behavior, but opt this suite into mounting audio routers.
+os.environ.setdefault("MINIMAL_TEST_INCLUDE_AUDIO", "1")

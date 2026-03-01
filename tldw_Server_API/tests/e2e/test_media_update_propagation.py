@@ -170,6 +170,37 @@ class TestMediaUpdatePropagation:
             ids = [(x.get("media_id") or x.get("id")) for x in items]
             assert media_id in ids, "Metadata search by DOI did not return patched media"
 
+            # Verify optional standard constraints are accepted in metadata mode.
+            q_constrained = api_client.client.get(
+                f"{api_client.base_url}/api/v1/media/metadata-search",
+                params={
+                    "field": "DOI",
+                    "op": "eq",
+                    "value": doi_val,
+                    "group_by_media": True,
+                    "q": "E2E Metadata Patch",
+                    "media_types": "document",
+                    "must_not_have": "definitely-not-present",
+                    "date_start": "1990-01-01T00:00:00.000Z",
+                    "date_end": "2999-12-31T23:59:59.999Z",
+                    "sort_by": "date_desc",
+                },
+            )
+            assert q_constrained.status_code == 200, q_constrained.text
+            constrained_payload = q_constrained.json()
+            constrained_items = (
+                constrained_payload.get("results", [])
+                if isinstance(constrained_payload, dict)
+                else []
+            )
+            constrained_ids = [
+                (x.get("media_id") or x.get("id"))
+                for x in constrained_items
+            ]
+            assert media_id in constrained_ids, (
+                "Constrained metadata search did not return patched media"
+            )
+
             # Quick smoke on by-identifier endpoint using DOI normalization
             q2 = api_client.client.get(
                 f"{api_client.base_url}/api/v1/media/by-identifier",

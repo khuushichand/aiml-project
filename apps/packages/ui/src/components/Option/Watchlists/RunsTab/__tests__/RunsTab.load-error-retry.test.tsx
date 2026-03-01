@@ -153,4 +153,57 @@ describe("RunsTab load-error retry", () => {
       expect(mocks.fetchWatchlistRunsMock).toHaveBeenCalledTimes(2)
     })
   })
+
+  it("shows persistent reliability attention with deep-link actions for failed and stalled runs", async () => {
+    const openRunDetail = vi.fn()
+    const setRunsStatusFilter = vi.fn()
+    mocks.storeStateRef.current = baseState({
+      openRunDetail,
+      setRunsStatusFilter,
+      runs: [
+        {
+          id: 71,
+          job_id: 3,
+          status: "failed",
+          started_at: "2026-02-18T08:00:00Z",
+          finished_at: "2026-02-18T08:05:00Z",
+          error_msg: "timeout while fetching",
+          stats: {}
+        },
+        {
+          id: 72,
+          job_id: 4,
+          status: "running",
+          started_at: "2026-02-18T06:00:00Z",
+          finished_at: null,
+          error_msg: null,
+          stats: {}
+        }
+      ]
+    })
+    mocks.fetchWatchlistRunsMock.mockResolvedValue({
+      items: [],
+      total: 0,
+      has_more: false
+    })
+
+    render(<RunsTab />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Reliability attention required")
+      ).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          "1 failed run and 1 stalled run need review. The source request timed out. Retry, or lower concurrency for this source."
+        )
+      ).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "View newest failed run" }))
+    expect(openRunDetail).toHaveBeenCalledWith(71)
+
+    fireEvent.click(screen.getByRole("button", { name: "Show failed runs" }))
+    expect(setRunsStatusFilter).toHaveBeenCalledWith("failed")
+  })
 })

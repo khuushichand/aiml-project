@@ -181,6 +181,28 @@ class TestFastGroundednessGrader:
         assert result.method == "llm"
 
     @pytest.mark.asyncio
+    async def test_llm_grounding_parses_fenced_json_with_think_tags(self, sample_documents):
+        mock_analyze = MagicMock(
+            return_value=(
+                "<think>reasoning</think>\n"
+                "```json\n"
+                '{"is_grounded": true, "confidence": 0.85, "rationale": "Supported."}\n'
+                "```"
+            )
+        )
+
+        grader = FastGroundednessGrader(analyze_fn=mock_analyze)
+        result = await grader.grade(
+            query="What is machine learning?",
+            answer="Machine learning learns from data.",
+            documents=sample_documents,
+        )
+
+        assert result.is_grounded is True
+        assert result.confidence == 0.85
+        assert result.method == "llm"
+
+    @pytest.mark.asyncio
     async def test_llm_grounding_not_grounded(self, sample_documents):
         """Test LLM-based check when answer is not grounded."""
         mock_analyze = MagicMock(return_value='{"is_grounded": false, "confidence": 0.8, "rationale": "Claims not in sources."}')
@@ -342,6 +364,26 @@ class TestUtilityGrader:
         assert result.utility_score == 5
         assert result.method == "llm"
         assert "Comprehensive" in result.explanation
+
+    @pytest.mark.asyncio
+    async def test_llm_utility_parses_fenced_json_with_think_tags(self):
+        mock_analyze = MagicMock(
+            return_value=(
+                "<think>analysis</think>\n"
+                "```json\n"
+                '{"utility_score": 4, "explanation": "Useful answer."}\n'
+                "```"
+            )
+        )
+
+        grader = UtilityGrader(analyze_fn=mock_analyze)
+        result = await grader.grade(
+            query="What is Python?",
+            answer="Python is a programming language.",
+        )
+
+        assert result.utility_score == 4
+        assert result.method == "llm"
 
     @pytest.mark.asyncio
     async def test_llm_utility_poor(self):

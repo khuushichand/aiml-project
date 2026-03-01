@@ -5,13 +5,18 @@ import contextlib
 import inspect
 import json
 import os
+import threading
 import tempfile
+import time
+from collections import OrderedDict, deque
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.endpoints._in_memory_limits import SlidingWindowLimiter
 from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentInfo,
     ACPAgentListResponse,
@@ -31,19 +36,23 @@ from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPTokenUsage,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
+    ACPGovernanceDeniedError,
     get_runner_client,
 )
 from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed, resolve_client_ip
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings as get_auth_settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     User,
     get_request_user,
 )
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime
 
 router = APIRouter(prefix="/acp", tags=["acp"])
 
@@ -69,6 +78,355 @@ _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
     ValueError,
 )
 
+_ACP_WS_QUOTA_LOCK = threading.Lock()
+_ACP_WS_ACTIVE_TOTAL = 0
+_ACP_WS_ACTIVE_BY_USER: dict[str, int] = {}
+_ACP_WS_ACTIVE_BY_PERSONA: dict[str, int] = {}
+_ACP_WS_ACTIVE_BY_SESSION: dict[str, int] = {}
+
+
+_ACP_CONTROL_RATE_LIMITER = SlidingWindowLimiter()
+_ACP_AUDIT_LOCK = threading.Lock()
+_ACP_AUDIT_EVENTS: deque[dict[str, Any]] = deque(maxlen=5000)
+_ACP_RECONCILIATION_LOCK = threading.Lock()
+_ACP_RECONCILIATION: OrderedDict[str, dict[str, Any]] = OrderedDict()
+_ACP_DIAGNOSTIC_REASON_MAP: dict[str, str] = {
+    "acp_governance_blocked": "blocked",
+    "governance_blocked": "blocked",
+    "blocked": "blocked",
+    "acp_timeout": "timed_out",
+    "timeout": "timed_out",
+    "timed_out": "timed_out",
+    "cancelled": "cancelled",
+    "cancelled_by_user": "cancelled",
+    "validation_error": "failed_validation",
+    "failed_validation": "failed_validation",
+    "authz_error": "authz_error",
+    "authorization_error": "authz_error",
+    "permission_denied": "authz_error",
+    "session_not_found": "authz_error",
+    "retry_exhausted": "retry_exhausted",
+    "failed_runtime": "failed_runtime",
+    "runtime_error": "failed_runtime",
+    "invariant_violation": "invariant_violation",
+}
+
+
+def _acp_env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return int(default)
+    try:
+        return int(raw)
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return int(default)
+
+
+def _acp_control_rate_limit_per_minute() -> int:
+    return _acp_env_int("ACP_CONTROL_RATE_LIMIT_PER_MINUTE", 240)
+
+
+def _acp_reconciliation_max_entries() -> int:
+    return max(1, _acp_env_int("ACP_RECONCILIATION_MAX_ENTRIES", 5000))
+
+
+def _acp_enforce_control_rate_limit(*, user_id: int, action: str) -> None:
+    limit = max(1, _acp_control_rate_limit_per_minute())
+    key = f"acp:control:user:{int(user_id)}:{str(action).strip().lower() or 'unknown'}"
+    allowed, retry_after = _ACP_CONTROL_RATE_LIMITER.allow(key, limit)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "code": "rate_limited",
+                "message": "ACP control surface rate limit exceeded",
+                "retry_after_seconds": retry_after,
+                "action": action,
+            },
+        )
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _acp_record_audit_event(
+    *,
+    action: str,
+    user_id: int,
+    session_id: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    event = {
+        "timestamp": _now_iso(),
+        "action": str(action),
+        "user_id": int(user_id),
+        "session_id": str(session_id),
+        "metadata": dict(metadata or {}),
+    }
+    with _ACP_AUDIT_LOCK:
+        _ACP_AUDIT_EVENTS.append(event)
+    logger.info(
+        "ACP audit event action={} user_id={} session_id={}",
+        event["action"],
+        event["user_id"],
+        event["session_id"],
+    )
+    return event
+
+
+def _acp_list_audit_events(*, session_id: str) -> list[dict[str, Any]]:
+    with _ACP_AUDIT_LOCK:
+        return [dict(item) for item in _ACP_AUDIT_EVENTS if str(item.get("session_id")) == str(session_id)]
+
+
+def _acp_mark_reconciliation(
+    *,
+    session_id: str,
+    status_value: str,
+    reason_code: str,
+    error: str | None = None,
+) -> dict[str, Any]:
+    key = str(session_id)
+    payload = {
+        "session_id": key,
+        "status": str(status_value),
+        "reason_code": str(reason_code),
+        "error": str(error) if error else None,
+        "updated_at": _now_iso(),
+    }
+    with _ACP_RECONCILIATION_LOCK:
+        _ACP_RECONCILIATION.pop(key, None)
+        _ACP_RECONCILIATION[key] = payload
+        max_entries = _acp_reconciliation_max_entries()
+        while len(_ACP_RECONCILIATION) > max_entries:
+            _ACP_RECONCILIATION.popitem(last=False)
+    return dict(payload)
+
+
+def _acp_get_reconciliation(session_id: str) -> dict[str, Any]:
+    with _ACP_RECONCILIATION_LOCK:
+        existing = _ACP_RECONCILIATION.get(str(session_id))
+        if existing:
+            return dict(existing)
+    return {
+        "session_id": str(session_id),
+        "status": "not_recorded",
+        "reason_code": "not_recorded",
+        "error": None,
+        "updated_at": None,
+    }
+
+
+def _sanitize_diagnostic_message(message: Any) -> str:
+    text = str(message or "").strip()
+    if not text:
+        return "No diagnostic message available"
+    lowered = text.lower()
+    redaction_markers = ("api_key", "access_token", "authorization", "bearer ", "xoxb-", "sk-")
+    if any(marker in lowered for marker in redaction_markers):
+        return "Diagnostic message redacted (sensitive content)"
+    if len(text) > 300:
+        return f"{text[:300]}..."
+    return text
+
+
+def _normalize_reason_code(raw_reason: Any, raw_message: Any) -> str:
+    candidate = str(raw_reason or "").strip().lower()
+    if candidate in _ACP_DIAGNOSTIC_REASON_MAP:
+        return _ACP_DIAGNOSTIC_REASON_MAP[candidate]
+    message_text = str(raw_message or "").strip().lower()
+    for marker, normalized in _ACP_DIAGNOSTIC_REASON_MAP.items():
+        if marker in message_text:
+            return normalized
+    return "failed_runtime"
+
+
+def _extract_session_diagnostics(session_id: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    for idx, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, dict):
+            continue
+        raw_reason = content.get("reason_code") or content.get("error_type") or content.get("status")
+        raw_message = content.get("error") or content.get("message") or content.get("detail")
+        diagnostic_uri = (
+            content.get("diagnostic_uri")
+            or content.get("diagnostic_url")
+            or content.get("artifact_url")
+            or content.get("artifact_uri")
+        )
+        if raw_reason is None and raw_message is None and diagnostic_uri is None:
+            continue
+        diagnostics.append(
+            {
+                "session_id": str(session_id),
+                "index": idx,
+                "timestamp": msg.get("timestamp"),
+                "role": msg.get("role"),
+                "reason_code": _normalize_reason_code(raw_reason, raw_message),
+                "message": _sanitize_diagnostic_message(raw_message),
+                "diagnostic_uri": str(diagnostic_uri) if diagnostic_uri else None,
+            }
+        )
+    return diagnostics
+
+
+def _acp_ws_limit(env_key: str, default: int) -> int:
+    try:
+        return int(os.getenv(env_key, str(default)))
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return int(default)
+
+
+def _acp_quota_inc(bucket: dict[str, int], key: str | None) -> None:
+    if key is None:
+        return
+    bucket[key] = int(bucket.get(key, 0)) + 1
+
+
+def _acp_quota_dec(bucket: dict[str, int], key: str | None) -> None:
+    if key is None:
+        return
+    current = int(bucket.get(key, 0))
+    if current <= 1:
+        bucket.pop(key, None)
+    else:
+        bucket[key] = current - 1
+
+
+def _acp_ws_try_acquire_quota(
+    *,
+    user_id: int,
+    session_id: str,
+    persona_id: str | None,
+) -> tuple[dict[str, str | None] | None, str | None]:
+    global _ACP_WS_ACTIVE_TOTAL
+    total_limit = _acp_ws_limit("ACP_WS_MAX_CONNECTIONS_TOTAL", 1024)
+    per_user_limit = _acp_ws_limit("ACP_WS_MAX_CONNECTIONS_PER_USER", 64)
+    per_persona_limit = _acp_ws_limit("ACP_WS_MAX_CONNECTIONS_PER_PERSONA", 32)
+    per_session_limit = _acp_ws_limit("ACP_WS_MAX_CONNECTIONS_PER_SESSION", 16)
+
+    user_key = str(user_id)
+    session_key = str(session_id).strip() if session_id else None
+    persona_key = str(persona_id).strip() if persona_id else None
+
+    with _ACP_WS_QUOTA_LOCK:
+        if total_limit > 0 and _ACP_WS_ACTIVE_TOTAL >= total_limit:
+            return None, "total_connections_quota_exceeded"
+        if per_user_limit > 0 and int(_ACP_WS_ACTIVE_BY_USER.get(user_key, 0)) >= per_user_limit:
+            return None, "user_connections_quota_exceeded"
+        if persona_key and per_persona_limit > 0 and int(_ACP_WS_ACTIVE_BY_PERSONA.get(persona_key, 0)) >= per_persona_limit:
+            return None, "persona_connections_quota_exceeded"
+        if session_key and per_session_limit > 0 and int(_ACP_WS_ACTIVE_BY_SESSION.get(session_key, 0)) >= per_session_limit:
+            return None, "session_connections_quota_exceeded"
+
+        _ACP_WS_ACTIVE_TOTAL += 1
+        _acp_quota_inc(_ACP_WS_ACTIVE_BY_USER, user_key)
+        _acp_quota_inc(_ACP_WS_ACTIVE_BY_PERSONA, persona_key)
+        _acp_quota_inc(_ACP_WS_ACTIVE_BY_SESSION, session_key)
+        return {
+            "user_key": user_key,
+            "persona_key": persona_key,
+            "session_key": session_key,
+        }, None
+
+
+def _acp_ws_release_quota(token: dict[str, str | None] | None) -> None:
+    global _ACP_WS_ACTIVE_TOTAL
+    if not token:
+        return
+    with _ACP_WS_QUOTA_LOCK:
+        if _ACP_WS_ACTIVE_TOTAL > 0:
+            _ACP_WS_ACTIVE_TOTAL -= 1
+        _acp_quota_dec(_ACP_WS_ACTIVE_BY_USER, token.get("user_key"))
+        _acp_quota_dec(_ACP_WS_ACTIVE_BY_PERSONA, token.get("persona_key"))
+        _acp_quota_dec(_ACP_WS_ACTIVE_BY_SESSION, token.get("session_key"))
+
+
+async def _resolve_acp_session_persona_id(client: Any, session_id: str, user_id: int) -> str | None:
+    getter = getattr(client, "get_session_metadata", None)
+    if not callable(getter):
+        return None
+    try:
+        metadata = await getter(session_id, user_id=user_id)
+    except TypeError:
+        metadata = await getter(session_id)
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    persona_id = metadata.get("persona_id")
+    if persona_id is None:
+        return None
+    return str(persona_id)
+
+
+def _governance_action(decision: dict[str, Any] | None) -> str:
+    if not isinstance(decision, dict):
+        return ""
+    return str(decision.get("action") or decision.get("status") or "").strip().lower()
+
+
+def _governance_blocked_detail(
+    decision: dict[str, Any] | None,
+    *,
+    message: str = "Prompt blocked by governance policy",
+) -> dict[str, Any]:
+    payload = dict(decision or {}) if isinstance(decision, dict) else {}
+    return {
+        "code": "governance_blocked",
+        "message": message,
+        "governance": payload,
+    }
+
+
+async def _check_prompt_governance(
+    client: Any,
+    *,
+    session_id: str,
+    prompt: list[dict[str, Any]],
+    user_id: int,
+) -> dict[str, Any] | None:
+    checker = getattr(client, "check_prompt_governance", None)
+    if not callable(checker):
+        return None
+
+    decision: Any | None = None
+    try:
+        decision = checker(
+            session_id,
+            prompt,
+            user_id=int(user_id),
+            metadata={"session_id": session_id, "user_id": int(user_id)},
+        )
+        if inspect.isawaitable(decision):
+            decision = await decision
+    except TypeError:
+        try:
+            decision = checker(
+                session_id,
+                prompt,
+                user_id=int(user_id),
+            )
+            if inspect.isawaitable(decision):
+                decision = await decision
+        except TypeError:
+            try:
+                decision = checker(session_id, prompt)
+                if inspect.isawaitable(decision):
+                    decision = await decision
+            except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                return None
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return None
+
+    if isinstance(decision, dict):
+        return decision
+    return None
+
 
 # -----------------------------------------------------------------------------
 # WebSocket Authentication Helper
@@ -77,14 +435,18 @@ _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
 class _AuthNZJWTManagerCompat:
     """Compatibility shim exposing verify_token() with token_data.user_id."""
 
-    def verify_token(self, token: str) -> SimpleNamespace | None:
-        token_data = get_jwt_service().decode_access_token(token)
-        if not isinstance(token_data, dict):
+    async def verify_token(self, token: str) -> SimpleNamespace | None:
+        try:
+            payload = get_jwt_service().decode_access_token(token)
+            session_manager = await get_session_manager()
+            if await session_manager.is_token_blacklisted(token, payload.get("jti")):
+                return None
+            user_id = payload.get("user_id") or payload.get("sub")
+            if user_id is None:
+                return None
+            return SimpleNamespace(user_id=int(user_id))
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             return None
-        user_id = token_data.get("sub")
-        if user_id is None:
-            return None
-        return SimpleNamespace(user_id=int(user_id))
 
 
 def get_jwt_manager() -> _AuthNZJWTManagerCompat:
@@ -103,6 +465,8 @@ async def _authenticate_ws(
         try:
             jwtm = get_jwt_manager()
             token_data = jwtm.verify_token(token)
+            if inspect.isawaitable(token_data):
+                token_data = await token_data
             if token_data and getattr(token_data, "user_id", None):
                 return int(token_data.user_id)
         except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
@@ -113,6 +477,7 @@ async def _authenticate_ws(
         try:
             settings = get_auth_settings()
             auth_mode = str(getattr(settings, "AUTH_MODE", "single_user")).strip().lower()
+            client_ip = resolve_client_ip(websocket, settings)
             if auth_mode == "single_user":
                 allowed_keys: set[str] = set()
                 primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
@@ -121,14 +486,19 @@ async def _authenticate_ws(
                 env_primary = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
                 if isinstance(env_primary, str) and env_primary.strip():
                     allowed_keys.add(env_primary.strip())
-                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
-                if isinstance(test_key, str) and test_key.strip():
-                    allowed_keys.add(test_key.strip())
-                if api_key in allowed_keys:
+                if is_explicit_pytest_runtime():
+                    test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                    if isinstance(test_key, str) and test_key.strip():
+                        allowed_keys.add(test_key.strip())
+                if api_key in allowed_keys and is_single_user_ip_allowed(client_ip, settings):
                     return int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
             else:
                 api_mgr = await get_api_key_manager()
-                info = await api_mgr.validate_api_key(api_key=api_key, required_scope="read")
+                info = await api_mgr.validate_api_key(
+                    api_key=api_key,
+                    required_scope="read",
+                    ip_address=client_ip,
+                )
                 user_id = info.get("user_id") if isinstance(info, dict) else None
                 if user_id is not None:
                     return int(user_id)
@@ -230,6 +600,17 @@ async def acp_session_stream(
         return
 
     # Set up WebSocket stream wrapper for metrics
+    persona_id = await _resolve_acp_session_persona_id(client, session_id=session_id, user_id=int(user_id))
+    ws_quota_token, _ws_quota_reason = _acp_ws_try_acquire_quota(
+        user_id=int(user_id),
+        session_id=session_id,
+        persona_id=persona_id,
+    )
+    if ws_quota_token is None:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await websocket.close(code=4429)
+        return
+
     stream = WebSocketStream(
         websocket,
         heartbeat_interval_s=30.0,
@@ -237,13 +618,15 @@ async def acp_session_stream(
         close_on_done=False,
         labels={"component": "acp", "endpoint": "acp_session_stream"},
     )
+    send_callback: Any | None = None
 
     try:
         await stream.start()
 
         # Define send callback for broadcasting
-        async def send_callback(message: dict[str, Any]) -> None:
+        async def _send_callback(message: dict[str, Any]) -> None:
             await stream.send_json(message)
+        send_callback = _send_callback
 
         # Register this WebSocket with the session
         await client.register_websocket(session_id, send_callback)
@@ -261,7 +644,13 @@ async def acp_session_stream(
         while True:
             try:
                 data = await stream.receive_json()
-                await _handle_client_message(client, session_id, data, stream)
+                await _handle_client_message(
+                    client,
+                    session_id,
+                    data,
+                    stream,
+                    user_id=int(user_id),
+                )
             except WebSocketDisconnect:
                 logger.info("WebSocket disconnected for ACP session {}", session_id)
                 break
@@ -285,12 +674,14 @@ async def acp_session_stream(
         logger.exception("WebSocket error for ACP session {}", session_id)
     finally:
         # Unregister WebSocket
-        try:
-            client = await get_runner_client()
-            await client.unregister_websocket(session_id, send_callback)
-        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-            pass
+        if send_callback is not None:
+            try:
+                client = await get_runner_client()
+                await client.unregister_websocket(session_id, send_callback)
+            except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                pass
         await stream.stop()
+        _acp_ws_release_quota(ws_quota_token)
 
 
 @router.websocket("/sessions/{session_id}/ssh")
@@ -323,6 +714,17 @@ async def acp_session_ssh(
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
             await websocket.close(code=4404)
+        return
+
+    persona_id = await _resolve_acp_session_persona_id(client, session_id=session_id, user_id=int(user_id))
+    ws_quota_token, _ws_quota_reason = _acp_ws_try_acquire_quota(
+        user_id=int(user_id),
+        session_id=session_id,
+        persona_id=persona_id,
+    )
+    if ws_quota_token is None:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await websocket.close(code=4429)
         return
 
     await websocket.accept()
@@ -468,12 +870,14 @@ async def acp_session_ssh(
         if temp_key_path:
             with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
                 os.unlink(temp_key_path)
+        _acp_ws_release_quota(ws_quota_token)
 
 async def _handle_client_message(
     client: Any,
     session_id: str,
     data: dict[str, Any],
     stream: WebSocketStream,
+    user_id: int | None = None,
 ) -> None:
     """Handle a message from the WebSocket client."""
     msg_type = data.get("type")
@@ -551,6 +955,24 @@ async def _handle_client_message(
             })
             return
 
+        governance_decision = None
+        if user_id is not None:
+            governance_decision = await _check_prompt_governance(
+                client,
+                session_id=session_id,
+                prompt=prompt,
+                user_id=int(user_id),
+            )
+            if _governance_action(governance_decision) == "deny":
+                await stream.send_json({
+                    "type": "error",
+                    "code": "governance_blocked",
+                    "message": "Prompt blocked by governance policy",
+                    "session_id": session_id,
+                    "data": {"governance": governance_decision},
+                })
+                return
+
         try:
             result = await client.prompt(session_id, prompt)
             await stream.send_json({
@@ -558,6 +980,15 @@ async def _handle_client_message(
                 "session_id": session_id,
                 "stop_reason": result.get("stopReason"),
                 "raw_result": result,
+            })
+        except ACPGovernanceDeniedError as e:
+            payload = dict(getattr(e, "governance", {}) or governance_decision or {})
+            await stream.send_json({
+                "type": "error",
+                "code": "governance_blocked",
+                "message": str(e),
+                "session_id": session_id,
+                "data": {"governance": payload},
             })
         except ACPResponseError as e:
             await stream.send_json({
@@ -727,6 +1158,15 @@ async def acp_session_new(
             create_session_kwargs["agent_type"] = payload.agent_type
         if "user_id" in create_session_params:
             create_session_kwargs["user_id"] = user.id
+        optional_tenancy_args = (
+            ("persona_id", payload.persona_id),
+            ("workspace_id", payload.workspace_id),
+            ("workspace_group_id", payload.workspace_group_id),
+            ("scope_snapshot_id", payload.scope_snapshot_id),
+        )
+        for field_name, field_value in optional_tenancy_args:
+            if field_value is not None and field_name in create_session_params:
+                create_session_kwargs[field_name] = field_value
         session_id = await client.create_session(
             payload.cwd,
             mcp_servers_dicts,
@@ -753,6 +1193,15 @@ async def acp_session_new(
             resolved_agent_type = default_agent
         except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             resolved_agent_type = "custom"
+    resolved_persona_id = payload.persona_id
+    resolved_workspace_id = payload.workspace_id
+    resolved_workspace_group_id = payload.workspace_group_id
+    resolved_scope_snapshot_id = payload.scope_snapshot_id
+    if sandbox_meta:
+        resolved_persona_id = resolved_persona_id or sandbox_meta.get("persona_id")
+        resolved_workspace_id = resolved_workspace_id or sandbox_meta.get("workspace_id")
+        resolved_workspace_group_id = resolved_workspace_group_id or sandbox_meta.get("workspace_group_id")
+        resolved_scope_snapshot_id = resolved_scope_snapshot_id or sandbox_meta.get("scope_snapshot_id")
 
     # Persist session metadata and emit SSE event
     try:
@@ -764,6 +1213,10 @@ async def acp_session_new(
             name=session_name,
             cwd=payload.cwd,
             tags=payload.tags,
+            persona_id=resolved_persona_id,
+            workspace_id=resolved_workspace_id,
+            workspace_group_id=resolved_workspace_group_id,
+            scope_snapshot_id=resolved_scope_snapshot_id,
         )
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         logger.warning("Failed to persist ACP session metadata for {}", session_id)
@@ -787,6 +1240,10 @@ async def acp_session_new(
         sandbox_run_id=(sandbox_meta or {}).get("sandbox_run_id") if sandbox_meta else None,
         ssh_ws_url=(sandbox_meta or {}).get("ssh_ws_url") if sandbox_meta else None,
         ssh_user=(sandbox_meta or {}).get("ssh_user") if sandbox_meta else None,
+        persona_id=resolved_persona_id,
+        workspace_id=resolved_workspace_id,
+        workspace_group_id=resolved_workspace_group_id,
+        scope_snapshot_id=resolved_scope_snapshot_id,
     )
 
 
@@ -795,12 +1252,53 @@ async def acp_session_prompt(
     payload: ACPSessionPromptRequest,
     user: User = Depends(get_request_user),
 ) -> ACPSessionPromptResponse:
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="prompt")
     try:
         client = await get_runner_client()
         await _require_session_access(client, session_id=payload.session_id, user_id=int(user.id))
+        governance_decision = await _check_prompt_governance(
+            client,
+            session_id=payload.session_id,
+            prompt=payload.prompt,
+            user_id=int(user.id),
+        )
+        if _governance_action(governance_decision) == "deny":
+            _acp_record_audit_event(
+                action="prompt_blocked",
+                user_id=int(user.id),
+                session_id=payload.session_id,
+                metadata={"reason_code": "governance_blocked"},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=_governance_blocked_detail(governance_decision),
+            )
         result = await client.prompt(payload.session_id, payload.prompt)
+    except ACPGovernanceDeniedError as exc:
+        logger.warning("ACP session/prompt blocked by governance for user {}: {}", user.id, exc)
+        _acp_record_audit_event(
+            action="prompt_blocked",
+            user_id=int(user.id),
+            session_id=payload.session_id,
+            metadata={"reason_code": "governance_blocked"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_governance_blocked_detail(
+                getattr(exc, "governance", None),
+                message=str(exc) or "Prompt blocked by governance policy",
+            ),
+        ) from exc
+    except HTTPException:
+        raise
     except ACPResponseError as exc:
         logger.error("ACP session/prompt failed for user {}: {}", user.id, exc)
+        _acp_record_audit_event(
+            action="prompt_failed",
+            user_id=int(user.id),
+            session_id=payload.session_id,
+            metadata={"reason_code": "failed_runtime", "message": str(exc)},
+        )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     # Record prompt exchange and accumulate token usage
@@ -817,6 +1315,12 @@ async def acp_session_prompt(
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         logger.warning("Failed to record prompt for session {}", payload.session_id)
 
+    _acp_record_audit_event(
+        action="prompt",
+        user_id=int(user.id),
+        session_id=payload.session_id,
+        metadata={"prompt_items": len(payload.prompt)},
+    )
     return ACPSessionPromptResponse(
         stop_reason=result.get("stopReason"),
         raw_result=result,
@@ -829,13 +1333,25 @@ async def acp_session_cancel(
     payload: ACPSessionCancelRequest,
     user: User = Depends(get_request_user),
 ) -> dict:
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="cancel")
     try:
         client = await get_runner_client()
         await _require_session_access(client, session_id=payload.session_id, user_id=int(user.id))
         await client.cancel(payload.session_id)
     except ACPResponseError as exc:
         logger.error("ACP session/cancel failed for user {}: {}", user.id, exc)
+        _acp_record_audit_event(
+            action="cancel_failed",
+            user_id=int(user.id),
+            session_id=payload.session_id,
+            metadata={"reason_code": "failed_runtime", "message": str(exc)},
+        )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    _acp_record_audit_event(
+        action="cancel",
+        user_id=int(user.id),
+        session_id=payload.session_id,
+    )
     return {"status": "ok"}
 
 
@@ -844,12 +1360,30 @@ async def acp_session_close(
     payload: ACPSessionCloseRequest,
     user: User = Depends(get_request_user),
 ) -> dict:
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="close")
+    _acp_mark_reconciliation(
+        session_id=payload.session_id,
+        status_value="teardown_started",
+        reason_code="teardown_requested",
+    )
     try:
         client = await get_runner_client()
         await _require_session_access(client, session_id=payload.session_id, user_id=int(user.id))
         await client.close_session(payload.session_id)
     except ACPResponseError as exc:
         logger.error("ACP session/close failed for user {}: {}", user.id, exc)
+        _acp_mark_reconciliation(
+            session_id=payload.session_id,
+            status_value="teardown_failed",
+            reason_code="failed_runtime",
+            error=str(exc),
+        )
+        _acp_record_audit_event(
+            action="close_failed",
+            user_id=int(user.id),
+            session_id=payload.session_id,
+            metadata={"reason_code": "failed_runtime", "message": str(exc)},
+        )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     # Mark session as closed in store and emit SSE event
     try:
@@ -865,7 +1399,128 @@ async def acp_session_close(
         }, category="acp")
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         pass
+    _acp_mark_reconciliation(
+        session_id=payload.session_id,
+        status_value="teardown_completed",
+        reason_code="success",
+    )
+    _acp_record_audit_event(
+        action="close",
+        user_id=int(user.id),
+        session_id=payload.session_id,
+    )
     return {"status": "ok"}
+
+
+@router.post("/sessions/{session_id}/teardown")
+async def acp_session_teardown(
+    session_id: str,
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="teardown")
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+    _acp_mark_reconciliation(
+        session_id=session_id,
+        status_value="teardown_started",
+        reason_code="teardown_requested",
+    )
+    try:
+        await client.close_session(session_id)
+    except ACPResponseError as exc:
+        record = _acp_mark_reconciliation(
+            session_id=session_id,
+            status_value="teardown_failed",
+            reason_code="failed_runtime",
+            error=str(exc),
+        )
+        _acp_record_audit_event(
+            action="teardown_failed",
+            user_id=int(user.id),
+            session_id=session_id,
+            metadata={"reason_code": "failed_runtime", "message": str(exc)},
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=record) from exc
+
+    with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+        store = await get_acp_session_store()
+        await store.close_session(session_id)
+    record = _acp_mark_reconciliation(
+        session_id=session_id,
+        status_value="teardown_completed",
+        reason_code="success",
+    )
+    _acp_record_audit_event(
+        action="teardown",
+        user_id=int(user.id),
+        session_id=session_id,
+    )
+    return {"status": "ok", "reconciliation": record}
+
+
+@router.get("/sessions/{session_id}/reconciliation")
+async def acp_session_reconciliation(
+    session_id: str,
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="reconciliation")
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+    _acp_record_audit_event(
+        action="reconciliation_query",
+        user_id=int(user.id),
+        session_id=session_id,
+    )
+    return {"session_id": session_id, "reconciliation": _acp_get_reconciliation(session_id)}
+
+
+@router.post("/sessions/{session_id}/reconcile")
+async def acp_session_reconcile(
+    session_id: str,
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="reconcile")
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+    current = _acp_get_reconciliation(session_id)
+    if str(current.get("status")) in {"teardown_completed", "reconciled"}:
+        _acp_record_audit_event(
+            action="reconcile_noop",
+            user_id=int(user.id),
+            session_id=session_id,
+        )
+        return {"status": "ok", "reconciliation": current}
+    try:
+        await client.close_session(session_id)
+    except ACPResponseError as exc:
+        updated = _acp_mark_reconciliation(
+            session_id=session_id,
+            status_value="reconcile_failed",
+            reason_code="failed_runtime",
+            error=str(exc),
+        )
+        _acp_record_audit_event(
+            action="reconcile_failed",
+            user_id=int(user.id),
+            session_id=session_id,
+            metadata={"reason_code": "failed_runtime", "message": str(exc)},
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=updated) from exc
+
+    with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+        store = await get_acp_session_store()
+        await store.close_session(session_id)
+    updated = _acp_mark_reconciliation(
+        session_id=session_id,
+        status_value="reconciled",
+        reason_code="success",
+    )
+    _acp_record_audit_event(
+        action="reconcile",
+        user_id=int(user.id),
+        session_id=session_id,
+    )
+    return {"status": "ok", "reconciliation": updated}
 
 
 @router.get("/sessions/{session_id}/updates", response_model=ACPSessionUpdatesResponse)
@@ -874,9 +1529,16 @@ async def acp_session_updates(
     limit: int | None = Query(default=100, ge=1, le=1000),
     user: User = Depends(get_request_user),
 ) -> ACPSessionUpdatesResponse:
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="updates")
     client = await get_runner_client()
     await _require_session_access(client, session_id=session_id, user_id=int(user.id))
     updates = client.pop_updates(session_id, limit=limit or 100)
+    _acp_record_audit_event(
+        action="updates_query",
+        user_id=int(user.id),
+        session_id=session_id,
+        metadata={"limit": int(limit or 100)},
+    )
     return ACPSessionUpdatesResponse(updates=updates)
 
 
@@ -894,6 +1556,7 @@ async def acp_list_sessions(
     user: User = Depends(get_request_user),
 ) -> ACPSessionListResponse:
     """List ACP sessions for the authenticated user."""
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="list_sessions")
     store = await get_acp_session_store()
     client = await get_runner_client()
     records, total = await store.list_sessions(
@@ -918,6 +1581,7 @@ async def acp_session_detail(
     user: User = Depends(get_request_user),
 ) -> ACPSessionDetailResponse:
     """Get detailed information about an ACP session."""
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="session_detail")
     client = await get_runner_client()
     await _require_session_access(client, session_id=session_id, user_id=int(user.id))
     store = await get_acp_session_store()
@@ -935,12 +1599,18 @@ async def acp_session_usage(
     user: User = Depends(get_request_user),
 ) -> ACPSessionUsageResponse:
     """Get token usage for an ACP session."""
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="usage")
     client = await get_runner_client()
     await _require_session_access(client, session_id=session_id, user_id=int(user.id))
     store = await get_acp_session_store()
     rec = await store.get_session(session_id)
     if not rec:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+    _acp_record_audit_event(
+        action="usage_query",
+        user_id=int(user.id),
+        session_id=session_id,
+    )
     return ACPSessionUsageResponse(
         session_id=rec.session_id,
         user_id=rec.user_id,
@@ -950,6 +1620,151 @@ async def acp_session_usage(
         created_at=rec.created_at,
         last_activity_at=rec.last_activity_at,
     )
+
+
+# -----------------------------------------------------------------------------
+# Session Events & Artifacts Query
+# -----------------------------------------------------------------------------
+
+
+@router.get("/sessions/{session_id}/events")
+async def acp_session_events(
+    session_id: str,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    """Query persisted ACP session events/messages."""
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="events")
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+    store = await get_acp_session_store()
+    rec = await store.get_session(session_id)
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+
+    events: list[dict[str, Any]] = []
+    for idx, msg in enumerate(getattr(rec, "messages", []) or []):
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        raw_reason = content.get("reason_code") if isinstance(content, dict) else None
+        raw_error = (
+            content.get("error") if isinstance(content, dict) else None
+        ) or (
+            content.get("message") if isinstance(content, dict) else None
+        )
+        event = {
+            "index": idx,
+            "event_type": "message",
+            "role": msg.get("role"),
+            "timestamp": msg.get("timestamp"),
+            "data": content,
+            "reason_code": _normalize_reason_code(raw_reason, raw_error),
+        }
+        events.append(event)
+
+    total = len(events)
+    sliced = events[offset:offset + limit]
+    _acp_record_audit_event(
+        action="events_query",
+        user_id=int(user.id),
+        session_id=session_id,
+        metadata={"limit": int(limit), "offset": int(offset)},
+    )
+    return {
+        "session_id": session_id,
+        "total": total,
+        "events": sliced,
+    }
+
+
+@router.get("/sessions/{session_id}/artifacts")
+async def acp_session_artifacts(
+    session_id: str,
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    """Query artifacts emitted in ACP session messages."""
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="artifacts")
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+    store = await get_acp_session_store()
+    rec = await store.get_session(session_id)
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+
+    artifacts: list[dict[str, Any]] = []
+    for msg in getattr(rec, "messages", []) or []:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, dict):
+            continue
+        listed = content.get("artifacts")
+        if isinstance(listed, list):
+            for artifact in listed:
+                if isinstance(artifact, dict):
+                    artifacts.append(dict(artifact))
+        single = content.get("artifact")
+        if isinstance(single, dict):
+            artifacts.append(dict(single))
+
+    _acp_record_audit_event(
+        action="artifacts_query",
+        user_id=int(user.id),
+        session_id=session_id,
+    )
+    return {
+        "session_id": session_id,
+        "total": len(artifacts),
+        "artifacts": artifacts,
+    }
+
+
+@router.get("/sessions/{session_id}/diagnostics")
+async def acp_session_diagnostics(
+    session_id: str,
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    """Return normalized, non-sensitive diagnostics for an ACP session."""
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="diagnostics")
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+    store = await get_acp_session_store()
+    rec = await store.get_session(session_id)
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+
+    diagnostics = _extract_session_diagnostics(session_id, list(getattr(rec, "messages", []) or []))
+    reconciliation = _acp_get_reconciliation(session_id)
+    _acp_record_audit_event(
+        action="diagnostics_query",
+        user_id=int(user.id),
+        session_id=session_id,
+    )
+    return {
+        "session_id": session_id,
+        "total": len(diagnostics),
+        "diagnostics": diagnostics,
+        "reconciliation": reconciliation,
+    }
+
+
+@router.get("/sessions/{session_id}/audit")
+async def acp_session_audit(
+    session_id: str,
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    """Return ACP audit trail for a session."""
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="audit")
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+    events = _acp_list_audit_events(session_id=session_id)
+    return {
+        "session_id": session_id,
+        "total": len(events),
+        "events": events,
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -969,6 +1784,7 @@ async def acp_session_fork(
     The forked session starts fresh with no active runner process — call
     ``/sessions/new`` with the returned session_id to resume.
     """
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="fork")
     client = await get_runner_client()
     await _require_session_access(client, session_id=session_id, user_id=int(user.id))
 

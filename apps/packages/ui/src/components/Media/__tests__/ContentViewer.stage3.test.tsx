@@ -119,8 +119,30 @@ describe('ContentViewer stage 3 playback', () => {
     })
     expect(player.currentTime).toBe(0)
 
+    fireEvent.click(screen.getByRole('button', { name: 'Show timings' }))
+
     fireEvent.click(await screen.findByRole('button', { name: 'Seek to 00:12' }))
 
     expect(player.currentTime).toBe(12)
+  })
+
+  it('hides transcript timings by default and reveals them when toggled', async () => {
+    render(
+      <ContentViewer
+        selectedMedia={selectedAudio}
+        content={'00:12 Intro line\n00:34 Follow up line'}
+        mediaDetail={{ has_original_file: true, type: 'audio' }}
+        contentDisplayMode="plain"
+      />
+    )
+
+    await screen.findByTestId('embedded-audio-player')
+    expect(screen.queryByRole('button', { name: 'Seek to 00:12' })).not.toBeInTheDocument()
+    expect(screen.getByText(/Intro line/)).toBeInTheDocument()
+    expect(screen.queryByText(/00:12/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show timings' }))
+
+    expect(await screen.findByRole('button', { name: 'Seek to 00:12' })).toBeInTheDocument()
   })
 })

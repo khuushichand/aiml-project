@@ -12,6 +12,9 @@ interface CharacterPreviewProps {
   greeting?: string
   tags?: string[]
   expandedMetadata?: boolean
+  onAvatarClick?: (src: string) => void
+  avatarClickAriaLabel?: string
+  avatarTriggerTestId?: string
 }
 
 
@@ -23,7 +26,10 @@ export function CharacterPreview({
   system_prompt,
   greeting,
   tags,
-  expandedMetadata = false
+  expandedMetadata = false,
+  onAvatarClick,
+  avatarClickAriaLabel,
+  avatarTriggerTestId
 }: CharacterPreviewProps) {
   const { t } = useTranslation(["settings", "common"])
   const [avatarImgError, setAvatarImgError] = useState(false)
@@ -41,6 +47,7 @@ export function CharacterPreview({
   const displayName = name || t("settings:manageCharacters.preview.untitled", {
     defaultValue: "Untitled character"
   })
+  const canOpenAvatar = Boolean(avatarSrc && !avatarImgError && onAvatarClick)
 
   return (
     <div className="rounded-lg border border-border bg-surface2 p-4">
@@ -54,7 +61,30 @@ export function CharacterPreview({
       <div className="flex items-start gap-3">
         {/* Avatar */}
         <div className="flex-shrink-0">
-          {avatarSrc && !avatarImgError ? (
+          {canOpenAvatar ? (
+            <button
+              type="button"
+              className="rounded-full focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-surface2"
+              aria-label={
+                avatarClickAriaLabel ||
+                t("settings:manageCharacters.preview.openFullImage", {
+                  defaultValue: "Open full size image for {{name}}",
+                  name: displayName
+                })
+              }
+              data-testid={avatarTriggerTestId}
+              onClick={() => onAvatarClick?.(avatarSrc as string)}
+            >
+              <img
+                src={avatarSrc as string}
+                alt={displayName}
+                className="h-12 w-12 rounded-full object-cover ring-2 ring-border cursor-zoom-in"
+                onError={() => {
+                  setAvatarImgError(true)
+                }}
+              />
+            </button>
+          ) : avatarSrc && !avatarImgError ? (
             <img
               src={avatarSrc}
               alt={displayName}

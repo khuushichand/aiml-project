@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "در صف گزارش"
+  },
+  "items_includeInNextBriefing": {
+    "message": "افزودن به گزارش بعدی"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "حذف از صف گزارش"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "این مورد قبلاً در خروجی‌های گزارش قرار گرفته است."
+  },
+  "items_briefingIncluded": {
+    "message": "به صف گزارش بعدی اضافه شد."
+  },
+  "items_briefingRemoved": {
+    "message": "از صف گزارش حذف شد."
+  },
+  "items_briefingIncludeError": {
+    "message": "افزودن مورد به گزارش ناموفق بود."
+  },
+  "items_queuedTag": {
+    "message": "در صف"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "انتخاب اجرا"
+  },
+  "items_queue_runOption": {
+    "message": "اجرا #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "برای تولید گزارش از موارد صف‌شده، یک اجرا انتخاب کنید."
+  },
+  "items_queue_empty": {
+    "message": "برای این اجرا موردی در صف یافت نشد."
+  },
+  "items_queue_generated": {
+    "message": "گزارش از {{count}} مورد صف‌شده{{plural}} ایجاد شد."
+  },
+  "items_queue_generateError": {
+    "message": "تولید گزارش از موارد صف‌شده ناموفق بود."
+  },
+  "items_queue_generateReport": {
+    "message": "تولید گزارش از صف"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "В очереди на брифинг"
+  },
+  "items_includeInNextBriefing": {
+    "message": "Добавить в следующий брифинг"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "Удалить из очереди брифинга"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "Этот элемент уже включен в материалы брифинга."
+  },
+  "items_briefingIncluded": {
+    "message": "Добавлено в очередь следующего брифинга."
+  },
+  "items_briefingRemoved": {
+    "message": "Удалено из очереди брифинга."
+  },
+  "items_briefingIncludeError": {
+    "message": "Не удалось включить элемент в брифинг."
+  },
+  "items_queuedTag": {
+    "message": "В очереди"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "Выберите запуск"
+  },
+  "items_queue_runOption": {
+    "message": "Запуск #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "Выберите запуск, чтобы создать отчет из очереди."
+  },
+  "items_queue_empty": {
+    "message": "Для этого запуска не найдено элементов в очереди."
+  },
+  "items_queue_generated": {
+    "message": "Создан отчет из {{count}} элемент{{plural}} в очереди."
+  },
+  "items_queue_generateError": {
+    "message": "Не удалось создать отчет из элементов в очереди."
+  },
+  "items_queue_generateReport": {
+    "message": "Создать отчет из очереди"
+  }
+}

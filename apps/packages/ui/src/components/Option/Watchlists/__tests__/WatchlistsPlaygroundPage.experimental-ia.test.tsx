@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { WatchlistsPlaygroundPage } from "../WatchlistsPlaygroundPage"
 
 const IA_STORAGE_KEY = "watchlists:ia-experiment:v1"
+const IA_ROLLOUT_STORAGE_KEY = "watchlists:ia-rollout:v1"
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => {
   return {
     fetchWatchlistRunsMock: vi.fn(),
     recordWatchlistsIaExperimentTelemetryMock: vi.fn(),
+    trackWatchlistsOnboardingTelemetryMock: vi.fn(),
     notificationDestroyMock: vi.fn(),
     state
   }
@@ -86,7 +88,8 @@ vi.mock("@/hooks/useAntdNotification", () => ({
   useAntdNotification: () => ({
     destroy: mocks.notificationDestroyMock,
     success: vi.fn(),
-    error: vi.fn()
+    error: vi.fn(),
+    warning: vi.fn()
   })
 }))
 
@@ -98,6 +101,11 @@ vi.mock("@/services/watchlists", () => ({
   fetchWatchlistRuns: (...args: any[]) => mocks.fetchWatchlistRunsMock(...args),
   recordWatchlistsIaExperimentTelemetry: (...args: any[]) =>
     mocks.recordWatchlistsIaExperimentTelemetryMock(...args)
+}))
+
+vi.mock("@/utils/watchlists-onboarding-telemetry", () => ({
+  trackWatchlistsOnboardingTelemetry: (...args: any[]) =>
+    mocks.trackWatchlistsOnboardingTelemetryMock(...args)
 }))
 
 vi.mock("@/store/watchlists", () => ({
@@ -140,32 +148,37 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     vi.clearAllMocks()
     mocks.fetchWatchlistRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.recordWatchlistsIaExperimentTelemetryMock.mockResolvedValue({ accepted: true })
+    mocks.trackWatchlistsOnboardingTelemetryMock.mockResolvedValue(undefined)
     mocks.state.activeTab = "sources"
     localStorage.removeItem(IA_STORAGE_KEY)
+    localStorage.removeItem(IA_ROLLOUT_STORAGE_KEY)
     ;(window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__ = true
   })
 
   afterEach(() => {
     cleanup()
     localStorage.removeItem(IA_STORAGE_KEY)
+    localStorage.removeItem(IA_ROLLOUT_STORAGE_KEY)
     delete (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__
   })
 
-  it("shows a reduced top-level tab set and exposes hidden routes via More views", () => {
+  it("shows task-centered primary tabs and exposes implementation tabs via More views", () => {
     render(<WatchlistsPlaygroundPage />)
 
     expect(screen.getByTestId("watchlists-tab-overview")).toBeInTheDocument()
     expect(screen.getByTestId("watchlists-tab-sources")).toBeInTheDocument()
-    expect(screen.getByTestId("watchlists-tab-runs")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-tab-items")).toBeInTheDocument()
     expect(screen.getByTestId("watchlists-tab-outputs")).toBeInTheDocument()
     expect(screen.getByTestId("watchlists-tab-settings")).toBeInTheDocument()
 
     expect(screen.queryByTestId("watchlists-tab-jobs")).not.toBeInTheDocument()
-    expect(screen.queryByTestId("watchlists-tab-items")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("watchlists-tab-runs")).not.toBeInTheDocument()
     expect(screen.queryByTestId("watchlists-tab-templates")).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId("watchlists-experimental-tab-jobs"))
     expect(mocks.state.setActiveTab).toHaveBeenCalledWith("jobs")
+    fireEvent.click(screen.getByTestId("watchlists-experimental-tab-runs"))
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("runs")
   })
 
   it("keeps hidden tabs reachable when currently selected", () => {
@@ -174,6 +187,28 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     render(<WatchlistsPlaygroundPage />)
 
     expect(screen.getByTestId("watchlists-tab-templates")).toBeInTheDocument()
+  })
+
+  it("routes task views to user outcomes and keeps legacy tabs mapped to the active task", () => {
+    render(<WatchlistsPlaygroundPage />)
+
+    fireEvent.click(screen.getByTestId("watchlists-task-view-collect"))
+    fireEvent.click(screen.getByTestId("watchlists-task-view-review"))
+    fireEvent.click(screen.getByTestId("watchlists-task-view-briefings"))
+
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("sources")
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("items")
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("outputs")
+
+    cleanup()
+    mocks.state.activeTab = "runs"
+    render(<WatchlistsPlaygroundPage />)
+    expect(screen.getByTestId("watchlists-task-view-review")).toHaveAttribute("aria-pressed", "true")
+
+    cleanup()
+    mocks.state.activeTab = "templates"
+    render(<WatchlistsPlaygroundPage />)
+    expect(screen.getByTestId("watchlists-task-view-briefings")).toHaveAttribute("aria-pressed", "true")
   })
 
   it("records tab transition telemetry when experiment mode is active", () => {
@@ -208,5 +243,21 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     expect(mocks.recordWatchlistsIaExperimentTelemetryMock).toHaveBeenCalledWith(
       expect.objectContaining({ variant: "baseline" })
     )
+  })
+
+  it("honors persisted rollout assignment when runtime override is absent", () => {
+    delete (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__
+    localStorage.setItem(
+      IA_ROLLOUT_STORAGE_KEY,
+      JSON.stringify({ version: 1, variant: "experimental" })
+    )
+
+    render(<WatchlistsPlaygroundPage />)
+
+    expect(screen.getByTestId("watchlists-experimental-tab-jobs")).toBeInTheDocument()
+    expect(screen.queryByTestId("watchlists-tab-jobs")).not.toBeInTheDocument()
+
+    const payload = JSON.parse(localStorage.getItem(IA_STORAGE_KEY) || "{}")
+    expect(payload.variant).toBe("experimental")
   })
 })

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   fetchWatchlistOutputsMock: vi.fn(),
   fetchWatchlistTemplatesMock: vi.fn(),
   downloadWatchlistOutputMock: vi.fn(),
+  trackWatchlistsOnboardingTelemetryMock: vi.fn(),
   storeStateRef: { current: {} as Record<string, any> }
 }))
 
@@ -49,7 +50,16 @@ vi.mock("antd", () => {
     </button>
   )
 
-  const Table = () => <div data-testid="outputs-table" />
+  const Table = ({ dataSource = [] }: any) => (
+    <div data-testid="outputs-table-rows">{dataSource.length}</div>
+  )
+  const Alert = ({ message, description, action, ...rest }: any) => (
+    <div data-testid={rest["data-testid"] || "outputs-alert"}>
+      <div>{message}</div>
+      <div>{description}</div>
+      {action}
+    </div>
+  )
   const Space = ({ children }: any) => <>{children}</>
   const Tag = ({ children }: any) => <span>{children}</span>
   const Tooltip = ({ children }: any) => <>{children}</>
@@ -71,6 +81,7 @@ vi.mock("antd", () => {
   )
 
   return {
+    Alert,
     Button,
     Input,
     InputNumber,
@@ -99,8 +110,18 @@ vi.mock("@/services/watchlists", () => ({
   downloadWatchlistOutput: (...args: any[]) => mocks.downloadWatchlistOutputMock(...args)
 }))
 
+vi.mock("@/utils/watchlists-onboarding-telemetry", () => ({
+  trackWatchlistsOnboardingTelemetry: (...args: any[]) =>
+    mocks.trackWatchlistsOnboardingTelemetryMock(...args)
+}))
+
 vi.mock("@/store/watchlists", () => ({
   useWatchlistsStore: (selector: (state: any) => unknown) => selector(mocks.storeStateRef.current)
+}))
+
+vi.mock("@/utils/watchlists-onboarding-telemetry", () => ({
+  trackWatchlistsOnboardingTelemetry: (...args: any[]) =>
+    mocks.trackWatchlistsOnboardingTelemetryMock(...args)
 }))
 
 vi.mock("../OutputPreviewDrawer", () => ({
@@ -114,6 +135,7 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   outputsPage: 1,
   outputsPageSize: 20,
   outputsJobFilter: null,
+  outputsRunFilter: null,
   outputPreviewOpen: false,
   selectedOutputId: null,
   setOutputs: vi.fn(),
@@ -121,9 +143,34 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   setOutputsPage: vi.fn(),
   setOutputsPageSize: vi.fn(),
   setOutputsJobFilter: vi.fn(),
+  setOutputsRunFilter: vi.fn(),
+  setRunsJobFilter: vi.fn(),
+  setRunsStatusFilter: vi.fn(),
+  setActiveTab: vi.fn(),
   openOutputPreview: vi.fn(),
   closeOutputPreview: vi.fn(),
   ...overrides
+})
+
+const buildOutput = (id: number, deliveryStatus: string) => ({
+  id,
+  job_id: 8,
+  run_id: 40 + id,
+  title: `Output ${id}`,
+  format: "md",
+  content: "body",
+  storage_path: null,
+  metadata: {
+    deliveries: [
+      {
+        channel: "email",
+        status: deliveryStatus
+      }
+    ]
+  },
+  expires_at: null,
+  expired: false,
+  created_at: "2026-02-23T10:00:00Z"
 })
 
 describe("OutputsTab advanced filters disclosure", () => {
@@ -142,8 +189,10 @@ describe("OutputsTab advanced filters disclosure", () => {
     render(<OutputsTab />)
 
     expect(screen.queryByTestId("watchlists-outputs-job-filter")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("watchlists-outputs-run-filter")).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId("watchlists-outputs-advanced-toggle"))
     expect(screen.getByTestId("watchlists-outputs-job-filter")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-outputs-run-filter")).toBeInTheDocument()
 
     await waitFor(() => {
       expect(localStorage.getItem(STORAGE_KEY)).toBe("1")
@@ -156,5 +205,87 @@ describe("OutputsTab advanced filters disclosure", () => {
     render(<OutputsTab />)
 
     expect(screen.getByTestId("watchlists-outputs-job-filter")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-outputs-run-filter")).toBeInTheDocument()
+  })
+
+  it("auto-opens when a run filter is active", () => {
+    mocks.storeStateRef.current = baseState({ outputsRunFilter: 42 })
+
+    render(<OutputsTab />)
+
+    expect(screen.getByTestId("watchlists-outputs-job-filter")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-outputs-run-filter")).toBeInTheDocument()
+  })
+
+  it("filters visible outputs by delivery status in advanced mode", async () => {
+    mocks.storeStateRef.current = baseState({
+      outputs: [buildOutput(1, "failed"), buildOutput(2, "sent")],
+      outputsTotal: 2
+    })
+
+    render(<OutputsTab />)
+
+    fireEvent.click(screen.getByTestId("watchlists-outputs-advanced-toggle"))
+    expect(screen.getByTestId("watchlists-outputs-delivery-filter")).toBeInTheDocument()
+    expect(screen.getByTestId("outputs-table-rows")).toHaveTextContent("2")
+
+    fireEvent.change(screen.getByTestId("watchlists-outputs-delivery-filter"), {
+      target: { value: "failed" }
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("outputs-table-rows")).toHaveTextContent("1")
+    })
+  })
+
+  it("highlights delivery issues and links remediation actions", async () => {
+    const setRunsStatusFilter = vi.fn()
+    const setRunsJobFilter = vi.fn()
+    const setActiveTab = vi.fn()
+
+    mocks.storeStateRef.current = baseState({
+      outputs: [buildOutput(1, "failed"), buildOutput(2, "sent")],
+      outputsTotal: 2,
+      setRunsStatusFilter,
+      setRunsJobFilter,
+      setActiveTab
+    })
+
+    render(<OutputsTab />)
+
+    expect(screen.getByTestId("watchlists-outputs-delivery-issues-banner")).toHaveTextContent(
+      "Delivery issues detected in 1 report."
+    )
+    expect(screen.getByTestId("outputs-table-rows")).toHaveTextContent("2")
+
+    fireEvent.click(screen.getByTestId("watchlists-outputs-banner-show-failed"))
+
+    await waitFor(() => {
+      expect(screen.getByTestId("outputs-table-rows")).toHaveTextContent("1")
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-outputs-banner-open-runs"))
+
+    expect(setRunsStatusFilter).toHaveBeenCalledWith("failed")
+    expect(setRunsJobFilter).toHaveBeenCalledWith(null)
+    expect(setActiveTab).toHaveBeenCalledWith("runs")
+  })
+
+  it("tracks first output milestone when outputs load returns items", async () => {
+    mocks.fetchWatchlistOutputsMock.mockResolvedValue({
+      items: [buildOutput(501, "sent")],
+      total: 1,
+      has_more: false
+    })
+
+    render(<OutputsTab />)
+
+    await waitFor(() => {
+      expect(mocks.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+        type: "first_output_succeeded",
+        outputId: 501,
+        format: "md"
+      })
+    })
   })
 })

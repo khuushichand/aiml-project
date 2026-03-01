@@ -12,6 +12,7 @@ from typing import Any
 from loguru import logger
 
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from ...persona_scope import get_explicit_scope_ids, merge_requested_ids_with_scope
 from ..base import BaseModule, create_tool_definition
 from ..disk_space import get_free_disk_space_gb
 
@@ -142,6 +143,7 @@ class ChatsModule(BaseModule):
         snippet_len: int = int(args.get("snippet_length", 300))
         character_id = args.get("character_id")
         sender = args.get("sender")
+        conversation_ids_filter = args.get("conversation_ids_filter")
 
         return await asyncio.to_thread(
             self._search_sync,
@@ -153,6 +155,7 @@ class ChatsModule(BaseModule):
             snippet_len,
             character_id,
             sender,
+            conversation_ids_filter,
         )
 
     def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
@@ -211,6 +214,7 @@ class ChatsModule(BaseModule):
         snippet_len = int(retrieval.get("snippet_length", 300))
         max_tokens = retrieval.get("max_tokens")
         cpt = int(retrieval.get("chars_per_token", 4))
+        conversation_ids_filter = args.get("conversation_ids_filter")
         if cpt <= 0:
             raise ValueError("chars_per_token must be a positive integer")
         if max_tokens is not None:
@@ -228,7 +232,20 @@ class ChatsModule(BaseModule):
             max_tokens,
             cpt,
             loc,
+            conversation_ids_filter,
         )
+
+    @staticmethod
+    def _to_int_set(values: set[str] | None) -> set[int] | None:
+        if values is None:
+            return None
+        out: set[int] = set()
+        for value in values:
+            try:
+                out.add(int(value))
+            except (TypeError, ValueError):
+                continue
+        return out
 
     def _search_sync(
         self,
@@ -240,9 +257,46 @@ class ChatsModule(BaseModule):
         snippet_len: int,
         character_id: Any,
         sender: Any,
+        conversation_ids_filter: Any,
     ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
+            scoped_conv_ids = get_explicit_scope_ids(context, "conversation_id")
+            scoped_char_ids_raw = get_explicit_scope_ids(context, "character_id")
+            scoped_char_ids = self._to_int_set(scoped_char_ids_raw)
+
+            effective_conv_ids = merge_requested_ids_with_scope(
+                conversation_ids_filter,
+                scoped_ids=scoped_conv_ids,
+            )
+            if effective_conv_ids is not None and not effective_conv_ids:
+                return {
+                    "results": [],
+                    "has_more": False,
+                    "next_offset": None,
+                    "total_estimated": 0,
+                }
+
+            if (
+                character_id is not None
+                and scoped_char_ids is not None
+                and int(character_id) not in scoped_char_ids
+            ):
+                return {
+                    "results": [],
+                    "has_more": False,
+                    "next_offset": None,
+                    "total_estimated": 0,
+                }
+
+            effective_character_id = character_id
+            if (
+                effective_character_id is None
+                and scoped_char_ids is not None
+                and len(scoped_char_ids) == 1
+            ):
+                effective_character_id = next(iter(scoped_char_ids))
+
             max_fetch = limit + offset
             combined: list[dict[str, Any]] = []
             convs_raw_len = 0
@@ -252,12 +306,25 @@ class ChatsModule(BaseModule):
             if by in {"both", "title"}:
                 convs = db.search_conversations_by_title(
                     query,
-                    character_id=character_id,
+                    character_id=effective_character_id,
                     limit=max_fetch,
                     client_id=None,  # MCP operates with a synthetic client_id; fetch full tenant scope explicitly.
                 )
+                filtered_convs: list[dict[str, Any]] = []
+                for conv in convs:
+                    conv_id = str(conv.get("id") or "")
+                    if effective_conv_ids is not None and conv_id not in effective_conv_ids:
+                        continue
+                    if scoped_char_ids is not None:
+                        try:
+                            conv_char = int(conv.get("character_id"))
+                        except (TypeError, ValueError):
+                            continue
+                        if conv_char not in scoped_char_ids:
+                            continue
+                    filtered_convs.append(conv)
                 convs_raw_len = len(convs)
-                for r in convs:
+                for r in filtered_convs:
                     combined.append({
                         "id": r.get("id"),
                         "source": "chats",
@@ -271,6 +338,7 @@ class ChatsModule(BaseModule):
                         "version": r.get("version"),
                         "tags": None,
                         "conversation_id": r.get("id"),
+                        "character_id": r.get("character_id"),
                         "loc": {"conversation_id": r.get("id")},
                     })
 
@@ -279,26 +347,44 @@ class ChatsModule(BaseModule):
                 msgs = db.search_messages_by_content(query, conversation_id=None, limit=max_fetch)
                 msgs_raw_len = len(msgs)
                 msg_results: list[dict[str, Any]] = []
+                conv_char_cache: dict[str, int | None] = {}
                 for r in msgs:
                     if sender and (str(r.get("sender") or "").lower() != str(sender).lower()):
                         continue
+                    conversation_id = str(r.get("conversation_id") or "")
+                    if effective_conv_ids is not None and conversation_id not in effective_conv_ids:
+                        continue
+                    if scoped_char_ids is not None:
+                        if conversation_id not in conv_char_cache:
+                            conv = db.get_conversation_by_id(conversation_id)
+                            if conv is None:
+                                conv_char_cache[conversation_id] = None
+                            else:
+                                try:
+                                    conv_char_cache[conversation_id] = int(conv.get("character_id"))
+                                except (TypeError, ValueError):
+                                    conv_char_cache[conversation_id] = None
+                        conv_char_id = conv_char_cache.get(conversation_id)
+                        if conv_char_id is None or conv_char_id not in scoped_char_ids:
+                            continue
                     content = r.get("content") or ""
                     msg_results.append({
                         "id": r.get("id"),
                         "source": "chats",
                         "title": None,
                         "snippet": " ".join(content.split())[:snippet_len],
-                        "uri": f"chats://{r.get('conversation_id')}#{r.get('id')}",
+                        "uri": f"chats://{conversation_id}#{r.get('id')}",
                         "score": 1.0,
                         "score_type": "fts",
                         "created_at": r.get("timestamp"),
                         "last_modified": r.get("last_modified"),
                         "version": r.get("version"),
                         "tags": None,
-                        "conversation_id": r.get("conversation_id"),
+                        "conversation_id": conversation_id,
                         "message_id": r.get("id"),
                         "sender": r.get("sender"),
-                        "loc": {"conversation_id": r.get("conversation_id"), "message_id": r.get("id")},
+                        "character_id": conv_char_cache.get(conversation_id),
+                        "loc": {"conversation_id": conversation_id, "message_id": r.get("id")},
                     })
                     if len(msg_results) >= max_fetch:
                         break
@@ -333,12 +419,30 @@ class ChatsModule(BaseModule):
         max_tokens: Any,
         cpt: int,
         loc: dict[str, Any],
+        conversation_ids_filter: Any,
     ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
+            scoped_conv_ids = get_explicit_scope_ids(context, "conversation_id")
+            effective_conv_ids = merge_requested_ids_with_scope(
+                conversation_ids_filter,
+                scoped_ids=scoped_conv_ids,
+            )
+            if effective_conv_ids is not None and conversation_id not in effective_conv_ids:
+                raise PermissionError("Conversation access denied by persona scope")
+
             conv = db.get_conversation_by_id(conversation_id)
             if not conv:
                 raise ValueError(f"Conversation not found: {conversation_id}")
+
+            scoped_char_ids = self._to_int_set(get_explicit_scope_ids(context, "character_id"))
+            if scoped_char_ids is not None:
+                try:
+                    conversation_character_id = int(conv.get("character_id"))
+                except (TypeError, ValueError):
+                    conversation_character_id = None
+                if conversation_character_id not in scoped_char_ids:
+                    raise PermissionError("Conversation access denied by persona scope")
             messages = db.get_messages_for_conversation(conversation_id, limit=1000, offset=0, order_by_timestamp="ASC")
 
             meta = {

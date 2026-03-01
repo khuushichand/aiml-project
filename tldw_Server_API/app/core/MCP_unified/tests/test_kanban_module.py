@@ -414,12 +414,13 @@ class FakeKanbanDB:
 
 
 @pytest.mark.asyncio
-async def test_kanban_module_basic_flow():
+async def test_kanban_module_basic_flow(tmp_path):
     mod = KanbanModule(ModuleConfig(name="kanban"))
     fake_db = FakeKanbanDB()
     mod._open_db = lambda ctx: fake_db  # type: ignore[assignment]
 
-    ctx = SimpleNamespace(user_id="1", db_paths={"kanban": "/tmp/kanban.db"})
+    db_path = tmp_path / "kanban.db"
+    ctx = SimpleNamespace(user_id="1", db_paths={"kanban": db_path})
 
     empty = await mod.execute_tool("kanban.boards.list", {}, context=ctx)
     assert empty["total"] == 0

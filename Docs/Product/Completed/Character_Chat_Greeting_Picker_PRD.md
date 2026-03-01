@@ -49,7 +49,7 @@ Deterministic fallback rules:
 Non-functional requirements:
 - Persist selection across refresh and client restarts.
 - Avoid server schema changes unless required for history metadata storage.
-- Respect shared prompt budget caps for greetings. See `Docs/Product/Character_Chat_Prompt_Assembly_Preview_PRD.md`.
+- Respect shared prompt budget caps for greetings. See `Docs/Product/Completed/Character_Chat_Prompt_Assembly_Preview_PRD.md`.
 
 ## UX Notes
 - Show the picker only when the chat has no non-greeting messages.

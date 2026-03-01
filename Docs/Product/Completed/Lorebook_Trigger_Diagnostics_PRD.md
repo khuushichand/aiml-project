@@ -30,7 +30,7 @@ Functional requirements:
 
 Non-functional requirements:
 - Use existing world book data without schema changes unless required.
-- Respect shared prompt budget caps for lorebook entries. See `Docs/Product/Character_Chat_Prompt_Assembly_Preview_PRD.md`.
+- Respect shared prompt budget caps for lorebook entries. See `Docs/Product/Completed/Character_Chat_Prompt_Assembly_Preview_PRD.md`.
 
 ## UX Notes
 - Place the debug view in chat settings under a collapsible section.

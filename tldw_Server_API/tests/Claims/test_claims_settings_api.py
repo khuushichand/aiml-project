@@ -3,8 +3,8 @@ import os
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.config import settings
 
 
@@ -67,15 +67,23 @@ def test_claims_settings_get_and_update():
             data = r.json()
             assert "enable_ingestion_claims" in data
             assert "claims_json_parse_mode" in data
+            assert "claims_prompt_validation_mode" in data
+            assert "claims_prompt_validation_strict" in data
             assert "claims_alignment_mode" in data
             assert "claims_alignment_threshold" in data
+            assert "claims_context_window_chars" in data
+            assert "claims_extraction_passes" in data
 
             payload = {
                 "enable_ingestion_claims": True,
                 "claims_max_per_chunk": 4,
                 "claims_json_parse_mode": "strict",
+                "claims_prompt_validation_mode": "warning",
+                "claims_prompt_validation_strict": True,
                 "claims_alignment_mode": "exact",
                 "claims_alignment_threshold": 0.9,
+                "claims_context_window_chars": 128,
+                "claims_extraction_passes": 2,
                 "persist": False,
             }
             r2 = client.put("/api/v1/claims/settings", json=payload)
@@ -84,8 +92,12 @@ def test_claims_settings_get_and_update():
             assert data2.get("enable_ingestion_claims") is True
             assert int(data2.get("claims_max_per_chunk")) == 4
             assert data2.get("claims_json_parse_mode") == "strict"
+            assert data2.get("claims_prompt_validation_mode") == "warning"
+            assert data2.get("claims_prompt_validation_strict") is True
             assert data2.get("claims_alignment_mode") == "exact"
             assert float(data2.get("claims_alignment_threshold")) == 0.9
+            assert int(data2.get("claims_context_window_chars")) == 128
+            assert int(data2.get("claims_extraction_passes")) == 2
     finally:
         for key, value in original.items():
             if value is None:

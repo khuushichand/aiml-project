@@ -22,6 +22,9 @@ type TldwRequestRuntime = {
   fetchFn?: typeof fetch
 }
 
+const ABSOLUTE_URL_BLOCK_ERROR =
+  "Absolute URL requests are blocked unless the request origin is explicitly allowlisted."
+
 const normalizeKnownPathQuirks = (path: PathOrUrl): PathOrUrl => {
   if (typeof path !== "string") return path
   // Some callers still build media listing URLs as `/api/v1/media/?...`.
@@ -85,6 +88,54 @@ export const parseRetryAfter = (headerValue?: string | null): number | null => {
   return null
 }
 
+const toAllowlistEntries = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => String(entry || "").trim())
+      .filter((entry) => entry.length > 0)
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return []
+    if (!trimmed.includes(",")) return [trimmed]
+    return trimmed
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+  }
+  return []
+}
+
+const absoluteOriginAllowlistFromConfig = (cfg: TldwConfigLike): Set<string> => {
+  const out = new Set<string>()
+  const entries = toAllowlistEntries((cfg as Record<string, unknown> | null)?.absoluteUrlAllowlist)
+  for (const entry of entries) {
+    try {
+      const parsed = new URL(entry)
+      if (/^https?:$/i.test(parsed.protocol)) {
+        out.add(parsed.origin.toLowerCase())
+      }
+    } catch {
+      // Ignore malformed allowlist entries.
+    }
+  }
+  return out
+}
+
+const isAbsoluteUrlAllowlisted = (
+  absoluteUrl: string,
+  cfg: TldwConfigLike
+): boolean => {
+  try {
+    const target = new URL(absoluteUrl)
+    if (!/^https?:$/i.test(target.protocol)) return false
+    const allowlistedOrigins = absoluteOriginAllowlistFromConfig(cfg)
+    return allowlistedOrigins.has(target.origin.toLowerCase())
+  } catch {
+    return false
+  }
+}
+
 export const tldwRequest = async (
   payload: TldwRequestPayload,
   runtime: TldwRequestRuntime
@@ -103,6 +154,13 @@ export const tldwRequest = async (
   const fetchFn = runtime.fetchFn || fetch
   const cfg = await runtime.getConfig()
   const isAbsolute = typeof normalizedPath === "string" && /^https?:/i.test(normalizedPath)
+  if (isAbsolute && !isAbsoluteUrlAllowlisted(String(normalizedPath), cfg)) {
+    return {
+      ok: false,
+      status: 400,
+      error: ABSOLUTE_URL_BLOCK_ERROR
+    }
+  }
   if (!cfg?.serverUrl && !isAbsolute) {
     return { ok: false, status: 400, error: "tldw server not configured" }
   }
@@ -113,6 +171,7 @@ export const tldwRequest = async (
   const url = isAbsolute
     ? normalizedPath
     : `${baseUrl}${normalizedPath.startsWith("/") ? "" : "/"}${normalizedPath}`
+  const shouldSkipAuth = noAuth || isAbsolute
   const h: Record<string, string> = { ...(headers || {}) }
   const hasContentType = Object.keys(h).some(
     (key) => key.toLowerCase() === "content-type"
@@ -136,7 +195,7 @@ export const tldwRequest = async (
   if (body != null && !hasContentType && typeof body !== "string" && !isBinaryBody(body)) {
     h["Content-Type"] = "application/json"
   }
-  if (!noAuth) {
+  if (!shouldSkipAuth) {
     for (const k of Object.keys(h)) {
       const kl = k.toLowerCase()
       if (kl === "x-api-key" || kl === "authorization") delete h[k]
@@ -214,7 +273,13 @@ export const tldwRequest = async (
       timeoutId = null
     }
 
-    if (resp.status === 401 && cfg?.authMode === "multi-user" && cfg?.refreshToken && runtime.refreshAuth) {
+    if (
+      !shouldSkipAuth &&
+      resp.status === 401 &&
+      cfg?.authMode === "multi-user" &&
+      cfg?.refreshToken &&
+      runtime.refreshAuth
+    ) {
       try {
         await runtime.refreshAuth()
       } catch {}

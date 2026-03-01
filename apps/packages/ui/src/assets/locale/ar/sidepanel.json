@@ -200,5 +200,16 @@
       "html": "HTML",
       "xml": "XML"
     }
+  },
+  "persona": {
+    "unsavedStateDiscardPrompt": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد تجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptConnect": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد الاتصال وتجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptDisconnect": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد قطع الاتصال وتجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptReloadState": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد تحميل الحالة وتجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptPersonaSwitch": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد تبديل الشخصية وتجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptSessionSwitch": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد تبديل الجلسة وتجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptRestoreState": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد استعادة هذا الإصدار من الحالة وتجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptRouteTransition": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد مغادرة هذه الصفحة وتجاهل المسودات المحلية؟",
+    "unsavedStateBeforeUnloadPrompt": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد مغادرة هذه الصفحة بدون حفظ؟"
   }
 }

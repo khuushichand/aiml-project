@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type LoadOptions = {
   signal?: AbortSignal;
@@ -13,7 +13,7 @@ export type PagedResponse<T> = {
 
 export type UsePagedResourceOptions<T> = {
   load: (options?: LoadOptions) => Promise<PagedResponse<T>>;
-  deps?: unknown[];
+  deps?: readonly unknown[];
   enabled?: boolean;
   initialItems?: T[];
   initialTotal?: number;
@@ -29,9 +29,16 @@ export type UsePagedResourceResult<T> = {
   reload: () => Promise<void>;
 };
 
+const NO_DEPS: readonly unknown[] = [];
+
+const depsChanged = (previous: readonly unknown[], next: readonly unknown[]): boolean => {
+  if (previous.length !== next.length) return true;
+  return next.some((value, index) => !Object.is(value, previous[index]));
+};
+
 export const usePagedResource = <T>({
   load,
-  deps = [],
+  deps = NO_DEPS,
   enabled = true,
   initialItems = [],
   initialTotal = 0,
@@ -42,6 +49,13 @@ export const usePagedResource = <T>({
   const [total, setTotal] = useState(initialTotal);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState('');
+  const depsRef = useRef<readonly unknown[]>(deps);
+
+  if (depsChanged(depsRef.current, deps)) {
+    depsRef.current = deps;
+  }
+
+  const stableDeps = depsRef.current;
 
   const runLoad = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -72,7 +86,7 @@ export const usePagedResource = <T>({
     const controller = new AbortController();
     void runLoad(controller.signal);
     return () => controller.abort();
-  }, [enabled, runLoad, deps]);
+  }, [enabled, runLoad, stableDeps]);
 
   const reload = useCallback(async () => {
     await runLoad();

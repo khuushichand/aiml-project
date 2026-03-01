@@ -7,8 +7,8 @@ describe("PlaygroundChat winner copy guard", () => {
     const sourcePath = path.resolve(__dirname, "../PlaygroundChat.tsx")
     const source = fs.readFileSync(sourcePath, "utf8")
 
-    expect(source).toContain("playground:composer.comparePrimaryOff")
-    expect(source).toContain("Use as main response")
+    expect(source).toContain("playground:composer.compareCanonicalOff")
+    expect(source).toContain("Choose as answer")
     expect(source).toContain("playground:composer.compareContinueWinner")
     expect(source).toContain("Continue with winner")
     expect(source).toContain("playground:composer.compareKeepComparing")

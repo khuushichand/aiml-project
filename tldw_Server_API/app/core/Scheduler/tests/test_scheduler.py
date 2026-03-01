@@ -703,10 +703,11 @@ async def test_error_handling(scheduler):
 
 if __name__ == "__main__":
     # Run tests
-    asyncio.run(test_scheduler_lifecycle(SchedulerConfig(
-        database_url="sqlite://:memory:",
-        base_path=Path("/tmp")
-    )))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        asyncio.run(test_scheduler_lifecycle(SchedulerConfig(
+            database_url="sqlite://:memory:",
+            base_path=Path(tmpdir)
+        )))
     print("✓ Scheduler lifecycle test passed")
 
     print("\n✅ All scheduler tests passed!")

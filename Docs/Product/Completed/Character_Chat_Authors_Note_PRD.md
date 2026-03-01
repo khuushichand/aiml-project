@@ -31,7 +31,7 @@ Functional requirements:
 - Support an optional GM-only toggle to exclude the note from prompt assembly.
 
 Non-functional requirements:
-- Enforce shared prompt budget caps for author notes. See `Docs/Product/Character_Chat_Prompt_Assembly_Preview_PRD.md`.
+- Enforce shared prompt budget caps for author notes. See `Docs/Product/Completed/Character_Chat_Prompt_Assembly_Preview_PRD.md`.
 - Keep injection order deterministic for testing.
 
 ## UX Notes
@@ -42,7 +42,7 @@ Non-functional requirements:
 - Store shared author note in per-chat settings as `authorNote`.
 - Store per-character notes in per-chat settings as `characterMemoryById` map where needed.
 - Store per-character default note in character settings.
-- Use the shared sync and migration rules described in `Docs/Product/Character_Chat_Greeting_Picker_PRD.md`.
+- Use the shared sync and migration rules described in `Docs/Product/Completed/Character_Chat_Greeting_Picker_PRD.md`.
 
 ## API and Integration
 - No new endpoints if per-chat settings and character metadata already support custom fields.
@@ -51,7 +51,7 @@ Non-functional requirements:
 ## Edge Cases
 - Empty note means no injection.
 - If injection depth is invalid, fall back to "before system".
-- When both shared and per-character notes exist, merge according to memory scope rules in `Docs/Product/Group_Multi_Character_Chats_PRD.md`.
+- When both shared and per-character notes exist, merge according to memory scope rules in `Docs/Product/Completed/Group_Multi_Character_Chats_PRD.md`.
 
 ## Risks and Open Questions
 - Best default injection depth and how it interacts with system prompts.

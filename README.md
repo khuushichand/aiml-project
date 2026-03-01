@@ -32,8 +32,10 @@
 - [Highlights](#highlights)
 - [Feature Status](#feature-status)
 - [Quickstart](#quickstart)
+  - [Preflight Check (Recommended)](#preflight-check-recommended)
   - [At-a-Glance Commands](#at-a-glance-commands)
   - [No-Docker Path (Makefile)](#no-docker-path-makefile)
+  - [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly)
   - [Manual Setup](#manual-setup)
   - [Tire Kicker: Add the WebUI](#tire-kicker-add-the-webui)
   - [Run the Web UI (WIP)](#run-the-web-ui-wip)
@@ -77,12 +79,24 @@ Good fit for:
 - Running local or hosted LLMs behind a consistent OpenAI-compatible API.
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
-**New here?** Jump to [Quickstart](#quickstart) or try `make quickstart-install` after cloning.
+**New here?** Start with the profile chooser in [Docs/Getting_Started/README.md](Docs/Getting_Started/README.md), then use [Quickstart](#quickstart) for command details.
+
+## Start Here (Self-Hosting Profiles)
+
+Choose one base onboarding path:
+
+1. [Local single-user](Docs/Getting_Started/Profile_Local_Single_User.md)
+2. [Docker single-user](Docs/Getting_Started/Profile_Docker_Single_User.md)
+3. [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md)
+
+Optional add-on:
+
+- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) for accelerated speech-to-text after your base path is working.
 
 
 ## Current Status
 
-Latest release: 0.1.20 (2026-02-07). Beta. Expect rough edges; please report issues. See `CHANGELOG.md` for release history.
+Latest release: 0.1.21 (2026-02-21). Beta. Expect rough edges; please report issues. See `CHANGELOG.md` for release history.
 
 <details>
 <summary>Current focus and migration notes</summary>
@@ -101,7 +115,7 @@ Latest release: 0.1.20 (2026-02-07). Beta. Expect rough edges; please report iss
     - `cp -a ./Databases ./Databases.backup`
 - Update configuration:
     - Copy provider keys to `.env`.
-    - For AuthNZ setup: `cp .env.authnz.template .env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
+    - For AuthNZ setup: `cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
 - Database migration:
     - Inspect: `python -m tldw_Server_API.app.core.DB_Management.migrate_db status`
     - Migrate: `python -m tldw_Server_API.app.core.DB_Management.migrate_db migrate`
@@ -122,6 +136,7 @@ Latest release: 0.1.20 (2026-02-07). Beta. Expect rough edges; please report iss
 - MCP Unified module with JWT/RBAC, tool execution APIs, WebSockets, and metrics
 - Next.js WebUI and Admin UI (primary web client)
 - Research & ingestion upgrades: OCR, web search + academic search, connectors, outputs/artifacts, watchlists/workflows
+- Reminder tasks + in-app notifications inbox, including realtime SSE stream and snooze actions
 - Strict OpenAI compatibility mode for local/self-hosted providers
 - PostgreSQL content mode + backup/restore helpers; Prometheus/Grafana monitoring + admin usage reporting
 
@@ -132,7 +147,7 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 - Self-hosted by design; no telemetry or data collection.
 - Users own and control their data; see hardening guidance for production.
 - Auth modes: single-user API key or multi-user JWT.
-- Security reporting and hardening docs: `SECURITY.md`, `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.
+- Security reporting and hardening docs: `SECURITY.md`, `Docs/Published/User_Guides/Server/Production_Hardening_Checklist.md`.
 - Outbound URL egress policy blocks SSRF to private networks and disallowed ports for media downloads (audio/video/doc URLs), with test-mode DNS relaxations for hostnames.
 
 ## Highlights
@@ -172,50 +187,104 @@ See the full [Feature Status Matrix at `Docs/Published/Overview/Feature_Status.m
 ## Quickstart
 
 `pip install tldw_server` is not generally available yet (PyPI publishing is in progress).
-For now, use this repository checkout with the Makefile targets below.
+For now, use this repository checkout and the setup paths below (`make` and no-`make`).
+
+### Preflight Check (Recommended)
+
+If you plan to use Makefile quickstart targets:
+```bash
+make quickstart-prereqs
+```
+
+If `make` is unavailable (common on Windows), run the equivalent checks manually:
+```powershell
+py -3.12 --version  # or py -3.13 / -3.11 / -3.10
+ffmpeg -version
+docker --version    # only if using Docker paths
+```
 
 ### At-a-Glance Commands
 
+Choose one install path:
+
+| Goal | Command |
+|------|---------|
+| API only (local Python, no Docker) | `make quickstart-install` |
+| API only (Docker) | `make quickstart-docker` |
+| API + WebUI (Docker) | `make quickstart-docker-webui` |
+| No `make` available (common on Windows) | See [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly) |
+
 ```bash
-# No Docker: installs deps, initializes auth, starts API
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
+
+# API only (local Python): installs deps, initializes auth, starts API
 make quickstart-install
 # If `python3` is older than 3.10 on your machine:
 # make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 
-# Docker: API only
-make quickstart-docker
-
-# Docker: API + WebUI
-make quickstart-docker-webui
-# Optional (non-localhost deployments):
-# make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
+# Docker paths:
+# make quickstart-docker
+# make quickstart-docker-webui
 ```
+
+If `make` is unavailable, use [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly).
 
 ### No-Docker Path (Makefile)
 
 ```bash
-git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
+# from repo root
 make quickstart-install
 # If `python3` is older than 3.10 on your machine:
 # make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 ```
 
-This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts the server. Verify with:
+This target:
+- Creates `.venv` if missing and installs dependencies.
+- Creates `tldw_Server_API/Config_Files/.env` from `.env.example` if missing.
+- Initializes AuthNZ (non-interactive).
+- Starts the API server at `http://127.0.0.1:8000`.
+
+Verify with:
 ```bash
 curl http://localhost:8000/health  # No auth needed!
 ```
 
 Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.13` / `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
 
+### No-Make Path (Windows-Friendly)
+
+Use these paths when `make` is not available.
+
+API only (local Python, no Docker):
+- Follow [Manual Setup](#manual-setup) below (includes PowerShell commands).
+
+API only (Docker):
+```powershell
+# from repo root
+if (!(Test-Path "tldw_Server_API/Config_Files/.env")) { Copy-Item "tldw_Server_API/Config_Files/.env.example" "tldw_Server_API/Config_Files/.env" }
+docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml up -d --build
+curl http://localhost:8000/health
+```
+
+API + WebUI (Docker):
+```powershell
+# from repo root
+if (!(Test-Path "tldw_Server_API/Config_Files/.env")) { Copy-Item "tldw_Server_API/Config_Files/.env.example" "tldw_Server_API/Config_Files/.env" }
+# Optional for non-localhost deployments:
+# $env:NEXT_PUBLIC_API_URL="http://YOUR_HOST_OR_DOMAIN:8000"
+docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.webui.yml up -d --build
+```
+
 ### Manual Setup
 
-Supported Python versions for quickstart/manual setup:
+Supported Python versions:
 - Minimum: Python 3.10+
 - CI-tested: Python 3.11, 3.12, and 3.13
 - Recommended for local development: Python 3.12
 
-Prerequisites: Python, ffmpeg, and (for audio capture paths) PyAudio/PortAudio.
+Prerequisites:
+- Required: Python + ffmpeg
+- Optional (for audio capture paths): PyAudio/PortAudio
 
 Platform setup examples:
 ```bash
@@ -230,11 +299,11 @@ sudo apt install -y ffmpeg portaudio19-dev python3-pyaudio
 sudo dnf install -y ffmpeg portaudio-devel python3-pyaudio
 ```
 
-Windows prerequisites:
+Windows notes:
 - Install ffmpeg (for example with `winget` or Chocolatey).
-- Install PyAudio inside the activated venv with `pip install pyaudio`; if wheel/build fails, install Microsoft C++ Build Tools and retry.
+- For PyAudio, run `pip install pyaudio` in the activated venv. If wheel/build fails, install Microsoft C++ Build Tools and retry.
 
-1) **Install**
+1) **Create and activate a virtual environment**
 ```bash
 # macOS/Linux: choose a supported interpreter explicitly (3.12 recommended)
 python3.12 -m venv .venv  # or python3.13 / python3.11 / python3.10
@@ -247,21 +316,20 @@ py -3.12 -m venv .venv  # or -3.13 / -3.11 / -3.10
 # Confirm venv interpreter version
 python --version
 
+# Install project dependencies
 pip install -e .
 ```
 
-PyAudio/PortAudio install notes by platform:
-- Linux: install distro packages (`portaudio19-dev` + `python3-pyaudio` on Debian/Ubuntu, `portaudio-devel` + `python3-pyaudio` on Fedora/RHEL).
-- macOS: `brew install portaudio` then `pip install pyaudio`.
-- Windows: `pip install pyaudio` inside the venv; if wheel build fails, install Microsoft C++ Build Tools and retry.
-
-2) **Configure** (minimal `tldw_Server_API/Config_Files/.env`)
+2) **Configure environment**
 ```bash
-cat > tldw_Server_API/Config_Files/.env << 'EOF'
-AUTH_MODE=single_user
-SINGLE_USER_API_KEY=my-secure-key-at-least-16-chars
-DATABASE_URL=sqlite:///./Databases/users.db
-EOF
+# macOS/Linux
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
+
+# Windows (PowerShell)
+# Copy-Item tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
+
+# Edit tldw_Server_API/Config_Files/.env and set:
+# SINGLE_USER_API_KEY=<at least 16 chars>
 ```
 
 3) **Initialize auth** (use `--non-interactive` to skip prompts)
@@ -274,7 +342,7 @@ python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
 python -m uvicorn tldw_Server_API.app.main:app --reload
 ```
 
-5) **Verify it works**
+5) **Verify**
 ```bash
 curl http://localhost:8000/health
 # Expected: {"status":"ok",...}
@@ -289,7 +357,8 @@ curl http://localhost:8000/health
 ```bash
 # Optional pip extras
 pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
-pip install -e ".[dev]"           # tests, linters, tooling
+pip install -e ".[tooling]"       # unified tooling smoke helpers/scripts
+pip install -e ".[dev]"           # tests and linters
 pip install -e ".[otel]"          # OpenTelemetry metrics/tracing
 
 # pyaudio (needed for audio capture and some processing paths)
@@ -319,41 +388,21 @@ See [MCP System Admin Guide](Docs/MCP/Unified/System_Admin_Guide.md) for details
 
 | I want to... | Guide |
 |--------------|-------|
-| Try it in 5 minutes with hand-holding | [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) |
-| Start from Tire Kicker, then launch the WebUI | [Tire Kicker: Add the WebUI](#tire-kicker-add-the-webui) |
-| Build apps against the API locally | [Local Development Guide](Docs/Getting_Started/Local_Development.md) |
-| Run on my home server with Docker | [Docker Self-Host Guide](Docs/Getting_Started/Docker_Self_Host.md) |
-| Deploy for a team with proper security | [Production Guide](Docs/Getting_Started/Production.md) |
+| Choose the right onboarding path | [Getting Started Index](Docs/Getting_Started/README.md) |
+| Start from local single-user, then launch the WebUI | [Local Profile: Add the WebUI](#local-profile-add-the-webui) |
+| Build apps against the API locally | [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) |
+| Run on my home server with Docker | [Docker Single-User Profile](Docs/Getting_Started/Profile_Docker_Single_User.md) |
+| Deploy for a team with proper security | [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) |
 
-### Tire Kicker: Add the WebUI
+### Local Profile: Add the WebUI
 
-If you already completed the [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) and your API is running at `http://127.0.0.1:8000`, use this add-on path.
-
-Install Bun (if needed):
-
-```bash
-# macOS/Linux
-curl -fsSL https://bun.sh/install | bash
-
-# Windows (PowerShell)
-powershell -c "irm bun.sh/install.ps1 | iex"
-
-# Open a new terminal, then verify:
-bun --version
-```
-
-Set up the WebUI project and install dependencies:
+If you already completed the [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) and your API is running at `http://127.0.0.1:8000`, this is the shortest add-on path:
 
 ```bash
 # from the repo root
 cd apps/tldw-frontend
 cp .env.local.example .env.local
 bun install
-```
-
-Run the WebUI:
-
-```bash
 bun run dev -- -p 8080
 ```
 
@@ -367,27 +416,10 @@ NEXT_PUBLIC_API_VERSION=v1
 
 Open `http://localhost:8080`.
 
-Access from another device on your network (for example, phone/tablet):
+Need Bun installation steps, npm fallback, or LAN/mobile access setup? See [Run the Web UI (WIP)](#run-the-web-ui-wip).
 
-```bash
-# 1) Run API on all interfaces
-python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
-
-# 2) In tldw_Server_API/Config_Files/.env, allow the WebUI origin:
-# ALLOWED_ORIGINS=http://YOUR_SERVER_IP:8080
-
-# 3) In apps/tldw-frontend/.env.local, point WebUI to the server IP:
-# NEXT_PUBLIC_API_URL=http://YOUR_SERVER_IP:8000
-
-# 4) Run WebUI on all interfaces
-bun run dev -- -H 0.0.0.0 -p 8080
-```
-
-Then open `http://YOUR_SERVER_IP:8080` from your mobile device (same LAN), and ensure ports `8000` and `8080` are reachable on your server/firewall.
-
-Security note: avoid exposing this quickstart setup directly to the public internet. For internet-facing access, use HTTPS with a reverse proxy and follow `Docs/Getting_Started/Production.md`.
-
-### Sidecar workers (optional)
+<details>
+<summary>Sidecar workers (optional)</summary>
 
 Run the API and Jobs workers as separate processes (recommended for heavier workloads or when using multiple Uvicorn workers):
 ```bash
@@ -395,12 +427,34 @@ Run the API and Jobs workers as separate processes (recommended for heavier work
 ```
 Notes:
 - Sets `TLDW_WORKERS_SIDECAR_MODE=true` to keep the API process from starting in-process workers.
-- Default worker list lives in `Docs/Deployment/sidecar_workers_manifest.json` (regen via `python Helper_Scripts/Deployment/generate_sidecar_files.py`).
+- Default worker list is documented in `Docs/Deployment/Sidecar_Workers.md` (regen via `python Helper_Scripts/Deployment/generate_sidecar_files.py`).
 - Customize worker list with `TLDW_SIDECAR_WORKERS=chatbooks,files,data_tables,prompt_studio,privilege_snapshots,audio,media_ingest,evals_abtest` or point to a different manifest with `TLDW_WORKERS_MANIFEST=/path/to/manifest.json`.
 - Logs are written to `.logs/sidecars/` by default.
 - Compose overlay: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.workers.yml up -d --build`.
 - systemd and launchd examples: `Docs/Deployment/Sidecar_Workers.md`.
 In-process workers are fine for light dev use, but SQLite + multiple Uvicorn workers can increase lock contention; use sidecars or Postgres for heavier workloads.
+</details>
+
+<details>
+<summary>Model container cycling (optional, Docker)</summary>
+
+For low-VRAM dev rigs, you can cycle model containers instead of running all model stacks at once:
+
+```bash
+make model-cycle \
+  MODEL_CYCLE_FIRST=your-llm-container \
+  MODEL_CYCLE_SECOND=your-tts-container \
+  MODEL_CYCLE_EXCLUDED=postgres,redis \
+  MODEL_CYCLE_FIRST_BOOT_WAIT=30 \
+  MODEL_CYCLE_SECOND_BOOT_WAIT=10
+```
+
+Notes:
+- Runs `Helper_Scripts/model_container_cycle.py`.
+- Workflow is: stop all running containers except exclusions, start first model container, stop it, then start second model container.
+- Use `MODEL_CYCLE_DRY_RUN=true` to print Docker commands without executing them.
+- Container names are whatever Docker reports via `docker ps --format '{{.Names}}'`.
+</details>
 
 ### Run the Web UI (WIP)
 
@@ -415,6 +469,7 @@ make quickstart-docker-webui
 # Optional (non-localhost deployments):
 # make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
 ```
+No-`make` equivalent: use [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly).
 
 Local WebUI development (API should already be running, for example via `make quickstart`):
 
@@ -454,6 +509,9 @@ bun run dev -- -p 8080
 ```
 Open http://localhost:8080
 
+<details>
+<summary>LAN/mobile access setup (optional)</summary>
+
 Access from another device on your network (for example, phone/tablet):
 ```bash
 # API (from repo root)
@@ -469,25 +527,16 @@ python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
 bun run dev -- -H 0.0.0.0 -p 8080
 ```
 Then open `http://YOUR_SERVER_IP:8080` from your mobile device on the same network.
+</details>
 
 Tip: http://127.0.0.1:8000/api/v1/config/quickstart redirects to your configured quickstart target.
 
+Security note: avoid exposing this quickstart setup directly to the public internet. For internet-facing access, use HTTPS with a reverse proxy and follow `Docs/Deployment/First_Time_Production_Setup.md`.
+
 ### Docker Compose
 
-Quick start with Docker:
-```bash
-make quickstart-docker
-curl http://localhost:8000/health  # Verify
-```
-
-Quick start with Docker + containerized WebUI:
-```bash
-make quickstart-docker-webui
-# API:   http://localhost:8000
-# WebUI: http://localhost:8080
-# Optional (non-localhost deployments):
-# make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
-```
+For the fastest Docker path, use the quickstart targets in [At-a-Glance Commands](#at-a-glance-commands).
+This section is the canonical manual/no-`make` compose reference.
 
 Or manually:
 ```bash
@@ -602,7 +651,7 @@ scrape_configs:
 ```
 See Docs/Operations/monitoring/README.md for examples that scrape the API and worker orchestrator.
 
-Tip: See multi-user setup and production hardening in Docs/User_Guides/Authentication_Setup.md and Docs/Published/Deployment/First_Time_Production_Setup.md.
+Tip: See multi-user setup and production hardening in Docs/User_Guides/Server/Authentication_Setup.md and Docs/Published/Deployment/First_Time_Production_Setup.md.
 
 </details>
 
@@ -688,6 +737,8 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - VLM Backends: `GET /api/v1/vlm/backends` - available VLM providers ([docs](Docs/Code_Documentation/VLM_Backends.md))
 - Connectors: `GET /api/v1/connectors/providers` - Drive/Notion providers ([docs](Docs/Product/External_Connectors_PRD.md))
 - Outputs: `POST /api/v1/outputs` - generate output artifact (md/html/mp3) ([docs](Docs/Product/Completed/Content_Collections_PRD.md))
+- Tasks: `POST /api/v1/tasks` + `GET /api/v1/tasks` - reminder task create/list ([docs](Docs/API-related/Reminder_Notifications_API.md))
+- Notifications: `GET /api/v1/notifications` + `GET /api/v1/notifications/stream` - inbox list + realtime SSE ([docs](Docs/API-related/Reminder_Notifications_API.md))
 - Metrics: `GET /api/v1/metrics/text` - Prometheus metrics (text format) ([docs](Docs/Deployment/Monitoring/Metrics_Cheatsheet.md))
 - Providers: `GET /api/v1/llm/providers` - provider/models list ([docs](Docs/API-related/Providers_API_Documentation.md))
 - MCP: `GET /api/v1/mcp/status` - MCP server status ([docs](Docs/MCP/Unified/System_Admin_Guide.md))
@@ -925,6 +976,7 @@ All limits are designed to be conservative by default and can be tuned using the
 - `python -m pytest --cov=tldw_Server_API --cov-report=term-missing` - coverage report.
 - Use markers (`unit`, `integration`, `e2e`, `external_api`, `performance`) to focus specific areas.
 - Enable optional suites with environment flags such as `RUN_MCP_TESTS=1`, `TLDW_TEST_POSTGRES_REQUIRED=1`, or `RUN_MOCK_OPENAI=1`.
+- `make tooling-smoke` - runs unified tooling smoke checks (`streaming_unified_smoke.py` + `watchlists_audio_smoke.py`) against a running local API (`http://127.0.0.1:8000` by default).
 
 </details>
 
@@ -952,6 +1004,9 @@ Notes:
 | --- | --- |
 | E2E Critical Smoke (In-Process) | [![E2E Critical Smoke](https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml/badge.svg)](https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml) |
 
+Required gate policy and check-name contract:
+- `Docs/Development/CI_REQUIRED_GATES.md`
+
 Run locally
 
 - In-process (no open port):
@@ -972,21 +1027,24 @@ Run locally
 <summary>Documentation and resources</summary>
 
 **Getting Started Guides:**
-- [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) - 5-minute setup with hand-holding
-- [Local Development Guide](Docs/Getting_Started/Local_Development.md) - building against the API
-- [Docker Self-Host Guide](Docs/Getting_Started/Docker_Self_Host.md) - running on your server
-- [Production Guide](Docs/Getting_Started/Production.md) - team deployment with security
+- [Getting Started Index](Docs/Getting_Started/README.md) - choose the right setup path
+- [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) - local API development path
+- [Docker Single-User Profile](Docs/Getting_Started/Profile_Docker_Single_User.md) - self-host with Docker
+- [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) - team deployment baseline
+- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) - optional acceleration and speech-to-text setup
 
 **Reference:**
 - `Docs/Documentation.md` - documentation index and developer guide links
 - `Docs/About.md` - project background and philosophy
-- Module deep dives: `Docs/Development/AuthNZ-Developer-Guide.md`, `Docs/Development/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
+- Module deep dives: `Docs/Code_Documentation/AuthNZ-Developer-Guide.md`, `Docs/Code_Documentation/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
 - Packaging and releases: `Docs/Development/PyPI_Publishing.md`
 - Distribution strategy (API + WebUI): `Docs/Development/Packaging_and_Distribution_Strategy.md`
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
 - Deployment/Monitoring: `Docs/Published/Deployment/First_Time_Production_Setup.md`, `Docs/Published/Deployment/Reverse_Proxy_Examples.md`, `Docs/Deployment/Monitoring/`
-- TTS onboarding: `Docs/User_Guides/TTS_Getting_Started.md` – hosted/local provider setup, verification, and troubleshooting
-- Design notes (WIP features): `Docs/Design/` - e.g., `Docs/Design/Custom_Scrapers_Router.md`
+- Speech quickstart (STT + TTS): `Docs/User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md`
+- TTS provider onboarding: `Docs/User_Guides/WebUI_Extension/TTS_Getting_Started.md`
+- TTS deep runbooks index: `Docs/User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md`
+- Design notes (WIP features): `Docs/Design/` - e.g., `Docs/Design/Audio_Pipeline.md`
 
 ### Resource Governor Config
 
@@ -1003,8 +1061,8 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 ### Chatbook Tools Guide
 
-- Getting started: `Docs/User_Guides/Chatbook_Tools_Getting_Started.md`
-- Product spec (PRD): `Docs/Product/Chatbook-Tools-PRD.md`
+- Getting started: `Docs/User_Guides/WebUI_Extension/Chatbook_Tools_Getting_Started.md`
+- Product spec (PRD): `Docs/Product/Completed/Chatbook-Tools-PRD.md`
 - Related endpoints (also listed above under Key Endpoints):
   - `GET /api/v1/chat/commands` — list slash commands (RBAC-filtered when enabled; returns empty list when disabled)
   - `POST /api/v1/chat/dictionaries/validate` — validate chat dictionaries (schema, regex, templates)
@@ -1019,7 +1077,7 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 - Reverse proxy samples: `Helper_Scripts/Samples/Nginx/`, `Helper_Scripts/Samples/Caddy/`.
 - Monitoring: `Docs/Deployment/Monitoring/` and `Helper_Scripts/Samples/Grafana/`.
 - Prometheus metrics exposed at `/metrics` and `/api/v1/metrics`.
-- Production hardening: `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.
+- Production hardening: `Docs/Published/User_Guides/Server/Production_Hardening_Checklist.md`.
 </details>
 
 ## Monitoring
@@ -1034,7 +1092,7 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 ### PostgreSQL Content Mode
 
 - Content DBs (Media, ChaChaNotes, Workflows) can run on Postgres.
-- See: `Docs/Published/Deployment/Postgres_Content_Mode.md`, `Docs/Published/Deployment/Postgres_Migration_Guide.md`, and `Docs/Published/Deployment/Postgres_Backups.md`.
+- See: `Docs/Published/User_Guides/Server/Multi-User_Postgres_Setup.md`, `Docs/Published/Deployment/Postgres_Migration_Guide.md`, and `Docs/Published/User_Guides/Server/Backups_Using_Litestream.md`.
 
 </details>
 

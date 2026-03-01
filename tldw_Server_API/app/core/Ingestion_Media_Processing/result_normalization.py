@@ -18,7 +18,7 @@ class MediaItemProcessResponse:
     """
     Internal representation of a single process-only media result.
 
-    This mirrors the dict structure returned today by the legacy media
+    This mirrors the dict structure returned by the media process
     endpoints (status, input_ref, media_type, content, metadata, chunks,
     analysis, keywords, warnings, error, db_id, db_message, etc.) while
     remaining an internal type – HTTP responses still expose plain dicts.
@@ -79,9 +79,9 @@ def normalise_pdf_result(item: dict[str, Any], original_ref: str) -> dict[str, A
     """
     Ensure every required key is present and correctly typed for PDF results.
 
-    This mirrors the legacy `_legacy_media.normalise_pdf_result` helper so
-    that process-only PDF endpoints share a consistent, fully-populated
-    result shape.
+    This mirrors the previous endpoint-local `normalise_pdf_result` behavior
+    so process-only PDF endpoints share a consistent, fully-populated result
+    shape.
     """
     # Ensure base keys are present
     item.setdefault("status", "Error")

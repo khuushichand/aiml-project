@@ -127,6 +127,60 @@ describe("TldwApiClient listAllCharacters", () => {
       "/api/v1/characters?limit=3&offset=3"
     ])
   })
+
+  it("normalizes object envelopes returned by character list endpoints", async () => {
+    const payloadByOffset = new Map<number, unknown>([
+      [
+        0,
+        {
+          items: [
+            { id: "a", name: "Alpha" },
+            { id: "b", name: "Bravo" }
+          ]
+        }
+      ],
+      [
+        2,
+        {
+          characters: [{ id: "c", name: "Charlie" }]
+        }
+      ]
+    ])
+
+    mocks.bgRequest.mockImplementation(async (request: { path?: string; method?: string }) => {
+      if (request.method !== "GET" || typeof request.path !== "string") return []
+      if (!request.path.startsWith("/api/v1/characters")) return []
+
+      const [, rawQuery = ""] = request.path.split("?")
+      const query = new URLSearchParams(rawQuery)
+      const offset = Number(query.get("offset") || "0")
+      return payloadByOffset.get(offset) ?? { items: [] }
+    })
+
+    const client = new TldwApiClient()
+    const list = await client.listAllCharacters({ pageSize: 2, maxPages: 10 })
+
+    expect(list).toEqual([
+      { id: "a", name: "Alpha" },
+      { id: "b", name: "Bravo" },
+      { id: "c", name: "Charlie" }
+    ])
+
+    const listCalls = mocks.bgRequest.mock.calls
+      .map(([request]) => request as { path?: string; method?: string })
+      .filter(
+        (request) =>
+          request.method === "GET" &&
+          typeof request.path === "string" &&
+          request.path.startsWith("/api/v1/characters")
+      )
+      .map((request) => request.path)
+
+    expect(listCalls).toEqual([
+      "/api/v1/characters?limit=2&offset=0",
+      "/api/v1/characters?limit=2&offset=2"
+    ])
+  })
 })
 
 describe("TldwApiClient listCharactersPage", () => {

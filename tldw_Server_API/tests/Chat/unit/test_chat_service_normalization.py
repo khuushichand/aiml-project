@@ -97,6 +97,71 @@ def test_model_availability_accepts_plain_request_for_namespaced_inventory(
 
 
 @pytest.mark.unit
+def test_openrouter_model_availability_accepts_display_id_for_canonical_inventory(
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.Chat import chat_service
+
+    monkeypatch.setattr(
+        chat_service,
+        "known_models_for_provider_cached",
+        lambda _provider: ("moonshotai/kimi-k2.5-0127",),
+    )
+
+    assert (
+        chat_service.is_model_known_for_provider("openrouter", "moonshotai/kimi-k2.5")
+        is True
+    )
+
+
+@pytest.mark.unit
+def test_openrouter_model_availability_accepts_canonical_id_for_display_inventory(
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.Chat import chat_service
+
+    monkeypatch.setattr(
+        chat_service,
+        "known_models_for_provider_cached",
+        lambda _provider: ("moonshotai/kimi-k2.5",),
+    )
+
+    assert (
+        chat_service.is_model_known_for_provider(
+            "openrouter",
+            "moonshotai/kimi-k2.5-0127",
+        )
+        is True
+    )
+
+
+@pytest.mark.unit
+def test_openrouter_model_availability_uses_discovered_inventory_when_catalog_empty(
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.Chat import chat_service
+
+    monkeypatch.setattr(
+        chat_service,
+        "known_models_for_provider_cached",
+        lambda _provider: tuple(),
+    )
+    monkeypatch.setattr(
+        chat_service,
+        "_discover_openrouter_models_for_chat",
+        lambda force_refresh=False: ("moonshotai/kimi-k2.5",),
+    )
+
+    assert (
+        chat_service.is_model_known_for_provider(
+            "openrouter",
+            "moonshotai/kimi-k2.5-0127",
+        )
+        is True
+    )
+
+
+@pytest.mark.unit
 def test_together_preserves_namespaced_model(monkeypatch):
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "chat_service_normalization::together_namespace")
     from tldw_Server_API.app.core.Chat.chat_service import (

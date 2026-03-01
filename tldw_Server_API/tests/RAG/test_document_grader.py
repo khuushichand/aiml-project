@@ -175,6 +175,27 @@ class TestDocumentGrader:
         assert result.method == "llm"
 
     @pytest.mark.asyncio
+    async def test_grade_document_parses_fenced_json_with_think_tags(self):
+        def analyze(*args, **kwargs):
+            return (
+                "<think>grading</think>\n"
+                "```json\n"
+                '{"is_relevant": true, "relevance_score": 0.77, "reasoning": "Relevant."}\n'
+                "```"
+            )
+
+        grader = DocumentGrader(analyze_fn=analyze)
+        doc = MockDocument(id="test_fenced", content="ML content", score=0.5)
+        result = await grader.grade_document(
+            query="What is machine learning?",
+            document=doc,
+        )
+
+        assert result.is_relevant is True
+        assert result.relevance_score == 0.77
+        assert result.method == "llm"
+
+    @pytest.mark.asyncio
     async def test_grade_document_malformed_response(self, mock_analyze_malformed):
         """Test grading with malformed LLM response uses heuristic parsing."""
         grader = DocumentGrader(analyze_fn=mock_analyze_malformed)

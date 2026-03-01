@@ -16,10 +16,13 @@ Tables (per-user, colocated with Media DB):
               error_msg, log_path)
 - scrape_run_items(run_id, media_id, source_id)
 - scraped_items(id, run_id, job_id, source_id, media_id, media_uuid, url, title,
-                summary, content, published_at, tags_json, status, reviewed, created_at)
+                summary, content, published_at, tags_json, status, reviewed,
+                queued_for_briefing, created_at)
 - watchlist_ia_experiment_events(id, user_id, variant, session_id, previous_tab,
                 current_tab, transitions, visited_tabs_json, first_seen_at,
                 last_seen_at, elapsed_ms, reached_target, created_at)
+- watchlist_onboarding_events(id, user_id, session_id, event_type, event_at,
+                details_json, created_at)
 
 Notes:
 - Backed by DatabaseBackendFactory; default to per-user SQLite Media DB path.
@@ -152,6 +155,7 @@ class ScrapedItemRow:
     tags_json: str | None
     status: str
     reviewed: int
+    queued_for_briefing: int
     created_at: str
 
     def tags(self) -> list[str]:
@@ -198,6 +202,17 @@ class WatchlistIaExperimentEventRow:
     last_seen_at: str | None
     elapsed_ms: int | None
     reached_target: int
+    created_at: str
+
+
+@dataclass
+class WatchlistOnboardingEventRow:
+    id: int
+    user_id: str
+    session_id: str
+    event_type: str
+    event_at: str
+    details_json: str
     created_at: str
 
 
@@ -399,6 +414,7 @@ class WatchlistsDatabase:
                 tags_json TEXT,
                 status TEXT NOT NULL,
                 reviewed INTEGER NOT NULL DEFAULT 0,
+                queued_for_briefing INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_scraped_items_run ON scraped_items(run_id);
@@ -436,6 +452,20 @@ class WatchlistsDatabase:
                 ON watchlist_ia_experiment_events(user_id, variant, created_at);
             CREATE INDEX IF NOT EXISTS idx_watchlist_ia_events_user_session_created
                 ON watchlist_ia_experiment_events(user_id, session_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS watchlist_onboarding_events (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                event_at TEXT NOT NULL,
+                details_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_watchlist_onboarding_user_event_created
+                ON watchlist_onboarding_events(user_id, event_type, created_at);
+            CREATE INDEX IF NOT EXISTS idx_watchlist_onboarding_user_session_eventat
+                ON watchlist_onboarding_events(user_id, session_id, event_at);
 
             CREATE TABLE IF NOT EXISTS feed_websub_subscriptions (
                 id BIGSERIAL PRIMARY KEY,
@@ -594,6 +624,7 @@ class WatchlistsDatabase:
                 tags_json TEXT,
                 status TEXT NOT NULL,
                 reviewed INTEGER NOT NULL DEFAULT 0,
+                queued_for_briefing INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_scraped_items_run ON scraped_items(run_id);
@@ -631,6 +662,20 @@ class WatchlistsDatabase:
                 ON watchlist_ia_experiment_events(user_id, variant, created_at);
             CREATE INDEX IF NOT EXISTS idx_watchlist_ia_events_user_session_created
                 ON watchlist_ia_experiment_events(user_id, session_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS watchlist_onboarding_events (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                event_at TEXT NOT NULL,
+                details_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_watchlist_onboarding_user_event_created
+                ON watchlist_onboarding_events(user_id, event_type, created_at);
+            CREATE INDEX IF NOT EXISTS idx_watchlist_onboarding_user_session_eventat
+                ON watchlist_onboarding_events(user_id, session_id, event_at);
 
             CREATE TABLE IF NOT EXISTS feed_websub_subscriptions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -703,6 +748,12 @@ class WatchlistsDatabase:
         if not _col_exists("scraped_items", "content"):
             with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
                 self.backend.execute("ALTER TABLE scraped_items ADD COLUMN content TEXT", ())
+        if not _col_exists("scraped_items", "queued_for_briefing"):
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute(
+                    "ALTER TABLE scraped_items ADD COLUMN queued_for_briefing INTEGER NOT NULL DEFAULT 0",
+                    (),
+                )
     # ------------------------
     # Tags helpers
     # ------------------------
@@ -1982,8 +2033,8 @@ class WatchlistsDatabase:
             """
             INSERT INTO scraped_items (
                 run_id, job_id, source_id, media_id, media_uuid, url, title,
-                summary, content, published_at, tags_json, status, reviewed, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                summary, content, published_at, tags_json, status, reviewed, queued_for_briefing, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
             """,
             (
                 run_id,
@@ -2010,7 +2061,7 @@ class WatchlistsDatabase:
         row = self.backend.execute(
             """
             SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
-                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
+                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.queued_for_briefing, si.created_at
             FROM scraped_items si
             JOIN scrape_jobs sj ON sj.id = si.job_id
             WHERE si.id = ? AND sj.user_id = ?
@@ -2029,6 +2080,7 @@ class WatchlistsDatabase:
         source_id: int | None = None,
         status: str | None = None,
         reviewed: bool | None = None,
+        queued_for_briefing: bool | None = None,
         search: str | None = None,
         since: str | None = None,
         until: str | None = None,
@@ -2052,6 +2104,9 @@ class WatchlistsDatabase:
         if reviewed is not None:
             where.append("si.reviewed = ?")
             params.append(1 if reviewed else 0)
+        if queued_for_briefing is not None:
+            where.append("si.queued_for_briefing = ?")
+            params.append(1 if queued_for_briefing else 0)
         if since:
             where.append("si.created_at >= ?")
             params.append(since)
@@ -2073,7 +2128,7 @@ class WatchlistsDatabase:
         rows = self.backend.execute(
             """
             SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
-                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
+                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.queued_for_briefing, si.created_at
             FROM scraped_items si
             JOIN scrape_jobs sj ON sj.id = si.job_id
             WHERE {where_sql}
@@ -2084,6 +2139,73 @@ class WatchlistsDatabase:
         ).rows
         return [ScrapedItemRow(**r) for r in rows], total
 
+    def get_item_smart_counts(
+        self,
+        *,
+        run_id: int | None = None,
+        job_id: int | None = None,
+        source_id: int | None = None,
+        status: str | None = None,
+        search: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        queue_run_id: int | None = None,
+        today_since: str | None = None,
+    ) -> dict[str, int]:
+        where = ["sj.user_id = ?"]
+        params: list[Any] = [self.user_id]
+        if run_id is not None:
+            where.append("si.run_id = ?")
+            params.append(run_id)
+        if job_id is not None:
+            where.append("si.job_id = ?")
+            params.append(job_id)
+        if source_id is not None:
+            where.append("si.source_id = ?")
+            params.append(source_id)
+        if status:
+            where.append("si.status = ?")
+            params.append(status)
+        if since:
+            where.append("si.created_at >= ?")
+            params.append(since)
+        if until:
+            where.append("si.created_at <= ?")
+            params.append(until)
+        if search:
+            like = f"%{search}%"
+            where.append("(si.title LIKE ? OR si.summary LIKE ? OR si.content LIKE ?)")
+            params.extend([like, like, like])
+
+        today_cutoff = today_since
+        if not today_cutoff:
+            utc_now = datetime.now(timezone.utc)
+            today_cutoff = utc_now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        where_sql = " AND ".join(where)
+        row = self.backend.execute(
+            f"""
+            SELECT
+              COUNT(*) AS all_count,
+              COALESCE(SUM(CASE WHEN si.created_at >= ? THEN 1 ELSE 0 END), 0) AS today_count,
+              COALESCE(SUM(CASE WHEN si.created_at >= ? AND si.reviewed = 0 THEN 1 ELSE 0 END), 0) AS today_unread_count,
+              COALESCE(SUM(CASE WHEN si.reviewed = 0 THEN 1 ELSE 0 END), 0) AS unread_count,
+              COALESCE(SUM(CASE WHEN si.reviewed = 1 THEN 1 ELSE 0 END), 0) AS reviewed_count,
+              COALESCE(SUM(CASE WHEN si.queued_for_briefing = 1 AND (? IS NULL OR si.run_id = ?) THEN 1 ELSE 0 END), 0) AS queued_count
+            FROM scraped_items si
+            JOIN scrape_jobs sj ON sj.id = si.job_id
+            WHERE {where_sql}
+            """,  # nosec B608
+            tuple([today_cutoff, today_cutoff, queue_run_id, queue_run_id, *params]),
+        ).first
+        return {
+            "all": int((row or {}).get("all_count") or 0),
+            "today": int((row or {}).get("today_count") or 0),
+            "today_unread": int((row or {}).get("today_unread_count") or 0),
+            "unread": int((row or {}).get("unread_count") or 0),
+            "reviewed": int((row or {}).get("reviewed_count") or 0),
+            "queued": int((row or {}).get("queued_count") or 0),
+        }
+
     def get_items_by_ids(self, item_ids: list[int]) -> list[ScrapedItemRow]:
         if not item_ids:
             return []
@@ -2091,7 +2213,7 @@ class WatchlistsDatabase:
         rows = self.backend.execute(
             """
             SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
-                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
+                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.queued_for_briefing, si.created_at
             FROM scraped_items si
             JOIN scrape_jobs sj ON sj.id = si.job_id
             WHERE si.id IN ({placeholders}) AND sj.user_id = ?
@@ -2106,6 +2228,7 @@ class WatchlistsDatabase:
         *,
         reviewed: bool | None = None,
         status: str | None = None,
+        queued_for_briefing: bool | None = None,
     ) -> ScrapedItemRow:
         fields: list[str] = []
         params: list[Any] = []
@@ -2115,6 +2238,9 @@ class WatchlistsDatabase:
         if status is not None:
             fields.append("status = ?")
             params.append(status)
+        if queued_for_briefing is not None:
+            fields.append("queued_for_briefing = ?")
+            params.append(1 if queued_for_briefing else 0)
         if not fields:
             return self.get_item(item_id)
         params.extend([item_id, self.user_id])
@@ -2359,6 +2485,255 @@ class WatchlistsDatabase:
             except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 continue
         return counts
+
+    # ------------------------
+    # Onboarding telemetry
+    # ------------------------
+    _ONBOARDING_EVENT_TYPES: set[str] = {
+        "quick_setup_opened",
+        "quick_setup_step_completed",
+        "quick_setup_cancelled",
+        "quick_setup_completed",
+        "quick_setup_failed",
+        "quick_setup_preview_loaded",
+        "quick_setup_preview_failed",
+        "quick_setup_test_run_triggered",
+        "quick_setup_test_run_failed",
+        "quick_setup_first_run_succeeded",
+        "quick_setup_first_output_succeeded",
+        "guided_tour_started",
+        "guided_tour_step_viewed",
+        "guided_tour_completed",
+        "guided_tour_dismissed",
+        "guided_tour_resumed",
+    }
+
+    @staticmethod
+    def _median(values: list[float]) -> float:
+        if not values:
+            return 0.0
+        sorted_values = sorted(values)
+        mid = len(sorted_values) // 2
+        if len(sorted_values) % 2 == 1:
+            return float(sorted_values[mid])
+        return (float(sorted_values[mid - 1]) + float(sorted_values[mid])) / 2.0
+
+    def record_onboarding_event(
+        self,
+        *,
+        session_id: str,
+        event_type: str,
+        event_at: str | None,
+        details: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Validate and persist a single onboarding telemetry event for the current user."""
+        normalized_session = str(session_id or "").strip()
+        if not normalized_session:
+            return {"accepted": False, "code": "session_id_required"}
+
+        normalized_event_type = str(event_type or "").strip().lower()
+        if not normalized_event_type:
+            return {"accepted": False, "code": "event_type_required"}
+        if normalized_event_type not in self._ONBOARDING_EVENT_TYPES:
+            return {"accepted": False, "code": "event_type_invalid"}
+
+        parsed_event_at = self._parse_iso_utc(event_at)
+        if event_at is not None and parsed_event_at is None:
+            return {"accepted": False, "code": "event_at_invalid"}
+        if parsed_event_at is None:
+            parsed_event_at = datetime.now(timezone.utc)
+
+        details_payload: dict[str, Any] = {}
+        if details is not None:
+            if not isinstance(details, dict):
+                return {"accepted": False, "code": "details_invalid"}
+            details_payload = details
+
+        now_iso = _utcnow_iso()
+        self.backend.execute(
+            """
+            INSERT INTO watchlist_onboarding_events (
+                user_id,
+                session_id,
+                event_type,
+                event_at,
+                details_json,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                self.user_id,
+                normalized_session[:128],
+                normalized_event_type,
+                parsed_event_at.isoformat(),
+                json.dumps(details_payload, ensure_ascii=False),
+                now_iso,
+            ),
+        )
+        return {"accepted": True, "code": None}
+
+    def summarize_onboarding_events(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate onboarding telemetry counters, rates, and timing metrics for a window."""
+        parsed_since = self._parse_iso_utc(since)
+        parsed_until = self._parse_iso_utc(until)
+        since_iso = parsed_since.isoformat() if parsed_since else None
+        until_iso = parsed_until.isoformat() if parsed_until else None
+
+        sql = (
+            "SELECT session_id, event_type, event_at "
+            "FROM watchlist_onboarding_events WHERE user_id = ?"
+        )
+        params: list[Any] = [self.user_id]
+        if since_iso:
+            sql += " AND event_at >= ?"
+            params.append(since_iso)
+        if until_iso:
+            sql += " AND event_at <= ?"
+            params.append(until_iso)
+        sql += " ORDER BY event_at ASC"
+        rows = self.backend.execute(sql, tuple(params)).rows
+
+        counters: dict[str, int] = {event_type: 0 for event_type in self._ONBOARDING_EVENT_TYPES}
+        sessions: set[str] = set()
+        session_events: dict[str, dict[str, datetime | None]] = {}
+
+        for row in rows or []:
+            session_id = str(row.get("session_id") or "").strip()
+            if not session_id:
+                continue
+            event_type = str(row.get("event_type") or "").strip().lower()
+            parsed_event_at = self._parse_iso_utc(row.get("event_at"))
+            if not parsed_event_at:
+                continue
+
+            sessions.add(session_id)
+            counters[event_type] = counters.get(event_type, 0) + 1
+
+            event_record = session_events.setdefault(
+                session_id,
+                {
+                    "opened_at": None,
+                    "completed_at": None,
+                    "first_run_at": None,
+                    "first_output_at": None,
+                },
+            )
+            if event_type == "quick_setup_opened" and event_record["opened_at"] is None:
+                event_record["opened_at"] = parsed_event_at
+            elif event_type == "quick_setup_completed" and event_record["completed_at"] is None:
+                event_record["completed_at"] = parsed_event_at
+            elif event_type == "quick_setup_first_run_succeeded" and event_record["first_run_at"] is None:
+                event_record["first_run_at"] = parsed_event_at
+            elif (
+                event_type == "quick_setup_first_output_succeeded"
+                and event_record["first_output_at"] is None
+            ):
+                event_record["first_output_at"] = parsed_event_at
+
+        opened_sessions = 0
+        completed_sessions = 0
+        first_run_sessions = 0
+        first_output_sessions = 0
+        setup_durations: list[float] = []
+        first_run_durations: list[float] = []
+        first_output_durations: list[float] = []
+
+        for event_record in session_events.values():
+            opened_at = event_record.get("opened_at")
+            completed_at = event_record.get("completed_at")
+            first_run_at = event_record.get("first_run_at")
+            first_output_at = event_record.get("first_output_at")
+
+            if opened_at is not None:
+                opened_sessions += 1
+            if completed_at is not None:
+                completed_sessions += 1
+            if first_run_at is not None:
+                first_run_sessions += 1
+            if first_output_at is not None:
+                first_output_sessions += 1
+
+            if opened_at is not None and completed_at is not None and completed_at >= opened_at:
+                setup_durations.append((completed_at - opened_at).total_seconds())
+            if opened_at is not None and first_run_at is not None and first_run_at >= opened_at:
+                first_run_durations.append((first_run_at - opened_at).total_seconds())
+            if opened_at is not None and first_output_at is not None and first_output_at >= opened_at:
+                first_output_durations.append((first_output_at - opened_at).total_seconds())
+
+        counters["sessions"] = len(sessions)
+        counters["users"] = 1 if sessions else 0
+        counters["setup_completed_sessions"] = completed_sessions
+        counters["first_run_success_sessions"] = first_run_sessions
+        counters["first_output_success_sessions"] = first_output_sessions
+
+        rates = {
+            "setup_completion_rate": (
+                float(completed_sessions) / float(opened_sessions) if opened_sessions > 0 else 0.0
+            ),
+            "first_run_success_rate": (
+                float(first_run_sessions) / float(completed_sessions)
+                if completed_sessions > 0
+                else 0.0
+            ),
+            "first_output_success_rate": (
+                float(first_output_sessions) / float(completed_sessions)
+                if completed_sessions > 0
+                else 0.0
+            ),
+        }
+
+        timings = {
+            "median_seconds_to_setup_completion": self._median(setup_durations),
+            "median_seconds_to_first_run_success": self._median(first_run_durations),
+            "median_seconds_to_first_output_success": self._median(first_output_durations),
+        }
+
+        return {
+            "counters": counters,
+            "rates": rates,
+            "timings": timings,
+            "since": since,
+            "until": until,
+        }
+
+    def list_completed_run_ids(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[int]:
+        parsed_since = self._parse_iso_utc(since)
+        parsed_until = self._parse_iso_utc(until)
+        since_iso = parsed_since.isoformat() if parsed_since else None
+        until_iso = parsed_until.isoformat() if parsed_until else None
+
+        sql = (
+            "SELECT sr.id AS run_id "
+            "FROM scrape_runs sr "
+            "JOIN scrape_jobs sj ON sj.id = sr.job_id "
+            "WHERE sj.user_id = ? AND LOWER(sr.status) = 'completed'"
+        )
+        params: list[Any] = [self.user_id]
+        if since_iso:
+            sql += " AND COALESCE(sr.finished_at, sr.started_at) >= ?"
+            params.append(since_iso)
+        if until_iso:
+            sql += " AND COALESCE(sr.finished_at, sr.started_at) <= ?"
+            params.append(until_iso)
+        rows = self.backend.execute(sql, tuple(params)).rows
+
+        run_ids: list[int] = []
+        for row in rows or []:
+            try:
+                run_ids.append(int(row.get("run_id")))
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+                continue
+        return run_ids
 
     # ------------------------
     # IA experiment telemetry

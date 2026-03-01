@@ -929,7 +929,7 @@ Import a character from various formats including V3.
 **Endpoint:** `POST /api/v1/characters/import`
 
 **Request:** Multipart form data
-- `character_file`: Character card file (supports PNG, WEBP, JPEG/JPG, JSON, YAML/YML, MD, TXT formats)
+- `character_file`: Character card file (supports PNG, WEBP, JSON, MD formats)
 
 **Response:** `201 Created`
 ```json
@@ -1308,4 +1308,4 @@ Configuration notes for providers: API keys are read from environment variables 
 
 ---
 
-*For more information about the tldw_server project, visit the [main documentation](README.md).*
+*For more information about the tldw_server project, visit the [API overview](API_README.md).*

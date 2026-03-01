@@ -131,7 +131,7 @@ def test_workflow_definition_and_run_roundtrip(workflows_dual_backend_db):
     db.update_step_subprocess(
         step_run_id=step_run_id,
         pid=123,
-        workdir="/tmp/workdir",
+        workdir="/tmp/workdir",  # nosec B108
         stdout_path="stdout.log",
     )
     db.complete_step_run(

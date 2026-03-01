@@ -566,8 +566,8 @@ class TestErrorHandling:
         assert forced_refresh_flags[:2] == [False, True]
 
     @pytest.mark.unit
-    def test_openai_oauth_second_401_returns_reconnect_required(self, setup, monkeypatch):
-        """Second OpenAI OAuth auth failure should return reconnect-required 401."""
+    def test_openai_oauth_second_401_propagates_original_auth_error(self, setup, monkeypatch):
+        """Second OpenAI OAuth auth failure should return the original auth error."""
         def override_user():
             return setup.regular_user
 
@@ -607,9 +607,7 @@ class TestErrorHandling:
         )
 
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
-        detail = response.json().get("detail", {})
-        assert detail.get("error_code") == "oauth_reconnect_required"
-        assert detail.get("reconnect_required") is True
+        assert response.json().get("detail") == "oauth auth failure"
 
 
 class TestMockedFlow:

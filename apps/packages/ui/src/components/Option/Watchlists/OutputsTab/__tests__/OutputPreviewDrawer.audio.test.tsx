@@ -1,0 +1,159 @@
+// @vitest-environment jsdom
+
+import React from "react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { render, screen, waitFor } from "@testing-library/react"
+import { OutputPreviewDrawer } from "../OutputPreviewDrawer"
+import type { WatchlistOutput } from "@/types/watchlists"
+
+const serviceMocks = vi.hoisted(() => ({
+  downloadWatchlistOutput: vi.fn(),
+  downloadWatchlistOutputBinary: vi.fn()
+}))
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (
+      key: string,
+      fallbackOrOptions?: string | { defaultValue?: string },
+      values?: Record<string, unknown>
+    ) => {
+      if (typeof fallbackOrOptions === "string") {
+        if (!values) return fallbackOrOptions
+        return fallbackOrOptions.replace(/\{\{(\w+)\}\}/g, (_match, token) => {
+          const value = values[token]
+          return value == null ? "" : String(value)
+        })
+      }
+      if (
+        fallbackOrOptions &&
+        typeof fallbackOrOptions === "object" &&
+        typeof fallbackOrOptions.defaultValue === "string"
+      ) {
+        return fallbackOrOptions.defaultValue
+      }
+      return key
+    }
+  })
+}))
+
+vi.mock("@/services/watchlists", () => ({
+  downloadWatchlistOutput: (...args: unknown[]) =>
+    serviceMocks.downloadWatchlistOutput(...args),
+  downloadWatchlistOutputBinary: (...args: unknown[]) =>
+    serviceMocks.downloadWatchlistOutputBinary(...args)
+}))
+
+const buildOutput = (overrides: Partial<WatchlistOutput> = {}): WatchlistOutput => ({
+  id: 42,
+  run_id: 9,
+  job_id: 7,
+  type: "briefing",
+  format: "md",
+  title: "Daily Brief",
+  content: null,
+  storage_path: "watchlists/brief-42.md",
+  metadata: {},
+  media_item_id: null,
+  chatbook_path: null,
+  version: 1,
+  expires_at: null,
+  expired: false,
+  created_at: "2026-02-20T00:00:00Z",
+  ...overrides
+})
+
+describe("OutputPreviewDrawer audio support", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    serviceMocks.downloadWatchlistOutput.mockResolvedValue("# Briefing")
+    serviceMocks.downloadWatchlistOutputBinary.mockResolvedValue(new Uint8Array([1, 2, 3]).buffer)
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:audio-output")
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
+  })
+
+  it("uses binary download and renders audio player for audio outputs", async () => {
+    render(
+      <OutputPreviewDrawer
+        open
+        onClose={vi.fn()}
+        output={buildOutput({
+          type: "tts_audio",
+          format: "mp3",
+          storage_path: "watchlists/audio-42.mp3"
+        })}
+      />
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.downloadWatchlistOutputBinary).toHaveBeenCalledWith(42)
+    })
+
+    expect(serviceMocks.downloadWatchlistOutput).not.toHaveBeenCalled()
+    expect(screen.getByText("Audio playback")).toBeInTheDocument()
+    expect(screen.getByTestId("output-preview-provenance")).toHaveTextContent(
+      "Monitor #7 • Run #9 • Artifact: Audio briefing"
+    )
+    const audioElement = document.querySelector("audio")
+    expect(audioElement).not.toBeNull()
+    expect(audioElement?.getAttribute("src")).toBe("blob:audio-output")
+  })
+
+  it("keeps text-preview flow for non-audio outputs", async () => {
+    render(
+      <OutputPreviewDrawer
+        open
+        onClose={vi.fn()}
+        output={buildOutput({ type: "brief", format: "md" })}
+      />
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.downloadWatchlistOutput).toHaveBeenCalledWith(42)
+    })
+
+    expect(serviceMocks.downloadWatchlistOutputBinary).not.toHaveBeenCalled()
+    expect(screen.getByTestId("output-preview-provenance")).toHaveTextContent(
+      "Monitor #7 • Run #9 • Artifact: Markdown"
+    )
+    expect(screen.getByText("# Briefing")).toBeInTheDocument()
+  })
+
+  it("restores focus to the launch control when the drawer closes", async () => {
+    const trigger = document.createElement("button")
+    trigger.type = "button"
+    trigger.textContent = "Open output preview"
+    document.body.appendChild(trigger)
+    trigger.focus()
+
+    const { rerender } = render(
+      <OutputPreviewDrawer
+        open
+        onClose={vi.fn()}
+        output={buildOutput({ type: "brief", format: "md" })}
+      />
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.downloadWatchlistOutput).toHaveBeenCalledWith(42)
+    })
+
+    const drawerButton = document.querySelector(".ant-drawer button")
+    expect(drawerButton).not.toBeNull()
+    ;(drawerButton as HTMLButtonElement).focus()
+
+    rerender(
+      <OutputPreviewDrawer
+        open={false}
+        onClose={vi.fn()}
+        output={buildOutput({ type: "brief", format: "md" })}
+      />
+    )
+
+    await waitFor(() => {
+      expect(trigger).toHaveFocus()
+    })
+
+    trigger.remove()
+  })
+})

@@ -46,6 +46,22 @@ from .Audio_Transcription_Nemo import (
     transcribe_with_canary,
     transcribe_with_parakeet,
 )
+try:  # pragma: no cover - optional on non-macOS or minimal test envs
+    from .Audio_Transcription_Parakeet_MLX import (
+        create_parakeet_mlx_streaming_session,
+        transcribe_with_parakeet_mlx,
+    )
+except ImportError as exc:  # pragma: no cover - provide safe fallbacks
+    logger.debug("Parakeet MLX import unavailable; using no-op fallbacks: {}", exc)
+
+    def create_parakeet_mlx_streaming_session(*_args: Any, **_kwargs: Any) -> None:  # type: ignore[override]
+        """Return no streaming session when the MLX backend is unavailable."""
+        return None
+
+    def transcribe_with_parakeet_mlx(*_args: Any, **_kwargs: Any) -> str:  # type: ignore[override]
+        """Return an empty transcription when the MLX backend is unavailable."""
+        return ""
+
 from .model_utils import normalize_model_and_variant
 
 _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS = (
@@ -1253,6 +1269,9 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
         self._rnnt_streamer: Optional[_ParakeetRNNTStreamer] = None
         self._rnnt_last_partial: str = ""
         self._rnnt_last_final: str = ""
+        self._mlx_stream_session: Any = None
+        self._mlx_last_partial: str = ""
+        self._mlx_last_final: str = ""
 
         if variant == 'mlx':
             # MLX model is loaded on-demand in transcribe function
@@ -1263,6 +1282,76 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 )
                 logger.info("Using Parakeet MLX variant (lazy loading)")
                 self.model = "mlx"  # Placeholder to indicate MLX is ready
+                try:
+                    from tldw_Server_API.app.core.config import get_stt_config
+
+                    stt_cfg = get_stt_config() or {}
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                    stt_cfg = {}
+
+                def _cfg_int(key: str, default: int) -> int:
+                    """Return an integer config value with safe fallback coercion."""
+                    try:
+                        value = stt_cfg.get(key, default)
+                        return int(value)
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                        return default
+
+                def _cfg_float(key: str, default: float) -> float:
+                    """Return a float config value with safe fallback coercion."""
+                    try:
+                        value = stt_cfg.get(key, default)
+                        return float(value)
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                        return default
+
+                def _cfg_str(key: str) -> Optional[str]:
+                    """Return a non-empty string config value or ``None``."""
+                    value = stt_cfg.get(key)
+                    if value is None:
+                        return None
+                    value_str = str(value).strip()
+                    return value_str if value_str else None
+
+                def _cfg_bool(key: str, *, default: bool = False) -> bool:
+                    """Return a boolean config value with string/number normalization."""
+                    value = stt_cfg.get(key)
+                    if value is None:
+                        return default
+                    if isinstance(value, bool):
+                        return value
+                    value_str = str(value).strip().lower()
+                    if value_str in {"1", "true", "yes", "on"}:
+                        return True
+                    if value_str in {"0", "false", "no", "off"}:
+                        return False
+                    return default
+
+                self._mlx_stream_session = create_parakeet_mlx_streaming_session(
+                    model_path=_cfg_str("mlx_model_id"),
+                    cache_dir=_cfg_str("mlx_cache_dir"),
+                    context_size=(
+                        _cfg_int("mlx_stream_context_left", 256),
+                        _cfg_int("mlx_stream_context_right", 256),
+                    ),
+                    depth=max(_cfg_int("mlx_stream_depth", 1), 1),
+                    keep_original_attention=_cfg_bool(
+                        "mlx_stream_keep_original_attention",
+                        default=False,
+                    ),
+                    decoding_mode=_cfg_str("mlx_decoding_mode"),
+                    beam_size=_cfg_int("mlx_beam_size", 0) or None,
+                    length_penalty=_cfg_float("mlx_length_penalty", 0.0) if stt_cfg.get("mlx_length_penalty") is not None else None,
+                    patience=_cfg_float("mlx_patience", 0.0) if stt_cfg.get("mlx_patience") is not None else None,
+                    duration_reward=_cfg_float("mlx_duration_reward", 0.0) if stt_cfg.get("mlx_duration_reward") is not None else None,
+                    sentence_max_words=_cfg_int("mlx_sentence_max_words", 0) or None,
+                    sentence_silence_gap=_cfg_float("mlx_sentence_silence_gap", 0.0) if stt_cfg.get("mlx_sentence_silence_gap") is not None else None,
+                    sentence_max_duration=_cfg_float("mlx_sentence_max_duration", 0.0) if stt_cfg.get("mlx_sentence_max_duration") is not None else None,
+                )
+                if self._mlx_stream_session is not None:
+                    logger.info("Initialized Parakeet MLX native streaming session")
+                else:
+                    logger.info("Parakeet MLX native streaming unavailable; using legacy chunk decode path")
                 return  # Success
             except ImportError as e:
                 logger.error(f"Failed to import Parakeet MLX: {e}")
@@ -1359,6 +1448,15 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
         # Clear RNNT-specific tracking so partial/final comparisons start fresh
         self._rnnt_last_partial = ""
         self._rnnt_last_final = ""
+        mlx_session = getattr(self, "_mlx_stream_session", None)
+        if mlx_session is not None and hasattr(mlx_session, "close"):
+            try:
+                mlx_session.close()
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                pass
+        self._mlx_stream_session = None
+        self._mlx_last_partial = ""
+        self._mlx_last_final = ""
 
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[dict[str, Any]]:
         """
@@ -1440,6 +1538,72 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
 
             return None
 
+        if self.config.model_variant == "mlx" and self._mlx_stream_session is not None:
+            try:
+                artifact = self._mlx_stream_session.add_audio(audio_np, sample_rate=self.config.sample_rate)
+                full_text = str((artifact or {}).get("text", "")).strip()
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as mlx_stream_err:
+                logger.warning(f"Parakeet MLX native streaming failed, falling back to legacy chunking: {mlx_stream_err}")
+                try:
+                    self._mlx_stream_session.close()
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                    pass
+                self._mlx_stream_session = None
+                full_text = ""
+
+            if full_text:
+                try:
+                    from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+
+                    full_text = postprocess_text_if_enabled(full_text)
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                    pass
+
+            if (
+                self.config.enable_partial
+                and current_time - self.last_partial_time > self.config.partial_interval
+                and buffer_duration > max(self.config.min_partial_duration, 0.1)
+                and full_text
+                and full_text != self._mlx_last_partial
+            ):
+                self._mlx_last_partial = full_text
+                self.last_partial_time = current_time
+                metadata = self._prepare_partial_metadata(buffer_duration)
+                result = {
+                    "type": "partial",
+                    "text": full_text,
+                    "timestamp": current_time,
+                    "is_final": False,
+                    "model": f"parakeet-{self.config.model_variant}",
+                }
+                result.update(metadata)
+                return result
+
+            if buffer_duration >= self.config.chunk_duration:
+                audio_chunk = self.buffer.get_audio(self.config.chunk_duration)
+                if audio_chunk is not None:
+                    self.buffer.consume(
+                        self.config.chunk_duration,
+                        self.config.overlap_duration
+                    )
+                    if full_text and full_text != self._mlx_last_final:
+                        self._mlx_last_final = full_text
+                        self.transcription_history.append(full_text)
+                        chunk_duration = float(len(audio_chunk)) / float(self.config.sample_rate or 1)
+                        metadata = self._prepare_final_metadata(chunk_duration)
+                        result = {
+                            "type": "final",
+                            "text": full_text,
+                            "timestamp": current_time,
+                            "is_final": True,
+                            "model": f"parakeet-{self.config.model_variant}",
+                        }
+                        result.update(metadata)
+                        result["_audio_chunk"] = np.array(audio_chunk, copy=True)
+                        return result
+
+            return None
+
         # Check if we should send a partial result
         if (self.config.enable_partial and
             current_time - self.last_partial_time > self.config.partial_interval and
@@ -1450,8 +1614,6 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
             if audio_for_partial is not None and len(audio_for_partial) > 0:
                 # Transcribe partial audio
                 if self.config.model_variant == 'mlx':
-                    # Use MLX implementation
-                    from .Audio_Transcription_Parakeet_MLX import transcribe_with_parakeet_mlx
                     text = transcribe_with_parakeet_mlx(
                         audio_for_partial,
                         sample_rate=self.config.sample_rate
@@ -1492,7 +1654,6 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
             if audio_chunk is not None:
                 # Transcribe the chunk
                 if self.config.model_variant == 'mlx':
-                    from .Audio_Transcription_Parakeet_MLX import transcribe_with_parakeet_mlx
                     text = transcribe_with_parakeet_mlx(
                         audio_chunk,
                         sample_rate=self.config.sample_rate
@@ -2465,36 +2626,37 @@ async def handle_unified_websocket(
                     },
                 })
 
-            # Check if fallback to Whisper is enabled in config (module-level alias for test monkeypatching)
+            # Check if fallback to Whisper is enabled in config (module-level alias for test monkeypatching).
+            # Default behavior is fail-fast unless explicitly enabled.
             comprehensive_config = load_comprehensive_config()
-
-            # ConfigParser returns a ConfigParser object, not a dict.
-            # Default behavior: enable Whisper fallback when configuration is
-            # missing or unreadable so users with faster-whisper installed still
-            # get functional streaming without extra config.
-            fallback_enabled = True
+            fallback_enabled = False
             try:
-                if comprehensive_config.has_section('STT-Settings'):
-                    fallback_value = comprehensive_config.get(
-                        'STT-Settings',
-                        'streaming_fallback_to_whisper',
-                        fallback='true',
-                    )
-                    fallback_enabled = str(fallback_value).lower() == 'true'
-                else:
-                    logger.info(
-                        "No [STT-Settings] section found in config; "
-                        "defaulting streaming_fallback_to_whisper=true. "
-                        "To disable, add [STT-Settings].streaming_fallback_to_whisper=false to config.txt."
-                    )
+                if comprehensive_config is not None and hasattr(comprehensive_config, "has_section"):
+                    if comprehensive_config.has_section('STT-Settings'):
+                        fallback_value = comprehensive_config.get(
+                            'STT-Settings',
+                            'streaming_fallback_to_whisper',
+                            fallback='false',
+                        )
+                        fallback_enabled = is_truthy(str(fallback_value))
+                    else:
+                        logger.info(
+                            "No [STT-Settings] section found in config; "
+                            "defaulting streaming_fallback_to_whisper=false. "
+                            "Set [STT-Settings].streaming_fallback_to_whisper=true to opt in."
+                        )
+                elif isinstance(comprehensive_config, dict):
+                    stt_section = comprehensive_config.get("STT-Settings", {}) or {}
+                    fallback_value = stt_section.get("streaming_fallback_to_whisper", False)
+                    fallback_enabled = is_truthy(str(fallback_value))
                 logger.info(f"Streaming fallback to Whisper enabled: {fallback_enabled}")
             except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as config_error:
                 logger.warning(
                     "Could not read streaming_fallback_to_whisper from config; "
-                    "defaulting to Whisper fallback enabled. "
-                    f"Error: {config_error}. To change, set [STT-Settings].streaming_fallback_to_whisper in config.txt."
+                    "defaulting to fail-fast (fallback disabled). "
+                    f"Error: {config_error}. To opt in, set [STT-Settings].streaming_fallback_to_whisper=true."
                 )
-                fallback_enabled = True
+                fallback_enabled = False
 
             # Try to fall back to Whisper if enabled and not already using Whisper
             if fallback_enabled and config.model.lower() != 'whisper':

@@ -56,6 +56,8 @@ def test_cancel_during_long_prompt(client_with_wf: TestClient):
             break
         time.sleep(0.02)
     assert status == "cancelled"
+    events = client.get(f"/api/v1/workflows/runs/{run_id}/events").json()
+    assert any(event.get("event_type") == "cancel_acknowledged" for event in events)
 
 
 def test_step_timeout_and_retry_failure(client_with_wf: TestClient):

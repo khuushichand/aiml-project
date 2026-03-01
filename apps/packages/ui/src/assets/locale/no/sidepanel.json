@@ -200,5 +200,16 @@
       "html": "HTML",
       "xml": "XML"
     }
+  },
+  "persona": {
+    "unsavedStateDiscardPrompt": "Du har ulagrede endringer i tilstandsdokumentet. Vil du forkaste lokale utkast?",
+    "unsavedStateDiscardPromptConnect": "Du har ulagrede endringer i tilstandsdokumentet. Vil du koble til og forkaste lokale utkast?",
+    "unsavedStateDiscardPromptDisconnect": "Du har ulagrede endringer i tilstandsdokumentet. Vil du koble fra og forkaste lokale utkast?",
+    "unsavedStateDiscardPromptReloadState": "Du har ulagrede endringer i tilstandsdokumentet. Vil du laste inn tilstand og forkaste lokale utkast?",
+    "unsavedStateDiscardPromptPersonaSwitch": "Du har ulagrede endringer i tilstandsdokumentet. Vil du bytte persona og forkaste lokale utkast?",
+    "unsavedStateDiscardPromptSessionSwitch": "Du har ulagrede endringer i tilstandsdokumentet. Vil du bytte økt og forkaste lokale utkast?",
+    "unsavedStateDiscardPromptRestoreState": "Du har ulagrede endringer i tilstandsdokumentet. Vil du gjenopprette denne tilstandsversjonen og forkaste lokale utkast?",
+    "unsavedStateDiscardPromptRouteTransition": "Du har ulagrede endringer i tilstandsdokumentet. Vil du forlate denne siden og forkaste lokale utkast?",
+    "unsavedStateBeforeUnloadPrompt": "Du har ulagrede endringer i tilstandsdokumentet. Vil du forlate denne siden uten å lagre?"
   }
 }

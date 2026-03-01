@@ -35,7 +35,7 @@ def test_job_scheduler_controls_roundtrip(client_user):
         "/api/v1/watchlists/jobs",
         json={
             "name": "Scheduler Controls",
-            "scope": {},
+            "scope": {"tags": ["scheduler-controls"]},
             "schedule_expr": "*/15 * * * *",
             "timezone": "UTC",
             "active": True,
@@ -69,7 +69,7 @@ def test_update_scheduler_controls_and_run_timestamps(client_user):
         "/api/v1/watchlists/jobs",
         json={
             "name": "Job Update",
-            "scope": {},
+            "scope": {"tags": ["scheduler-update"]},
             "schedule_expr": "*/30 * * * *",
             "timezone": "UTC",
             "active": True,

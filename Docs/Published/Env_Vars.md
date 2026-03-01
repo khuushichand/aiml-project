@@ -12,7 +12,24 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 For the full, frequently updated raw reference (auto-generated), see `Env_Vars.md` in the repository root.
 
 Config file support (selected):
-- Section `[Image-Generation]` in `Config_Files/config.txt` can define: `default_backend`, `enabled_backends`, `max_width`, `max_height`, `max_pixels`, `max_steps`, `max_prompt_length`, `inline_max_bytes`, `sd_cpp_binary_path`, `sd_cpp_diffusion_model_path`, `sd_cpp_model_path`, `sd_cpp_llm_path`, `sd_cpp_vae_path`, `sd_cpp_lora_paths`, `sd_cpp_allowed_extra_params`, `sd_cpp_default_steps`, `sd_cpp_default_cfg_scale`, `sd_cpp_default_sampler`, `sd_cpp_device`, `sd_cpp_timeout_seconds`, `swarmui_base_url`, `swarmui_default_model`, `swarmui_swarm_token`, `swarmui_allowed_extra_params`, `swarmui_timeout_seconds`, `openrouter_image_base_url`, `openrouter_image_api_key`, `openrouter_image_default_model`, `openrouter_image_allowed_extra_params`, `openrouter_image_timeout_seconds`, `novita_image_base_url`, `novita_image_api_key`, `novita_image_default_model`, `novita_image_allowed_extra_params`, `novita_image_timeout_seconds`, `novita_image_poll_interval_seconds`, `together_image_base_url`, `together_image_api_key`, `together_image_default_model`, `together_image_allowed_extra_params`, `together_image_timeout_seconds`.
+- Section `[Image-Generation]` in `Config_Files/config.txt` can define:
+  - General: `default_backend`, `enabled_backends`
+  - Limits: `max_width`, `max_height`, `max_pixels`, `max_steps`, `max_prompt_length`, `inline_max_bytes`
+  - `sd_cpp_*`: `sd_cpp_binary_path`, `sd_cpp_diffusion_model_path`, `sd_cpp_model_path`, `sd_cpp_llm_path`, `sd_cpp_vae_path`, `sd_cpp_lora_paths`, `sd_cpp_allowed_extra_params`, `sd_cpp_default_steps`, `sd_cpp_default_cfg_scale`, `sd_cpp_default_sampler`, `sd_cpp_device`, `sd_cpp_timeout_seconds`
+  - `swarmui_*`: `swarmui_base_url`, `swarmui_default_model`, `swarmui_swarm_token`, `swarmui_allowed_extra_params`, `swarmui_timeout_seconds`
+  - `openrouter_*`: `openrouter_image_base_url`, `openrouter_image_api_key`, `openrouter_image_default_model`, `openrouter_image_allowed_extra_params`, `openrouter_image_timeout_seconds`
+  - `novita_*`: `novita_image_base_url`, `novita_image_api_key`, `novita_image_default_model`, `novita_image_allowed_extra_params`, `novita_image_timeout_seconds`, `novita_image_poll_interval_seconds`
+  - `together_*`: `together_image_base_url`, `together_image_api_key`, `together_image_default_model`, `together_image_allowed_extra_params`, `together_image_timeout_seconds`
+  - `modelstudio_*`: `modelstudio_image_base_url`, `modelstudio_image_api_key`, `modelstudio_image_default_model`, `modelstudio_image_region`, `modelstudio_image_mode`, `modelstudio_image_poll_interval_seconds`, `modelstudio_image_timeout_seconds`, `modelstudio_image_allowed_extra_params`
+
+Model Studio / Qwen routing:
+- `QWEN_BASE_URL`: Overrides Qwen chat base URL directly (highest non-request precedence).
+- `QWEN_REGION`: Region preset for Qwen chat when `QWEN_BASE_URL` and `qwen_api.api_base_url` are unset (`sg|cn|us`).
+- `DASHSCOPE_API_KEY`: Optional fallback API key for `modelstudio` image backend when `modelstudio_image_api_key` is unset.
+- `DASHSCOPE_BASE_URL`: Optional fallback base URL for `modelstudio` image backend.
+- `MODELSTUDIO_IMAGE_BASE_URL`: Env override for Model Studio image base URL.
+- `MODELSTUDIO_IMAGE_REGION`: Region preset for Model Studio image backend when no explicit base URL override is set (`sg|cn|us`).
+- `MODELSTUDIO_IMAGE_MODEL`: Env override for Model Studio default image model.
 
 ## Core Server
 - `tldw_production`: Enable production guards (`true|false`). Masks API key in logs and enforces DB/secret checks.

@@ -13,6 +13,7 @@ import { useConnectionPhase, useIsConnected } from "@/hooks/useConnectionState"
 import { ConnectionPhase } from "@/types/connection"
 import { useChatModelsSelect } from "@/hooks/useChatModelsSelect"
 import { QuickChatGuidesPanel } from "./QuickChatGuidesPanel"
+import { buildQuickChatPopoutState } from "./popout-state"
 import { useLocation, useNavigate } from "react-router-dom"
 import { useTutorialStore } from "@/store/tutorials"
 
@@ -79,8 +80,9 @@ export const QuickChatHelperModal: React.FC<Props> = ({ open, onClose }) => {
   const handlePopOut = useCallback(() => {
     // Serialize current state to sessionStorage
     const state = useQuickChatStore.getState().getSerializableState()
+    const popoutState = buildQuickChatPopoutState(state, location.pathname)
     const stateKey = `quickchat_${Date.now()}`
-    sessionStorage.setItem(stateKey, JSON.stringify(state))
+    sessionStorage.setItem(stateKey, JSON.stringify(popoutState))
 
     // Open pop-out window
     const popoutUrl = browser.runtime.getURL(
@@ -96,7 +98,7 @@ export const QuickChatHelperModal: React.FC<Props> = ({ open, onClose }) => {
       useQuickChatStore.getState().setPopoutWindow(popoutWindow)
       onClose()
     }
-  }, [onClose])
+  }, [location.pathname, onClose])
 
   const title = t("option:quickChatHelper.title", "Quick Chat Helper")
   const emptyState = t(

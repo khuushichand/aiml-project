@@ -200,5 +200,16 @@
       "html": "HTML",
       "xml": "XML"
     }
+  },
+  "persona": {
+    "unsavedStateDiscardPrompt": "저장되지 않은 상태 문서 변경사항이 있습니다. 로컬 초안을 버릴까요?",
+    "unsavedStateDiscardPromptConnect": "저장되지 않은 상태 문서 변경사항이 있습니다. 연결하고 로컬 초안을 버릴까요?",
+    "unsavedStateDiscardPromptDisconnect": "저장되지 않은 상태 문서 변경사항이 있습니다. 연결을 끊고 로컬 초안을 버릴까요?",
+    "unsavedStateDiscardPromptReloadState": "저장되지 않은 상태 문서 변경사항이 있습니다. 상태를 불러오고 로컬 초안을 버릴까요?",
+    "unsavedStateDiscardPromptPersonaSwitch": "저장되지 않은 상태 문서 변경사항이 있습니다. 페르소나를 전환하고 로컬 초안을 버릴까요?",
+    "unsavedStateDiscardPromptSessionSwitch": "저장되지 않은 상태 문서 변경사항이 있습니다. 세션을 전환하고 로컬 초안을 버릴까요?",
+    "unsavedStateDiscardPromptRestoreState": "저장되지 않은 상태 문서 변경사항이 있습니다. 이 상태 버전을 복원하고 로컬 초안을 버릴까요?",
+    "unsavedStateDiscardPromptRouteTransition": "저장되지 않은 상태 문서 변경사항이 있습니다. 이 페이지를 나가고 로컬 초안을 버릴까요?",
+    "unsavedStateBeforeUnloadPrompt": "저장되지 않은 상태 문서 변경사항이 있습니다. 저장하지 않고 이 페이지를 나갈까요?"
   }
 }

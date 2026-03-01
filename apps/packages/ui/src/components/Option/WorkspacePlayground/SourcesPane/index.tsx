@@ -176,6 +176,12 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
   const allSelected =
     sources.length > 0 && selectedSourceIds.length === sources.length
   const someSelected = selectedSourceIds.length > 0 && !allSelected
+  const selectedSourceEntries = React.useMemo(
+    () => sources.filter((source) => selectedSourceIds.includes(source.id)),
+    [selectedSourceIds, sources]
+  )
+  const singleSelectedSource =
+    selectedSourceEntries.length === 1 ? selectedSourceEntries[0] : null
   const previewSource = previewSourceId
     ? sources.find((source) => source.id === previewSourceId) || null
     : null
@@ -558,6 +564,17 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     const canMoveUp = sourceOrderIndex > 0
     const canMoveDown = sourceOrderIndex >= 0 && sourceOrderIndex < sources.length - 1
     const isDropTarget = draggedSourceId != null && draggedSourceId !== source.id
+    const sourceTypeLabel = t(`playground:sources.type.${source.type}`, source.type)
+    const sourceStatusLabel = isProcessing
+      ? t("playground:sources.statusProcessing", "Processing")
+      : isError
+        ? t("playground:sources.statusErrorShort", "Error")
+        : t("playground:sources.statusReady", "Ready")
+    const sourceStatusClass = isProcessing
+      ? "border-primary/30 bg-primary/10 text-primary"
+      : isError
+        ? "border-error/30 bg-error/10 text-error"
+        : "border-success/30 bg-success/10 text-success"
 
     return (
       <div
@@ -648,9 +665,21 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             <p className="truncate text-sm font-medium text-text">
               {source.title}
             </p>
-            <p className="truncate text-xs text-text-muted capitalize">
-              {source.type}
-            </p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] uppercase tracking-[0.04em]">
+              <span className="rounded-full border border-border bg-surface2 px-1.5 py-0.5 font-medium text-text-muted">
+                {sourceTypeLabel}
+              </span>
+              <span
+                className={`rounded-full border px-1.5 py-0.5 font-medium ${sourceStatusClass}`}
+              >
+                {sourceStatusLabel}
+              </span>
+              {isSelected && (
+                <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                  {t("playground:sources.selectedBadge", "Selected")}
+                </span>
+              )}
+            </div>
             <Tooltip title={metadataTooltip}>
               <p className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-[11px] text-text-subtle">
                 <Info className="h-3 w-3 shrink-0" />
@@ -681,7 +710,11 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             )}
           </div>
         </div>
-        <div className="flex shrink-0 items-start gap-1">
+        <div
+          className={`flex shrink-0 items-start gap-1 rounded-md p-0.5 ${
+            isSelected ? "border border-primary/20 bg-primary/5" : ""
+          }`}
+        >
           <Tooltip title={t("playground:sources.previewAnnotate", "Preview & annotate")}>
             <button
               type="button"
@@ -752,7 +785,9 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
                 }
               }}
               data-testid={`remove-source-${source.id}`}
-              className="rounded p-1 text-text-muted opacity-0 transition hover:bg-error/10 hover:text-error group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11 [@media(hover:none)]:opacity-100"
+              className={`rounded p-1 text-text-muted transition hover:bg-error/10 hover:text-error focus-visible:opacity-100 [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11 [@media(hover:none)]:opacity-100 ${
+                isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+              }`}
               aria-label={t("common:remove", "Remove")}
             >
               <svg
@@ -843,6 +878,31 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
               </button>
             )}
           </div>
+          {selectedSourceIds.length > 0 && (
+            <div
+              data-testid="sources-selected-actions"
+              className="mt-2 flex flex-wrap items-center gap-2"
+            >
+              <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                {t(
+                  "playground:sources.selectedForChat",
+                  "{{count}} selected for grounded chat",
+                  { count: selectedSourceIds.length }
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!singleSelectedSource) return
+                  handleOpenPreview(singleSelectedSource.id)
+                }}
+                disabled={!singleSelectedSource}
+                className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text-muted transition hover:bg-surface2 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {t("playground:sources.previewSelected", "Preview selected")}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

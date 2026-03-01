@@ -7,6 +7,7 @@ import hmac
 import json
 import mimetypes
 import os
+import threading
 import time
 
 from fastapi import (
@@ -69,7 +70,11 @@ from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogra
 from tldw_Server_API.app.core.Sandbox.models import RunSpec, SessionSpec
 from tldw_Server_API.app.core.Sandbox.models import RuntimeType as CoreRuntimeType
 from tldw_Server_API.app.core.Sandbox.models import TrustLevel as CoreTrustLevel
-from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict, QueueFull
+from tldw_Server_API.app.core.Sandbox.orchestrator import (
+    IdempotencyConflict,
+    QueueFull,
+    SessionActiveRunsConflict,
+)
 from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy
 from tldw_Server_API.app.core.Sandbox.service import SandboxService
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
@@ -100,6 +105,7 @@ _SANDBOX_NONCRITICAL_EXCEPTIONS = (
     IdempotencyConflict,
     QueueFull,
     SandboxPolicy.RuntimeUnavailable,
+    SandboxPolicy.PolicyUnsupported,
     SandboxService.InvalidSpecVersion,
     SandboxService.InvalidFirecrackerConfig,
 )
@@ -146,7 +152,109 @@ class SandboxArtifactGuardRoute(APIRoute):
 
 router = APIRouter(prefix="/sandbox", tags=["sandbox"], route_class=SandboxArtifactGuardRoute)
 
-_service = SandboxService()
+_service = SandboxService(enable_background_tasks=False)
+
+
+@router.on_event("startup")
+async def _sandbox_startup() -> None:
+    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+        _service.start_background_tasks()
+
+
+@router.on_event("shutdown")
+async def _sandbox_shutdown() -> None:
+    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+        _service.shutdown()
+
+_SANDBOX_WS_QUOTA_LOCK = threading.Lock()
+_SANDBOX_WS_ACTIVE_TOTAL = 0
+_SANDBOX_WS_ACTIVE_BY_USER: dict[str, int] = {}
+_SANDBOX_WS_ACTIVE_BY_PERSONA: dict[str, int] = {}
+_SANDBOX_WS_ACTIVE_BY_SESSION: dict[str, int] = {}
+_SANDBOX_WS_ACTIVE_BY_RUN: dict[str, int] = {}
+
+
+def _sandbox_ws_limit(env_key: str, settings_attr: str, default: int) -> int:
+    try:
+        raw = os.getenv(env_key)
+        if raw is None:
+            raw = getattr(app_settings, settings_attr, default)
+        return int(raw)
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+        return int(default)
+
+
+def _quota_inc(bucket: dict[str, int], key: str | None) -> None:
+    if key is None:
+        return
+    bucket[key] = int(bucket.get(key, 0)) + 1
+
+
+def _quota_dec(bucket: dict[str, int], key: str | None) -> None:
+    if key is None:
+        return
+    current = int(bucket.get(key, 0))
+    if current <= 1:
+        bucket.pop(key, None)
+    else:
+        bucket[key] = current - 1
+
+
+def _sandbox_ws_try_acquire_quota(
+    *,
+    user_id: int,
+    run_id: str,
+    persona_id: str | None,
+    session_id: str | None,
+) -> tuple[dict[str, str | None] | None, str | None]:
+    global _SANDBOX_WS_ACTIVE_TOTAL
+    total_limit = _sandbox_ws_limit("SANDBOX_WS_MAX_CONNECTIONS_TOTAL", "SANDBOX_WS_MAX_CONNECTIONS_TOTAL", 1024)
+    per_user_limit = _sandbox_ws_limit("SANDBOX_WS_MAX_CONNECTIONS_PER_USER", "SANDBOX_WS_MAX_CONNECTIONS_PER_USER", 64)
+    per_persona_limit = _sandbox_ws_limit("SANDBOX_WS_MAX_CONNECTIONS_PER_PERSONA", "SANDBOX_WS_MAX_CONNECTIONS_PER_PERSONA", 32)
+    per_session_limit = _sandbox_ws_limit("SANDBOX_WS_MAX_CONNECTIONS_PER_SESSION", "SANDBOX_WS_MAX_CONNECTIONS_PER_SESSION", 16)
+    per_run_limit = _sandbox_ws_limit("SANDBOX_WS_MAX_CONNECTIONS_PER_RUN", "SANDBOX_WS_MAX_CONNECTIONS_PER_RUN", 8)
+
+    user_key = str(user_id)
+    persona_key = str(persona_id).strip() if persona_id else None
+    session_key = str(session_id).strip() if session_id else None
+    run_key = str(run_id).strip() if run_id else None
+
+    with _SANDBOX_WS_QUOTA_LOCK:
+        if total_limit > 0 and _SANDBOX_WS_ACTIVE_TOTAL >= total_limit:
+            return None, "total_connections_quota_exceeded"
+        if per_user_limit > 0 and int(_SANDBOX_WS_ACTIVE_BY_USER.get(user_key, 0)) >= per_user_limit:
+            return None, "user_connections_quota_exceeded"
+        if persona_key and per_persona_limit > 0 and int(_SANDBOX_WS_ACTIVE_BY_PERSONA.get(persona_key, 0)) >= per_persona_limit:
+            return None, "persona_connections_quota_exceeded"
+        if session_key and per_session_limit > 0 and int(_SANDBOX_WS_ACTIVE_BY_SESSION.get(session_key, 0)) >= per_session_limit:
+            return None, "session_connections_quota_exceeded"
+        if run_key and per_run_limit > 0 and int(_SANDBOX_WS_ACTIVE_BY_RUN.get(run_key, 0)) >= per_run_limit:
+            return None, "run_connections_quota_exceeded"
+
+        _SANDBOX_WS_ACTIVE_TOTAL += 1
+        _quota_inc(_SANDBOX_WS_ACTIVE_BY_USER, user_key)
+        _quota_inc(_SANDBOX_WS_ACTIVE_BY_PERSONA, persona_key)
+        _quota_inc(_SANDBOX_WS_ACTIVE_BY_SESSION, session_key)
+        _quota_inc(_SANDBOX_WS_ACTIVE_BY_RUN, run_key)
+        return {
+            "user_key": user_key,
+            "persona_key": persona_key,
+            "session_key": session_key,
+            "run_key": run_key,
+        }, None
+
+
+def _sandbox_ws_release_quota(token: dict[str, str | None] | None) -> None:
+    global _SANDBOX_WS_ACTIVE_TOTAL
+    if not token:
+        return
+    with _SANDBOX_WS_QUOTA_LOCK:
+        if _SANDBOX_WS_ACTIVE_TOTAL > 0:
+            _SANDBOX_WS_ACTIVE_TOTAL -= 1
+        _quota_dec(_SANDBOX_WS_ACTIVE_BY_USER, token.get("user_key"))
+        _quota_dec(_SANDBOX_WS_ACTIVE_BY_PERSONA, token.get("persona_key"))
+        _quota_dec(_SANDBOX_WS_ACTIVE_BY_SESSION, token.get("session_key"))
+        _quota_dec(_SANDBOX_WS_ACTIVE_BY_RUN, token.get("run_key"))
 
 
 def _is_admin_user(user: User) -> bool:
@@ -218,7 +326,7 @@ async def _resolve_sandbox_ws_user_id(
             from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 
             jwt_service = get_jwt_service()
-            payload = await jwt_service.verify_token_async(token, token_type="access")
+            payload = await jwt_service.verify_token_async(token, token_type="access")  # nosec B106
             session_manager = await get_session_manager()
             if await session_manager.is_token_blacklisted(token, payload.get("jti")):
                 raise HTTPException(status_code=401, detail="invalid_token")
@@ -316,6 +424,36 @@ def _normalize_reason(outcome: str, message: str | None) -> str:
         return o or "other"
     except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         return "other"
+
+
+def _runtime_name_from_policy_exception(exc: Exception) -> str:
+    rt_attr = getattr(exc, "runtime", None)
+    if rt_attr is None:
+        return "unknown"
+    try:
+        return rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+        return str(rt_attr) if rt_attr is not None else "unknown"
+
+
+def _runtime_unavailable_suggestions(runtime_name: str) -> list[str]:
+    suggestions: list[str] = []
+    try:
+        from tldw_Server_API.app.core.Sandbox.runners.docker_runner import docker_available as _dock_avail
+        from tldw_Server_API.app.core.Sandbox.runners.firecracker_runner import (
+            firecracker_available as _fc_avail,
+        )
+
+        rt = str(runtime_name or "").strip().lower()
+        if rt == "lima":
+            return []
+        if rt == "firecracker" and _dock_avail():
+            suggestions.append("docker")
+        elif rt == "docker" and _fc_avail():
+            suggestions.append("firecracker")
+        return sorted(set(suggestions))
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+        return []
 
 
 @router.get("/runtimes", response_model=SandboxRuntimesResponse, summary="Discover available runtimes")
@@ -439,6 +577,10 @@ async def create_session(
         env=payload.env or {},
         labels=payload.labels or {},
         trust_level=CoreTrustLevel(payload.trust_level) if payload.trust_level else None,
+        persona_id=payload.persona_id,
+        workspace_id=payload.workspace_id,
+        workspace_group_id=payload.workspace_group_id,
+        scope_snapshot_id=payload.scope_snapshot_id,
     )
     try:
         session = _service.create_session(
@@ -451,22 +593,35 @@ async def create_session(
     except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         if isinstance(e, SandboxPolicy.RuntimeUnavailable):
             # Map to 503 with details per PRD; read runtime from exception with safe fallback
-            rt_attr = getattr(e, "runtime", None)
-            if rt_attr is None:
-                rt = "unknown"
-            else:
-                try:
-                    rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
-                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                    rt = str(rt_attr) if rt_attr is not None else "unknown"
+            rt = _runtime_name_from_policy_exception(e)
+            suggestions = _runtime_unavailable_suggestions(rt)
+            reasons = list(getattr(e, "reasons", []) or [])
             logger.exception("RuntimeUnavailable error occurred on sandbox session creation: {}", str(e))
             return JSONResponse(status_code=503, content={
                 "error": {
                     "code": "runtime_unavailable",
                     "message": "The requested runtime is currently unavailable.",
-                    "details": {"runtime": rt, "available": False, "suggested": ["docker"]}
+                    "details": {"runtime": rt, "available": False, "suggested": suggestions, "reasons": reasons}
                 }
             })
+        if isinstance(e, SandboxPolicy.PolicyUnsupported):
+            rt = _runtime_name_from_policy_exception(e)
+            requirement = str(getattr(e, "requirement", "unknown"))
+            reasons = list(getattr(e, "reasons", []) or [])
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "policy_unsupported",
+                        "message": str(e),
+                        "details": {
+                            "runtime": rt,
+                            "requirement": requirement,
+                            "reasons": reasons,
+                        },
+                    }
+                },
+            )
         if isinstance(e, IdempotencyConflict):
             raise HTTPException(status_code=409, detail={
                 "error": {
@@ -482,11 +637,21 @@ async def create_session(
         if isinstance(e, QueueFull):
             # Backpressure: 429 with Retry-After
             retry_after = getattr(e, "retry_after", 30)
+            details = {"retry_after": retry_after}
+            quota_reason = getattr(e, "reason", None)
+            quota_scope = getattr(e, "quota_scope", None)
+            quota_limit = getattr(e, "limit", None)
+            if quota_reason:
+                details["reason"] = str(quota_reason)
+            if quota_scope:
+                details["quota_scope"] = str(quota_scope)
+            if isinstance(quota_limit, int):
+                details["limit"] = int(quota_limit)
             raise HTTPException(status_code=429, detail={
                 "error": {
                     "code": "queue_full",
                     "message": "Sandbox run queue is full",
-                    "details": {"retry_after": retry_after}
+                    "details": details,
                 }
             }, headers={"Retry-After": str(int(retry_after))}) from e
         if isinstance(e, SandboxService.InvalidSpecVersion):
@@ -557,6 +722,10 @@ async def create_session(
         base_image=session.base_image,
         expires_at=session.expires_at,
         policy_hash=ph,
+        persona_id=session.persona_id,
+        workspace_id=session.workspace_id,
+        workspace_group_id=session.workspace_group_id,
+        scope_snapshot_id=session.scope_snapshot_id,
     )
 
 
@@ -566,7 +735,18 @@ async def delete_session(
     current_user: User = Depends(get_request_user),
 ) -> dict:
     _require_session_owner(session_id, current_user)
-    ok = _service.destroy_session(session_id)
+    try:
+        ok = _service.destroy_session(session_id)
+    except SessionActiveRunsConflict as e:
+        err = str(e) or "session_has_active_runs"
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": err,
+                "active_runs": int(getattr(e, "active_runs", 0) or 0),
+                "session_id": str(session_id),
+            },
+        ) from e
     if not ok:
         raise HTTPException(status_code=404, detail="session_not_found")
     return {"ok": True}
@@ -896,6 +1076,10 @@ async def start_run(
         stdin_bps=(int(payload.stdin_bps) if hasattr(payload, "stdin_bps") and payload.stdin_bps is not None else None),
         stdin_idle_timeout_sec=(int(payload.stdin_idle_timeout_sec) if hasattr(payload, "stdin_idle_timeout_sec") and payload.stdin_idle_timeout_sec is not None else None),
         trust_level=(CoreTrustLevel(payload.trust_level) if hasattr(payload, "trust_level") and payload.trust_level else None),
+        persona_id=payload.persona_id,
+        workspace_id=payload.workspace_id,
+        workspace_group_id=payload.workspace_group_id,
+        scope_snapshot_id=payload.scope_snapshot_id,
     )
     # Scaffold: return immediate completed status without real execution
     try:
@@ -916,39 +1100,34 @@ async def start_run(
     except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         if isinstance(e, SandboxPolicy.RuntimeUnavailable):
             # Use runtime from exception; fallback only if missing/None
-            rt_attr = getattr(e, "runtime", None)
-            if rt_attr is None:
-                rt = "unknown"
-            else:
-                try:
-                    rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
-                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                    rt = str(rt_attr) if rt_attr is not None else "unknown"
-            # Build dynamic suggestions based on availability
-            suggestions = []
-            try:
-                # Prefer suggesting Docker when Firecracker unavailable
-                from tldw_Server_API.app.core.Sandbox.runners.docker_runner import docker_available as _dock_avail
-                from tldw_Server_API.app.core.Sandbox.runners.firecracker_runner import (
-                    firecracker_available as _fc_avail,
-                )
-                if str(rt) == "firecracker":
-                    # Suggest docker even if availability is unknown (tests expect this)
-                    if _dock_avail() or True:
-                        suggestions.append("docker")
-                elif str(rt) == "docker" and _fc_avail():
-                    suggestions.append("firecracker")
-                # Ensure uniqueness
-                suggestions = sorted(set(suggestions))
-            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                suggestions = ["docker"]
+            rt = _runtime_name_from_policy_exception(e)
+            suggestions = _runtime_unavailable_suggestions(rt)
+            reasons = list(getattr(e, "reasons", []) or [])
             return JSONResponse(status_code=503, content={
                 "error": {
                     "code": "runtime_unavailable",
                     "message": str(e),
-                    "details": {"runtime": rt, "available": False, "suggested": suggestions}
+                    "details": {"runtime": rt, "available": False, "suggested": suggestions, "reasons": reasons}
                 }
             })
+        if isinstance(e, SandboxPolicy.PolicyUnsupported):
+            rt = _runtime_name_from_policy_exception(e)
+            requirement = str(getattr(e, "requirement", "unknown"))
+            reasons = list(getattr(e, "reasons", []) or [])
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "policy_unsupported",
+                        "message": str(e),
+                        "details": {
+                            "runtime": rt,
+                            "requirement": requirement,
+                            "reasons": reasons,
+                        },
+                    }
+                },
+            )
         if isinstance(e, IdempotencyConflict):
             return JSONResponse(status_code=409, content={
                 "error": {
@@ -964,17 +1143,31 @@ async def start_run(
         if isinstance(e, QueueFull):
             # Backpressure: 429 with Retry-After + metric
             retry_after = getattr(e, "retry_after", 30)
+            details = {"retry_after": retry_after}
+            quota_reason = getattr(e, "reason", None)
+            quota_scope = getattr(e, "quota_scope", None)
+            quota_limit = getattr(e, "limit", None)
+            if quota_reason:
+                details["reason"] = str(quota_reason)
+            if quota_scope:
+                details["quota_scope"] = str(quota_scope)
+            if isinstance(quota_limit, int):
+                details["limit"] = int(quota_limit)
             try:
                 # Include runtime label where possible for taxonomy consistency
                 rt_label = str(payload.runtime or "unknown")
-                increment_counter("sandbox_queue_full_total", labels={"component": "sandbox", "runtime": rt_label, "reason": "queue_full"})
+                metric_reason = str(quota_reason or "queue_full")
+                increment_counter(
+                    "sandbox_queue_full_total",
+                    labels={"component": "sandbox", "runtime": rt_label, "reason": metric_reason},
+                )
             except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
             return JSONResponse(status_code=429, content={
                 "error": {
                     "code": "queue_full",
                     "message": "Sandbox run queue is full",
-                    "details": {"retry_after": retry_after}
+                    "details": details,
                 }
             }, headers={"Retry-After": str(int(retry_after))})
         if isinstance(e, SandboxService.InvalidSpecVersion):
@@ -1173,6 +1366,11 @@ async def start_run(
         resource_usage=status.resource_usage,
         estimated_start_time=status.estimated_start_time,
         log_stream_url=log_stream_url,
+        session_id=status.session_id,
+        persona_id=status.persona_id,
+        workspace_id=status.workspace_id,
+        workspace_group_id=status.workspace_group_id,
+        scope_snapshot_id=status.scope_snapshot_id,
     )
 
 
@@ -1200,6 +1398,11 @@ async def get_run_status(
         message=st.message,
         resource_usage=st.resource_usage,
         estimated_start_time=st.estimated_start_time,
+        session_id=st.session_id,
+        persona_id=st.persona_id,
+        workspace_id=st.workspace_id,
+        workspace_group_id=st.workspace_group_id,
+        scope_snapshot_id=st.scope_snapshot_id,
     )
 
 
@@ -1519,16 +1722,26 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         finally:
             return  # noqa: B012
 
-    await websocket.accept()
-    # Wrap for WS metrics; keep domain frames unchanged
-    stream = WebSocketStream(
-        websocket,
-        heartbeat_interval_s=0.0,
-        idle_timeout_s=None,
-        close_on_done=False,
-        labels={"component": "sandbox", "endpoint": "sandbox_run_ws"},
+    run_status = None
+    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+        run_status = _service.get_run(run_id)
+    ws_quota_token, ws_quota_reason = _sandbox_ws_try_acquire_quota(
+        user_id=int(user_id),
+        run_id=run_id,
+        persona_id=(getattr(run_status, "persona_id", None) if run_status is not None else None),
+        session_id=(getattr(run_status, "session_id", None) if run_status is not None else None),
     )
-    await stream.start()
+    if ws_quota_token is None:
+        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+            increment_counter(
+                "sandbox_ws_quota_rejections_total",
+                labels={"component": "sandbox", "reason": str(ws_quota_reason or "quota_exceeded")},
+            )
+        try:
+            await websocket.close(code=4429)
+        finally:
+            return  # noqa: B012
+
     hub = get_hub()
     hub.set_loop(asyncio.get_running_loop())
     # Optional resume from specific sequence
@@ -1543,6 +1756,17 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         q = hub.subscribe_with_buffer_from_seq(run_id, int(from_seq))
     else:
         q = hub.subscribe_with_buffer(run_id)
+
+    await websocket.accept()
+    # Wrap for WS metrics; keep domain frames unchanged
+    stream = WebSocketStream(
+        websocket,
+        heartbeat_interval_s=0.0,
+        idle_timeout_s=None,
+        close_on_done=False,
+        labels={"component": "sandbox", "endpoint": "sandbox_run_ws"},
+    )
+    await stream.start()
     # Keep strong references to any background tasks spawned in this handler
     synth_task: asyncio.Task | None = None
     # No-op: retain default queue state; buffered frames are enqueued below.
@@ -1619,6 +1843,9 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                     with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         stream.mark_activity()
                 except WebSocketDisconnect:
+                    return
+                except RuntimeError:
+                    # Starlette raises RuntimeError when the websocket is no longer connected.
                     return
                 except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                     # Non-JSON or decode error: ignore and continue
@@ -1733,7 +1960,11 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
         with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+            hub.unsubscribe(run_id, q)
+        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
             await stream.ws.close()
+        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+            _sandbox_ws_release_quota(ws_quota_token)
 
 
 
@@ -1793,6 +2024,11 @@ async def admin_list_runs(
                 started_at=(r.get("started_at") if isinstance(r.get("started_at"), str) else r.get("started_at")),
                 finished_at=(r.get("finished_at") if isinstance(r.get("finished_at"), str) else r.get("finished_at")),
                 message=r.get("message"),
+                session_id=r.get("session_id"),
+                persona_id=r.get("persona_id"),
+                workspace_id=r.get("workspace_id"),
+                workspace_group_id=r.get("workspace_group_id"),
+                scope_snapshot_id=r.get("scope_snapshot_id"),
             )
         )
     has_more = (offset + len(items)) < int(total)
@@ -1831,6 +2067,11 @@ async def admin_get_run_details(
         finished_at=st.finished_at,
         message=st.message,
         resource_usage=st.resource_usage,
+        session_id=st.session_id,
+        persona_id=st.persona_id,
+        workspace_id=st.workspace_id,
+        workspace_group_id=st.workspace_group_id,
+        scope_snapshot_id=st.scope_snapshot_id,
     )
 
 

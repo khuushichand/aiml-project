@@ -12,6 +12,10 @@ from tldw_Server_API.app.core.Image_Generation.adapter_registry import get_regis
 from tldw_Server_API.app.core.Image_Generation.adapters.base import ImageGenRequest
 from tldw_Server_API.app.core.Image_Generation.config import get_image_generation_config
 from tldw_Server_API.app.core.Image_Generation.exceptions import ImageBackendUnavailableError, ImageGenerationError
+from tldw_Server_API.app.core.Image_Generation.prompt_refinement import (
+    normalize_prompt_refinement_mode,
+    refine_image_prompt,
+)
 
 
 class ImageAdapter:
@@ -32,10 +36,17 @@ class ImageAdapter:
         resolved_backend = registry.resolve_backend(backend_name)
         if not resolved_backend:
             raise FileArtifactsError("image_backend_unavailable")
+        image_config = get_image_generation_config()
+        prompt_mode = normalize_prompt_refinement_mode(payload.get("prompt_refinement"))
+        normalized_prompt = refine_image_prompt(
+            prompt.strip(),
+            mode=prompt_mode,
+            max_length=image_config.max_prompt_length,
+        )
 
         structured = {
             "backend": resolved_backend,
-            "prompt": prompt.strip(),
+            "prompt": normalized_prompt,
             "negative_prompt": self._string_or_none(payload.get("negative_prompt")),
             "width": self._int_or_none(payload.get("width")),
             "height": self._int_or_none(payload.get("height")),
@@ -44,6 +55,7 @@ class ImageAdapter:
             "seed": self._int_or_none(payload.get("seed")),
             "sampler": self._string_or_none(payload.get("sampler")),
             "model": self._string_or_none(payload.get("model")),
+            "prompt_refinement": prompt_mode,
             "extra_params": payload.get("extra_params") or {},
         }
 
@@ -186,6 +198,8 @@ class ImageAdapter:
             return set(config.novita_image_allowed_extra_params or [])
         if backend == "together":
             return set(config.together_image_allowed_extra_params or [])
+        if backend == "modelstudio":
+            return set(config.modelstudio_image_allowed_extra_params or [])
         return set()
 
     def _validate_extra_params(
@@ -199,8 +213,15 @@ class ImageAdapter:
             return
         backend = str(structured.get("backend") or "").strip()
         allowlist = self._allowed_extra_params(backend, config)
+        exempt_control_keys: set[str] = set()
+        if backend == "modelstudio":
+            # `mode` is a local backend control knob, not a passthrough upstream parameter.
+            exempt_control_keys.add("mode")
+        keys_to_validate = [key for key in extra_params if key not in exempt_control_keys]
+        if not keys_to_validate:
+            return
         if not allowlist:
-            for key in extra_params:
+            for key in keys_to_validate:
                 issues.append(
                     ValidationIssue(
                         code="image_params_invalid",
@@ -209,7 +230,7 @@ class ImageAdapter:
                     )
                 )
             return
-        for key in extra_params:
+        for key in keys_to_validate:
             if key not in allowlist:
                 issues.append(
                     ValidationIssue(

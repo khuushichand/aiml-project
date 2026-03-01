@@ -21,5 +21,5 @@ COPY --from=builder /out/tldw-agent-acp /usr/local/bin/tldw-agent-acp
 COPY ${TLDW_SERVER_DIR}/Dockerfiles/ACP/entrypoint.sh /usr/local/bin/tldw-acp-entrypoint
 RUN chmod +x /usr/local/bin/tldw-acp-entrypoint
 
-EXPOSE 22
+EXPOSE 2222
 ENTRYPOINT ["/usr/local/bin/tldw-acp-entrypoint"]

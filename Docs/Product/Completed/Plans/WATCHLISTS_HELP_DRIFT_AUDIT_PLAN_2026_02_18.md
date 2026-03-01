@@ -13,7 +13,7 @@ Detect and correct drift between Watchlists UI language/flows and in-product hel
   - `apps/packages/ui/src/public/_locales/en/watchlists.json`
 - Policy/checklist:
   - `Docs/Monitoring/WATCHLISTS_HELP_MAINTENANCE_POLICY_2026_02_18.md`
-  - `Docs/Plans/WATCHLISTS_HELP_RELEASE_CHECKLIST_2026_02_18.md`
+  - `Docs/Product/Completed/Plans/WATCHLISTS_HELP_RELEASE_CHECKLIST_2026_02_18.md`
 
 ## Cadence
 

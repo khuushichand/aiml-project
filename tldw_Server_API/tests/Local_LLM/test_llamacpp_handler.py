@@ -88,7 +88,7 @@ async def test_llamacpp_start_server_wildcard_host_uses_loopback(monkeypatch, tm
 
     monkeypatch.setattr(llama_mod, "wait_for_http_ready", fake_ready)
 
-    res = await handler.start_server(model.name, server_args={"host": "0.0.0.0", "port": 8099})
+    res = await handler.start_server(model.name, server_args={"host": "0.0.0.0", "port": 8099})  # nosec B104
     assert res["status"] == "started"
     assert captured["base_url"] == "http://127.0.0.1:8099"
 
@@ -200,7 +200,7 @@ async def test_llamacpp_inference_wildcard_host_uses_loopback(monkeypatch, tmp_p
         returncode = None
 
     handler._active_server_process = RunningProc()
-    handler._active_server_host = "0.0.0.0"
+    handler._active_server_host = "0.0.0.0"  # nosec B104
     handler._active_server_port = 8199
 
     import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod

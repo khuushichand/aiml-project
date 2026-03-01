@@ -86,6 +86,26 @@ class SnapshotManager:
         if target != root and root not in target.parents:
             raise ValueError(f"Path traversal detected: {member.name}")
 
+    @staticmethod
+    def _validate_workspace_tree_for_copy(workspace_root: Path) -> None:
+        """Validate workspace tree for snapshot/clone copy semantics.
+
+        Policy: reject symlinks and any path resolution outside workspace root.
+        """
+        if workspace_root.is_symlink():
+            raise ValueError("Refusing symlink workspace root")
+        root = workspace_root.resolve()
+        for current, dirnames, filenames in os.walk(workspace_root, topdown=True, followlinks=False):
+            cur_path = Path(current)
+            cur_resolved = cur_path.resolve()
+            if cur_resolved != root and root not in cur_resolved.parents:
+                raise ValueError(f"Workspace path traversal detected: {cur_path}")
+            for name in [*dirnames, *filenames]:
+                entry = cur_path / name
+                if entry.is_symlink():
+                    rel = entry.relative_to(workspace_root)
+                    raise ValueError(f"Refusing symlink workspace entry: {rel}")
+
     def create_snapshot(self, session_id: str, workspace_path: str) -> dict:
         """Create a snapshot of the session workspace.
 
@@ -105,6 +125,8 @@ class SnapshotManager:
         """
         if not workspace_path or not os.path.isdir(workspace_path):
             raise ValueError(f"Invalid workspace path: {workspace_path}")
+        workspace_root = Path(workspace_path)
+        self._validate_workspace_tree_for_copy(workspace_root)
 
         snapshot_id = f"snap-{uuid.uuid4().hex[:12]}"
         snapshot_dir = self._snapshot_dir(session_id)
@@ -186,6 +208,18 @@ class SnapshotManager:
         if not workspace_path:
             raise ValueError("Invalid workspace path")
 
+        workspace_root = Path(workspace_path)
+        backup_path = workspace_root.parent / f".restore_backup_{uuid.uuid4().hex}"
+
+        # Take a backup first so failed restore can roll back atomically.
+        try:
+            if workspace_root.exists() and workspace_root.is_dir():
+                shutil.copytree(workspace_path, str(backup_path), dirs_exist_ok=False)
+            else:
+                os.makedirs(workspace_path, exist_ok=True)
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
+            raise OSError(f"Failed to backup workspace before restore: {e}") from e
+
         # Clear current workspace (but keep the directory)
         try:
             if os.path.isdir(workspace_path):
@@ -199,19 +233,42 @@ class SnapshotManager:
             else:
                 os.makedirs(workspace_path, exist_ok=True)
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
+            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
+                if backup_path.exists():
+                    if os.path.isdir(workspace_path):
+                        shutil.rmtree(workspace_path, ignore_errors=True)
+                    os.makedirs(workspace_path, exist_ok=True)
+                    shutil.copytree(str(backup_path), workspace_path, dirs_exist_ok=True)
+                    shutil.rmtree(backup_path, ignore_errors=True)
             raise OSError(f"Failed to clear workspace: {e}") from e
 
         # Extract snapshot
         try:
             with tarfile.open(snapshot_path, "r:gz") as tar:
-                workspace_root = Path(workspace_path)
                 for member in tar.getmembers():
                     self._validate_tar_member(member, workspace_root)
                     tar.extract(member, workspace_path)
         except ValueError:
+            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
+                if backup_path.exists():
+                    if os.path.isdir(workspace_path):
+                        shutil.rmtree(workspace_path, ignore_errors=True)
+                    os.makedirs(workspace_path, exist_ok=True)
+                    shutil.copytree(str(backup_path), workspace_path, dirs_exist_ok=True)
+                    shutil.rmtree(backup_path, ignore_errors=True)
             raise
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
+            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
+                if backup_path.exists():
+                    if os.path.isdir(workspace_path):
+                        shutil.rmtree(workspace_path, ignore_errors=True)
+                    os.makedirs(workspace_path, exist_ok=True)
+                    shutil.copytree(str(backup_path), workspace_path, dirs_exist_ok=True)
+                    shutil.rmtree(backup_path, ignore_errors=True)
             raise OSError(f"Failed to extract snapshot: {e}") from e
+        finally:
+            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
+                shutil.rmtree(backup_path, ignore_errors=True)
 
         return True
 
@@ -244,6 +301,8 @@ class SnapshotManager:
 
         if not new_workspace:
             raise ValueError("Invalid new workspace path")
+
+        self._validate_workspace_tree_for_copy(Path(source_workspace))
 
         try:
             # Ensure parent directory exists
@@ -447,3 +506,40 @@ class SnapshotManager:
                 total_size -= snap_size
 
         return deleted
+
+    def enforce_quota_all_sessions(
+        self,
+        *,
+        max_snapshots: int = 10,
+        max_size_mb: int = 256,
+    ) -> dict[str, int]:
+        """Enforce snapshot quotas for all session snapshot directories."""
+        scanned_sessions = 0
+        evicted_sessions = 0
+        deleted_snapshots = 0
+        root = Path(self.storage_path)
+        if not root.exists():
+            return {
+                "scanned_sessions": 0,
+                "evicted_sessions": 0,
+                "deleted_snapshots": 0,
+            }
+        with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
+            for session_dir in root.iterdir():
+                if not session_dir.is_dir():
+                    continue
+                session_id = session_dir.name
+                scanned_sessions += 1
+                deleted = self.enforce_quota(
+                    session_id,
+                    max_snapshots=max_snapshots,
+                    max_size_mb=max_size_mb,
+                )
+                if deleted:
+                    evicted_sessions += 1
+                    deleted_snapshots += len(deleted)
+        return {
+            "scanned_sessions": int(scanned_sessions),
+            "evicted_sessions": int(evicted_sessions),
+            "deleted_snapshots": int(deleted_snapshots),
+        }

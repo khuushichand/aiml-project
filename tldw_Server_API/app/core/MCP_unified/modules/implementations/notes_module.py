@@ -12,6 +12,7 @@ from typing import Any, Optional
 from loguru import logger
 
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from ...persona_scope import get_explicit_scope_ids, merge_requested_ids_with_scope
 from ..base import BaseModule, create_tool_definition
 from ..disk_space import get_free_disk_space_gb
 
@@ -289,6 +290,7 @@ class NotesModule(BaseModule):
         limit: int = int(args.get("limit", 10))
         offset: int = int(args.get("offset", 0))
         snippet_len: int = int(args.get("snippet_length", 300))
+        note_ids_filter = args.get("note_ids_filter")
         # Apply session defaults if present
         try:
             if context and isinstance(getattr(context, "metadata", {}), dict):
@@ -306,6 +308,7 @@ class NotesModule(BaseModule):
             limit,
             offset,
             snippet_len,
+            note_ids_filter,
         )
 
     def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
@@ -401,6 +404,7 @@ class NotesModule(BaseModule):
     async def _get_note(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         note_id: str = args.get("note_id")
         retrieval = args.get("retrieval") or {}
+        note_ids_filter = args.get("note_ids_filter")
         mode = (retrieval or {}).get("mode", "snippet")
         snippet_len = int((retrieval or {}).get("snippet_length", 300))
         # Apply session defaults if present
@@ -419,6 +423,7 @@ class NotesModule(BaseModule):
             note_id,
             mode,
             snippet_len,
+            note_ids_filter,
         )
 
     async def _create_note(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
@@ -467,12 +472,35 @@ class NotesModule(BaseModule):
         limit: int,
         offset: int,
         snippet_len: int,
+        note_ids_filter: Any,
     ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
+            scoped_note_ids = get_explicit_scope_ids(context, "note_id")
+            effective_note_ids = merge_requested_ids_with_scope(
+                note_ids_filter,
+                scoped_ids=scoped_note_ids,
+            )
+            if effective_note_ids is not None and not effective_note_ids:
+                return {
+                    "results": [],
+                    "has_more": False,
+                    "next_offset": None,
+                    "total_estimated": 0,
+                }
+
             fetch_limit = limit + 1  # fetch one extra row to detect additional pages
-            raw = db.search_notes(query, limit=fetch_limit, offset=offset)
-            rows = raw[:limit]
+            if effective_note_ids is not None:
+                fetch_limit = min(max(limit + offset + 1, (limit + offset + 1) * 5), 1000)
+            raw = db.search_notes(query, limit=fetch_limit, offset=0 if effective_note_ids is not None else offset)
+            filtered_rows = raw
+            if effective_note_ids is not None:
+                filtered_rows = [row for row in raw if str(row.get("id") or "") in effective_note_ids]
+                rows = filtered_rows[offset: offset + limit]
+                has_more = len(filtered_rows) > (offset + limit)
+            else:
+                rows = filtered_rows[:limit]
+                has_more = len(raw) > limit
             # Detect score key if backend provided it
             score_key = None
             if rows:
@@ -483,7 +511,6 @@ class NotesModule(BaseModule):
                     score_key = "bm25_score"
             scores = _normalize_scores(rows, score_key=score_key)
 
-            has_more = len(raw) > limit
             next_offset = (offset + len(rows)) if has_more else None
 
             results = []
@@ -518,6 +545,8 @@ class NotesModule(BaseModule):
 
             try:
                 total_estimated = db.count_notes_matching(query)
+                if effective_note_ids is not None:
+                    total_estimated = min(total_estimated, len(filtered_rows))
             except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
                 total_estimated = offset + len(rows) + (1 if has_more else 0)
 
@@ -539,7 +568,16 @@ class NotesModule(BaseModule):
         note_id: str,
         mode: str,
         snippet_len: int,
+        note_ids_filter: Any,
     ) -> dict[str, Any]:
+        scoped_note_ids = get_explicit_scope_ids(context, "note_id")
+        effective_note_ids = merge_requested_ids_with_scope(
+            note_ids_filter,
+            scoped_ids=scoped_note_ids,
+        )
+        if effective_note_ids is not None and str(note_id or "") not in effective_note_ids:
+            raise PermissionError("Note access denied by persona scope")
+
         db = self._open_db(context)
         try:
             row = db.get_note_by_id(note_id)

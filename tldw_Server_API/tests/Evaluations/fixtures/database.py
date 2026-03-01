@@ -240,7 +240,7 @@ class TestDatabaseHelper:
 
         with sqlite3.connect(self.db_path) as conn:
             for table in tables:
-                conn.execute(f"DELETE FROM {table}")
+                conn.execute(f"DELETE FROM {table}")  # nosec B608
             conn.commit()
 
     def get_statistics(self) -> Dict[str, int]:
@@ -256,7 +256,7 @@ class TestDatabaseHelper:
 
         with sqlite3.connect(self.db_path) as conn:
             for table in tables:
-                cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")
+                cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")  # nosec B608
                 stats[table] = cursor.fetchone()[0]
 
         return stats

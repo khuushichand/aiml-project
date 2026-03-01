@@ -82,3 +82,30 @@ async def test_generate_suggestions_fallback_returns_exact_count_for_large_reque
 
     assert len(suggestions) == 10
     assert len({s.lower() for s in suggestions}) == 10
+
+
+@pytest.mark.asyncio
+async def test_generate_suggestions_parses_fenced_json_with_think_tags(monkeypatch):
+    import tldw_Server_API.app.core.Chat.chat_service as chat_service
+
+    async def _fake_chat_call_async(**_kwargs):  # noqa: ANN001
+        return (
+            "<think>reasoning</think>\n"
+            "```json\n"
+            '["What are the prerequisites?", "How do I benchmark this?"]\n'
+            "```"
+        )
+
+    monkeypatch.setattr(chat_service, "perform_chat_api_call_async", _fake_chat_call_async)
+
+    suggestions = await generate_suggestions(
+        query="RAG pipelines",
+        response_text="Here is a response",
+        num_suggestions=2,
+        llm_timeout_sec=1.0,
+    )
+
+    assert suggestions == [
+        "What are the prerequisites?",
+        "How do I benchmark this?",
+    ]

@@ -298,11 +298,11 @@ domains:
 
 Sections on modular extraction strategies, LLM/block extraction, regex catalogs, clustering, and extended observability have been split into a dedicated document to keep this PRD focused on transport/UA/routing. See:
 
-- Docs/Design/Extraction_Pipeline_PRD.md
+- Docs/Product/Completed/Extraction_Pipeline_PRD.md
 
 ## 19. Router YAML Schema (Short)
 
-See full schema and examples in Docs/Design/Custom_Scrapers_Router.md. Allowed per-domain keys:
+See full schema and examples in Docs/Product/Completed/Custom_Scrapers_Router.md. Allowed per-domain keys:
 - `backend`: `auto|curl|httpx|playwright`
 - `handler`: allowlisted import string
 - `ua_profile`: e.g., `chrome_120_win`

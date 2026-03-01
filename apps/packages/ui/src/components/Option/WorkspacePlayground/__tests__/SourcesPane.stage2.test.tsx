@@ -244,6 +244,15 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     expect(removeButton.className).toContain("[@media(hover:none)]:opacity-100")
   })
 
+  it("keeps selected-row remove action visible without hover", () => {
+    workspaceStoreState.selectedSourceIds = ["s1"]
+
+    render(<SourcesPane />)
+
+    const removeButton = screen.getByTestId("remove-source-s1")
+    expect(removeButton.className).toContain("opacity-100")
+  })
+
   it("provides keyboard-accessible reorder buttons", () => {
     render(<SourcesPane />)
 
@@ -302,7 +311,7 @@ describe("SourcesPane Stage 2 source highlighting", () => {
   it("shows processing status and disables selection for non-ready sources", () => {
     render(<SourcesPane />)
 
-    expect(screen.getByText("Processing")).toBeInTheDocument()
+    expect(screen.getAllByText("Processing").length).toBeGreaterThan(0)
 
     const processingHitArea = screen.getByTestId("source-checkbox-hitarea-s2")
     const checkboxInput = processingHitArea.querySelector(
@@ -418,6 +427,23 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     await waitFor(() => {
       expect(screen.getByText("Edited annotation")).toBeInTheDocument()
     })
+  })
+
+  it("shows selected-source action strip and previews single selected source", async () => {
+    workspaceStoreState.selectedSourceIds = ["s1"]
+
+    render(<SourcesPane />)
+
+    expect(screen.getByTestId("sources-selected-actions")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview selected" }))
+
+    expect(
+      await screen.findByText("Source preview and annotations")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByPlaceholderText("Highlighted excerpt (optional)")
+    ).toBeInTheDocument()
   })
 
   it("enables virtualized rendering when source volume crosses threshold", () => {

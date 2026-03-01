@@ -9,13 +9,20 @@ import pytest
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.Watchlists.filters import evaluate_filters, normalize_filters
+from tldw_Server_API.tests.Watchlists.test_perf_plan_metadata import (
+    WATCHLISTS_SCALE_GUARDRAILS,
+    WATCHLISTS_SCALE_SCENARIOS,
+)
 
 
 @pytest.mark.performance
 @pytest.mark.unit
 def test_filter_evaluation_large_rule_set_within_budget():
+    scenario = WATCHLISTS_SCALE_SCENARIOS["filter_eval_large_rule_set"]
+    guardrail_seconds = WATCHLISTS_SCALE_GUARDRAILS["filter_eval_large_rule_set_seconds"]
+
     raw_filters: list[dict[str, object]] = []
-    for idx in range(120):
+    for idx in range(scenario["rule_count"]):
         raw_filters.append(
             {
                 "type": "keyword",
@@ -35,20 +42,24 @@ def test_filter_evaluation_large_rule_set_within_budget():
     }
 
     start = time.perf_counter()
-    for _ in range(600):
+    for _ in range(scenario["evaluation_iterations"]):
         action, meta = evaluate_filters(normalized, candidate)
-        assert action in {"include", "exclude", "flag", None}
-        assert meta is None or isinstance(meta, dict)
+        assert action in {"include", "exclude", "flag", None}  # nosec B101
+        assert meta is None or isinstance(meta, dict)  # nosec B101
     elapsed = time.perf_counter() - start
 
     # Guardrail for obvious regressions without being overly strict across environments.
-    assert elapsed < 8.0
+    assert elapsed < guardrail_seconds  # nosec B101
 
 
 @pytest.mark.performance
 @pytest.mark.load
 @pytest.mark.unit
 def test_watchlists_db_large_sources_and_jobs_listing_within_budget(monkeypatch):
+    scenario = WATCHLISTS_SCALE_SCENARIOS["watchlists_db_listing"]
+    sources_guardrail = WATCHLISTS_SCALE_GUARDRAILS["sources_listing_seconds"]
+    jobs_guardrail = WATCHLISTS_SCALE_GUARDRAILS["jobs_listing_seconds"]
+
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_watchlists_perf_stage2"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
@@ -64,7 +75,7 @@ def test_watchlists_db_large_sources_and_jobs_listing_within_budget(monkeypatch)
     db = WatchlistsDatabase.for_user(user_id)
     db.ensure_schema()
 
-    source_count = 1500
+    source_count = scenario["source_count"]
     for idx in range(source_count):
         db.create_source(
             name=f"PerfSource{idx}",
@@ -76,7 +87,7 @@ def test_watchlists_db_large_sources_and_jobs_listing_within_budget(monkeypatch)
             group_ids=[],
         )
 
-    job_count = 900
+    job_count = scenario["job_count"]
     for idx in range(job_count):
         db.create_job(
             name=f"PerfJob{idx}",
@@ -93,18 +104,20 @@ def test_watchlists_db_large_sources_and_jobs_listing_within_budget(monkeypatch)
         )
 
     sources_start = time.perf_counter()
-    source_rows, source_total = db.list_sources(q=None, tag_names=None, limit=200, offset=0)
+    source_rows, source_total = db.list_sources(
+        q=None, tag_names=None, limit=scenario["page_size"], offset=0
+    )
     sources_elapsed = time.perf_counter() - sources_start
 
     jobs_start = time.perf_counter()
-    job_rows, jobs_total = db.list_jobs(q=None, limit=200, offset=0)
+    job_rows, jobs_total = db.list_jobs(q=None, limit=scenario["page_size"], offset=0)
     jobs_elapsed = time.perf_counter() - jobs_start
 
-    assert source_total >= source_count
-    assert jobs_total >= job_count
-    assert len(source_rows) <= 200
-    assert len(job_rows) <= 200
+    assert source_total >= source_count  # nosec B101
+    assert jobs_total >= job_count  # nosec B101
+    assert len(source_rows) <= scenario["page_size"]  # nosec B101
+    assert len(job_rows) <= scenario["page_size"]  # nosec B101
 
     # Stage 2 scale sanity guardrails for high-cardinality listings.
-    assert sources_elapsed < 0.45
-    assert jobs_elapsed < 0.40
+    assert sources_elapsed < sources_guardrail  # nosec B101
+    assert jobs_elapsed < jobs_guardrail  # nosec B101

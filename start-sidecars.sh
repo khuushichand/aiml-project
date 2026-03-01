@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${ROOT_DIR}"
 
 if [[ -n "${TLDW_ENV_FILE:-}" && -f "${TLDW_ENV_FILE}" ]]; then
   set -a
@@ -16,6 +17,12 @@ UVICORN_PORT="${UVICORN_PORT:-8000}"
 UVICORN_WORKERS="${UVICORN_WORKERS:-1}"
 UVICORN_RELOAD="${UVICORN_RELOAD:-false}"
 UVICORN_EXTRA_ARGS="${UVICORN_EXTRA_ARGS:-}"
+SIDECAR_PROFILE="${TLDW_SIDECAR_PROFILE:-full}"
+SIDECAR_DRY_RUN="${TLDW_SIDECAR_DRY_RUN:-false}"
+WAIT_FOR_SERVER_HEALTH="${TLDW_WAIT_FOR_SERVER_HEALTH:-true}"
+SERVER_HEALTH_URL="${TLDW_SERVER_HEALTH_URL:-http://${UVICORN_HOST}:${UVICORN_PORT}/health}"
+SERVER_HEALTH_RETRIES="${TLDW_SERVER_HEALTH_RETRIES:-60}"
+SERVER_HEALTH_INTERVAL="${TLDW_SERVER_HEALTH_INTERVAL:-1}"
 
 LOG_DIR="${TLDW_LOG_DIR:-${ROOT_DIR}/.logs/sidecars}"
 mkdir -p "${LOG_DIR}"
@@ -64,7 +71,20 @@ while IFS= read -r line; do
   fi
 done <<< "${MANIFEST_OUTPUT}"
 
-WORKERS_CSV="${TLDW_SIDECAR_WORKERS:-${DEFAULT_WORKERS}}"
+WORKERS_CSV="$("${PYTHON_BIN}" - "${SIDECAR_PROFILE}" "${TLDW_SIDECAR_WORKERS:-}" "${DEFAULT_WORKERS}" <<'PY'
+import sys
+
+from Helper_Scripts.common.sidecar_profiles import resolve_workers
+
+profile, explicit_workers_csv, default_workers_csv = sys.argv[1], sys.argv[2], sys.argv[3]
+workers = resolve_workers(
+    profile=profile,
+    explicit_workers_csv=explicit_workers_csv or None,
+    default_workers_csv=default_workers_csv,
+)
+print(",".join(workers))
+PY
+)"
 
 declare -a PIDS=()
 declare -a NAMES=()
@@ -82,10 +102,31 @@ start_proc() {
 
 stop_all() {
   printf '\nStopping sidecar stack...\n'
-  for pid in "${PIDS[@]}"; do
+  for pid in "${PIDS[@]-}"; do
     kill "${pid}" 2>/dev/null || true
   done
   wait || true
+}
+
+wait_for_server_health() {
+  if [[ "${WAIT_FOR_SERVER_HEALTH}" != "true" ]]; then
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    printf 'curl not available; skipping server health wait.\n'
+    return 0
+  fi
+
+  local attempt=1
+  while [[ "${attempt}" -le "${SERVER_HEALTH_RETRIES}" ]]; do
+    if curl -fsS "${SERVER_HEALTH_URL}" >/dev/null 2>&1; then
+      printf 'Server healthy at %s\n' "${SERVER_HEALTH_URL}"
+      return 0
+    fi
+    sleep "${SERVER_HEALTH_INTERVAL}"
+    attempt=$((attempt + 1))
+  done
+  return 1
 }
 
 trap stop_all INT TERM EXIT
@@ -104,10 +145,25 @@ if [[ -n "${UVICORN_EXTRA_ARGS}" ]]; then
   server_cmd+=( "${extra_args[@]}" )
 fi
 
+IFS=',' read -r -a WORKER_LIST <<< "${WORKERS_CSV}"
+
+if [[ "${SIDECAR_DRY_RUN}" == "true" ]]; then
+  printf 'Dry run enabled. Profile=%s selected_workers=%s\n' "${SIDECAR_PROFILE}" "${WORKERS_CSV}"
+  printf 'Server command: %s\n' "${server_cmd[*]}"
+  for worker in "${WORKER_LIST[@]}"; do
+    [[ -z "${worker}" ]] && continue
+    printf 'Worker key: %s\n' "${worker}"
+  done
+  exit 0
+fi
+
 start_proc "server" "${server_cmd[@]}"
 SERVER_PID="${PIDS[$(( ${#PIDS[@]} - 1 ))]}"
 
-IFS=',' read -r -a WORKER_LIST <<< "${WORKERS_CSV}"
+if ! wait_for_server_health; then
+  printf 'Server failed health check at %s (set TLDW_SERVER_HEALTH_URL to override)\n' "${SERVER_HEALTH_URL}" >&2
+  exit 1
+fi
 
 for worker in "${WORKER_LIST[@]}"; do
   if [[ -z "${worker}" ]]; then

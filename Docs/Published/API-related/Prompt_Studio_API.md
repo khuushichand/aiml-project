@@ -372,12 +372,49 @@ curl -X POST "http://localhost:8000/api/v1/prompt-studio/optimizations/create" \
       }'
 ```
 
+### Create MCTS Optimization Job (Canary/Flagged)
+```bash
+curl -X POST "http://localhost:8000/api/v1/prompt-studio/optimizations/create" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+        "project_id": 1,
+        "name": "MCTS Sequence Run",
+        "initial_prompt_id": 12,
+        "test_case_ids": [1,2,3],
+        "optimization_config": {
+          "optimizer_type": "mcts",
+          "max_iterations": 20,
+          "target_metric": "accuracy",
+          "strategy_params": {
+            "mcts_simulations": 20,
+            "mcts_max_depth": 4,
+            "mcts_exploration_c": 1.4,
+            "prompt_candidates_per_node": 3,
+            "score_dedup_bin": 0.1,
+            "early_stop_no_improve": 5,
+            "token_budget": 50000,
+            "ws_throttle_every": 2,
+            "trace_top_k": 3
+          }
+        }
+      }'
+```
+
 ### Subscribe to Real-time Updates (WebSocket)
 ```js
 const ws = new WebSocket("ws://localhost:8000/api/v1/prompt-studio/ws");
 ws.onopen = () => ws.send(JSON.stringify({ type: "subscribe", entity_type: "project", entity_id: 1 }));
 ws.onmessage = (evt) => console.log("event", evt.data);
 ```
+
+MCTS iteration payload fields (when `type = "optimization_iteration"`):
+`optimization_id`, `iteration`, `max_iterations`, `current_metric`, `best_metric`, `progress`,
+`strategy`, `sim_index`, `depth`, `reward`, `best_reward`, `token_spend_so_far`, `trace_summary`.
+
+Reference payloads:
+- `Docs/Examples/PromptStudio/mcts/ROLL_OUT_NOTES.md`
+- `Docs/Guides/Prompt_Studio_MCTS_Guide.md`
 
 ## Access Control & Limits
 
@@ -389,7 +426,6 @@ ws.onmessage = (evt) => console.log("event", evt.data);
 
 - Prompt updates create new versions; reverting also creates a new version
 - Evaluations can run synchronously or as background tasks
-- Real-time updates support both WebSocket and SSE fallback
 - Real-time updates support both WebSocket and SSE fallback
 ## Metrics
 

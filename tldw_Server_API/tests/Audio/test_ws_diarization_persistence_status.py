@@ -53,7 +53,7 @@ async def test_status_emitted_when_persistence_degraded(monkeypatch):
             return None
 
         async def finalize(self):
-            return {}, "/tmp/fake.wav", []
+            return {}, "/tmp/fake.wav", []  # nosec B108
 
         async def reset(self):
             pass

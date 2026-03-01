@@ -78,6 +78,21 @@ export const test = base.extend<{ diagnostics: DiagnosticsData }>({
 
 export { expect }
 
+const DEFAULT_SMOKE_LOAD_TIMEOUT_MS = 30_000
+const MIN_SMOKE_LOAD_TIMEOUT_MS = 5_000
+
+const resolveSmokeLoadTimeoutMs = (): number => {
+  const raw = process.env.TLDW_SMOKE_LOAD_TIMEOUT_MS
+  if (!raw || !raw.trim()) return DEFAULT_SMOKE_LOAD_TIMEOUT_MS
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return DEFAULT_SMOKE_LOAD_TIMEOUT_MS
+  const normalized = Math.floor(parsed)
+  if (normalized < MIN_SMOKE_LOAD_TIMEOUT_MS) return DEFAULT_SMOKE_LOAD_TIMEOUT_MS
+  return normalized
+}
+
+export const SMOKE_LOAD_TIMEOUT = resolveSmokeLoadTimeoutMs()
+
 /**
  * Auth configuration for smoke tests
  */
@@ -467,6 +482,8 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
       "/settings/speech",
       "/chatbooks",
       "/watchlists",
+      "/prompts",
+      "/reading",
       "/admin",
       "/admin/server",
       "/notes",
@@ -477,6 +494,57 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
       "/audio",
       "/__wayfinding-missing-route__"
     ]
+  },
+  {
+    id: "m5-drawer-width-deprecation-noise",
+    scope: "console",
+    pattern: /Warning:\s+\[antd:\s*Drawer\]\s+`width` is deprecated\. Please use `size` instead\./i,
+    rationale:
+      "Known Ant Design Drawer deprecation warning in selected routes; no functional regression in smoke path.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31",
+    routes: ["/media-multi", "/kanban", "/review"]
+  },
+  {
+    id: "m5-model-oauth-status-403-noise",
+    scope: "console",
+    pattern: /Failed to load resource: the server responded with a status of 403 \(Forbidden\)/i,
+    rationale:
+      "Model settings probes optional OAuth status endpoint that can return 403 in minimal smoke backend profile.",
+    owner: "Platform",
+    expiresOn: "2026-03-31",
+    routes: ["/settings/model"]
+  },
+  {
+    id: "m5-notes-title-settings-cors-noise",
+    scope: "console",
+    pattern:
+      /Access to fetch at 'http:\/\/127\.0\.0\.1:\d+\/api\/v1\/admin\/notes\/title-settings'.*blocked by CORS policy/i,
+    rationale:
+      "Notes title settings probe may be CORS-blocked in isolated smoke backend mode while page remains recoverable.",
+    owner: "Platform",
+    expiresOn: "2026-03-31",
+    routes: ["/notes"]
+  },
+  {
+    id: "m5-notes-title-settings-net-failed-noise",
+    scope: "console",
+    pattern: /Failed to load resource: net::ERR_FAILED/i,
+    rationale:
+      "Companion browser error after expected CORS rejection for notes title settings probe in smoke mode.",
+    owner: "Platform",
+    expiresOn: "2026-03-31",
+    routes: ["/notes"]
+  },
+  {
+    id: "m5-notes-title-settings-request-failure-noise",
+    scope: "request",
+    pattern: /\/api\/v1\/admin\/notes\/title-settings\s+\(net::ERR_FAILED\)/i,
+    rationale:
+      "Request-failure companion signal for expected notes title settings CORS rejection in isolated smoke mode.",
+    owner: "Platform",
+    expiresOn: "2026-03-31",
+    routes: ["/notes"]
   },
   {
     id: "m5-media-not-found-search-console-noise",
@@ -552,7 +620,18 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
       "Known Ant Design message context warning in collections route; no functional regression.",
     owner: "WebUI",
     expiresOn: "2026-03-31",
-    routes: ["/collections"]
+    routes: ["/collections", "/reading"]
+  },
+  {
+    id: "m5-characters-useform-context-warning",
+    scope: "console",
+    pattern:
+      /Warning:\s+Instance created by `useForm` is not connected to any Form element\.\s+Forget to pass `form` prop\?/i,
+    rationale:
+      "Known Ant Design form instance warning in characters route under minimal smoke backend profile; route remains functional.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31",
+    routes: ["/characters"]
   },
   {
     id: "m5-model-metadata-rate-limit-log-noise",
@@ -563,7 +642,7 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
       "Dense smoke sweeps can rate-limit model metadata probes; treated as environment noise for these routes.",
     owner: "Platform",
     expiresOn: "2026-03-31",
-    routes: ["/content-review", "/claims-review"]
+    routes: ["/content-review", "/claims-review", "/workspace-playground"]
   },
   {
     id: "m5-chatbooks-evaluations-cors-noise",

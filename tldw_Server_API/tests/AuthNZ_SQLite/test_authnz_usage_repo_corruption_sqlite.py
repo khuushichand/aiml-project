@@ -8,18 +8,24 @@ from loguru import logger
 
 class _CorruptingSQLitePool:
     pool = None
-    _sqlite_fs_path = "/tmp/authnz-corrupt-users.db"
+
+    def __init__(self, sqlite_fs_path: str) -> None:
+        self._sqlite_fs_path = sqlite_fs_path
 
     async def execute(self, *args, **kwargs):  # noqa: ANN002, ANN003, D401
         raise RuntimeError("database disk image is malformed")
 
 
 @pytest.mark.asyncio
-async def test_aggregate_llm_usage_daily_skips_on_sqlite_corruption():
+async def test_aggregate_llm_usage_daily_skips_on_sqlite_corruption(tmp_path):
     from tldw_Server_API.app.core.AuthNZ.repos import usage_repo as usage_repo_module
 
     usage_repo_module._SQLITE_CORRUPTION_WARNING_KEYS.clear()
-    repo = usage_repo_module.AuthnzUsageRepo(db_pool=_CorruptingSQLitePool())  # type: ignore[arg-type]
+    sqlite_db_path = tmp_path / "authnz-corrupt-users.db"
+    sqlite_db_path.touch()
+    repo = usage_repo_module.AuthnzUsageRepo(
+        db_pool=_CorruptingSQLitePool(str(sqlite_db_path))
+    )  # type: ignore[arg-type]
 
     messages: list[str] = []
 
@@ -40,11 +46,15 @@ async def test_aggregate_llm_usage_daily_skips_on_sqlite_corruption():
 
 
 @pytest.mark.asyncio
-async def test_aggregate_usage_daily_skips_on_sqlite_corruption():
+async def test_aggregate_usage_daily_skips_on_sqlite_corruption(tmp_path):
     from tldw_Server_API.app.core.AuthNZ.repos import usage_repo as usage_repo_module
 
     usage_repo_module._SQLITE_CORRUPTION_WARNING_KEYS.clear()
-    repo = usage_repo_module.AuthnzUsageRepo(db_pool=_CorruptingSQLitePool())  # type: ignore[arg-type]
+    sqlite_db_path = tmp_path / "authnz-corrupt-users.db"
+    sqlite_db_path.touch()
+    repo = usage_repo_module.AuthnzUsageRepo(
+        db_pool=_CorruptingSQLitePool(str(sqlite_db_path))
+    )  # type: ignore[arg-type]
 
     messages: list[str] = []
     sink_id = logger.add(lambda msg: messages.append(str(msg.record.get("message") or "")), level="WARNING")

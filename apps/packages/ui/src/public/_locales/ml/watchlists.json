@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "ബ്രിഫിംഗിന് ക്യൂയിൽ"
+  },
+  "items_includeInNextBriefing": {
+    "message": "അടുത്ത ബ്രിഫിംഗിൽ ഉൾപ്പെടുത്തുക"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "ബ്രിഫിംഗ് ക്യൂയിൽ നിന്ന് നീക്കുക"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "ഈ ഇനം ഇതിനകം ബ്രിഫിംഗ് ഔട്ട്പുട്ടുകളിൽ ഉൾപ്പെട്ടിരിക്കുന്നു."
+  },
+  "items_briefingIncluded": {
+    "message": "അടുത്ത ബ്രിഫിംഗ് ക്യൂയിലേക്ക് ചേർത്തു."
+  },
+  "items_briefingRemoved": {
+    "message": "ബ്രിഫിംഗ് ക്യൂയിൽ നിന്ന് നീക്കി."
+  },
+  "items_briefingIncludeError": {
+    "message": "ഇനത്തെ ബ്രിഫിംഗിൽ ഉൾപ്പെടുത്താൻ കഴിഞ്ഞില്ല."
+  },
+  "items_queuedTag": {
+    "message": "ക്യൂയിൽ"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "റൺ തിരഞ്ഞെടുക്കുക"
+  },
+  "items_queue_runOption": {
+    "message": "റൺ #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "ക്യൂയിൽ നിന്നുള്ള റിപ്പോർട്ട് സൃഷ്ടിക്കാൻ ഒരു റൺ തിരഞ്ഞെടുക്കുക."
+  },
+  "items_queue_empty": {
+    "message": "ഈ റണിനായി ക്യൂ ചെയ്ത ഇനങ്ങൾ കണ്ടെത്തിയില്ല."
+  },
+  "items_queue_generated": {
+    "message": "{{count}} ക്യൂ ചെയ്ത ഇനം{{plural}} ഉപയോഗിച്ച് റിപ്പോർട്ട് സൃഷ്ടിച്ചു."
+  },
+  "items_queue_generateError": {
+    "message": "ക്യൂ ചെയ്ത ഇനങ്ങളിൽ നിന്ന് റിപ്പോർട്ട് സൃഷ്ടിക്കാൻ കഴിഞ്ഞില്ല."
+  },
+  "items_queue_generateReport": {
+    "message": "ക്യൂയിൽ നിന്ന് റിപ്പോർട്ട് സൃഷ്ടിക്കുക"
+  }
+}

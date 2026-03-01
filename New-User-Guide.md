@@ -1,10 +1,10 @@
 # tldw_server New User Guide
 
-> **Note:** This guide is being replaced by the new Getting Started guides:
-> - [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) - 5-minute setup
-> - [Local Development Guide](Docs/Getting_Started/Local_Development.md) - building against the API
-> - [Docker Self-Host Guide](Docs/Getting_Started/Docker_Self_Host.md) - running on your server
-> - [Production Guide](Docs/Getting_Started/Production.md) - team deployment
+> **Note:** This guide is being replaced by the profile-based Getting Started docs:
+> - [Getting Started Index](Docs/Getting_Started/README.md) - choose your setup path
+> - [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) - local API setup
+> - [Docker Single-User Profile](Docs/Getting_Started/Profile_Docker_Single_User.md) - self-hosting with Docker
+> - [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) - production/team baseline
 >
 > The content below remains valid but may not be actively maintained.
 
@@ -67,7 +67,7 @@ pip install -e .
 ### 3.2 Configure auth + provider settings
 Start from the AuthNZ template, then edit it:
 ```bash
-cp tldw_Server_API/Config_Files/.env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 # Edit .env to set AUTH_MODE and your keys
 ```
 Key fields to set:
@@ -76,9 +76,9 @@ Key fields to set:
 - `DATABASE_URL` (defaults to SQLite; use Postgres for multi-user production)
 - Provider keys (optional): `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.
 
-For local multi-user SQLite, see `Docs/User_Guides/Multi-User_SQLite_Setup.md`.
+For local multi-user SQLite, see `Docs/User_Guides/Server/Multi-User_SQLite_Setup.md`.
 
-For a full provider list, see `tldw_Server_API/Config_Files/.env.template`. You can also keep large provider configs in `tldw_Server_API/Config_Files/config.txt`.
+For a full provider list, see `tldw_Server_API/Config_Files/.env.example`. You can also keep large provider configs in `tldw_Server_API/Config_Files/config.txt`.
 
 > Important: Replace placeholder values with strong random keys before continuing.
 > - Generate a key: `python -c "import secrets; print(secrets.token_urlsafe(32))"`
@@ -96,7 +96,7 @@ The command is **interactive**: run it in a terminal and answer the prompts (you
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --reload
 ```
-- Docs/UI: http://127.0.0.1:8000/docs
+- API docs UI: http://127.0.0.1:8000/docs
 - Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart
 - Setup UI (if required): http://127.0.0.1:8000/setup
 
@@ -136,7 +136,7 @@ List active providers/models via `GET /api/v1/llm/providers`.
 Once the server boots, you’ll likely tailor behaviour, credentials, and model lists. Two files drive most settings:
 
 ### 4.1 `.env`: secrets, auth, and DB targets
-- Location: `tldw_server2/.env` (same folder as `pyproject.toml`). Start from `tldw_Server_API/Config_Files/.env.authnz.template` or the full `tldw_Server_API/Config_Files/.env.template`.
+- Location: `tldw_Server_API/Config_Files/.env`. Start from `tldw_Server_API/Config_Files/.env.example`.
 - Best place for **secrets**: API keys, DB passwords, Postgres URLs, JWT secrets.
 - Common fields:
   - `AUTH_MODE` = `single_user` (API key header) or `multi_user` (JWT/auth endpoints).
@@ -298,7 +298,7 @@ curl -X POST "http://127.0.0.1:8000/api/v1/media/add" \
 
 ## 8. Common Next Steps
 - **Explore docs**: OpenAPI docs at `/docs`, plus deep dives in `Docs/` (RAG, AuthNZ, MCP, etc.).
-- **Read user guides**: `Docs/User_Guides/Installation-Setup-Guide.md` and `Docs/User_Guides/User_Guide.md`.
+- **Read user guides**: `Docs/Getting_Started/README.md` and `Docs/User_Guides/WebUI_Extension/User_Guide.md`.
 - **List available providers**: `GET /api/v1/llm/providers` to confirm names/models you can target.
 - **Run tests**: `python -m pytest -v` (add `-m "unit"` or `-m "integration"` as needed).
 - **Switch to PostgreSQL**: set `DATABASE_URL` and leverage `tldw_Server_API/app/core/DB_Management/` migration helpers.

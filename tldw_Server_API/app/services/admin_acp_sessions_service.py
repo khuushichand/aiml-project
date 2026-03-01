@@ -58,6 +58,10 @@ class SessionRecord:
     usage: SessionTokenUsage = field(default_factory=SessionTokenUsage)
     tags: list[str] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
+    persona_id: str | None = None
+    workspace_id: str | None = None
+    workspace_group_id: str | None = None
+    scope_snapshot_id: str | None = None
     # Forking lineage
     forked_from: str | None = None
 
@@ -74,6 +78,10 @@ class SessionRecord:
             "usage": self.usage.to_dict(),
             "tags": list(self.tags),
             "has_websocket": has_websocket,
+            "persona_id": self.persona_id,
+            "workspace_id": self.workspace_id,
+            "workspace_group_id": self.workspace_group_id,
+            "scope_snapshot_id": self.scope_snapshot_id,
         }
 
     def to_detail_dict(self, *, has_websocket: bool = False) -> dict[str, Any]:
@@ -178,6 +186,10 @@ class ACPSessionStore:
         name: str = "",
         cwd: str = "",
         tags: list[str] | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
     ) -> SessionRecord:
         now = datetime.now(timezone.utc).isoformat()
         record = SessionRecord(
@@ -189,6 +201,10 @@ class ACPSessionStore:
             created_at=now,
             last_activity_at=now,
             tags=tags or [],
+            persona_id=persona_id,
+            workspace_id=workspace_id,
+            workspace_group_id=workspace_group_id,
+            scope_snapshot_id=scope_snapshot_id,
         )
         async with self._lock:
             self._sessions[session_id] = record
@@ -295,6 +311,10 @@ class ACPSessionStore:
                 message_count=len(forked_messages),
                 tags=list(source.tags),
                 messages=forked_messages,
+                persona_id=source.persona_id,
+                workspace_id=source.workspace_id,
+                workspace_group_id=source.workspace_group_id,
+                scope_snapshot_id=source.scope_snapshot_id,
                 forked_from=source_session_id,
             )
             self._sessions[new_session_id] = forked

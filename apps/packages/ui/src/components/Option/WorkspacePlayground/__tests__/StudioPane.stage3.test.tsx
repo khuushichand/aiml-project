@@ -298,6 +298,35 @@ if (!(globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver) {
   }
 }
 
+const expandStudioOptionsSection = () => {
+  const toggle = screen.getByRole("button", { name: /Studio Options/i })
+  if (toggle.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(toggle)
+  }
+}
+
+const expandOutputTypesSection = () => {
+  const toggle = screen.getByRole("button", { name: /Output Types/i })
+  if (toggle.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(toggle)
+  }
+}
+
+const expandGeneratedOutputsSection = () => {
+  const toggle = screen.getByRole("button", { name: /Generated Outputs/i })
+  if (toggle.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(toggle)
+  }
+}
+
+const renderExpandedStudioPane = () => {
+  const renderResult = render(<StudioPane />)
+  expandStudioOptionsSection()
+  expandOutputTypesSection()
+  expandGeneratedOutputsSection()
+  return renderResult
+}
+
 describe("StudioPane Stage 3 information architecture and UX polish", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -374,7 +403,7 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
   })
 
   it("groups output buttons by category and surfaces description tooltips", async () => {
-    render(<StudioPane />)
+    renderExpandedStudioPane()
 
     expect(screen.getByText("Study Aids")).toBeInTheDocument()
     expect(screen.getByText("Analysis")).toBeInTheDocument()
@@ -387,7 +416,7 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
   })
 
   it("shows contextual audio settings when audio overview is selected", async () => {
-    render(<StudioPane />)
+    renderExpandedStudioPane()
 
     expect(
       screen.getByText("Select Audio Overview to configure TTS voice and speed.")
@@ -416,7 +445,7 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
         })
     )
 
-    render(<StudioPane />)
+    renderExpandedStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Summary" }))
 
@@ -439,7 +468,7 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
       }
     ]
 
-    const { container } = render(<StudioPane />)
+    const { container } = renderExpandedStudioPane()
     const paneRoot = container.firstElementChild as HTMLElement | null
     expect(paneRoot).not.toBeNull()
     expect(paneRoot?.className).toContain("overflow-y-auto")
@@ -456,7 +485,7 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
   it("uses larger touch controls for audio settings on mobile", async () => {
     isMobile = true
 
-    const { container } = render(<StudioPane />)
+    const { container } = renderExpandedStudioPane()
     fireEvent.click(screen.getByRole("button", { name: "Audio Settings" }))
 
     expect(await screen.findByText("TTS Provider")).toBeInTheDocument()
@@ -484,7 +513,7 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     const studioOptionsToggle = screen.getByRole("button", {
       name: /Studio Options/
     })
-    expect(studioOptionsToggle).toHaveAttribute("aria-expanded", "true")
+    expect(studioOptionsToggle).toHaveAttribute("aria-expanded", "false")
     expect(studioOptionsToggle).toHaveAttribute(
       "aria-controls",
       "studio-options-section"
@@ -514,11 +543,27 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
       container.querySelector("#studio-generated-outputs-section")
     ).toHaveAttribute("hidden")
 
+    fireEvent.click(outputsToggle)
+    expect(outputsToggle).toHaveAttribute("aria-expanded", "true")
+    expect(
+      container.querySelector("#studio-generated-outputs-section")
+    ).not.toHaveAttribute("hidden")
+
+    fireEvent.click(studioOptionsToggle)
+    expect(studioOptionsToggle).toHaveAttribute("aria-expanded", "true")
+    expect(
+      container.querySelector("#studio-options-section")
+    ).not.toHaveAttribute("hidden")
+
     fireEvent.click(studioOptionsToggle)
     expect(studioOptionsToggle).toHaveAttribute("aria-expanded", "false")
-    expect(container.querySelector("#studio-options-section")).toHaveAttribute(
-      "hidden"
-    )
+    expect(container.querySelector("#studio-options-section")).toHaveAttribute("hidden")
+
+    fireEvent.click(outputTypesToggle)
+    expect(outputTypesToggle).toHaveAttribute("aria-expanded", "false")
+
+    fireEvent.click(outputTypesToggle)
+    expect(outputTypesToggle).toHaveAttribute("aria-expanded", "true")
 
     const audioSettingsToggle = screen.getByRole("button", {
       name: /Audio Settings/
@@ -531,7 +576,7 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
   })
 
   it("renders audio settings as a connected accordion container", () => {
-    render(<StudioPane />)
+    renderExpandedStudioPane()
 
     const accordion = screen.getByTestId("studio-audio-settings-accordion")
     const audioSettingsToggle = screen.getByRole("button", {
@@ -552,7 +597,7 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
   })
 
   it("wires Studio Options controls to model and RAG stores", async () => {
-    const { container } = render(<StudioPane />)
+    const { container } = renderExpandedStudioPane()
 
     await waitFor(() => {
       expect(mockGetChatModels).toHaveBeenCalled()
@@ -609,7 +654,7 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
       }
     ]
 
-    const { container } = render(<StudioPane />)
+    const { container } = renderExpandedStudioPane()
 
     const iconOnlyButtons = Array.from(
       container.querySelectorAll("button")
@@ -624,5 +669,47 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
       expect(button).toHaveAttribute("aria-label")
       expect(button.getAttribute("aria-label")?.trim().length).toBeGreaterThan(0)
     })
+  })
+
+  it("keeps grouped artifact actions discoverable and keyboard-operable", async () => {
+    workspaceStoreState.generatedArtifacts = [
+      {
+        id: "artifact-grouped-actions",
+        type: "summary",
+        title: "Grouped Actions Summary",
+        status: "completed",
+        content: "Content for grouped action checks.",
+        createdAt: new Date("2026-02-18T08:00:00.000Z")
+      }
+    ]
+
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent")
+
+    renderExpandedStudioPane()
+
+    expect(
+      screen.getByTestId("studio-artifact-primary-actions-artifact-grouped-actions")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId("studio-artifact-secondary-actions-artifact-grouped-actions")
+    ).toBeInTheDocument()
+
+    expect(screen.getByRole("button", { name: "View" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Regenerate options" })
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Save to notes" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument()
+
+    const discussButton = screen.getByRole("button", { name: "Discuss in chat" })
+    discussButton.focus()
+    expect(discussButton).toHaveFocus()
+
+    fireEvent.keyDown(discussButton, { key: "Enter" })
+    expect(dispatchSpy).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate options" }))
+    expect(await screen.findByText("Replace existing")).toBeInTheDocument()
   })
 })

@@ -54,6 +54,18 @@ const createBundleFixture = (): WorkspaceExportBundle => ({
         version: 1,
         isDirty: false
       },
+      workspaceBanner: {
+        title: "Alpha Banner",
+        subtitle: "Workspace subtitle",
+        image: {
+          dataUrl: "data:image/webp;base64,alpha-banner",
+          mimeType: "image/webp",
+          width: 1400,
+          height: 460,
+          bytes: 24576,
+          updatedAt: new Date("2026-02-19T10:05:00.000Z")
+        }
+      },
       leftPaneCollapsed: false,
       rightPaneCollapsed: true,
       audioSettings: {
@@ -104,6 +116,24 @@ describe("workspace bundle zip compatibility", () => {
     const parsed = await parseWorkspaceImportFile(file)
 
     expect(parsed).toEqual(toSerializableBundle(bundle))
+  })
+
+  it("round-trips workspaceBanner through zip export/import", async () => {
+    const bundle = createBundleFixture()
+    const zipBlob = await createWorkspaceExportZipBlob(bundle)
+    const file = new File([zipBlob], "alpha.workspace.zip", {
+      type: WORKSPACE_EXPORT_BUNDLE_ZIP_MIME
+    })
+
+    const parsed = await parseWorkspaceImportFile(file)
+
+    expect(parsed.workspace.snapshot.workspaceBanner.title).toBe("Alpha Banner")
+    expect(parsed.workspace.snapshot.workspaceBanner.subtitle).toBe(
+      "Workspace subtitle"
+    )
+    expect(parsed.workspace.snapshot.workspaceBanner.image?.mimeType).toBe(
+      "image/webp"
+    )
   })
 
   it("imports legacy JSON workspace bundles", async () => {

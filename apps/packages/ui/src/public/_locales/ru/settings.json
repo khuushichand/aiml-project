@@ -3279,7 +3279,7 @@
     "message": "Совместимо с SillyTavern"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "Строка один\\nСтрока два с ||встроенным спойлером||\\n\\n[spoiler]Содержимое блочного спойлера[/spoiler]"
+    "message": "Строка один\nСтрока два с ||встроенным спойлером||\n\n[spoiler]Содержимое блочного спойлера[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "Стили элементов форматированного текста"

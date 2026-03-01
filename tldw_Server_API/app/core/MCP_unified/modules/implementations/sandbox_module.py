@@ -14,6 +14,7 @@ Notes:
 from __future__ import annotations
 
 import base64
+import binascii
 from typing import Any
 
 from loguru import logger
@@ -42,11 +43,11 @@ class SandboxModule(BaseModule):
         return [
             {
                 "name": "sandbox.run",
-                "description": "Execute a run in the code sandbox (Docker/Firecracker).",
+                "description": "Execute a run in the code sandbox (Docker/Firecracker/Lima).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "runtime": {"type": "string", "enum": ["docker", "firecracker"]},
+                        "runtime": {"type": "string", "enum": ["docker", "firecracker", "lima"]},
                         "session_id": {"type": "string"},
                         "base_image": {"type": "string"},
                         "command": {"type": "array", "items": {"type": "string"}},
@@ -64,6 +65,10 @@ class SandboxModule(BaseModule):
                         },
                         "timeout_sec": {"type": "integer", "minimum": 1},
                         "env": {"type": "object"},
+                        "persona_id": {"type": "string"},
+                        "workspace_id": {"type": "string"},
+                        "workspace_group_id": {"type": "string"},
+                        "scope_snapshot_id": {"type": "string"},
                         "spec_version": {"type": "string"}
                     },
                     "oneOf": [
@@ -87,7 +92,7 @@ class SandboxModule(BaseModule):
         # Prepare RunSpec
         runtime_raw = (args.get("runtime") or "").strip().lower()
         runtime: SbxRuntimeType | None = None
-        if runtime_raw in ("docker", "firecracker"):
+        if runtime_raw in ("docker", "firecracker", "lima"):
             runtime = SbxRuntimeType(runtime_raw)
         # files (inline)
         files_inline: list[tuple[str, bytes]] = []
@@ -97,7 +102,8 @@ class SandboxModule(BaseModule):
                 b64 = str(f.get("content_b64", ""))
                 data = base64.b64decode(b64)
                 files_inline.append((p, data))
-            except Exception:
+            except (TypeError, ValueError, binascii.Error, AttributeError) as exc:
+                logger.debug("sandbox.run: skipping invalid inline file payload: {}", exc)
                 continue
         command = [str(x) for x in (args.get("command") or [])]
         env = args.get("env") or {}
@@ -116,6 +122,10 @@ class SandboxModule(BaseModule):
             network_policy=None,
             files_inline=files_inline,
             capture_patterns=[],
+            persona_id=(str(args.get("persona_id")) if args.get("persona_id") is not None else None),
+            workspace_id=(str(args.get("workspace_id")) if args.get("workspace_id") is not None else None),
+            workspace_group_id=(str(args.get("workspace_group_id")) if args.get("workspace_group_id") is not None else None),
+            scope_snapshot_id=(str(args.get("scope_snapshot_id")) if args.get("scope_snapshot_id") is not None else None),
         )
 
         # Spec version
@@ -127,11 +137,13 @@ class SandboxModule(BaseModule):
         except Exception:
             idem_key = None
 
-        # Execute via internal service scaffold; user context if available
+        # Require authenticated principal binding; no synthetic fallback identity.
         user_id = getattr(context, "user_id", None) if context is not None else None
+        if user_id is None or not str(user_id).strip():
+            raise PermissionError("sandbox.run requires an authenticated user context")
         try:
             status = self._svc.start_run_scaffold(
-                user_id=user_id or "mcp_user",
+                user_id=str(user_id),
                 spec=spec,
                 spec_version=spec_version,
                 idem_key=idem_key,
@@ -158,6 +170,11 @@ class SandboxModule(BaseModule):
             "started_at": _iso(status.started_at),
             "finished_at": _iso(status.finished_at),
             "message": status.message,
+            "session_id": status.session_id,
+            "persona_id": status.persona_id,
+            "workspace_id": status.workspace_id,
+            "workspace_group_id": status.workspace_group_id,
+            "scope_snapshot_id": status.scope_snapshot_id,
         }
 
     def sanitize_input(self, input_data: Any, _depth: int = 0) -> Any:
@@ -194,8 +211,8 @@ class SandboxModule(BaseModule):
         if (isinstance(sess, str) and sess) and (isinstance(img, str) and img):
             raise ValueError("Provide only one of session_id or base_image, not both")
         rt = arguments.get("runtime")
-        if rt is not None and str(rt).lower() not in {"docker", "firecracker"}:
-            raise ValueError("runtime must be docker|firecracker when provided")
+        if rt is not None and str(rt).lower() not in {"docker", "firecracker", "lima"}:
+            raise ValueError("runtime must be docker|firecracker|lima when provided")
         if arguments.get("timeout_sec") is not None:
             try:
                 ts = int(arguments.get("timeout_sec"))

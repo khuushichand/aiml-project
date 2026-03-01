@@ -18,7 +18,9 @@ def _make_wav_bytes(duration_sec: float = 0.1, sr: int = 16000) -> bytes:
     return buf.getvalue()
 
 
-def _setup_stubbed_audio_app(monkeypatch):
+def _setup_stubbed_audio_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[FastAPI, dict[str, list[str] | None]]:
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", TEST_API_KEY)

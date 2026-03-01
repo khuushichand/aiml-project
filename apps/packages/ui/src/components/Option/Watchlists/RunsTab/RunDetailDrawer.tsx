@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   Alert,
   Button,
@@ -20,6 +20,7 @@ import { useWatchlistsStore } from "@/store/watchlists"
 import {
   cancelWatchlistRun,
   exportRunTalliesCsv,
+  fetchWatchlistOutputs,
   fetchWatchlistSources,
   fetchScrapedItems,
   getRunDetails,
@@ -34,7 +35,12 @@ import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { RunDetailResponse, ScrapedItem } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { StatusTag } from "../shared"
+import { mapWatchlistsError } from "../shared/watchlists-error"
 import { classifyRunFailure, getRunFailureHint } from "./run-notifications"
+import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
 
 interface RunDetailDrawerProps {
   runId: number | null
@@ -59,7 +65,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   const { t } = useTranslation(["watchlists", "common"])
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<RunDetailResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ReturnType<typeof mapWatchlistsError> | null>(null)
   const [itemsLoading, setItemsLoading] = useState(false)
   const [items, setItems] = useState<ScrapedItem[]>([])
   const [itemsTotal, setItemsTotal] = useState(0)
@@ -74,14 +80,21 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   const [cancelState, setCancelState] = useState<"idle" | "cancelling" | "failed-to-cancel">("idle")
   const [retryingRun, setRetryingRun] = useState(false)
   const [sourceNamesById, setSourceNamesById] = useState<Record<number, string>>({})
+  const [linkedOutputCount, setLinkedOutputCount] = useState<number | null>(null)
+  const [linkedOutputsLoading, setLinkedOutputsLoading] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
+  const translationRef = useRef(t)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectAttemptRef = useRef(0)
   const manuallyClosedRef = useRef(false)
   const currentStatusRef = useRef<string | null>(null)
+  const restoreFocusTargetRef = useRef<HTMLElement | null>(null)
+  const wasOpenRef = useRef(false)
   const updateRunInList = useWatchlistsStore((s) => s.updateRunInList)
   const addRun = useWatchlistsStore((s) => s.addRun)
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
+  const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
   const openJobForm = useWatchlistsStore((s) => s.openJobForm)
 
   const downloadCsv = (content: string, filename: string): void => {
@@ -183,25 +196,55 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   }, [data?.status])
 
   useEffect(() => {
+    translationRef.current = t
+  }, [t])
+
+  const loadRunDetails = useCallback(async () => {
+    if (!runId) return
+    const translate = translationRef.current
+    setLoading(true)
+    setError(null)
+    setStreamError(null)
+    setCancelState("idle")
+    try {
+      const result = await getRunDetails(runId)
+      setData(result)
+    } catch (err) {
+      console.error("Failed to fetch run details:", err)
+      setError(
+        mapWatchlistsError(err, {
+          t: translate,
+          context: translate("watchlists:runs.detail.context", "run details"),
+          fallbackMessage: translate(
+            "watchlists:runs.detail.loadError",
+            "Failed to load details"
+          ),
+          operationLabel: translate("watchlists:errors.operation.load", "load")
+        })
+      )
+    } finally {
+      setLoading(false)
+    }
+  }, [runId])
+
+  useLayoutEffect(() => {
+    if (open) {
+      if (!wasOpenRef.current) {
+        restoreFocusTargetRef.current = getFocusableActiveElement()
+      }
+      wasOpenRef.current = true
+      return
+    }
+
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      restoreFocusToElement(restoreFocusTargetRef.current)
+    }
+  }, [open])
+
+  useEffect(() => {
     if (open && runId) {
-      setLoading(true)
-      setError(null)
-      setStreamError(null)
-      setCancelState("idle")
-      getRunDetails(runId)
-        .then((result) => {
-          setData(result)
-        })
-        .catch((err) => {
-          console.error("Failed to fetch run details:", err)
-          setError(
-            err?.message ||
-              t("watchlists:runs.detail.loadError", "Failed to load details")
-          )
-        })
-        .finally(() => {
-          setLoading(false)
-        })
+      void loadRunDetails()
     } else {
       setData(null)
       setError(null)
@@ -209,7 +252,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       setStreamError(null)
       setLastStreamEventAt(null)
     }
-  }, [open, runId])
+  }, [open, runId, loadRunDetails])
 
   useEffect(() => {
     let active = true
@@ -232,6 +275,44 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       })
       .catch((err) => {
         console.warn("Failed to resolve source names for run detail:", err)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [open, runId])
+
+  useEffect(() => {
+    let active = true
+
+    if (!open || !runId) {
+      setLinkedOutputCount(null)
+      setLinkedOutputsLoading(false)
+      return () => {
+        active = false
+      }
+    }
+
+    setLinkedOutputsLoading(true)
+    fetchWatchlistOutputs({ run_id: runId, page: 1, size: 1 })
+      .then((result) => {
+        if (!active) return
+        const total =
+          typeof result.total === "number"
+            ? result.total
+            : Array.isArray(result.items)
+              ? result.items.length
+              : 0
+        setLinkedOutputCount(Math.max(0, total))
+      })
+      .catch((err) => {
+        console.warn("Failed to resolve linked outputs for run detail:", err)
+        if (!active) return
+        setLinkedOutputCount(null)
+      })
+      .finally(() => {
+        if (!active) return
+        setLinkedOutputsLoading(false)
       })
 
     return () => {
@@ -561,11 +642,20 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       dataIndex: "status",
       key: "status",
       width: 110,
-      render: (status: string) => (
-        <Tag color={status === "ingested" ? "green" : "default"}>
-          {status}
-        </Tag>
-      )
+      render: (status: string) => {
+        const normalized = String(status || "").toLowerCase()
+        const label =
+          normalized === "ingested"
+            ? t("watchlists:runs.detail.itemsStatusInBriefing", "Included in briefing")
+            : normalized === "filtered"
+              ? t("watchlists:runs.detail.itemsStatusFilteredOut", "Excluded from briefing")
+              : status
+        return (
+          <Tag color={normalized === "ingested" ? "green" : "default"}>
+            {label}
+          </Tag>
+        )
+      }
     },
     {
       title: t("watchlists:runs.detail.itemsColumns.reviewed", "Reviewed"),
@@ -694,12 +784,52 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     onClose()
   }
 
+  const handleOpenOutputs = () => {
+    if (!data) return
+    setOutputsJobFilter(data.job_id)
+    setOutputsRunFilter(data.id)
+    setActiveTab("outputs")
+    onClose()
+  }
+
   const tabItems = [
     {
       key: "stats",
       label: t("watchlists:runs.detail.stats", "Statistics"),
       children: (
         <div className="space-y-4">
+          {data && (
+            <Alert
+              type="info"
+              showIcon
+              title={t("watchlists:runs.detail.linkageTitle", "Run linkage")}
+              description={t(
+                "watchlists:runs.detail.linkageDescription",
+                "Monitor #{{jobId}} produced {{count}} report{{plural}} for this run.",
+                {
+                  jobId: data.job_id,
+                  count: linkedOutputCount ?? 0,
+                  plural: linkedOutputCount === 1 ? "" : "s"
+                }
+              )}
+              action={(
+                <div className="flex flex-wrap gap-2">
+                  <Button size="small" onClick={handleEditMonitor}>
+                    {t("watchlists:runs.detail.openMonitor", "Open monitor")}
+                  </Button>
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={linkedOutputsLoading}
+                    onClick={handleOpenOutputs}
+                  >
+                    {t("watchlists:runs.detail.openRunOutputs", "Open reports for this run")}
+                  </Button>
+                </div>
+              )}
+            />
+          )}
+
           {data && (
             <Descriptions column={2} size="small" bordered>
               <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.status", "Status")}>
@@ -725,6 +855,22 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
               </Descriptions.Item>
               <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.errors", "Errors")}>
                 {data.stats?.items_errored ?? 0}
+              </Descriptions.Item>
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.monitor", "Monitor")}>
+                <Button size="small" type="link" className="px-0" onClick={handleEditMonitor}>
+                  {t("watchlists:runs.detail.openMonitor", "Open monitor settings")}
+                </Button>
+              </Descriptions.Item>
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.outputs", "Reports")}>
+                <Button
+                  size="small"
+                  type="link"
+                  className="px-0"
+                  onClick={handleOpenOutputs}
+                  data-testid="watchlists-run-detail-open-outputs"
+                >
+                  {t("watchlists:runs.detail.openOutputs", "Open reports for this run")}
+                </Button>
               </Descriptions.Item>
             </Descriptions>
           )}
@@ -986,7 +1132,21 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
           <Spin size="large" />
         </div>
       ) : error ? (
-        <div className="text-center py-12 text-danger">{error}</div>
+        <Alert
+          type={error.severity}
+          showIcon
+          message={error.title}
+          description={error.description}
+          action={(
+            <Button
+              size="small"
+              type="primary"
+              onClick={() => void loadRunDetails()}
+            >
+              {t("watchlists:errors.retry", "Retry")}
+            </Button>
+          )}
+        />
       ) : data ? (
         <Tabs items={tabItems} />
       ) : null}

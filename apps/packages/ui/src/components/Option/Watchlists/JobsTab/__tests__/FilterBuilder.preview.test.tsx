@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from "react"
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { FilterBuilder } from "../FilterBuilder"
 
@@ -88,5 +88,47 @@ describe("FilterBuilder preview panel", () => {
 
     expect(screen.getByText("0 ingestable, 0 filtered from 0 sample items.")).toBeInTheDocument()
     expect(screen.getByText("No sample candidates available.")).toBeInTheDocument()
+  })
+
+  it("shows per-rule summaries and regex validation hints", () => {
+    render(
+      <FilterBuilder
+        value={[
+          {
+            type: "regex",
+            action: "exclude",
+            value: { pattern: "(", field: "title", flags: "i" },
+            is_active: true
+          }
+        ]}
+        onChange={vi.fn()}
+      />
+    )
+
+    expect(screen.getByTestId("filter-rule-summary-0")).toHaveTextContent("exclude")
+    expect(screen.getByTestId("filter-regex-error-0")).toHaveTextContent("Regex pattern is invalid")
+    expect(screen.getByText("Examples: sponsored|promo, (?i)breaking, \\bAI\\b")).toBeInTheDocument()
+  })
+
+  it("exposes preview impact action when preview data is available", () => {
+    render(
+      <FilterBuilder
+        value={[]}
+        onChange={vi.fn()}
+        preview={{
+          outcome: {
+            items: [],
+            total: 0,
+            ingestable: 0,
+            filtered: 0
+          }
+        }}
+      />
+    )
+
+    const previewButton = screen.getByTestId("filter-preview-impact-button")
+    expect(previewButton).toBeInTheDocument()
+    fireEvent.click(previewButton)
+    expect(screen.getByTestId("filter-preview-panel")).toBeInTheDocument()
   })
 })

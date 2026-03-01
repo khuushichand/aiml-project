@@ -241,7 +241,7 @@ This section highlights common flows a new contributor will likely touch.
 
 For subsystem-level diagrams and details, see:
 - `Docs/Code_Documentation/Ingestion_Media_Processing.md`
-- `Docs/User_Guides/TTS_Getting_Started.md`
+- `Docs/User_Guides/WebUI_Extension/TTS_Getting_Started.md`
 - `Docs/Development/Audio-Multi-User-Architecture.md`
 
 ---

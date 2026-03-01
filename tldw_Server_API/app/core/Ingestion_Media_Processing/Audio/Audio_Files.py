@@ -149,29 +149,80 @@ def check_transcription_model_status(model_name: str) -> dict[str, Any]:
     Returns:
         Dictionary with status information:
         - 'available': True if model is ready, False if needs download
+        - 'usable': True if the provider can accept requests now
         - 'message': Human-readable status message
         - 'model': The model name
+        - 'provider': Provider identifier (whisper/parakeet/etc.)
     """
     from tldw_Server_API.app.core.config import get_stt_config
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
         check_model_exists,
+        parse_transcription_model,
         validate_whisper_model_identifier,
     )
 
-    model_name = (model_name or "").strip()
-    model_lower = model_name.lower()
+    def _as_bool(value: Any, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    requested_model = (model_name or "").strip() or "whisper-1"
+    provider, parsed_model, variant = parse_transcription_model(requested_model)
+    provider = (provider or "whisper").strip().lower()
+
+    # Lightweight provider-level checks for non-Whisper STT backends.
+    # These providers generally initialize or download internals on first use.
+    if provider == "parakeet":
+        resolved_model = requested_model or parsed_model or "parakeet-standard"
+        resolved_variant = (variant or "standard").strip().lower()
+        return {
+            "available": True,
+            "usable": True,
+            "provider": "parakeet",
+            "model": resolved_model,
+            "variant": resolved_variant,
+            "on_demand": True,
+            "message": (
+                f"Parakeet ({resolved_variant}) is available for transcription requests. "
+                "Model assets may be initialized on first use."
+            ),
+        }
+
+    if provider == "canary":
+        resolved_model = requested_model or parsed_model or "nemo-canary-1b"
+        return {
+            "available": True,
+            "usable": True,
+            "provider": "canary",
+            "model": resolved_model,
+            "on_demand": True,
+            "message": "Canary is available for transcription requests. Model assets may initialize on first use.",
+        }
+
+    if provider == "external":
+        resolved_model = requested_model or parsed_model or "external:default"
+        return {
+            "available": True,
+            "usable": True,
+            "provider": "external",
+            "model": resolved_model,
+            "on_demand": False,
+            "message": "External STT provider is configured for transcription requests.",
+        }
 
     # VibeVoice-ASR health is config-driven; we do not attempt heavyweight
     # model initialization here.
-    if "vibevoice" in model_lower:
+    if provider == "vibevoice":
         try:
             stt_cfg = get_stt_config() or {}
         except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
             stt_cfg = {}
-        vibevoice_enabled = bool(stt_cfg.get("vibevoice_enabled"))
-        vibevoice_vllm_enabled = bool(stt_cfg.get("vibevoice_vllm_enabled"))
-        resolved_model = str(stt_cfg.get("vibevoice_model_id") or model_name or "microsoft/VibeVoice-ASR")
-        available = vibevoice_enabled or vibevoice_vllm_enabled
+        vibevoice_enabled = _as_bool(stt_cfg.get("vibevoice_enabled"))
+        vibevoice_vllm_enabled = _as_bool(stt_cfg.get("vibevoice_vllm_enabled"))
+        resolved_model = str(stt_cfg.get("vibevoice_model_id") or requested_model or "microsoft/VibeVoice-ASR")
+        available = bool(vibevoice_enabled or vibevoice_vllm_enabled)
         if available:
             msg = "VibeVoice-ASR is enabled via STT settings."
         else:
@@ -181,32 +232,97 @@ def check_transcription_model_status(model_name: str) -> dict[str, Any]:
             )
         return {
             "available": available,
+            "usable": available,
             "message": msg,
             "model": resolved_model,
             "provider": "vibevoice",
+            "on_demand": False,
         }
 
+    if provider == "qwen2audio":
+        try:
+            stt_cfg = get_stt_config() or {}
+        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
+            stt_cfg = {}
+        enabled = _as_bool(stt_cfg.get("qwen2audio_enabled"))
+        resolved_model = requested_model or parsed_model or "qwen2audio"
+        if enabled:
+            msg = "Qwen2Audio is enabled via STT settings."
+        else:
+            msg = (
+                "Qwen2Audio is disabled. Set STT-Settings.qwen2audio_enabled=true "
+                "to enable this provider."
+            )
+        return {
+            "available": enabled,
+            "usable": enabled,
+            "message": msg,
+            "model": resolved_model,
+            "provider": "qwen2audio",
+            "on_demand": False,
+        }
+
+    if provider == "qwen3-asr":
+        try:
+            stt_cfg = get_stt_config() or {}
+        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
+            stt_cfg = {}
+        enabled = _as_bool(stt_cfg.get("qwen3_asr_enabled"))
+        resolved_model = str(
+            requested_model
+            or stt_cfg.get("qwen3_asr_model_path")
+            or parsed_model
+            or "./models/qwen3_asr/1.7B"
+        ).strip()
+        if enabled:
+            msg = "Qwen3-ASR is enabled via STT settings."
+        else:
+            msg = "Qwen3-ASR is disabled. Set STT-Settings.qwen3_asr_enabled=true in config."
+        return {
+            "available": enabled,
+            "usable": enabled,
+            "message": msg,
+            "model": resolved_model,
+            "provider": "qwen3-asr",
+            "on_demand": False,
+        }
+
+    # Whisper model readiness is local-cache based because the faster-whisper
+    # transcription route explicitly preflights and rejects unavailable models.
+    whisper_model_name = (parsed_model or requested_model or "").strip()
     try:
-        model_name = validate_whisper_model_identifier(model_name)
+        whisper_model_name = validate_whisper_model_identifier(whisper_model_name)
     except ValueError as exc:
         return {
             'available': False,
+            'usable': False,
             'message': str(exc),
-            'model': model_name,
+            'model': whisper_model_name,
+            'provider': 'whisper',
+            'on_demand': False,
         }
 
-    if check_model_exists(model_name):
+    if check_model_exists(whisper_model_name):
         return {
             'available': True,
-            'message': f'Model {model_name} is available and ready for use',
-            'model': model_name
+            'usable': True,
+            'message': f'Model {whisper_model_name} is available and ready for use',
+            'model': whisper_model_name,
+            'provider': 'whisper',
+            'on_demand': False,
         }
     else:
         return {
             'available': False,
-            'message': f'Model {model_name} is not available locally and will be downloaded on first use. This may take several minutes depending on model size and internet connection.',
-            'model': model_name,
-            'estimated_size': _get_model_estimated_size(model_name)
+            'usable': False,
+            'message': (
+                f'Model {whisper_model_name} is not available locally and will be downloaded on first use. '
+                'This may take several minutes depending on model size and internet connection.'
+            ),
+            'model': whisper_model_name,
+            'provider': 'whisper',
+            'on_demand': True,
+            'estimated_size': _get_model_estimated_size(whisper_model_name),
         }
 
 def _get_model_estimated_size(model_name: str) -> str:

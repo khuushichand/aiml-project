@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const mocks = vi.hoisted(() => ({
   fetchScrapedItems: vi.fn(),
   fetchWatchlistJobs: vi.fn(),
+  fetchWatchlistOutputs: vi.fn(),
   fetchWatchlistRuns: vi.fn(),
   fetchWatchlistSources: vi.fn()
 }))
@@ -10,14 +11,17 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/services/watchlists", () => ({
   fetchScrapedItems: (...args: unknown[]) => mocks.fetchScrapedItems(...args),
   fetchWatchlistJobs: (...args: unknown[]) => mocks.fetchWatchlistJobs(...args),
+  fetchWatchlistOutputs: (...args: unknown[]) => mocks.fetchWatchlistOutputs(...args),
   fetchWatchlistRuns: (...args: unknown[]) => mocks.fetchWatchlistRuns(...args),
   fetchWatchlistSources: (...args: unknown[]) => mocks.fetchWatchlistSources(...args)
 }))
 
 import {
+  buildOverviewHealthModel,
   classifySourceHealth,
   fetchWatchlistsOverviewData,
-  getEarliestNextRunAt
+  getEarliestNextRunAt,
+  getOverviewTabBadges
 } from "../watchlists-overview"
 
 describe("watchlists overview service", () => {
@@ -155,6 +159,38 @@ describe("watchlists overview service", () => {
         ],
         total: 1
       })
+    mocks.fetchWatchlistOutputs.mockResolvedValueOnce({
+      items: [
+        {
+          id: 701,
+          run_id: 91,
+          job_id: 10,
+          type: "briefing_markdown",
+          format: "md",
+          metadata: {
+            deliveries: {
+              email: "failed"
+            }
+          },
+          version: 1,
+          expired: false,
+          created_at: "2026-02-18T10:05:00Z"
+        },
+        {
+          id: 702,
+          run_id: 92,
+          job_id: 10,
+          type: "briefing_markdown",
+          format: "md",
+          metadata: null,
+          version: 1,
+          expired: true,
+          created_at: "2026-02-18T11:05:00Z"
+        }
+      ],
+      total: 2,
+      has_more: false
+    })
 
     const result = await fetchWatchlistsOverviewData()
 
@@ -168,9 +204,30 @@ describe("watchlists overview service", () => {
     expect(result.jobs.total).toBe(2)
     expect(result.jobs.active).toBe(1)
     expect(result.jobs.nextRunAt).toBe("2026-02-20T08:00:00Z")
+    expect(result.jobs.attention).toBe(0)
     expect(result.items.unread).toBe(42)
     expect(result.runs.running).toBe(1)
     expect(result.runs.pending).toBe(2)
+    expect(result.runs.failed).toBe(1)
+    expect(result.outputs).toEqual({
+      total: 2,
+      expired: 1,
+      deliveryIssues: 1,
+      attention: 2
+    })
+    expect(result.health.attention).toEqual({
+      total: 4,
+      sources: 1,
+      jobs: 0,
+      runs: 1,
+      outputs: 2
+    })
+    expect(result.health.statuses.outputs).toBe("attention")
+    expect(result.health.tabBadges).toEqual({
+      sources: 1,
+      runs: 1,
+      outputs: 2
+    })
     expect(result.runs.recentFailed).toEqual([
       expect.objectContaining({
         id: 91,
@@ -180,5 +237,32 @@ describe("watchlists overview service", () => {
       })
     ])
     expect(result.systemHealth).toBe("degraded")
+  })
+
+  it("derives health model and tab badges from aggregate counters", () => {
+    const model = buildOverviewHealthModel({
+      sources: { total: 3, degraded: 0, inactive: 3 },
+      jobs: { total: 2, active: 0, attention: 1 },
+      runs: { running: 0, pending: 0, failed: 0 },
+      outputs: { total: 5, attention: 0 }
+    })
+
+    expect(model.statuses).toEqual({
+      sources: "inactive",
+      jobs: "attention",
+      runs: "unknown",
+      outputs: "healthy"
+    })
+    expect(model.attention.total).toBe(1)
+    expect(getOverviewTabBadges(model)).toEqual({
+      sources: 0,
+      runs: 0,
+      outputs: 0
+    })
+    expect(getOverviewTabBadges(null)).toEqual({
+      sources: 0,
+      runs: 0,
+      outputs: 0
+    })
   })
 })

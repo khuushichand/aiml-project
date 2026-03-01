@@ -1,5 +1,6 @@
 import asyncio
 import os
+import tempfile
 import pytest
 
 from fastapi.testclient import TestClient
@@ -24,7 +25,10 @@ def _setup_env():
     os.environ["MCP_JWT_SECRET"] = "x" * 64
     os.environ["MCP_API_KEY_SALT"] = "s" * 64
     os.environ["MCP_ENABLE_MEDIA_MODULE"] = "false"
-    os.environ["MCP_MODULES_CONFIG"] = "/tmp/mcp_modules_empty.yaml"
+    os.environ["MCP_MODULES_CONFIG"] = os.path.join(
+        tempfile.gettempdir(),
+        "mcp_modules_empty.yaml",
+    )
     os.environ["MCP_MODULES"] = (
         "media=tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module:MediaModule,"
         "chats=tldw_Server_API.app.core.MCP_unified.modules.implementations.chats_module:ChatsModule,"

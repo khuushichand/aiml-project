@@ -74,6 +74,49 @@ export interface TldwConfig {
   authMode: 'single-user' | 'multi-user'
 }
 
+export interface CurrentUserStorageQuotaResponse {
+  user_id: number
+  storage_used_mb: number
+  storage_quota_mb: number
+  available_mb: number
+  usage_percentage: number
+}
+
+export interface OpenAIOAuthAuthorizeRequest {
+  credential_fields?: Record<string, unknown>
+  return_path?: string
+}
+
+export interface OpenAIOAuthAuthorizeResponse {
+  provider: "openai"
+  auth_url: string
+  auth_session_id: string
+  expires_at: string
+}
+
+export interface OpenAIOAuthStatusResponse {
+  provider: "openai"
+  connected: boolean
+  auth_source: "api_key" | "oauth" | "none"
+  updated_at?: string | null
+  last_used_at?: string | null
+  expires_at?: string | null
+  scope?: string | null
+}
+
+export interface OpenAIOAuthRefreshResponse {
+  provider: "openai"
+  status: string
+  updated_at?: string | null
+  expires_at?: string | null
+}
+
+export interface OpenAICredentialSourceSwitchResponse {
+  provider: "openai"
+  auth_source: "api_key" | "oauth"
+  updated_at?: string | null
+}
+
 export type UserProfileUpdateEntry = {
   key: string
   value: unknown | null
@@ -169,6 +212,8 @@ export interface ChatCompletionRequest {
   model: string
   stream?: boolean
   temperature?: number
+  logprobs?: boolean
+  top_logprobs?: number
   max_tokens?: number
   top_p?: number
   frequency_penalty?: number
@@ -884,6 +929,56 @@ export class TldwApiClient {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: payload
+    })
+  }
+
+  async getCurrentUserStorageQuota(): Promise<CurrentUserStorageQuotaResponse> {
+    return await this.request<CurrentUserStorageQuotaResponse>({
+      path: "/api/v1/users/storage",
+      method: "GET"
+    })
+  }
+
+  async startOpenAIOAuthAuthorize(
+    payload: OpenAIOAuthAuthorizeRequest = {}
+  ): Promise<OpenAIOAuthAuthorizeResponse> {
+    return await this.request<OpenAIOAuthAuthorizeResponse>({
+      path: "/api/v1/users/keys/openai/oauth/authorize",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async getOpenAIOAuthStatus(): Promise<OpenAIOAuthStatusResponse> {
+    return await this.request<OpenAIOAuthStatusResponse>({
+      path: "/api/v1/users/keys/openai/oauth/status",
+      method: "GET"
+    })
+  }
+
+  async refreshOpenAIOAuth(): Promise<OpenAIOAuthRefreshResponse> {
+    return await this.request<OpenAIOAuthRefreshResponse>({
+      path: "/api/v1/users/keys/openai/oauth/refresh",
+      method: "POST"
+    })
+  }
+
+  async disconnectOpenAIOAuth(): Promise<void> {
+    await this.request<void>({
+      path: "/api/v1/users/keys/openai/oauth",
+      method: "DELETE"
+    })
+  }
+
+  async switchOpenAICredentialSource(
+    authSource: "api_key" | "oauth"
+  ): Promise<OpenAICredentialSourceSwitchResponse> {
+    return await this.request<OpenAICredentialSourceSwitchResponse>({
+      path: "/api/v1/users/keys/openai/source",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: { auth_source: authSource }
     })
   }
 
@@ -1708,6 +1803,187 @@ export class TldwApiClient {
     })
   }
 
+  async bulkUpdateMediaKeywords(payload: {
+    media_ids: number[]
+    keywords: string[]
+    mode?: "add" | "remove" | "set"
+  }): Promise<{
+    endpoint: "bulk" | "fallback"
+    updated: number
+    failed: number
+    results: Array<{
+      media_id: number
+      success: boolean
+      keywords: string[] | null
+      error: string | null
+    }>
+  }> {
+    const rawIds = Array.isArray(payload.media_ids) ? payload.media_ids : []
+    const mediaIds = Array.from(
+      new Set(
+        rawIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+          .map((id) => Math.trunc(id))
+      )
+    )
+    if (mediaIds.length === 0) {
+      throw new Error("media_ids_required")
+    }
+
+    const keywords = Array.isArray(payload.keywords)
+      ? payload.keywords
+          .map((keyword) => String(keyword ?? "").trim())
+          .filter((keyword) => keyword.length > 0)
+      : []
+    const mode = payload.mode ?? "add"
+
+    const requestPayload = {
+      media_ids: mediaIds,
+      keywords,
+      mode
+    } as const
+
+    try {
+      const response = await bgRequest<any>({
+        path: "/api/v1/media/bulk/keyword-update",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: requestPayload
+      })
+      const results = Array.isArray(response?.results)
+        ? response.results.map((entry: any) => ({
+            media_id: Number(entry?.media_id ?? entry?.id ?? 0),
+            success: Boolean(entry?.success ?? true),
+            keywords: Array.isArray(entry?.keywords) ? entry.keywords.map(String) : null,
+            error:
+              typeof entry?.error === "string"
+                ? entry.error
+                : typeof entry?.detail === "string"
+                  ? entry.detail
+                  : null
+          }))
+        : mediaIds.map((mediaId) => ({
+            media_id: mediaId,
+            success: true,
+            keywords: null,
+            error: null
+          }))
+      const updatedCount =
+        typeof response?.updated === "number"
+          ? Math.max(0, Math.trunc(response.updated))
+          : results.filter((entry) => entry.success).length
+      const failedCount =
+        typeof response?.failed === "number"
+          ? Math.max(0, Math.trunc(response.failed))
+          : Math.max(0, results.length - updatedCount)
+
+      return {
+        endpoint: "bulk",
+        updated: updatedCount,
+        failed: failedCount,
+        results
+      }
+    } catch (error) {
+      const candidate = error as
+        | { status?: number; response?: { status?: number }; statusCode?: number }
+        | undefined
+      const statusCode = Number(
+        candidate?.status ?? candidate?.response?.status ?? candidate?.statusCode
+      )
+      if (!Number.isFinite(statusCode) || (statusCode !== 404 && statusCode !== 405)) {
+        throw error
+      }
+    }
+
+    const settled = await Promise.allSettled(
+      mediaIds.map(async (mediaId) => {
+        const updated = await this.updateMediaKeywords(mediaId, {
+          keywords,
+          mode
+        })
+        return {
+          media_id: mediaId,
+          success: true,
+          keywords: Array.isArray(updated?.keywords) ? updated.keywords : [],
+          error: null as string | null
+        }
+      })
+    )
+
+    const results = settled.map((entry, index) => {
+      const mediaId = mediaIds[index]
+      if (entry.status === "fulfilled") {
+        return entry.value
+      }
+      const reason = entry.reason
+      const detail =
+        typeof reason?.message === "string"
+          ? reason.message
+          : typeof reason === "string"
+            ? reason
+            : "keyword_update_failed"
+      return {
+        media_id: mediaId,
+        success: false,
+        keywords: null,
+        error: detail
+      }
+    })
+    const updated = results.filter((entry) => entry.success).length
+
+    return {
+      endpoint: "fallback",
+      updated,
+      failed: results.length - updated,
+      results
+    }
+  }
+
+  async deleteMedia(mediaId: string | number): Promise<void> {
+    const id = encodeURIComponent(String(mediaId))
+    await bgRequest<void>({
+      path: `/api/v1/media/${id}`,
+      method: "DELETE"
+    })
+  }
+
+  async restoreMedia(mediaId: string | number): Promise<any> {
+    const id = encodeURIComponent(String(mediaId))
+    return await bgRequest<any>({
+      path: `/api/v1/media/${id}/restore`,
+      method: "POST"
+    })
+  }
+
+  async permanentlyDeleteMedia(mediaId: string | number): Promise<void> {
+    const id = encodeURIComponent(String(mediaId))
+    await bgRequest<void>({
+      path: `/api/v1/media/${id}/permanent`,
+      method: "DELETE"
+    })
+  }
+
+  async reprocessMedia(
+    mediaId: string | number,
+    options?: Record<string, unknown>
+  ): Promise<any> {
+    const id = encodeURIComponent(String(mediaId))
+    return await bgRequest<any>({
+      path: `/api/v1/media/${id}/reprocess`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: options || {}
+    })
+  }
+
+  async getMediaStatistics(): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/media/statistics",
+      method: "GET"
+    })
+  }
+
   async getMediaDetails(
     mediaId: string | number,
     options?: {
@@ -2330,15 +2606,42 @@ export class TldwApiClient {
   }
 
   // Characters API
+  private normalizeCharacterListResponse(payload: unknown): any[] {
+    if (Array.isArray(payload)) {
+      return payload
+    }
+    if (!payload || typeof payload !== "object") {
+      return []
+    }
+
+    const objectPayload = payload as Record<string, unknown>
+    const candidateLists = [
+      objectPayload.items,
+      objectPayload.characters,
+      objectPayload.results,
+      objectPayload.data
+    ]
+
+    for (const candidate of candidateLists) {
+      if (Array.isArray(candidate)) {
+        return candidate
+      }
+    }
+
+    return []
+  }
+
   async listCharacters(params?: Record<string, any>): Promise<any[]> {
     const query = this.buildQuery(params)
     const listPathCandidates = ["/api/v1/characters", "/api/v1/characters/"] as const
     const base = await this.resolveApiPath("characters.list", [...listPathCandidates])
     const requestList = async (path: string) =>
-      await bgRequest<any[]>({
-        path: appendPathQuery(path as AllowedPath, query),
-        method: "GET"
-      })
+      this.normalizeCharacterListResponse(
+        await bgRequest<any>({
+          path: appendPathQuery(path as AllowedPath, query),
+          method: "GET"
+        })
+      )
 
     try {
       return await requestList(base)
@@ -6112,6 +6415,20 @@ export class TldwApiClient {
         type: file.type || "application/octet-stream",
         data
       }
+    })
+  }
+
+  async seedSkills(params?: {
+    overwrite?: boolean
+  }): Promise<any> {
+    const query = this.buildQuery(params)
+    const base = await this.resolveApiPath("skills.seed", [
+      "/api/v1/skills/seed",
+      "/api/v1/skills/seed/"
+    ])
+    return await bgRequest<any>({
+      path: appendPathQuery(base, query),
+      method: "POST"
     })
   }
 

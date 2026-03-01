@@ -7,7 +7,7 @@ auth context (`AuthContext`) are governed in v0.1, and enumerates the key HTTP
 surfaces where principal/state invariants are enforced by tests.
 
 The full design and implementation notes live in:
-- `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`
+- `Docs/Product/Completed/AuthNZ-Refactor-Implementation-Plan.md`
 - `Docs/Code_Documentation/Guides/AuthNZ_Code_Guide.md`
 
 This file acts as a compact index for “governed surfaces” and their coverage.
@@ -66,13 +66,13 @@ capture wrappers) include:
 
 ## Relationship to Other PRDs
 
-- **User-Auth-Deps PRD (`Docs/Product/User-Auth-Deps-PRD.md`)**
+- **User-Auth-Deps PRD (`Docs/Product/Completed/AuthNZ-Refactor/User-Auth-Deps-PRD.md`)**
   - Defines the dependency surface (`get_auth_principal`, `get_current_user`,
     `require_permissions`, `require_roles`) and mandates claim-first behavior.
   - Phase 1 (“AuthPrincipal + Claim Invariants”) and Phase 2 (“Claim-First
     Permissions”) reference the invariant and permissions tests listed above.
 
-- **User-Unification PRD (`Docs/Product/User-Unification-PRD.md`)**
+- **User-Unification PRD (`Docs/Product/Completed/User-Unification-PRD.md`)**
   - Treats single-user as a bootstrap profile of multi-user, with a real admin
     user and API key seeded in AuthNZ.
   - Notes that principal/state invariants span media, RAG, tools, and evaluations,

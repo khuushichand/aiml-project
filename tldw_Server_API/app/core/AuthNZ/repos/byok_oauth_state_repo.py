@@ -329,6 +329,138 @@ class AuthnzByokOAuthStateRepo:
             logger.error(f"AuthnzByokOAuthStateRepo.consume_state failed: {exc}")
             raise
 
+    async def count_outstanding(
+        self,
+        *,
+        user_id: int,
+        provider: str,
+        now: datetime | None = None,
+    ) -> int:
+        provider_norm = normalize_provider_name(provider)
+        lookup_time = now or datetime.now(timezone.utc)
+        try:
+            if getattr(self.db_pool, "pool", None) is not None:
+                row = await self.db_pool.fetchone(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM byok_oauth_state
+                    WHERE user_id = $1
+                      AND provider = $2
+                      AND consumed_at IS NULL
+                      AND expires_at > $3
+                    """,
+                    int(user_id),
+                    provider_norm,
+                    _strip_tzinfo(lookup_time),
+                )
+            else:
+                row = await self.db_pool.fetchone(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM byok_oauth_state
+                    WHERE user_id = ?
+                      AND provider = ?
+                      AND consumed_at IS NULL
+                      AND datetime(expires_at) > datetime(?)
+                    """,
+                    (int(user_id), provider_norm, lookup_time.isoformat()),
+                )
+            if not row:
+                return 0
+            value = row["count"] if isinstance(row, dict) else row[0]
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                return 0
+            return parsed if parsed > 0 else 0
+        except Exception as exc:
+            logger.error(f"AuthnzByokOAuthStateRepo.count_outstanding failed: {exc}")
+            raise
+
+    async def enforce_outstanding_cap(
+        self,
+        *,
+        user_id: int,
+        provider: str,
+        max_outstanding: int,
+        now: datetime | None = None,
+    ) -> int:
+        cap = int(max_outstanding)
+        if cap <= 0:
+            return 0
+
+        lookup_time = now or datetime.now(timezone.utc)
+        keep_active = max(0, cap - 1)
+        outstanding = await self.count_outstanding(
+            user_id=int(user_id),
+            provider=provider,
+            now=lookup_time,
+        )
+        overflow = outstanding - keep_active
+        if overflow <= 0:
+            return 0
+
+        provider_norm = normalize_provider_name(provider)
+        try:
+            if getattr(self.db_pool, "pool", None) is not None:
+                async with self.db_pool.transaction() as conn:
+                    rows = await conn.fetch(
+                        """
+                        WITH stale AS (
+                            SELECT state, user_id
+                            FROM byok_oauth_state
+                            WHERE user_id = $1
+                              AND provider = $2
+                              AND consumed_at IS NULL
+                              AND expires_at > $3
+                            ORDER BY created_at ASC
+                            LIMIT $4
+                        )
+                        DELETE FROM byok_oauth_state target
+                        USING stale
+                        WHERE target.state = stale.state
+                          AND target.user_id = stale.user_id
+                        RETURNING target.state
+                        """,
+                        int(user_id),
+                        provider_norm,
+                        _strip_tzinfo(lookup_time),
+                        int(overflow),
+                    )
+                    return len(rows or [])
+
+            async with self.db_pool.transaction() as conn:
+                cursor = await conn.execute(
+                    """
+                    DELETE FROM byok_oauth_state
+                    WHERE rowid IN (
+                        SELECT rowid
+                        FROM byok_oauth_state
+                        WHERE user_id = ?
+                          AND provider = ?
+                          AND consumed_at IS NULL
+                          AND datetime(expires_at) > datetime(?)
+                        ORDER BY created_at ASC
+                        LIMIT ?
+                    )
+                    """,
+                    (
+                        int(user_id),
+                        provider_norm,
+                        lookup_time.isoformat(),
+                        int(overflow),
+                    ),
+                )
+                rowcount = getattr(cursor, "rowcount", 0)
+                if isinstance(rowcount, int) and rowcount >= 0:
+                    return rowcount
+                changes_cursor = await conn.execute("SELECT changes()")
+                change_row = await changes_cursor.fetchone()
+                return int(change_row[0]) if change_row else 0
+        except Exception as exc:
+            logger.error(f"AuthnzByokOAuthStateRepo.enforce_outstanding_cap failed: {exc}")
+            raise
+
     async def purge_expired(self, *, now: datetime | None = None) -> int:
         purge_time = now or datetime.now(timezone.utc)
         try:

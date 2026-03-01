@@ -4,6 +4,13 @@
 
 The tldw_server provides a comprehensive audio transcription API that is fully compatible with OpenAI's Audio API while offering additional transcription engines including NVIDIA Nemo models (Canary and Parakeet) for improved performance and flexibility.
 
+## User Guide Map
+
+- [Getting Started — STT and TTS](../User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md) — quickstart for first successful speech requests.
+- [TTS Providers Getting Started](../User_Guides/WebUI_Extension/TTS_Getting_Started.md) — provider selection and first successful synthesis.
+- [TTS Provider Setup Guide](../User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md) — runbook index for deep provider setup/tuning.
+- [Qwen3-ASR Setup Guide](../STT-TTS/QWEN3_ASR_SETUP.md) — Qwen3-ASR model setup details.
+
 ## Auth + Rate Limits
 - Single-user: `X-API-KEY: <key>`
 - Multi-user: `Authorization: Bearer <JWT>`
@@ -76,7 +83,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - **Languages**: 30 languages + 22 Chinese dialects (auto-detected)
 - **Best For**: Chinese transcription, high-accuracy multilingual content
 - **Special Features**: Optional word-level timestamps via Forced Aligner
-- **Note**: Requires manual model download. See [Qwen3-ASR Setup Guide](../STT-TTS/QWEN3_ASR_SETUP.md)
+- **Note**: Requires manual model download. See [Qwen3-ASR Setup Guide](../STT-TTS/QWEN3_ASR_SETUP.md); for end-to-end first run, start with [Getting Started — STT and TTS](../User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md).
 
 ### 6. VibeVoice-ASR
 - **Model**: `vibevoice-asr`, `vibevoice`
@@ -125,8 +132,8 @@ Transcribe audio into text.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | file | file | Yes | The audio file to transcribe (default max 25MB; actual limit may vary by quota tier) |
-| model | string | No | Model to use. Supported examples: `whisper-1` (`whisper` alias), raw faster-whisper ids like `large-v3` or `distil-whisper-large-v3`; NVIDIA variants such as `parakeet`, `parakeet-onnx`, `parakeet-mlx`; Canary via `canary`; Qwen via `qwen2audio` or `qwen2audio-*`; Qwen3-ASR via `qwen3-asr-1.7b`, `qwen3-asr-0.6b`, or `qwen3-asr`; VibeVoice via `vibevoice-asr` (default: `whisper-1`). |
-| language | string | No | Language code in ISO-639-1 format (e.g., 'en', 'es'). When omitted, Whisper models auto-detect the language and the detected code is included in the JSON response. |
+| model | string | No | Model to use. Supported examples: `whisper-1` (`whisper` alias), raw faster-whisper ids like `large-v3` or `distil-whisper-large-v3`; NVIDIA variants such as `parakeet`, `parakeet-onnx`, `parakeet-mlx`; Canary via `canary`; Qwen via `qwen2audio` or `qwen2audio-*`; Qwen3-ASR via `qwen3-asr-1.7b`, `qwen3-asr-0.6b`, or `qwen3-asr`; VibeVoice via `vibevoice-asr` (default when omitted: `[STT-Settings].default_batch_transcription_model`, shipping default `parakeet-onnx`). |
+| language | string | No | Language hint. ISO-639-1 codes are always accepted (for example `en`, `es`). BCP-47 locale hints (for example `en-US`, `pt-BR`) are accepted and normalized per provider: providers that require ISO-style hints receive base codes, providers with locale-capable routing keep locale hints. When omitted, Whisper models auto-detect the language and the detected code is included in the JSON response. |
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 (default: 0) |
@@ -174,6 +181,54 @@ Notes:
 - For `response_format: text|srt|vtt` responses, outputs are simple best-effort formats; precise per-segment timings require JSON.
 - For `response_format: verbose_json`, the response includes `task` and `duration` fields.
 - For Whisper-based models, the underlying `speech_to_text(...)` helper prepends a metadata header (model + detected language) to the first segment. The HTTP API always calls `strip_whisper_metadata_header(...)` before returning JSON/text so clients see only user content. If you use `speech_to_text` directly (e.g., in workflows or custom tools), call `strip_whisper_metadata_header` on segment lists, or `_strip_whisper_metadata_header_from_text` (speech chat) before presenting text to end users.
+
+### Dictation Error Taxonomy
+
+Structured error payloads include:
+- `dictation_error_class`: canonical failure class.
+- `dictation_fallback_allowed`: whether automatic fallback (`auto` strategy) is allowed for that class.
+
+Classes:
+- `permission_denied`
+- `unsupported_api`
+- `auth_error`
+- `quota_error`
+- `provider_unavailable`
+- `model_unavailable` (includes `status: model_downloading`)
+- `transient_failure`
+- `empty_transcript`
+- `unknown_error`
+
+Fallback policy:
+- Auto-fallback allowed: `unsupported_api`, `provider_unavailable`, `model_unavailable`, `transient_failure`.
+- Auto-fallback disallowed: `permission_denied`, `auth_error`, `quota_error`, `empty_transcript`, `unknown_error`.
+
+### Client Dictation Diagnostics (WebUI + Extension)
+
+WebUI `/chat` and extension sidepanel emit a sanitized diagnostics event for dictation strategy transitions:
+- Event name: `tldw:dictation:diagnostics`
+- Purpose: explain mode resolution and fallback behavior without logging sensitive content.
+
+Payload schema:
+
+| Field | Type | Description |
+|---|---|---|
+| `version` | number | Schema version (`1`) |
+| `at` | string | ISO-8601 timestamp |
+| `surface` | string | `playground` or `sidepanel` |
+| `kind` | string | `toggle`, `server_error`, or `server_success` |
+| `requested_mode` | string | `auto`, `server`, `browser`, or `unknown` |
+| `resolved_mode` | string | `server`, `browser`, `unavailable`, or `unknown` |
+| `speech_available` | boolean | Whether dictation is available on this surface |
+| `speech_uses_server` | boolean | Whether current resolved mode routes through server STT |
+| `toggle_intent` | string/null | `start_*`/`stop_*` intent for toggle events |
+| `error_class` | string/null | Dictation taxonomy class for terminal server errors |
+| `fallback_applied` | boolean | Whether auto-fallback was applied after server error |
+| `fallback_reason` | string/null | Error class that triggered fallback, if any |
+
+Privacy contract:
+- Diagnostics payloads never include transcript text, prompt text, raw audio, or binary payloads.
+- Only strategy state and taxonomy metadata are serialized.
 
 Internal STT helpers:
 - `speech_to_text(...)` (file or NumPy input) is the canonical segment-based helper used by media ingestion and offline workers; it returns a list of segments (or `(segments, language)` when requested).
@@ -234,13 +289,21 @@ Add the following section to your `config.txt`:
 
 ```ini
 [STT-Settings]
-# Default transcription provider
-default_transcriber = faster-whisper
-# Options: faster-whisper, parakeet, canary, qwen2audio
+# Explicit defaults when the client omits `model`
+default_batch_transcription_model = parakeet-onnx
+default_streaming_transcription_model = parakeet-onnx
 
 # Nemo model variant (for Parakeet)
 nemo_model_variant = standard
 # Options: standard, onnx, mlx
+
+# Parakeet ONNX model source
+parakeet_onnx_model_id = istupakov/parakeet-tdt-0.6b-v3-onnx
+# Optional: pin exact commit/tag for deterministic downloads
+parakeet_onnx_revision =
+
+# Streaming fallback policy (default fail-fast)
+streaming_fallback_to_whisper = false
 
 # Device for Nemo models
 nemo_device = cuda
@@ -269,7 +332,7 @@ or a JSON list (e.g., `["alpha","beta"]`).
 
 ### Environment Variables
 
-Note: STT configuration is read from `Config_Files/config.txt` (`[STT-Settings]`). Environment overrides are limited; use `config.txt` to change default transcriber, Nemo device, model variant, and cache dir.
+Note: STT configuration is read from `Config_Files/config.txt` (`[STT-Settings]`). Environment overrides are limited; use `config.txt` to change batch/streaming defaults, Nemo device/variant, fallback policy, and cache directories.
 
 Additional streaming quota/env controls:
 - `AUDIO_TIER_LIMITS_JSON`: JSON mapping to override per-tier limits, e.g. `{ "free": { "daily_minutes": 60, "concurrent_streams": 2 } }`
@@ -306,6 +369,8 @@ failopen_cap_minutes = 5.0
   - Client may send config after auth: `{ "type": "config", "sample_rate": 16000, "language": "en", "model_variant": "standard|onnx|mlx" }`
   - Send audio chunks: `{ "type": "audio", "data": "<base64 float32 little-endian mono>" }`
   - Optional finalize: `{ "type": "commit" }`
+- If no client `model` is provided, the server uses `[STT-Settings].default_streaming_transcription_model` (default: `parakeet-onnx`).
+- Streaming model-init fallback to Whisper is opt-in via `[STT-Settings].streaming_fallback_to_whisper=true`; default is fail-fast.
 - Server messages include:
     - `{ "type": "status", "message": "Authenticated" }` or `"Authenticated (JWT)"`
     - `{ "type": "partial", "text": "...", "timestamp": ..., "is_final": false, "segment_id": 3, "segment_start": 12.5, "segment_end": 15.0 }`
@@ -406,7 +471,7 @@ The insight payload mirrors granola-style UX:
   - `4403` Forbidden (endpoint/path not allowed or key/JWT quota exceeded)
   - `4003` Application quota violation (daily minutes / concurrent streams)
   - `1008` Policy violation (e.g., IP not on allowlist)
-  - `1011` Internal error (e.g., no models available after fallback)
+  - `1011` Internal error (e.g., no models available, or fallback failed when explicitly enabled)
 
 
 #### Speaker Diarization & Audio Persistence

@@ -136,6 +136,26 @@ const normalizeGuideRoute = (route: unknown): string | null => {
   return `/${trimmed}`
 }
 
+const deriveRouteLabel = (route: string): string => {
+  const segments = route
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+  if (segments.length === 0) {
+    return "Home"
+  }
+  return segments
+    .map((segment) =>
+      segment
+        .split("-")
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0)
+        .map((part) => part[0].toUpperCase() + part.slice(1))
+        .join(" ")
+    )
+    .join(" / ")
+}
+
 const normalizeGuideTags = (value: unknown): string[] => {
   if (Array.isArray(value)) {
     return value
@@ -162,12 +182,13 @@ const sanitizeGuideCandidate = (
     typeof candidate.question === "string" ? candidate.question.trim() : ""
   const answer = typeof candidate.answer === "string" ? candidate.answer.trim() : ""
   const route = normalizeGuideRoute(candidate.route)
-  const routeLabel =
+  const routeLabelInput =
     typeof candidate.routeLabel === "string" ? candidate.routeLabel.trim() : ""
 
-  if (!title || !question || !answer || !route || !routeLabel) {
+  if (!title || !question || !answer || !route) {
     return null
   }
+  const routeLabel = routeLabelInput || deriveRouteLabel(route)
 
   const rawId = typeof candidate.id === "string" ? candidate.id.trim() : ""
   const id = rawId || `custom-guide-${index + 1}`
@@ -232,7 +253,7 @@ export const parseQuickChatWorkflowGuidesJson = (
       return {
         guides: null,
         error:
-          "No valid guide cards were found. Each card requires id, title, question, answer, route, routeLabel, and tags."
+          "No valid guide cards were found. Each card requires title, question, answer, and route."
       }
     }
     return { guides: resolved }

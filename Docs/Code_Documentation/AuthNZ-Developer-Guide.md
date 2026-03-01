@@ -361,7 +361,7 @@ pip install -e .
 
 2. **Configure Environment**
 ```bash
-cp .env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 # Edit .env with your settings
 ```
 
@@ -509,7 +509,7 @@ When upgrading to a new version:
 
 1. **Backup Database**: Always backup before upgrading
 2. **Run Migrations**: `python -m tldw_Server_API.app.core.AuthNZ.run_migrations`
-3. **Update Configuration**: Check for new settings in `.env.authnz.template`
+3. **Update Configuration**: Check for new settings in `.env.example`
 4. **Test Authentication**: Verify authentication still works
 
 ## Troubleshooting

@@ -20,7 +20,7 @@ import {
 } from "lucide-react"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import type { RagSettings } from "@/services/rag/unified-rag"
 
 // Section configuration

@@ -1,4 +1,5 @@
 import os
+import tempfile
 import time
 from typing import Any, Dict, Tuple
 
@@ -51,7 +52,11 @@ def _open_db_from_spec(spec: Dict[str, Any]) -> PromptStudioDatabase:
         connect_timeout=2,
     )
     be = DatabaseBackendFactory.create_backend(cfg)
-    return PromptStudioDatabase(db_path="/tmp/placeholder.sqlite", client_id="mp-worker", backend=be)
+    fd, temp_db_path = tempfile.mkstemp(prefix="prompt_studio_mp_worker_", suffix=".sqlite")
+    os.close(fd)
+    db = PromptStudioDatabase(db_path=temp_db_path, client_id="mp-worker", backend=be)
+    setattr(db, "_temp_sqlite_path", temp_db_path)
+    return db
 
 
 def _worker_acquire_loop(spec: Dict[str, Any], out_ids):
@@ -75,6 +80,12 @@ def _worker_acquire_loop(spec: Dict[str, Any], out_ids):
             db.close()
         except Exception:
             _ = None
+        temp_db_path = getattr(db, "_temp_sqlite_path", None)
+        if temp_db_path:
+            try:
+                os.unlink(temp_db_path)
+            except OSError:
+                _ = None
 
 
 @pytest.mark.integration
@@ -86,6 +97,7 @@ def test_parallel_acquire_distinct_jobs_multiprocessing(
     label, db = prompt_studio_dual_backend_db
     mp_db = None
     backend = None
+    temp_db_path = None
     db_to_use = db
     if label == "sqlite":
         mp_db_path = tmp_path / "prompt_studio_mp.sqlite"
@@ -93,7 +105,9 @@ def test_parallel_acquire_distinct_jobs_multiprocessing(
         db_to_use = mp_db
     else:
         backend = DatabaseBackendFactory.create_backend(pg_database_config)
-        mp_db = PromptStudioDatabase(db_path="/tmp/placeholder.sqlite", client_id="mp-session", backend=backend)
+        fd, temp_db_path = tempfile.mkstemp(prefix="prompt_studio_mp_session_", suffix=".sqlite")
+        os.close(fd)
+        mp_db = PromptStudioDatabase(db_path=temp_db_path, client_id="mp-session", backend=backend)
         db_to_use = mp_db
 
     try:
@@ -148,4 +162,9 @@ def test_parallel_acquire_distinct_jobs_multiprocessing(
             try:
                 backend.get_pool().close_all()
             except Exception:
+                _ = None
+        if temp_db_path:
+            try:
+                os.unlink(temp_db_path)
+            except OSError:
                 _ = None

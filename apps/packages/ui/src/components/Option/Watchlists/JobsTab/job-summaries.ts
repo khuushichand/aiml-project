@@ -1,10 +1,6 @@
-import type { JobScope, WatchlistFilter } from "@/types/watchlists"
+import type { JobOutputPrefs, JobScope, WatchlistFilter } from "@/types/watchlists"
 
-type Translator = (
-  key: string,
-  defaultValue: string,
-  options?: Record<string, unknown>
-) => string
+type Translator = (...args: any[]) => string
 
 export interface ScopeNameCatalog {
   sources: Record<number, string>
@@ -196,4 +192,34 @@ export const summarizeFilters = (
     preview,
     tooltipLines
   }
+}
+
+const resolveTemplateName = (outputPrefs: JobOutputPrefs | null | undefined): string | null => {
+  const nestedTemplate = outputPrefs?.template?.default_name
+  if (typeof nestedTemplate === "string" && nestedTemplate.trim().length > 0) {
+    return nestedTemplate.trim()
+  }
+  const legacyTemplate = outputPrefs?.template_name
+  if (typeof legacyTemplate === "string" && legacyTemplate.trim().length > 0) {
+    return legacyTemplate.trim()
+  }
+  return null
+}
+
+export const summarizeOutputLinkage = (
+  outputPrefs: JobOutputPrefs | null | undefined,
+  t: Translator
+): string => {
+  const templateName = resolveTemplateName(outputPrefs)
+  const templateSummary = templateName
+    ? t("watchlists:jobs.outputLinkage.templateNamed", "Template: {{name}}", {
+        name: templateName
+      })
+    : t("watchlists:jobs.outputLinkage.templateDefault", "Template: default")
+
+  const audioSummary = outputPrefs?.generate_audio
+    ? t("watchlists:jobs.outputLinkage.audioEnabled", "Audio: enabled")
+    : t("watchlists:jobs.outputLinkage.audioDisabled", "Audio: text only")
+
+  return `${templateSummary} • ${audioSummary}`
 }

@@ -31,6 +31,54 @@ describe("quick chat per-page tutorials", () => {
     expect(entries.some((entry) => entry.tutorial.id === "media-basics")).toBe(true)
   })
 
+  it("returns prompts tutorials for /prompts route", () => {
+    const entries = buildQuickChatPageTutorialEntries("/prompts", [])
+
+    expect(entries.some((entry) => entry.tutorial.id === "prompts-basics")).toBe(
+      true
+    )
+  })
+
+  it("returns world books tutorials for /world-books route", () => {
+    const entries = buildQuickChatPageTutorialEntries("/world-books", [])
+
+    expect(
+      entries.some((entry) => entry.tutorial.id === "world-books-basics")
+    ).toBe(true)
+  })
+
+  it("returns evaluations tutorials for /evaluations route", () => {
+    const entries = buildQuickChatPageTutorialEntries("/evaluations", [])
+
+    expect(
+      entries.some((entry) => entry.tutorial.id === "evaluations-basics")
+    ).toBe(true)
+  })
+
+  it("returns notes tutorials for /notes route", () => {
+    const entries = buildQuickChatPageTutorialEntries("/notes", [])
+
+    expect(entries.some((entry) => entry.tutorial.id === "notes-basics")).toBe(
+      true
+    )
+  })
+
+  it("returns flashcards tutorials for /flashcards route", () => {
+    const entries = buildQuickChatPageTutorialEntries("/flashcards", [])
+
+    expect(
+      entries.some((entry) => entry.tutorial.id === "flashcards-basics")
+    ).toBe(true)
+  })
+
+  it("maps /options/evaluations alias to evaluations tutorials", () => {
+    const entries = buildQuickChatPageTutorialEntries("/options/evaluations", [])
+
+    expect(
+      entries.some((entry) => entry.tutorial.id === "evaluations-basics")
+    ).toBe(true)
+  })
+
   it("marks advanced tutorials locked until prerequisites are complete", () => {
     const entries = buildQuickChatPageTutorialEntries("/chat", [])
     const toolsTutorial = entries.find(
@@ -52,5 +100,26 @@ describe("quick chat per-page tutorials", () => {
   it("returns empty tutorial list for routes without definitions", () => {
     const entries = buildQuickChatPageTutorialEntries("/settings/health", [])
     expect(entries).toEqual([])
+  })
+
+  it("resolves knowledge tutorials for knowledge subroutes", () => {
+    const entries = buildQuickChatPageTutorialEntries("/knowledge/thread/abc123", [])
+    expect(entries.some((entry) => entry.tutorial.id === "knowledge-basics")).toBe(
+      true
+    )
+  })
+
+  it("still resolves tutorials when runtime path is sidepanel", () => {
+    const originalPath = `${window.location.pathname}${window.location.search}${window.location.hash}`
+
+    try {
+      window.history.replaceState({}, "", "/sidepanel.html")
+      const entries = buildQuickChatPageTutorialEntries("/chat", [])
+      expect(entries.some((entry) => entry.tutorial.id === "playground-basics")).toBe(
+        true
+      )
+    } finally {
+      window.history.replaceState({}, "", originalPath || "/")
+    }
   })
 })

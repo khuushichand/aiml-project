@@ -1,4 +1,4 @@
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 
 from tldw_Server_API.app.core.Chunking.strategies.json_xml import XMLChunkingStrategy
 

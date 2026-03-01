@@ -368,16 +368,17 @@ async def create_speech(
         except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
             return False
 
-    def _raise_oauth_reconnect_required() -> None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "error_code": "oauth_reconnect_required",
-                "provider": "openai",
-                "reconnect_required": True,
-                "message": "OpenAI OAuth access is no longer valid. Reconnect OpenAI and retry.",
-            },
-        )
+    def _record_oauth_401_retry(outcome: str) -> None:
+        try:
+            log_counter(
+                "byok_oauth_401_retry_total",
+                labels={
+                    "provider": "openai",
+                    "outcome": outcome,
+                },
+            )
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
+            pass
     logger.info(
         'Received speech request: model={}, voice={}, format={}, request_id={}',
         request_data.model,
@@ -567,31 +568,21 @@ async def create_speech(
                 request=request,
                 force_oauth_refresh=True,
             )
-        except HTTPException as refresh_exc:
-            if refresh_exc.status_code in {
-                status.HTTP_401_UNAUTHORIZED,
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-            }:
-                _raise_oauth_reconnect_required()
+        except HTTPException:
             raise
         except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
-            _raise_oauth_reconnect_required()
+            raise
 
         if byok_tts_resolution is None:
-            _raise_oauth_reconnect_required()
+            raise TTSAuthenticationError("OpenAI OAuth refresh did not return credentials")
 
         api_key = (tts_overrides or {}).get("api_key") if isinstance(tts_overrides, dict) else None
         if not api_key:
             api_key = getattr(byok_tts_resolution, "api_key", None)
         if not isinstance(api_key, str) or not api_key.strip():
-            _raise_oauth_reconnect_required()
+            raise TTSAuthenticationError("OpenAI OAuth refresh returned no access token")
 
-        try:
-            speech_iter = _build_speech_iter()
-        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
-            if _is_tts_auth_failure(exc):
-                _raise_oauth_reconnect_required()
-            _raise_for_tts_error(exc, request_id)
+        speech_iter = _build_speech_iter()
 
     try:
         speech_iter = _build_speech_iter()
@@ -613,18 +604,32 @@ async def create_speech(
                 and _is_tts_auth_failure(exc)
             ):
                 oauth_retry_attempted = True
-                await _refresh_openai_oauth_and_rebuild_iter()
                 try:
-                    return await speech_iter.__anext__()
+                    await _refresh_openai_oauth_and_rebuild_iter()
+                except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
+                    _record_oauth_401_retry("refresh_failed")
+                    _raise_for_tts_error(exc, request_id)
+                except Exception:
+                    _record_oauth_401_retry("refresh_failed")
+                    _raise_for_tts_error(exc, request_id)
+                try:
+                    next_chunk = await speech_iter.__anext__()
+                    _record_oauth_401_retry("success")
+                    return next_chunk
                 except StopAsyncIteration:
+                    _record_oauth_401_retry("success")
                     return b""
                 except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as retry_exc:
                     if _is_tts_auth_failure(retry_exc):
-                        _raise_oauth_reconnect_required()
+                        _record_oauth_401_retry("retry_auth_failed")
+                        _raise_for_tts_error(exc, request_id)
+                    _record_oauth_401_retry("retry_failed")
                     _raise_for_tts_error(retry_exc, request_id)
                 except Exception as retry_exc:  # pragma: no cover - defensive fallback
                     if _is_tts_auth_failure(retry_exc):
-                        _raise_oauth_reconnect_required()
+                        _record_oauth_401_retry("retry_auth_failed")
+                        _raise_for_tts_error(exc, request_id)
+                    _record_oauth_401_retry("retry_failed")
                     _raise_for_tts_error(retry_exc, request_id)
             _raise_for_tts_error(exc, request_id)
         except Exception as exc:  # pragma: no cover - defensive fallback
@@ -865,16 +870,17 @@ async def create_speech_metadata(
         except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
             return False
 
-    def _raise_oauth_reconnect_required() -> None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "error_code": "oauth_reconnect_required",
-                "provider": "openai",
-                "reconnect_required": True,
-                "message": "OpenAI OAuth access is no longer valid. Reconnect OpenAI and retry.",
-            },
-        )
+    def _record_oauth_401_retry(outcome: str) -> None:
+        try:
+            log_counter(
+                "byok_oauth_401_retry_total",
+                labels={
+                    "provider": "openai",
+                    "outcome": outcome,
+                },
+            )
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
+            pass
 
     try:
         usage_log.log_event(
@@ -925,31 +931,21 @@ async def create_speech_metadata(
                 request=request,
                 force_oauth_refresh=True,
             )
-        except HTTPException as refresh_exc:
-            if refresh_exc.status_code in {
-                status.HTTP_401_UNAUTHORIZED,
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-            }:
-                _raise_oauth_reconnect_required()
+        except HTTPException:
             raise
         except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
-            _raise_oauth_reconnect_required()
+            raise
 
         if byok_tts_resolution is None:
-            _raise_oauth_reconnect_required()
+            raise TTSAuthenticationError("OpenAI OAuth refresh did not return credentials")
 
         api_key = (tts_overrides or {}).get("api_key") if isinstance(tts_overrides, dict) else None
         if not api_key:
             api_key = getattr(byok_tts_resolution, "api_key", None)
         if not isinstance(api_key, str) or not api_key.strip():
-            _raise_oauth_reconnect_required()
+            raise TTSAuthenticationError("OpenAI OAuth refresh returned no access token")
 
-        try:
-            speech_iter = _build_speech_iter()
-        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
-            if _is_tts_auth_failure(exc):
-                _raise_oauth_reconnect_required()
-            _raise_for_tts_error(exc, request_id)
+        speech_iter = _build_speech_iter()
 
     try:
         speech_iter = _build_speech_iter()
@@ -966,14 +962,24 @@ async def create_speech_metadata(
             and _is_tts_auth_failure(exc)
         ):
             oauth_retry_attempted = True
-            await _refresh_openai_oauth_and_rebuild_iter()
+            try:
+                await _refresh_openai_oauth_and_rebuild_iter()
+            except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
+                _record_oauth_401_retry("refresh_failed")
+                _raise_for_tts_error(exc, request_id)
+            except Exception:
+                _record_oauth_401_retry("refresh_failed")
+                _raise_for_tts_error(exc, request_id)
             try:
                 with contextlib.suppress(StopAsyncIteration):
                     await speech_iter.__anext__()
             except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as retry_exc:
                 if _is_tts_auth_failure(retry_exc):
-                    _raise_oauth_reconnect_required()
+                    _record_oauth_401_retry("retry_auth_failed")
+                    _raise_for_tts_error(exc, request_id)
+                _record_oauth_401_retry("retry_failed")
                 _raise_for_tts_error(retry_exc, request_id)
+            _record_oauth_401_retry("success")
         else:
             _raise_for_tts_error(exc, request_id)
     finally:

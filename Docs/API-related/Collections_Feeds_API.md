@@ -2,7 +2,7 @@
 
 Collections Feeds is a thin API over Watchlists sources and jobs that ingests RSS/Atom into Collections items. Each subscription is stored as a Watchlists source and polled by a Watchlists job. Items are written to the Collections DB with `origin="feed"`.
 
-This API is ingest-only. It does not publish RSS/Atom or render UI. See `Docs/Design/Collections_Feeds_Ingestion.md` for the roadmap and `Reference implementation` below for newsletter-to-Atom details.
+This API is ingest-only. It does not publish RSS/Atom or render UI. See `Docs/Product/Collections_Feeds_Ingestion.md` for the roadmap and `Reference implementation` below for newsletter-to-Atom details.
 
 ## Endpoints
 

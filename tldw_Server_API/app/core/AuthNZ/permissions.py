@@ -327,6 +327,12 @@ EMBEDDINGS_ADMIN = "embeddings.admin"
 CLAIMS_REVIEW = "claims.review"
 CLAIMS_ADMIN = "claims.admin"
 
+# Reminders / notifications permissions
+TASKS_READ = "tasks.read"
+TASKS_CONTROL = "tasks.control"
+NOTIFICATIONS_READ = "notifications.read"
+NOTIFICATIONS_CONTROL = "notifications.control"
+
 # Role names
 ROLE_ADMIN = "admin"
 ROLE_USER = "user"

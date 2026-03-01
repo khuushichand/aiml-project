@@ -4,9 +4,9 @@ from __future__ import annotations
 Core helpers for sourcing media inputs (uploads, temp dirs).
 
 This module centralizes logic that was previously implemented directly in
-`_legacy_media.py` (TempDirManager and _save_uploaded_files) so that
-process-only endpoints and future ingestion pipelines can share a single
-implementation.
+the former monolithic media endpoint module (TempDirManager and
+save/upload helpers) so that process-only endpoints and ingestion pipelines
+can share a single implementation.
 
 Behavior is intentionally kept backwards compatible with the original helpers.
 """
@@ -38,7 +38,8 @@ class TempDirManager:
     Context manager for temporary directories used during media processing.
 
     This is a direct extraction of the implementation previously defined in
-    `_legacy_media.py`, with behavior preserved for compatibility.
+    the endpoint-local media helpers, with behavior preserved for
+    compatibility.
     """
 
     def __init__(self, prefix: str = "media_processing_", *, cleanup: bool = True) -> None:
@@ -91,7 +92,7 @@ async def save_uploaded_files(
     """
     Save uploaded files to a temporary directory, validating them via FileValidator.
 
-    This is a direct extraction of `_save_uploaded_files` from `_legacy_media.py`.
+    This is a direct extraction of the previous endpoint-local upload helper.
     The signature and return contract are preserved so callers (including tests
     that exercise the helper via the media endpoints module) continue to work.
 

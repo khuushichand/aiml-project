@@ -17,12 +17,12 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim
 from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
     ClaimsJobBudget,
     ClaimsJobContext,
     estimate_claims_tokens,
 )
-from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim_span
 from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import (
     LLM_PROVIDER_MODES,
     detect_claims_language,
@@ -33,6 +33,17 @@ from tldw_Server_API.app.core.Claims_Extraction.extractor_registry import (
     extract_ner_claims_texts,
     run_sync_claims_strategy,
 )
+from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
+    estimate_claims_cost,
+    record_claims_alignment_event,
+    record_claims_budget_exhausted,
+    record_claims_fallback,
+    record_claims_output_parse_event,
+    record_claims_provider_request,
+    record_claims_response_format_selection,
+    record_claims_throttle,
+    should_throttle_claims_provider,
+)
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     ClaimsOutputParseError,
     coerce_llm_response_text,
@@ -40,22 +51,14 @@ from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     parse_claims_llm_output,
     resolve_claims_response_format,
 )
+from tldw_Server_API.app.core.Claims_Extraction.review_assignment import apply_review_rules
 from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
     resolve_claims_alignment_config,
+    resolve_claims_context_window_chars,
+    resolve_claims_extraction_passes,
     resolve_claims_json_parse_mode,
     resolve_claims_llm_config,
 )
-from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
-    estimate_claims_cost,
-    record_claims_fallback,
-    record_claims_budget_exhausted,
-    record_claims_output_parse_event,
-    record_claims_provider_request,
-    record_claims_response_format_selection,
-    record_claims_throttle,
-    should_throttle_claims_provider,
-)
-from tldw_Server_API.app.core.Claims_Extraction.review_assignment import apply_review_rules
 from tldw_Server_API.app.core.config import settings as _settings
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
@@ -129,6 +132,102 @@ _INGESTION_CLAIMS_RESPONSE_SCHEMA: dict[str, Any] = {
 }
 
 
+def _normalize_claim_text(text: Any) -> str:
+    """Normalize claim text for stable comparisons.
+
+    Args:
+        text: Raw claim text value. Any type is accepted and coerced to string.
+
+    Returns:
+        Lowercased string with surrounding whitespace removed and internal
+        whitespace collapsed to single spaces.
+
+    Behavior:
+        Falsey inputs (including ``None``) normalize to ``""``.
+    """
+    return " ".join(str(text or "").strip().lower().split())
+
+
+def _coerce_span(span_value: Any) -> tuple[int, int] | None:
+    """Coerce span input into a validated ``(start, end)`` tuple.
+
+    Args:
+        span_value: Candidate span value. Accepted format is a 2-item list/tuple
+            whose values are integer-coercible (for example, ``[10, "25"]``).
+
+    Returns:
+        A ``(start, end)`` tuple when valid; otherwise ``None``.
+
+    Behavior:
+        Returns ``None`` for unsupported shapes, coercion failures, negative
+        starts, or non-positive lengths (``end <= start``).
+    """
+    if not isinstance(span_value, (list, tuple)) or len(span_value) != 2:
+        return None
+    try:
+        start = int(span_value[0])
+        end = int(span_value[1])
+    except _CLAIMS_COERCE_EXCEPTIONS:
+        return None
+    if start < 0 or end <= start:
+        return None
+    return start, end
+
+
+def _spans_overlap(first: tuple[int, int] | None, second: tuple[int, int] | None) -> bool:
+    """Determine whether two spans overlap.
+
+    Args:
+        first: First optional ``(start, end)`` span.
+        second: Second optional ``(start, end)`` span.
+
+    Returns:
+        ``True`` when spans overlap, or when either span is ``None``.
+
+    Behavior:
+        Concrete spans use half-open overlap semantics (``[start, end)``).
+        Unknown spans (``None``) are treated as potentially overlapping.
+    """
+    if first is None or second is None:
+        return True
+    return first[0] < second[1] and second[0] < first[1]
+
+
+def _dedupe_claim_candidates(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate claim candidates while preserving input order.
+
+    Args:
+        claims: Candidate claim objects containing ``claim_text`` and optional
+            ``chunk_index``/``span`` fields.
+
+    Returns:
+        A filtered list of claim dicts with duplicates removed.
+
+    Behavior:
+        Two candidates are considered duplicates when they share the same
+        ``chunk_index``, have the same normalized ``claim_text``, and their
+        spans overlap per ``_spans_overlap``.
+    """
+    deduped: list[dict[str, Any]] = []
+    for claim in claims:
+        chunk_index = int(claim.get("chunk_index", 0))
+        normalized = _normalize_claim_text(claim.get("claim_text"))
+        span = _coerce_span(claim.get("span"))
+        is_duplicate = False
+        for existing in deduped:
+            if int(existing.get("chunk_index", 0)) != chunk_index:
+                continue
+            if _normalize_claim_text(existing.get("claim_text")) != normalized:
+                continue
+            existing_span = _coerce_span(existing.get("span"))
+            if _spans_overlap(existing_span, span):
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            deduped.append(claim)
+    return deduped
+
+
 def extract_claims_for_chunks(
     chunks: list[dict[str, Any]],
     *,
@@ -159,10 +258,16 @@ def extract_claims_for_chunks(
         default_mode="fuzzy",
         default_threshold=0.75,
     )
+    context_window_chars = resolve_claims_context_window_chars(_settings, default=0)
+    extraction_passes = resolve_claims_extraction_passes(_settings, default=1)
     current_mode = resolved_mode
+    current_prompt_context = ""
+    current_prompt_chunk = ""
 
     def _llm_extract_claim_texts(txt: str, max_items: int, _language_hint: str | None) -> list[str]:
         nonlocal current_mode
+        nonlocal current_prompt_context
+        nonlocal current_prompt_chunk
         cost_estimate = None
         default_provider, model_override, temperature = resolve_claims_llm_config(
             _settings,
@@ -187,16 +292,31 @@ def extract_claims_for_chunks(
             "You extract specific, verifiable, decontextualized factual propositions. Output strict JSON."
         )
         base = load_prompt("ingestion", "claims_extractor_prompt") or (
-            "Extract up to {max_claims} atomic factual propositions from the ANSWER. "
-            "Each proposition should stand alone without the surrounding context, be specific and checkable. "
-            "Return JSON: {{\"claims\":[{{\"text\": str}}]}}. Do not include explanations.\n\nANSWER:\n{answer}"
+            "Extract up to {max_claims} atomic factual propositions from CHUNK only. "
+            "Never extract claims from CONTEXT. "
+            "Each proposition should stand alone without surrounding context, be specific, and checkable. "
+            "Return JSON: {{\"claims\":[{{\"text\": str}}]}}. Do not include explanations.\n\n"
+            "CONTEXT (do not extract claims from this):\n{context}\n\n"
+            "CHUNK (extract claims only from this):\n{answer}"
         )
+        chunk_text = current_prompt_chunk or txt
+        prompt_vars = {
+            "max_claims": max_items,
+            "answer": chunk_text,
+            "chunk": chunk_text,
+            "context": current_prompt_context,
+        }
         try:
-            prompt = base.format(max_claims=max_items, answer=txt)
+            prompt = base.format(**prompt_vars)
         except _CLAIMS_TEMPLATE_FORMAT_EXCEPTIONS:
             _tmpl = base.replace("{", "{{").replace("}", "}}")
-            _tmpl = _tmpl.replace("{{max_claims}}", "{max_claims}").replace("{{answer}}", "{answer}")
-            prompt = _tmpl.format(max_claims=max_items, answer=txt)
+            _tmpl = (
+                _tmpl.replace("{{max_claims}}", "{max_claims}")
+                .replace("{{answer}}", "{answer}")
+                .replace("{{chunk}}", "{chunk}")
+                .replace("{{context}}", "{context}")
+            )
+            prompt = _tmpl.format(**prompt_vars)
 
         messages = [{"role": "user", "content": prompt}]
         timeout_sec = 8.0
@@ -413,39 +533,63 @@ def extract_claims_for_chunks(
         "aps": _llm_extract_claim_texts,
         "llm": _llm_extract_claim_texts,
     }
+    llm_like_modes = {"llm", "aps", *LLM_PROVIDER_MODES}
+    run_passes = extraction_passes if resolved_mode in llm_like_modes else 1
+    include_context = context_window_chars > 0 and resolved_mode in llm_like_modes
 
-    for ch in chunks or []:
-        txt = (ch or {}).get("text") or (ch or {}).get("content") or ""
-        meta = (ch or {}).get("metadata", {}) or {}
-        idx = int(meta.get("chunk_index") or meta.get("index") or 0)
-        lang_hint = resolved_language or detect_claims_language(txt)
-        current_mode = resolved_mode
+    for pass_index in range(max(1, run_passes)):
+        previous_tail = ""
+        for ch in chunks or []:
+            txt = (ch or {}).get("text") or (ch or {}).get("content") or ""
+            meta = (ch or {}).get("metadata", {}) or {}
+            idx = int(meta.get("chunk_index") or meta.get("index") or 0)
+            lang_hint = resolved_language or detect_claims_language(txt)
+            current_mode = resolved_mode
+            current_prompt_chunk = txt
+            current_prompt_context = previous_tail if include_context and previous_tail else ""
 
-        dispatch = run_sync_claims_strategy(
-            requested_mode=current_mode,
-            text=txt,
-            max_claims=max_per_chunk,
-            strategy_map=strategy_map,
-            fallback_mode="heuristic",
-            language=lang_hint,
-            catch_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
-        )
-
-        for sent in dispatch.claim_texts:
-            span = align_claim_span(
-                txt,
-                sent,
-                mode=alignment_mode,
-                threshold=alignment_threshold,
+            dispatch = run_sync_claims_strategy(
+                requested_mode=current_mode,
+                text=txt,
+                max_claims=max_per_chunk,
+                strategy_map=strategy_map,
+                fallback_mode="heuristic",
+                language=lang_hint,
+                catch_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
             )
-            claims.append(
-                {
-                    "chunk_index": idx,
-                    "claim_text": sent,
-                    "span": list(span) if span is not None else None,
-                    "extractor_mode": dispatch.mode,
-                }
-            )
+
+            for sent in dispatch.claim_texts:
+                alignment_result = align_claim(
+                    txt,
+                    sent,
+                    mode=alignment_mode,
+                    threshold=alignment_threshold,
+                )
+                if include_context and (
+                    alignment_result is None
+                    or not getattr(alignment_result, "span", None)
+                ):
+                    continue
+                record_claims_alignment_event(
+                    context="ingestion_extract",
+                    mode=alignment_mode,
+                    result=alignment_result,
+                )
+                claims.append(
+                    {
+                        "chunk_index": idx,
+                        "claim_text": sent,
+                        "span": list(alignment_result.span) if alignment_result is not None else None,
+                        "extractor_mode": dispatch.mode,
+                        "extraction_pass": pass_index + 1,
+                        "alignment_method": alignment_result.method if alignment_result is not None else None,
+                        "alignment_score": alignment_result.score if alignment_result is not None else None,
+                    }
+                )
+            if include_context:
+                previous_tail = txt[-context_window_chars:]
+    if run_passes > 1 or include_context:
+        return _dedupe_claim_candidates(claims)
     return claims
 
 

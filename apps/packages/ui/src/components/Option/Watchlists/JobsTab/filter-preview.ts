@@ -73,6 +73,7 @@ const resolveFilterKey = (entry: FilterWithIndex): string => {
 const matchesFilter = (entry: FilterWithIndex, item: PreviewItem): boolean => {
   const { filter } = entry
   const value = (filter.value || {}) as Record<string, unknown>
+  const itemRecord = item as unknown as Record<string, unknown>
 
   if (filter.type === "keyword") {
     const corpus = buildSearchCorpus(item)
@@ -85,7 +86,7 @@ const matchesFilter = (entry: FilterWithIndex, item: PreviewItem): boolean => {
   }
 
   if (filter.type === "author") {
-    const author = normalize((item as Record<string, unknown>).author as string | undefined)
+    const author = normalize(itemRecord.author as string | undefined)
     const names = toStringArray(value.names).concat(toStringArray(value.authors))
     if (!author || names.length === 0) return false
     return names.some((name) => author.includes(name.toLowerCase()))
@@ -93,7 +94,7 @@ const matchesFilter = (entry: FilterWithIndex, item: PreviewItem): boolean => {
 
   if (filter.type === "regex") {
     const field = String(value.field || "title")
-    const candidateFieldValue = normalize((item as Record<string, unknown>)[field] as string | undefined)
+    const candidateFieldValue = normalize(itemRecord[field] as string | undefined)
     const regex = safeRegex(value.pattern, value.flags)
     if (!regex) return false
     return regex.test(candidateFieldValue)

@@ -5,8 +5,8 @@ import pytest
 from tldw_Server_API.app.api.v1.schemas.data_tables_schemas import DATA_TABLES_MAX_ROWS_LIMIT
 from tldw_Server_API.app.core.Data_Tables import jobs_worker
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.exceptions import DataTablesJobError
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-
 
 pytestmark = pytest.mark.unit
 
@@ -111,3 +111,21 @@ def test_dedupe_column_names_is_case_insensitive():
 
 def test_worker_max_rows_limit_matches_api_schema_limit():
     assert jobs_worker._MAX_ROWS_LIMIT == DATA_TABLES_MAX_ROWS_LIMIT
+
+
+def test_extract_json_payload_accepts_fenced_json_with_think_tags():
+    raw = (
+        "<think>reasoning</think>\n"
+        "```json\n"
+        "{\"columns\":[{\"name\":\"A\"}],\"rows\":[[1]]}\n"
+        "```"
+    )
+    payload = jobs_worker._extract_json_payload(raw)
+    assert isinstance(payload, dict)
+    assert payload["columns"][0]["name"] == "A"
+
+
+def test_extract_json_payload_rejects_malformed_json():
+    with pytest.raises(DataTablesJobError) as exc:
+        jobs_worker._extract_json_payload("not valid json")
+    assert "llm_response_invalid_json" in str(exc.value)

@@ -169,12 +169,12 @@ def _reset_prompt_studio_tables(db: PromptStudioDatabase) -> None:
     cursor.execute("PRAGMA foreign_keys=OFF")
     try:
         for name in tables:
-            cursor.execute(f"DELETE FROM {_quote_ident(name)}")
+            cursor.execute(f"DELETE FROM {_quote_ident(name)}")  # nosec B608
         if tables:
             placeholders = ", ".join("?" for _ in tables)
             try:
                 cursor.execute(
-                    f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})",
+                    f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})",  # nosec B608
                     tables,
                 )
             except Exception:

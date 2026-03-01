@@ -189,6 +189,23 @@ def _register_claims_metrics() -> None:
     )
     reg.register_metric(
         MetricDefinition(
+            name="claims_alignment_events_total",
+            type=MetricType.COUNTER,
+            description="Claim alignment outcomes by context and strategy",
+            labels=["context", "mode", "method", "outcome"],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_alignment_score",
+            type=MetricType.HISTOGRAM,
+            description="Claim alignment confidence score",
+            labels=["context", "method"],
+            buckets=[0.25, 0.5, 0.65, 0.75, 0.85, 0.95, 1.0],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
             name="claims_rebuild_queue_size",
             type=MetricType.GAUGE,
             description="Claims rebuild queue size",
@@ -591,6 +608,86 @@ def record_claims_fallback(
             "model": str(model or ""),
             "mode": _normalize_claims_metric_label(mode, fallback="unknown"),
             "reason": _normalize_claims_metric_label(reason, fallback="unknown"),
+        },
+    )
+
+
+def record_claims_alignment_event(
+    *,
+    context: str,
+    mode: str,
+    result: object | None,
+) -> None:
+    """Record claims-alignment metrics for the provided context, mode, and result.
+
+    This helper records claims alignment events and scores for monitoring. It
+    returns early when `_claims_monitoring_enabled()` is false. When monitoring
+    is enabled, it calls `_register_claims_metrics()`, imports
+    `increment_counter` / `observe_histogram`, and emits
+    `claims_alignment_events_total`. If a result is present, it also observes
+    `claims_alignment_score`.
+
+    Args:
+        context: Claims-alignment context label.
+        mode: Claims extraction mode label.
+        result: Alignment result object or `None`; method/score are read from it.
+
+    Behavior:
+        - Labels are normalized via `_normalize_claims_metric_label`.
+        - `increment_counter` emits labels: `context`, `mode`, `method`,
+          `outcome`.
+        - `outcome` is `matched` when `result` exists, otherwise `missing`.
+        - `observe_histogram` records score only when `result` is present.
+
+    Error handling:
+        - Catches `_CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS` while importing
+          metrics helpers.
+        - Catches `_CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS` when converting
+          the result score to float.
+
+    Returns:
+        None.
+    """
+    if not _claims_monitoring_enabled():
+        return
+    _register_claims_metrics()
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import (
+            increment_counter,
+            observe_histogram,
+        )
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
+        return
+
+    method = _normalize_claims_metric_label(
+        getattr(result, "method", None),
+        fallback="none",
+    )
+    outcome = "matched" if result is not None else "missing"
+    increment_counter(
+        "claims_alignment_events_total",
+        1,
+        labels={
+            "context": _normalize_claims_metric_label(context, fallback="unknown"),
+            "mode": _normalize_claims_metric_label(mode, fallback="unknown"),
+            "method": method,
+            "outcome": outcome,
+        },
+    )
+
+    if result is None:
+        return
+    try:
+        score = float(getattr(result, "score", 0.0))
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
+        return
+    score = max(0.0, min(1.0, score))
+    observe_histogram(
+        "claims_alignment_score",
+        score,
+        labels={
+            "context": _normalize_claims_metric_label(context, fallback="unknown"),
+            "method": method,
         },
     )
 

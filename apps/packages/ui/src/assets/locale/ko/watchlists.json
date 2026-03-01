@@ -1,0 +1,21 @@
+{
+  "items": {
+    "queuedForBriefing": "브리핑 대기열",
+    "includeInNextBriefing": "다음 브리핑에 포함",
+    "removeFromBriefingQueue": "브리핑 대기열에서 제거",
+    "briefingAlreadyIncluded": "이 항목은 이미 브리핑 출력에 포함되어 있습니다.",
+    "briefingIncluded": "다음 브리핑 대기열에 추가되었습니다.",
+    "briefingRemoved": "브리핑 대기열에서 제거되었습니다.",
+    "briefingIncludeError": "항목을 브리핑에 포함하지 못했습니다.",
+    "queuedTag": "대기열",
+    "queue": {
+      "runPlaceholder": "실행 선택",
+      "runOption": "실행 #{{id}}",
+      "runRequired": "대기열 보고서를 생성하려면 실행을 선택하세요.",
+      "empty": "이 실행에서 대기열 항목을 찾을 수 없습니다.",
+      "generated": "대기열 항목 {{count}}개{{plural}}로 보고서를 생성했습니다.",
+      "generateError": "대기열 항목으로 보고서를 생성하지 못했습니다.",
+      "generateReport": "대기열에서 보고서 생성"
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
@@ -150,12 +151,18 @@ class FakeQuizzesDB:
 
 
 @pytest.mark.asyncio
-async def test_quizzes_crud_and_generation():
+async def test_quizzes_crud_and_generation(tmp_path: Path):
     mod = QuizzesModule(ModuleConfig(name="quizzes"))
     fake_db = FakeQuizzesDB()
     mod._open_db = lambda ctx: fake_db  # type: ignore[attr-defined]
 
-    ctx = SimpleNamespace(db_paths={"media": "/tmp/media.db", "chacha": "/tmp/chacha.db"}, client_id="test")
+    ctx = SimpleNamespace(
+        db_paths={
+            "media": str(tmp_path / "media.db"),
+            "chacha": str(tmp_path / "chacha.db"),
+        },
+        client_id="test",
+    )
 
     created = await mod.execute_tool(
         "quizzes.create",

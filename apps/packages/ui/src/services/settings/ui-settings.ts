@@ -521,6 +521,26 @@ export const HEADER_SHORTCUTS_EXPANDED_SETTING = defineSetting(
   }
 )
 
+const HEADER_SHORTCUTS_LAUNCHER_VIEW_VALUES = ["current", "legacy"] as const
+export type HeaderShortcutsLauncherViewValue =
+  (typeof HEADER_SHORTCUTS_LAUNCHER_VIEW_VALUES)[number]
+
+export const HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING = defineSetting(
+  "headerShortcutsLauncherView",
+  "current" as HeaderShortcutsLauncherViewValue,
+  (value) => {
+    const normalized = String(value || "").toLowerCase()
+    return HEADER_SHORTCUTS_LAUNCHER_VIEW_VALUES.includes(
+      normalized as HeaderShortcutsLauncherViewValue
+    )
+      ? (normalized as HeaderShortcutsLauncherViewValue)
+      : "current"
+  },
+  {
+    area: "local"
+  }
+)
+
 const coerceBooleanRecord = (value: unknown): Record<string, boolean> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {}
   const entries = Object.entries(value as Record<string, unknown>)
@@ -898,6 +918,15 @@ export const MEDIA_TEXT_SIZE_PRESET_SETTING = defineSetting(
   "tldw:media:textSizePreset",
   "m" as MediaTextSizePreset,
   (value) => coerceMediaTextSizePreset(value),
+  {
+    area: "local"
+  }
+)
+
+export const MEDIA_HIDE_TRANSCRIPT_TIMINGS_SETTING = defineSetting(
+  "tldw:media:hideTranscriptTimings",
+  true,
+  (value) => coerceBoolean(value, true),
   {
     area: "local"
   }

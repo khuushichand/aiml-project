@@ -1027,6 +1027,13 @@ class ModerationService:
                     continue
                 if m.start() < end:
                     return m.start(), m.end()
+            # Keep the chunked fast path for large payloads, but preserve correctness
+            # for moderate payloads where a match can span far beyond the chunk window.
+            fallback_limit = chunk_limit * 4
+            if text_len <= fallback_limit:
+                m = pat.search(text)
+                if m:
+                    return m.start(), m.end()
             return None
         except re.error:
             return None

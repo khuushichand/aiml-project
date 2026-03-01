@@ -70,9 +70,17 @@ def _extract_pdf_figures(
 
             for img_index, img_info in enumerate(image_list):
                 xref = img_info[0]
+                image = None
                 try:
                     image = doc.extract_image(xref)
-                except Exception:
+                except Exception as exc:
+                    logger.debug(
+                        "Skipping unreadable extracted image xref {} on page {}: {}",
+                        xref,
+                        page_num + 1,
+                        exc,
+                    )
+                if image is None:
                     continue
 
                 # Filter out small images (icons, bullets, etc.)

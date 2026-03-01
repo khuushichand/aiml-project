@@ -5,7 +5,7 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
   <div>
     <div>
       <button
-        aria-label="Open help for OPML imports"
+        aria-label="Open help for OPML feed import"
         class="!h-6 !w-6 !p-0 text-text-muted "
         data-testid="watchlists-help-opml"
         type="text"
@@ -45,12 +45,12 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
           <div
             class="text-sm font-medium"
           >
-            What is OPML?
+            Import many feeds quickly
           </div>
           <div
             class="text-xs text-text-muted"
           >
-            OPML is a portable feed-list format. Import one file to add many RSS or site feeds at once.
+            Use OPML when moving feed lists from another reader so setup takes minutes instead of manual entry.
           </div>
           <a
             class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
@@ -88,7 +88,7 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
     </div>
     <div>
       <button
-        aria-label="Open help for cron scheduling"
+        aria-label="Open help for advanced schedule timing"
         class="!h-6 !w-6 !p-0 text-text-muted "
         data-testid="watchlists-help-cron"
         type="text"
@@ -128,12 +128,12 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
           <div
             class="text-sm font-medium"
           >
-            How cron scheduling works
+            Set a reliable monitor schedule
           </div>
           <div
             class="text-xs text-text-muted"
           >
-            Cron uses five fields: minute, hour, day-of-month, month, and day-of-week.
+            Start with presets for daily or weekday runs. Use cron only when you need exact custom timing.
           </div>
           <a
             class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
@@ -171,7 +171,7 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
     </div>
     <div>
       <button
-        aria-label="Open help for retention TTL"
+        aria-label="Open help for retention window"
         class="!h-6 !w-6 !p-0 text-text-muted "
         data-testid="watchlists-help-ttl"
         type="text"
@@ -211,12 +211,12 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
           <div
             class="text-sm font-medium"
           >
-            What retention TTL means
+            Control how long outputs stay available
           </div>
           <div
             class="text-xs text-text-muted"
           >
-            TTL controls how long generated outputs are kept before they expire automatically.
+            Set retention to keep briefings only as long as your review workflow needs before automatic cleanup.
           </div>
           <a
             class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
@@ -254,7 +254,7 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
     </div>
     <div>
       <button
-        aria-label="Open help for Jinja2 templates"
+        aria-label="Open help for briefing templates"
         class="!h-6 !w-6 !p-0 text-text-muted "
         data-testid="watchlists-help-jinja2"
         type="text"
@@ -294,12 +294,12 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
           <div
             class="text-sm font-medium"
           >
-            Using Jinja2 templates
+            Customize briefing format
           </div>
           <div
             class="text-xs text-text-muted"
           >
-            Jinja2 lets you loop, branch, and format monitor data into reusable report templates.
+            Start from a preset report template, then edit sections to shape briefing tone, structure, and audio script text.
           </div>
           <a
             class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
@@ -337,7 +337,7 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
     </div>
     <div>
       <button
-        aria-label="Open help for claim clusters"
+        aria-label="Open help for claim tracking"
         class="!h-6 !w-6 !p-0 text-text-muted "
         data-testid="watchlists-help-claimClusters"
         type="text"
@@ -377,12 +377,12 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
           <div
             class="text-sm font-medium"
           >
-            What claim clusters are
+            Track repeating claims across sources
           </div>
           <div
             class="text-xs text-text-muted"
           >
-            Claim clusters group similar claims across feeds so monitors can subscribe to related topic updates.
+            Subscribe to claim clusters to follow how the same claim evolves across feeds without manual tagging.
           </div>
           <a
             class="inline-flex items-center gap-1 text-xs text-primary hover:underline"

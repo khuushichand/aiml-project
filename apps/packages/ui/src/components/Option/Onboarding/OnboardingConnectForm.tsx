@@ -164,6 +164,8 @@ interface Props {
 }
 
 const QUICK_INGEST_OPEN_DELAY_MS = 120
+const QUICK_INGEST_OPEN_RETRY_INTERVAL_MS = 120
+const QUICK_INGEST_OPEN_MAX_ATTEMPTS = 25
 
 /**
  * Single-step onboarding form for the new UX redesign.
@@ -757,7 +759,19 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       navigate(path)
       if (options?.openQuickIngestIntro && typeof window !== "undefined") {
         window.setTimeout(() => {
-          window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest-intro"))
+          let attempts = 0
+          const dispatchWhenReady = () => {
+            const triggerReady = Boolean(
+              document.querySelector('[data-testid="open-quick-ingest"]')
+            )
+            if (triggerReady || attempts >= QUICK_INGEST_OPEN_MAX_ATTEMPTS) {
+              window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest-intro"))
+              return
+            }
+            attempts += 1
+            window.setTimeout(dispatchWhenReady, QUICK_INGEST_OPEN_RETRY_INTERVAL_MS)
+          }
+          dispatchWhenReady()
         }, QUICK_INGEST_OPEN_DELAY_MS)
       }
     },

@@ -13,6 +13,8 @@ interface ACPChatPanelProps {
   updates: ACPUpdate[]
   sendPrompt: (messages: Array<{ role: "system" | "user" | "assistant"; content: string }>) => void
   cancel: () => void
+  connect: () => Promise<void>
+  error?: string | null
 }
 
 export const ACPChatPanel: React.FC<ACPChatPanelProps> = ({
@@ -21,9 +23,12 @@ export const ACPChatPanel: React.FC<ACPChatPanelProps> = ({
   updates,
   sendPrompt,
   cancel,
+  connect,
+  error,
 }) => {
   const { t } = useTranslation(["playground", "option", "common"])
   const [inputValue, setInputValue] = useState("")
+  const [isReconnecting, setIsReconnecting] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Store
@@ -50,6 +55,15 @@ export const ACPChatPanel: React.FC<ACPChatPanelProps> = ({
 
   const handleCancel = () => {
     cancel()
+  }
+
+  const handleReconnect = async () => {
+    setIsReconnecting(true)
+    try {
+      await connect()
+    } finally {
+      setIsReconnecting(false)
+    }
   }
 
   const isRunning = state === "running" || state === "waiting_permission"
@@ -138,10 +152,19 @@ export const ACPChatPanel: React.FC<ACPChatPanelProps> = ({
           </div>
 
           {!isConnected && (
-            <div className="mt-2 flex items-center gap-1 text-xs text-warning">
-              <AlertCircle className="h-3 w-3" />
-              {t("playground:acp.notConnected", "Not connected to session")}
+            <div className="mt-2 flex items-center justify-between gap-2 text-xs text-warning">
+              <span className="flex items-center gap-1">
+                <AlertCircle className="h-3 w-3" />
+                {t("playground:acp.notConnected", "Not connected to session")}
+              </span>
+              <Button size="small" onClick={handleReconnect} loading={isReconnecting}>
+                {t("playground:acp.reconnect", "Reconnect")}
+              </Button>
             </div>
+          )}
+
+          {error && (
+            <div className="mt-2 text-xs text-error">{error}</div>
           )}
         </div>
       </div>

@@ -9,6 +9,8 @@ export interface ToastItem {
   description?: string;
   variant?: Variant;
   duration?: number; // ms
+  actionLabel?: string;
+  onAction?: () => void | Promise<void>;
 }
 
 interface ToastContextType {
@@ -43,6 +45,18 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <div key={t.id} className={cn('pointer-events-auto animate-fade-in-up rounded-md border p-3 shadow-lg backdrop-blur', variantClass(t.variant))}>
             {t.title && <div className="text-sm font-semibold">{t.title}</div>}
             {t.description && <div className="mt-0.5 text-sm text-text">{t.description}</div>}
+            {t.actionLabel && t.onAction && (
+              <button
+                type="button"
+                className="mt-2 inline-flex items-center rounded border border-current/40 px-2 py-1 text-xs font-medium hover:bg-black/5"
+                onClick={() => {
+                  void t.onAction?.();
+                  remove(t.id);
+                }}
+              >
+                {t.actionLabel}
+              </button>
+            )}
           </div>
         ))}
       </div>

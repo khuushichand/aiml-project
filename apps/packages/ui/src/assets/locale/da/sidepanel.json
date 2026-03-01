@@ -200,5 +200,16 @@
       "html": "HTML",
       "xml": "XML"
     }
+  },
+  "persona": {
+    "unsavedStateDiscardPrompt": "Du har ikke-gemte ændringer i statusdokumentet. Vil du kassere lokale kladder?",
+    "unsavedStateDiscardPromptConnect": "Du har ikke-gemte ændringer i statusdokumentet. Vil du oprette forbindelse og kassere lokale kladder?",
+    "unsavedStateDiscardPromptDisconnect": "Du har ikke-gemte ændringer i statusdokumentet. Vil du afbryde forbindelsen og kassere lokale kladder?",
+    "unsavedStateDiscardPromptReloadState": "Du har ikke-gemte ændringer i statusdokumentet. Vil du indlæse status og kassere lokale kladder?",
+    "unsavedStateDiscardPromptPersonaSwitch": "Du har ikke-gemte ændringer i statusdokumentet. Vil du skifte persona og kassere lokale kladder?",
+    "unsavedStateDiscardPromptSessionSwitch": "Du har ikke-gemte ændringer i statusdokumentet. Vil du skifte session og kassere lokale kladder?",
+    "unsavedStateDiscardPromptRestoreState": "Du har ikke-gemte ændringer i statusdokumentet. Vil du gendanne denne statusversion og kassere lokale kladder?",
+    "unsavedStateDiscardPromptRouteTransition": "Du har ikke-gemte ændringer i statusdokumentet. Vil du forlade denne side og kassere lokale kladder?",
+    "unsavedStateBeforeUnloadPrompt": "Du har ikke-gemte ændringer i statusdokumentet. Vil du forlade denne side uden at gemme?"
   }
 }

@@ -149,6 +149,8 @@ async def websocket_parakeet_core(
 
                 if (config.model != old_model) or (config.model_variant != old_variant):
                     # reset state and rebuild transcriber for new model selection
+                    with contextlib.suppress(_PARAKEET_WS_NONCRITICAL_EXCEPTIONS):
+                        transcriber.close()
                     transcriber = ParakeetCoreTranscriber(config=config, decode_fn=decode_fn)
                     if getattr(transcriber, 'decode_fn', None) is None:
                         await websocket.send_json({
@@ -369,6 +371,10 @@ async def websocket_parakeet_core(
             await websocket.send_json({"type": "error", "message": str(e)})
     finally:
         try:
+            with contextlib.suppress(_PARAKEET_WS_NONCRITICAL_EXCEPTIONS):
+                await transcriber.flush()
+            with contextlib.suppress(_PARAKEET_WS_NONCRITICAL_EXCEPTIONS):
+                transcriber.close()
             if insights_engine:
                 with contextlib.suppress(_PARAKEET_WS_NONCRITICAL_EXCEPTIONS):
                     await insights_engine.close()

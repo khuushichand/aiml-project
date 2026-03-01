@@ -56,7 +56,7 @@ try:
 except (ImportError, ModuleNotFoundError):  # pragma: no cover - optional in minimal profiles
     RGRequest = None  # type: ignore[assignment]
 
-try:  # Align HTTP 413 compatibility with legacy endpoint module
+try:  # Align HTTP 413 compatibility across FastAPI/Starlette versions
     HTTP_413_TOO_LARGE = status.HTTP_413_CONTENT_TOO_LARGE
 except AttributeError:  # Starlette < 0.27
     HTTP_413_TOO_LARGE = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
@@ -247,68 +247,6 @@ def _callable_accepts_keyword(
         candidate.kind == inspect.Parameter.VAR_KEYWORD
         for candidate in signature.parameters.values()
     )
-
-
-def _callable_for_keyword_probe(
-    *,
-    candidate_callable: Callable[..., Any],
-    core_fallback: Callable[..., Any],
-) -> Callable[..., Any]:
-    """
-    Return the callable that should be inspected for keyword support.
-
-    Endpoint media shim wrappers intentionally use `*args, **kwargs` and can
-    over-report support for keywords the underlying core implementation does not
-    accept. When we detect that known shim pattern, inspect the core fallback
-    instead.
-    """
-    try:
-        signature = inspect.signature(candidate_callable)
-    except (TypeError, ValueError):
-        return candidate_callable
-
-    has_var_keyword = any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        for parameter in signature.parameters.values()
-    )
-    if not has_var_keyword:
-        return candidate_callable
-
-    candidate_module = getattr(candidate_callable, "__module__", "")
-    candidate_name = getattr(candidate_callable, "__name__", "")
-    if (
-        candidate_module
-        == "tldw_Server_API.app.api.v1.endpoints.media"
-        and candidate_name in {"process_videos", "process_audio_files"}
-    ):
-        return core_fallback
-
-    return candidate_callable
-
-
-def _resolve_shimmed_batch_processor(
-    *,
-    core_callable: Callable[..., Any],
-    media_module: Any,
-    shim_attr: str,
-    shim_core_attr: str,
-) -> Callable[..., Any]:
-    """
-    Resolve shimmed processor callable while avoiding stale endpoint aliases.
-
-    Endpoint module aliases (`process_* = _process_*_core`) can become stale when
-    tests monkeypatch the core module directly after endpoint import. In that case,
-    prefer the currently patched core callable.
-    """
-    shimmed_callable = getattr(media_module, shim_attr, None)
-    if not callable(shimmed_callable):
-        return core_callable
-
-    shim_core_callable = getattr(media_module, shim_core_attr, None)
-    if shimmed_callable is shim_core_callable and core_callable is not shim_core_callable:
-        return core_callable
-
-    return shimmed_callable
 
 
 def _normalize_analysis_text_chunk(
@@ -1281,9 +1219,9 @@ def _resolve_ingestion_file_validator(media_mod: Any | None) -> Any:
     """
     Resolve the shared file validator instance used by media ingestion flows.
 
-    Prefer the modular endpoint shim (for tests that monkeypatch
-    `endpoints.media.file_validator_instance`) and fall back to the core
-    dependency singleton.
+    Prefer the endpoint-exported validator patchpoint (for tests that
+    monkeypatch `endpoints.media.file_validator_instance`) and fall back to
+    the core dependency singleton.
     """
     try:
         from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (  # type: ignore  # noqa: E501
@@ -1916,8 +1854,8 @@ def validate_add_media_inputs(
     """
     Validate basic inputs for the `/media/add` endpoint.
 
-    This is the core implementation of the legacy `_validate_inputs`
-    helper previously defined in `_legacy_media`.
+    This is the core implementation of the historical endpoint
+    `_validate_inputs` helper.
     """
     if not urls and not files:
         logger.warning("No URLs or files provided in add_media request")
@@ -1940,8 +1878,8 @@ def determine_add_media_final_status(results: list[dict[str, Any]]) -> int:
     """
     Determine the overall HTTP status code for `/media/add` responses.
 
-    Mirrors the legacy `_determine_final_status` behaviour while living
-    in the core ingestion module.
+    Mirrors the previous endpoint-local `_determine_final_status` behavior
+    while living in the core ingestion module.
     """
     if not results:
         # This case should ideally be handled earlier if no inputs were valid.
@@ -1973,14 +1911,13 @@ async def add_media_orchestrate(
     Orchestration helper for the `/media/add` endpoint.
 
     This function now owns the full ingestion and processing pipeline
-    that previously lived in `_legacy_media._add_media_impl`, while
-    reusing helper functions defined in that module and the modular
-    `media` shim so tests can continue to monkeypatch helpers via
-    `endpoints.media`.
+    that previously lived in endpoint-local helpers, while resolving
+    selected helpers from modular `media` exports so tests can
+    monkeypatch `endpoints.media.*` patch points.
     """
-    # Resolve helpers via the modular `media` shim when available so
+    # Resolve helpers via the modular `media` exports when available so
     # tests that patch `endpoints.media.*` continue to work. Fall back
-    # to core implementations when the shim is unavailable.
+    # to core implementations when those exports are unavailable.
     try:
         from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
             media as media_mod,
@@ -1996,19 +1933,12 @@ async def add_media_orchestrate(
     from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (  # type: ignore  # noqa: E501
         file_validator_instance as core_file_validator_instance,
     )
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (  # type: ignore  # noqa: E501
-        TempDirManager as CoreTempDirManager,
+    from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore  # noqa: E501
+        input_sourcing as input_sourcing_mod,
     )
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
-        save_uploaded_files as core_save_uploaded_files,
-    )
+    CoreTempDirManager = input_sourcing_mod.TempDirManager
 
     if media_mod is not None:
-        _save_uploaded_files = getattr(  # type: ignore[assignment]
-            media_mod,
-            "_save_uploaded_files",
-            core_save_uploaded_files,
-        )
         file_validator_instance = getattr(  # type: ignore[assignment]
             media_mod,
             "file_validator_instance",
@@ -2024,23 +1954,10 @@ async def add_media_orchestrate(
             "TempDirManager",
             CoreTempDirManager,
         )
-        _process_doc_item_fn = getattr(  # type: ignore[assignment]
-            media_mod,
-            "_process_document_like_item",
-            None,
-        )
     else:  # pragma: no cover - fallback for minimal profiles
-        _save_uploaded_files = core_save_uploaded_files  # type: ignore[assignment]
         file_validator_instance = core_file_validator_instance  # type: ignore[assignment]
         TemplateClassifier = None  # type: ignore[assignment]
         TempDirManagerCls = CoreTempDirManager  # type: ignore[assignment]
-        _process_doc_item_fn = None
-
-    if _process_doc_item_fn is None:
-        # Fall back to the core helper when the modular shim is not
-        # present; this still centralizes behaviour while keeping
-        # resolver logic simple.
-        _process_doc_item_fn = process_document_like_item  # type: ignore[assignment]
 
     request_started_at = time.monotonic()
     request_outcome = "error"
@@ -2194,7 +2111,7 @@ async def add_media_orchestrate(
             }
             allowed_exts = allowed_ext_map.get(str(form_data.media_type).lower())
 
-            saved_files_info, file_save_errors = await _save_uploaded_files(
+            saved_files_info, file_save_errors = await input_sourcing_mod.save_uploaded_files(
                 files or [],
                 temp_dir_path,
                 validator=file_validator_instance,
@@ -2467,7 +2384,7 @@ async def add_media_orchestrate(
             except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as auto_err:
                 logger.warning("Auto-apply chunking template failed: {}", auto_err)
 
-            # Even if not used directly here, preserve the legacy call
+            # Even if not used directly here, preserve the existing call
             # to common options preparation to keep side effects/logging.
             _prepare_common_options(form_data, chunking_options_dict)
 
@@ -2543,7 +2460,7 @@ async def add_media_orchestrate(
 
                 async def _run_doc_item(source: str) -> dict[str, Any]:
                     async with semaphore:
-                        return await _process_doc_item_fn(  # type: ignore[misc]
+                        return await process_document_like_item(
                             item_input_ref=source_to_ref_map.get(source, source),
                             processing_source=source,
                             media_type=form_data.media_type,
@@ -2939,10 +2856,9 @@ async def persist_primary_av_item(
     Persist a single audio/video item processed by the /add orchestration.
 
     This helper lifts the DB write + claims persistence logic used by
-    `_process_batch_media` so it can be reused and eventually migrated
-    out of the legacy endpoint module entirely.
+    `_process_batch_media` so it can be reused from the core ingestion module.
     """
-    # Match legacy guard: only attempt DB writes when we have a DB path,
+    # Match historical guard: only attempt DB writes when we have a DB path,
     # client id, and a successful or warning status.
     if not (db_path and client_id and process_result.get("status") in ["Success", "Warning"]):
         return
@@ -2966,7 +2882,7 @@ async def persist_primary_av_item(
         )
     final_keywords_list = sorted(combined_keywords)
 
-    # Use original input ref for default title to match legacy.
+    # Use original input ref for default title to match previous endpoint behavior.
     default_title = FilePath(str(original_input_ref)).stem if original_input_ref else "Untitled"
 
     title_for_db = metadata_for_db.get(
@@ -2975,7 +2891,7 @@ async def persist_primary_av_item(
     )
     author_for_db = metadata_for_db.get("author", getattr(form_data, "author", None))
 
-    # When there is no content, mirror legacy behavior: skip DB writes but
+    # When there is no content, mirror prior behavior: skip DB writes but
     # still persist claims (with media_id=None) and update db_message/db_id.
     if not content_for_db:
         process_result["db_message"] = "DB persistence skipped (no content)."
@@ -3381,9 +3297,8 @@ async def process_batch_media(
     """
     Core implementation of the audio/video batch processing helper used by `/media/add`.
 
-    This function mirrors the legacy `_process_batch_media` behaviour while living
-    in the core ingestion module so it can be reused independently of the legacy
-    endpoint file.
+    This function mirrors the previous endpoint-local `_process_batch_media`
+    behavior while living in the core ingestion module for shared reuse.
     """
     combined_results: list[dict[str, Any]] = []
     all_processing_sources = urls + uploaded_file_paths
@@ -3753,22 +3668,8 @@ async def process_batch_media(
             )
 
             target_callable: Callable[..., Any] = process_videos
-            try:
-                import tldw_Server_API.app.api.v1.endpoints.media as _media_mod  # type: ignore
-
-                target_callable = _resolve_shimmed_batch_processor(
-                    core_callable=process_videos,
-                    media_module=_media_mod,
-                    shim_attr="process_videos",
-                    shim_core_attr="_process_videos_core",
-                )
-            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
-                target_callable = process_videos
             attach_chunk_options = _callable_accepts_keyword(
-                _callable_for_keyword_probe(
-                    candidate_callable=target_callable,
-                    core_fallback=process_videos,
-                ),
+                target_callable,
                 "chunk_options",
             )
 
@@ -3844,22 +3745,8 @@ async def process_batch_media(
             )
 
             target_callable: Callable[..., Any] = process_audio_files
-            try:
-                import tldw_Server_API.app.api.v1.endpoints.media as _media_mod  # type: ignore
-
-                target_callable = _resolve_shimmed_batch_processor(
-                    core_callable=process_audio_files,
-                    media_module=_media_mod,
-                    shim_attr="process_audio_files",
-                    shim_core_attr="_process_audio_files_core",
-                )
-            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
-                target_callable = process_audio_files
             attach_chunk_options = _callable_accepts_keyword(
-                _callable_for_keyword_probe(
-                    candidate_callable=target_callable,
-                    core_fallback=process_audio_files,
-                ),
+                target_callable,
                 "chunk_options",
             )
 
@@ -4180,12 +4067,11 @@ async def process_document_like_item(
     document-like items (PDF, generic documents/JSON, ebooks, and emails)
     used by the `/media/add` endpoint.
 
-    This mirrors the behaviour of the legacy `_process_document_like_item`
-    implementation while living in the core ingestion module.
+    This mirrors the behavior of the previous endpoint-local
+    `_process_document_like_item` implementation while living in core.
     """
-    # Resolve shimmed helpers via the modular `media` package when
-    # available so tests that patch `endpoints.media.*` continue to
-    # observe calls, while keeping this implementation canonical.
+    # Resolve media-module exports when available so validator monkeypatching
+    # (`endpoints.media.file_validator_instance`) continues to apply.
     try:  # type: ignore[assignment]
         from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
             media as _media_mod,
@@ -4259,19 +4145,7 @@ async def process_document_like_item(
                 download_url_async as _core_download_url_async,
             )
 
-            # Allow tests to patch `media._download_url_async` while falling
-            # back to the core helper in normal operation.
-            if _media_mod is not None:
-                try:
-                    download_url_async = getattr(  # type: ignore[assignment]
-                        _media_mod,
-                        "_download_url_async",
-                        _core_download_url_async,
-                    )
-                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive fallback
-                    download_url_async = _core_download_url_async
-            else:  # pragma: no cover - minimal profiles
-                download_url_async = _core_download_url_async
+            download_url_async = _core_download_url_async
 
             allowed_extensions = _allowed_url_extensions(media_type, form_data)
             check_extension = bool(allowed_extensions)
@@ -4524,7 +4398,7 @@ async def process_document_like_item(
                 raise ValueError("Document processing requires a file path.")
             import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs  # type: ignore  # noqa: E501
 
-            # Prefer the shimmed `media.process_document_content` so
+            # Prefer endpoint-exported `media.process_document_content` so
             # tests can patch it; fall back to the core implementation.
             if _media_mod is not None:
                 try:
@@ -4941,7 +4815,7 @@ async def persist_doc_item_and_children(
 ) -> None:
     """
     Persist a single document/email item (and any children) produced by the /add
-    orchestration, mirroring the legacy post-processing DB logic.
+    orchestration, mirroring the previous post-processing DB logic.
     """
     content_for_db = final_result.get("content", "")
     analysis_for_db = final_result.get("summary") or final_result.get("analysis")

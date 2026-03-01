@@ -5,7 +5,9 @@ export const FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS = {
   research_studio_provenance_v1:
     "tldw:feature-rollout:research_studio_provenance_v1:percentage",
   research_studio_status_guardrails_v1:
-    "tldw:feature-rollout:research_studio_status_guardrails_v1:percentage"
+    "tldw:feature-rollout:research_studio_status_guardrails_v1:percentage",
+  watchlists_ia_reduced_nav_v1:
+    "tldw:feature-rollout:watchlists_ia_reduced_nav_v1:percentage"
 } as const
 
 const ROLLOUT_PERCENT_MIN = 0

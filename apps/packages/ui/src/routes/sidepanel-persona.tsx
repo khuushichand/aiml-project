@@ -1,7 +1,7 @@
 import React from "react"
 import { Button, Checkbox, Input, Select, Tag, Typography } from "antd"
 import { CheckCircle2, Send, XCircle } from "lucide-react"
-import { useNavigate } from "react-router-dom"
+import { useBlocker, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
@@ -63,7 +63,92 @@ type PersonaSessionSummary = {
   pending_plan_count?: number
 }
 
+type PersonaProfileResponse = {
+  id?: string
+  use_persona_state_context_default?: boolean
+}
+
+type PersonaStateDocsResponse = {
+  persona_id?: string
+  soul_md?: string | null
+  identity_md?: string | null
+  heartbeat_md?: string | null
+  last_modified?: string | null
+}
+
+type PersonaStateHistoryEntry = {
+  entry_id: string
+  field: "soul_md" | "identity_md" | "heartbeat_md"
+  content: string
+  is_active?: boolean
+  created_at?: string | null
+  last_modified?: string | null
+  version?: number
+}
+
+type PersonaStateHistoryResponse = {
+  persona_id?: string
+  entries?: PersonaStateHistoryEntry[]
+}
+
+type UnsavedStateDiscardReason =
+  | "generic"
+  | "connect"
+  | "disconnect"
+  | "reload_state"
+  | "persona_switch"
+  | "session_switch"
+  | "restore_state"
+  | "route_transition"
+  | "before_unload"
+
 const formatMemoryResultsLabel = (count: number) => `Memory results: ${count}`
+const _historyEntrySortEpoch = (entry: PersonaStateHistoryEntry): number => {
+  const candidate = String(entry.created_at || entry.last_modified || "").trim()
+  if (!candidate) return 0
+  const parsed = Date.parse(candidate)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+const PERSONA_STATE_EDITOR_EXPANDED_PREF_KEY =
+  "sidepanel:persona:state-editor-expanded"
+const PERSONA_STATE_HISTORY_ORDER_PREF_KEY = "sidepanel:persona:state-history-order"
+
+const _readBoolPreference = (key: string, fallback: boolean): boolean => {
+  if (typeof window === "undefined") return fallback
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (raw == null) return fallback
+    const normalized = raw.trim().toLowerCase()
+    if (normalized === "true") return true
+    if (normalized === "false") return false
+  } catch {
+    // ignore storage access errors
+  }
+  return fallback
+}
+
+const _readHistoryOrderPreference = (): "newest" | "oldest" => {
+  if (typeof window === "undefined") return "newest"
+  try {
+    const raw = window.localStorage
+      .getItem(PERSONA_STATE_HISTORY_ORDER_PREF_KEY)
+      ?.trim()
+      .toLowerCase()
+    if (raw === "oldest") return "oldest"
+  } catch {
+    // ignore storage access errors
+  }
+  return "newest"
+}
+
+const _confirmWithBrowserPrompt = (message: string): boolean => {
+  if (typeof window === "undefined" || typeof window.confirm !== "function") return true
+  try {
+    return window.confirm(message)
+  } catch {
+    return true
+  }
+}
 
 const SidepanelPersona = () => {
   const { t } = useTranslation(["sidepanel", "common"])
@@ -82,6 +167,37 @@ const SidepanelPersona = () => {
   const [resumeSessionId, setResumeSessionId] = React.useState<string>("")
   const [memoryEnabled, setMemoryEnabled] = React.useState(true)
   const [memoryTopK, setMemoryTopK] = React.useState<number>(3)
+  const [personaStateContextEnabled, setPersonaStateContextEnabled] =
+    React.useState(true)
+  const [personaStateContextProfileDefault, setPersonaStateContextProfileDefault] =
+    React.useState(true)
+  const [updatingPersonaStateContextDefault, setUpdatingPersonaStateContextDefault] =
+    React.useState(false)
+  const [soulMd, setSoulMd] = React.useState("")
+  const [identityMd, setIdentityMd] = React.useState("")
+  const [heartbeatMd, setHeartbeatMd] = React.useState("")
+  const [savedSoulMd, setSavedSoulMd] = React.useState("")
+  const [savedIdentityMd, setSavedIdentityMd] = React.useState("")
+  const [savedHeartbeatMd, setSavedHeartbeatMd] = React.useState("")
+  const [stateLastModified, setStateLastModified] = React.useState<string | null>(null)
+  const [personaStateLoading, setPersonaStateLoading] = React.useState(false)
+  const [personaStateSaving, setPersonaStateSaving] = React.useState(false)
+  const [personaStateHistoryLoading, setPersonaStateHistoryLoading] =
+    React.useState(false)
+  const [personaStateHistoryLoaded, setPersonaStateHistoryLoaded] =
+    React.useState(false)
+  const [personaStateHistoryOrder, setPersonaStateHistoryOrder] =
+    React.useState<"newest" | "oldest">(_readHistoryOrderPreference)
+  const [personaStateEditorExpanded, setPersonaStateEditorExpanded] =
+    React.useState(() =>
+      _readBoolPreference(PERSONA_STATE_EDITOR_EXPANDED_PREF_KEY, true)
+    )
+  const [personaStateHistory, setPersonaStateHistory] = React.useState<
+    PersonaStateHistoryEntry[]
+  >([])
+  const [restoringStateEntryId, setRestoringStateEntryId] = React.useState<
+    string | null
+  >(null)
   const [connected, setConnected] = React.useState(false)
   const [connecting, setConnecting] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -91,6 +207,82 @@ const SidepanelPersona = () => {
   const [approvedStepMap, setApprovedStepMap] = React.useState<
     Record<number, boolean>
   >({})
+  const [activeSessionPersonaId, setActiveSessionPersonaId] = React.useState<string | null>(
+    null
+  )
+
+  const getUnsavedStateDiscardPrompt = React.useCallback(
+    (reason: UnsavedStateDiscardReason): string => {
+      switch (reason) {
+        case "connect":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptConnect",
+            "You have unsaved state-doc changes. Connect and discard local drafts?"
+          )
+        case "disconnect":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptDisconnect",
+            "You have unsaved state-doc changes. Disconnect and discard local drafts?"
+          )
+        case "reload_state":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptReloadState",
+            "You have unsaved state-doc changes. Load state and discard local drafts?"
+          )
+        case "persona_switch":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptPersonaSwitch",
+            "You have unsaved state-doc changes. Switch persona and discard local drafts?"
+          )
+        case "session_switch":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptSessionSwitch",
+            "You have unsaved state-doc changes. Switch session and discard local drafts?"
+          )
+        case "restore_state":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptRestoreState",
+            "You have unsaved state-doc changes. Restore this state version and discard local drafts?"
+          )
+        case "route_transition":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptRouteTransition",
+            "You have unsaved state-doc changes. Leave this page and discard local drafts?"
+          )
+        case "before_unload":
+          return t(
+            "sidepanel:persona.unsavedStateBeforeUnloadPrompt",
+            "You have unsaved state-doc changes. Leave this page without saving?"
+          )
+        case "generic":
+        default:
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPrompt",
+            "You have unsaved state-doc changes. Discard local drafts?"
+          )
+      }
+    },
+    [t]
+  )
+
+  const confirmDiscardUnsavedStateDrafts = React.useCallback((reason: UnsavedStateDiscardReason = "generic"): boolean => {
+    if (
+      soulMd === savedSoulMd &&
+      identityMd === savedIdentityMd &&
+      heartbeatMd === savedHeartbeatMd
+    ) {
+      return true
+    }
+    return _confirmWithBrowserPrompt(getUnsavedStateDiscardPrompt(reason))
+  }, [
+    getUnsavedStateDiscardPrompt,
+    heartbeatMd,
+    identityMd,
+    savedHeartbeatMd,
+    savedIdentityMd,
+    savedSoulMd,
+    soulMd,
+  ])
 
   const appendLog = React.useCallback(
     (kind: PersonaLogEntry["kind"], text: string) => {
@@ -108,7 +300,10 @@ const SidepanelPersona = () => {
     []
   )
 
-  const disconnect = React.useCallback(() => {
+  const disconnect = React.useCallback((options?: { force?: boolean }) => {
+    if (!options?.force && !confirmDiscardUnsavedStateDrafts("disconnect")) {
+      return false
+    }
     const ws = wsRef.current
     if (!ws) return
     manuallyClosingRef.current = true
@@ -119,7 +314,11 @@ const SidepanelPersona = () => {
     }
     wsRef.current = null
     setConnected(false)
-  }, [])
+    setActiveSessionPersonaId(null)
+    setPersonaStateHistory([])
+    setPersonaStateHistoryLoaded(false)
+    return true
+  }, [confirmDiscardUnsavedStateDrafts])
 
   const handleIncomingPayload = React.useCallback(
     (payload: any) => {
@@ -205,15 +404,207 @@ const SidepanelPersona = () => {
     [appendLog]
   )
 
+  const applyPersonaStatePayload = React.useCallback((payload: PersonaStateDocsResponse) => {
+    const nextSoulMd = String(payload?.soul_md ?? "")
+    const nextIdentityMd = String(payload?.identity_md ?? "")
+    const nextHeartbeatMd = String(payload?.heartbeat_md ?? "")
+    setSoulMd(nextSoulMd)
+    setIdentityMd(nextIdentityMd)
+    setHeartbeatMd(nextHeartbeatMd)
+    setSavedSoulMd(nextSoulMd)
+    setSavedIdentityMd(nextIdentityMd)
+    setSavedHeartbeatMd(nextHeartbeatMd)
+    setStateLastModified(payload?.last_modified ? String(payload.last_modified) : null)
+  }, [])
+
+  const getTargetPersonaId = React.useCallback(
+    (override?: string): string =>
+      String(override || (connected ? activeSessionPersonaId : selectedPersonaId) || "").trim(),
+    [activeSessionPersonaId, connected, selectedPersonaId]
+  )
+
+  const loadPersonaStateDocs = React.useCallback(
+    async (personaIdOverride?: string, options?: { silent?: boolean }) => {
+      const personaId = getTargetPersonaId(personaIdOverride)
+      if (!personaId) return false
+      const silent = options?.silent === true
+      if (!silent && !confirmDiscardUnsavedStateDrafts("reload_state")) {
+        return false
+      }
+      setPersonaStateLoading(true)
+      if (!silent) {
+        setError(null)
+      }
+      try {
+        const stateResp = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/state` as any,
+          { method: "GET" }
+        )
+        if (!stateResp.ok) {
+          if (!silent) {
+            throw new Error(stateResp.error || "Failed to load persona state docs")
+          }
+          return false
+        }
+        const statePayload = (await stateResp.json()) as PersonaStateDocsResponse
+        applyPersonaStatePayload(statePayload)
+        return true
+      } catch (err: any) {
+        if (!silent) {
+          setError(String(err?.message || "Failed to load persona state docs"))
+        }
+        return false
+      } finally {
+        setPersonaStateLoading(false)
+      }
+    },
+    [applyPersonaStatePayload, confirmDiscardUnsavedStateDrafts, getTargetPersonaId]
+  )
+
+  const loadPersonaStateHistory = React.useCallback(
+    async (personaIdOverride?: string) => {
+      const personaId = getTargetPersonaId(personaIdOverride)
+      if (!personaId) return false
+      setPersonaStateHistoryLoading(true)
+      setError(null)
+      try {
+        const historyResp = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/state/history?include_archived=true&limit=30` as any,
+          { method: "GET" }
+        )
+        if (!historyResp.ok) {
+          throw new Error(historyResp.error || "Failed to load persona state history")
+        }
+        const historyPayload = (await historyResp.json()) as PersonaStateHistoryResponse
+        const entries = Array.isArray(historyPayload?.entries)
+          ? historyPayload.entries
+          : []
+        setPersonaStateHistory(entries)
+        setPersonaStateHistoryLoaded(true)
+        return true
+      } catch (err: any) {
+        setError(String(err?.message || "Failed to load persona state history"))
+        return false
+      } finally {
+        setPersonaStateHistoryLoading(false)
+      }
+    },
+    [getTargetPersonaId]
+  )
+
+  const savePersonaStateDocs = React.useCallback(async () => {
+    const personaId = getTargetPersonaId()
+    if (!personaId || personaStateSaving) return
+    if (
+      soulMd === savedSoulMd &&
+      identityMd === savedIdentityMd &&
+      heartbeatMd === savedHeartbeatMd
+    ) {
+      return true
+    }
+    setPersonaStateSaving(true)
+    setError(null)
+    try {
+      const toNullable = (value: string): string | null =>
+        String(value || "").trim().length > 0 ? value : null
+      const saveResp = await tldwClient.fetchWithAuth(
+        `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/state` as any,
+        {
+          method: "PUT",
+          body: {
+            soul_md: toNullable(soulMd),
+            identity_md: toNullable(identityMd),
+            heartbeat_md: toNullable(heartbeatMd)
+          }
+        }
+      )
+      if (!saveResp.ok) {
+        throw new Error(saveResp.error || "Failed to save persona state docs")
+      }
+      const savePayload = (await saveResp.json()) as PersonaStateDocsResponse
+      applyPersonaStatePayload(savePayload)
+      if (personaStateHistoryLoaded) {
+        void loadPersonaStateHistory(personaId)
+      }
+      appendLog("notice", "Saved persona state docs")
+      return true
+    } catch (err: any) {
+      setError(String(err?.message || "Failed to save persona state docs"))
+      return false
+    } finally {
+      setPersonaStateSaving(false)
+    }
+  }, [
+    appendLog,
+    applyPersonaStatePayload,
+    heartbeatMd,
+    identityMd,
+    getTargetPersonaId,
+    loadPersonaStateHistory,
+    personaStateHistoryLoaded,
+    personaStateSaving,
+    savedHeartbeatMd,
+    savedIdentityMd,
+    savedSoulMd,
+    soulMd
+  ])
+
+  const restorePersonaStateHistoryEntry = React.useCallback(
+    async (entryId: string) => {
+      const personaId = getTargetPersonaId()
+      const trimmedEntryId = String(entryId || "").trim()
+      if (!personaId || !trimmedEntryId || restoringStateEntryId) return false
+      if (!confirmDiscardUnsavedStateDrafts("restore_state")) {
+        return false
+      }
+      setRestoringStateEntryId(trimmedEntryId)
+      setError(null)
+      try {
+        const restoreResp = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/state/restore` as any,
+          {
+            method: "POST",
+            body: { entry_id: trimmedEntryId }
+          }
+        )
+        if (!restoreResp.ok) {
+          throw new Error(restoreResp.error || "Failed to restore persona state version")
+        }
+        const restorePayload = (await restoreResp.json()) as PersonaStateDocsResponse
+        applyPersonaStatePayload(restorePayload)
+        await loadPersonaStateHistory(personaId)
+        appendLog("notice", "Restored persona state version")
+        return true
+      } catch (err: any) {
+        setError(String(err?.message || "Failed to restore persona state version"))
+        return false
+      } finally {
+        setRestoringStateEntryId(null)
+      }
+    },
+    [
+      appendLog,
+      applyPersonaStatePayload,
+      confirmDiscardUnsavedStateDrafts,
+      getTargetPersonaId,
+      loadPersonaStateHistory,
+      restoringStateEntryId,
+    ]
+  )
+
   const connect = React.useCallback(async () => {
     if (connecting || connected) return
+    if (!confirmDiscardUnsavedStateDrafts("connect")) return
     setConnecting(true)
     setError(null)
 
     try {
-      disconnect()
+      disconnect({ force: true })
+      setActiveSessionPersonaId(null)
       setPendingPlan(null)
       setApprovedStepMap({})
+      setPersonaStateHistory([])
+      setPersonaStateHistoryLoaded(false)
 
       const config = await tldwClient.getConfig()
       if (!config) {
@@ -232,11 +623,34 @@ const SidepanelPersona = () => {
         : []
       setCatalog(personas)
 
+      const selectedPersonaIsValid = personas.some(
+        (persona) => String(persona.id || "") === selectedPersonaId
+      )
       const resolvedPersonaId =
-        selectedPersonaId || personas[0]?.id || "research_assistant"
-      if (!selectedPersonaId && resolvedPersonaId) {
+        (selectedPersonaIsValid ? selectedPersonaId : personas[0]?.id) ||
+        selectedPersonaId ||
+        "research_assistant"
+      if (resolvedPersonaId && resolvedPersonaId !== selectedPersonaId) {
         setSelectedPersonaId(resolvedPersonaId)
       }
+      setPersonaStateContextEnabled(true)
+      setPersonaStateContextProfileDefault(true)
+      try {
+        const profileResp = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(resolvedPersonaId)}` as any,
+          { method: "GET" }
+        )
+        if (profileResp.ok) {
+          const profilePayload = (await profileResp.json()) as PersonaProfileResponse
+          const stateContextDefault =
+            profilePayload?.use_persona_state_context_default !== false
+          setPersonaStateContextEnabled(stateContextDefault)
+          setPersonaStateContextProfileDefault(stateContextDefault)
+        }
+      } catch {
+        // profile fetch is optional for route initialization
+      }
+      void loadPersonaStateDocs(resolvedPersonaId, { silent: true })
 
       const sessionsResp = await tldwClient.fetchWithAuth(
         `/api/v1/persona/sessions?persona_id=${encodeURIComponent(resolvedPersonaId)}&limit=50` as any,
@@ -267,6 +681,13 @@ const SidepanelPersona = () => {
       const nextSessionId = String(sessionPayload?.session_id || "").trim()
       if (!nextSessionId) {
         throw new Error("Persona session response missing session_id")
+      }
+      const connectedPersonaId =
+        String(sessionPayload?.persona?.id || resolvedPersonaId || "").trim() ||
+        resolvedPersonaId
+      setActiveSessionPersonaId(connectedPersonaId)
+      if (connectedPersonaId && connectedPersonaId !== selectedPersonaId) {
+        setSelectedPersonaId(connectedPersonaId)
       }
       setSessionId(nextSessionId)
       setResumeSessionId(nextSessionId)
@@ -319,21 +740,170 @@ const SidepanelPersona = () => {
     }
   }, [
     appendLog,
+    confirmDiscardUnsavedStateDrafts,
     connected,
     connecting,
     disconnect,
     handleIncomingPayload,
+    loadPersonaStateDocs,
     resumeSessionId,
     selectedPersonaId
   ])
 
   React.useEffect(() => {
     return () => {
-      disconnect()
+      const ws = wsRef.current
+      if (!ws) return
+      manuallyClosingRef.current = true
+      try {
+        ws.close()
+      } catch {
+        // ignore close errors
+      }
+      wsRef.current = null
     }
-  }, [disconnect])
+  }, [])
 
   const canSend = connected && Boolean(sessionId) && Boolean(input.trim())
+  const hasUnsavedPersonaStateChanges =
+    soulMd !== savedSoulMd ||
+    identityMd !== savedIdentityMd ||
+    heartbeatMd !== savedHeartbeatMd
+  const routeNavigationBlocker = useBlocker(hasUnsavedPersonaStateChanges)
+  const stateDirtyLabel = hasUnsavedPersonaStateChanges
+    ? t("sidepanel:persona.stateDirty", "unsaved")
+    : t("sidepanel:persona.stateSaved", "saved")
+  const stateEditorToggleLabel = personaStateEditorExpanded
+    ? t("sidepanel:persona.stateEditorHide", "Hide editor")
+    : t("sidepanel:persona.stateEditorShow", "Show editor")
+  const orderedPersonaStateHistory = React.useMemo(() => {
+    const sorted = [...personaStateHistory].sort(
+      (left, right) => _historyEntrySortEpoch(left) - _historyEntrySortEpoch(right)
+    )
+    if (personaStateHistoryOrder === "newest") {
+      sorted.reverse()
+    }
+    return sorted
+  }, [personaStateHistory, personaStateHistoryOrder])
+
+  const revertPersonaStateDraft = React.useCallback(() => {
+    setSoulMd(savedSoulMd)
+    setIdentityMd(savedIdentityMd)
+    setHeartbeatMd(savedHeartbeatMd)
+  }, [savedHeartbeatMd, savedIdentityMd, savedSoulMd])
+
+  React.useEffect(() => {
+    if (routeNavigationBlocker.state !== "blocked") return
+    if (confirmDiscardUnsavedStateDrafts("route_transition")) {
+      routeNavigationBlocker.proceed()
+    } else {
+      routeNavigationBlocker.reset()
+    }
+  }, [confirmDiscardUnsavedStateDrafts, routeNavigationBlocker])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined" || !hasUnsavedPersonaStateChanges) return
+    const promptMessage = getUnsavedStateDiscardPrompt("before_unload")
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = promptMessage
+      return promptMessage
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload)
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload)
+    }
+  }, [getUnsavedStateDiscardPrompt, hasUnsavedPersonaStateChanges])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.localStorage.setItem(
+        PERSONA_STATE_EDITOR_EXPANDED_PREF_KEY,
+        personaStateEditorExpanded ? "true" : "false"
+      )
+    } catch {
+      // ignore storage access errors
+    }
+  }, [personaStateEditorExpanded])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.localStorage.setItem(
+        PERSONA_STATE_HISTORY_ORDER_PREF_KEY,
+        personaStateHistoryOrder
+      )
+    } catch {
+      // ignore storage access errors
+    }
+  }, [personaStateHistoryOrder])
+
+  const updatePersonaStateContextDefault = React.useCallback(
+    async (nextDefault: boolean) => {
+      const personaId = getTargetPersonaId()
+      if (!personaId || updatingPersonaStateContextDefault || !connected) return
+      const previousDefault = personaStateContextProfileDefault
+      const previousEnabled = personaStateContextEnabled
+      setPersonaStateContextProfileDefault(nextDefault)
+      setPersonaStateContextEnabled(nextDefault)
+      setUpdatingPersonaStateContextDefault(true)
+      setError(null)
+
+      try {
+        const updateResp = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}` as any,
+          {
+            method: "PATCH",
+            body: { use_persona_state_context_default: nextDefault }
+          }
+        )
+        if (!updateResp.ok) {
+          throw new Error(
+            updateResp.error || "Failed to update persona state context default"
+          )
+        }
+        const profilePayload = (await updateResp.json()) as PersonaProfileResponse
+        const persistedDefault =
+          profilePayload?.use_persona_state_context_default !== false
+        setPersonaStateContextProfileDefault(persistedDefault)
+        setPersonaStateContextEnabled(persistedDefault)
+      } catch (err: any) {
+        setPersonaStateContextProfileDefault(previousDefault)
+        setPersonaStateContextEnabled(previousEnabled)
+        setError(String(err?.message || "Failed to update persona state context default"))
+      } finally {
+        setUpdatingPersonaStateContextDefault(false)
+      }
+    },
+    [
+      connected,
+      getTargetPersonaId,
+      personaStateContextEnabled,
+      personaStateContextProfileDefault,
+      updatingPersonaStateContextDefault
+    ]
+  )
+
+  const handlePersonaSelectionChange = React.useCallback(
+    (value: string) => {
+      const nextPersonaId = String(value || "").trim()
+      if (!nextPersonaId || nextPersonaId === selectedPersonaId) return
+      if (!confirmDiscardUnsavedStateDrafts("persona_switch")) return
+      setSelectedPersonaId(nextPersonaId)
+    },
+    [confirmDiscardUnsavedStateDrafts, selectedPersonaId]
+  )
+
+  const handleResumeSessionSelectionChange = React.useCallback(
+    (value: string) => {
+      const nextResumeSessionId = value === "__new__" ? "" : String(value)
+      if (nextResumeSessionId === resumeSessionId) return
+      if (!confirmDiscardUnsavedStateDrafts("session_switch")) return
+      setResumeSessionId(nextResumeSessionId)
+    },
+    [confirmDiscardUnsavedStateDrafts, resumeSessionId]
+  )
 
   const sendUserMessage = React.useCallback(() => {
     if (!canSend || !sessionId || !wsRef.current) return
@@ -345,6 +915,7 @@ const SidepanelPersona = () => {
           session_id: sessionId,
           text: trimmed,
           use_memory_context: memoryEnabled,
+          use_persona_state_context: personaStateContextEnabled,
           memory_top_k: memoryTopK
         })
       )
@@ -353,7 +924,15 @@ const SidepanelPersona = () => {
     } catch (err: any) {
       setError(String(err?.message || "Failed to send message"))
     }
-  }, [appendLog, canSend, input, memoryEnabled, memoryTopK, sessionId])
+  }, [
+    appendLog,
+    canSend,
+    input,
+    memoryEnabled,
+    memoryTopK,
+    personaStateContextEnabled,
+    sessionId
+  ])
 
   const loadSessionHistory = React.useCallback(async () => {
     if (!sessionId) return
@@ -486,8 +1065,9 @@ const SidepanelPersona = () => {
             size="small"
             className="min-w-[180px]"
             value={selectedPersonaId}
+            disabled={connected}
             aria-label={t("sidepanel:persona.select", "Select persona")}
-            onChange={(value) => setSelectedPersonaId(String(value))}
+            onChange={(value) => handlePersonaSelectionChange(String(value))}
             options={catalog.map((persona) => ({
               label: persona.name || persona.id,
               value: persona.id
@@ -501,9 +1081,7 @@ const SidepanelPersona = () => {
             value={resumeSessionId || "__new__"}
             aria-label={t("sidepanel:persona.resume", "Resume session")}
             disabled={connected}
-            onChange={(value) =>
-              setResumeSessionId(value === "__new__" ? "" : String(value))
-            }
+            onChange={(value) => handleResumeSessionSelectionChange(String(value))}
             options={[
               { label: t("sidepanel:persona.newSession", "New session"), value: "__new__" },
               ...sessionHistory.map((session) => ({
@@ -519,6 +1097,23 @@ const SidepanelPersona = () => {
             onChange={(event) => setMemoryEnabled(event.target.checked)}
           >
             {t("sidepanel:persona.memoryToggle", "Memory")}
+          </Checkbox>
+          <Checkbox
+            data-testid="persona-state-context-toggle"
+            checked={personaStateContextEnabled}
+            onChange={(event) => setPersonaStateContextEnabled(event.target.checked)}
+          >
+            {t("sidepanel:persona.stateContextToggle", "State context")}
+          </Checkbox>
+          <Checkbox
+            data-testid="persona-state-context-default-toggle"
+            checked={personaStateContextProfileDefault}
+            disabled={!connected || updatingPersonaStateContextDefault}
+            onChange={(event) => {
+              void updatePersonaStateContextDefault(event.target.checked)
+            }}
+          >
+            {t("sidepanel:persona.stateContextDefaultToggle", "Profile default")}
           </Checkbox>
           <Select
             data-testid="persona-memory-topk-select"
@@ -644,6 +1239,200 @@ const SidepanelPersona = () => {
             </div>
           </div>
         ) : null}
+
+        <div className="rounded-lg border border-border bg-surface p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Typography.Text strong>
+              {t("sidepanel:persona.stateDocs", "Persistent state docs")}
+            </Typography.Text>
+            <div className="flex flex-wrap items-center gap-1">
+              <Tag
+                data-testid="persona-state-dirty-tag"
+                color={hasUnsavedPersonaStateChanges ? "gold" : "green"}
+              >
+                {stateDirtyLabel}
+              </Tag>
+              {stateLastModified ? (
+                <Typography.Text type="secondary" className="text-xs">
+                  {`${t("sidepanel:persona.stateUpdatedPrefix", "updated")} ${stateLastModified}`}
+                </Typography.Text>
+              ) : null}
+              <Button
+                data-testid="persona-state-editor-toggle-button"
+                size="small"
+                onClick={() => {
+                  setPersonaStateEditorExpanded((prev) => !prev)
+                }}
+              >
+                {stateEditorToggleLabel}
+              </Button>
+            </div>
+          </div>
+          {personaStateEditorExpanded ? (
+            <>
+              <div className="mt-2 grid gap-2">
+                <Input.TextArea
+                  data-testid="persona-state-soul-input"
+                  value={soulMd}
+                  autoSize={{ minRows: 2, maxRows: 4 }}
+                  onChange={(event) => setSoulMd(event.target.value)}
+                  placeholder={t("sidepanel:persona.stateSoulPlaceholder", "soul.md")}
+                />
+                <Input.TextArea
+                  data-testid="persona-state-identity-input"
+                  value={identityMd}
+                  autoSize={{ minRows: 2, maxRows: 4 }}
+                  onChange={(event) => setIdentityMd(event.target.value)}
+                  placeholder={t("sidepanel:persona.stateIdentityPlaceholder", "identity.md")}
+                />
+                <Input.TextArea
+                  data-testid="persona-state-heartbeat-input"
+                  value={heartbeatMd}
+                  autoSize={{ minRows: 2, maxRows: 4 }}
+                  onChange={(event) => setHeartbeatMd(event.target.value)}
+                  placeholder={t("sidepanel:persona.stateHeartbeatPlaceholder", "heartbeat.md")}
+                />
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Button
+                  data-testid="persona-state-load-button"
+                  size="small"
+                  loading={personaStateLoading}
+                  disabled={!connected || personaStateSaving}
+                  onClick={() => {
+                    void loadPersonaStateDocs()
+                  }}
+                >
+                  {t("sidepanel:persona.stateLoad", "Load state")}
+                </Button>
+                <Button
+                  data-testid="persona-state-save-button"
+                  size="small"
+                  type="primary"
+                  loading={personaStateSaving}
+                  disabled={!connected || !hasUnsavedPersonaStateChanges}
+                  onClick={() => {
+                    void savePersonaStateDocs()
+                  }}
+                >
+                  {t("sidepanel:persona.stateSave", "Save state")}
+                </Button>
+                <Button
+                  data-testid="persona-state-revert-button"
+                  size="small"
+                  disabled={!hasUnsavedPersonaStateChanges || personaStateSaving}
+                  onClick={revertPersonaStateDraft}
+                >
+                  {t("sidepanel:persona.stateRevert", "Revert")}
+                </Button>
+                <Button
+                  data-testid="persona-state-history-button"
+                  size="small"
+                  loading={personaStateHistoryLoading}
+                  disabled={!connected}
+                  onClick={() => {
+                    void loadPersonaStateHistory()
+                  }}
+                >
+                  {t("sidepanel:persona.stateHistory", "Load history")}
+                </Button>
+              </div>
+              {personaStateHistory.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {personaStateHistory.length > 1 ? (
+                    <div className="mb-1 flex items-center gap-2 text-xs">
+                      <Typography.Text type="secondary" className="text-xs">
+                        {t("sidepanel:persona.stateHistoryOrderLabel", "Order")}
+                      </Typography.Text>
+                      <Button
+                        data-testid="persona-state-history-order-newest-button"
+                        size="small"
+                        type={personaStateHistoryOrder === "newest" ? "primary" : "default"}
+                        onClick={() => {
+                          setPersonaStateHistoryOrder("newest")
+                        }}
+                      >
+                        {t("sidepanel:persona.stateHistoryOrderNewest", "Newest")}
+                      </Button>
+                      <Button
+                        data-testid="persona-state-history-order-oldest-button"
+                        size="small"
+                        type={personaStateHistoryOrder === "oldest" ? "primary" : "default"}
+                        onClick={() => {
+                          setPersonaStateHistoryOrder("oldest")
+                        }}
+                      >
+                        {t("sidepanel:persona.stateHistoryOrderOldest", "Oldest")}
+                      </Button>
+                    </div>
+                  ) : null}
+                  {orderedPersonaStateHistory.map((entry) => (
+                    <div
+                      data-testid={`persona-state-history-entry-${entry.entry_id}`}
+                      key={entry.entry_id}
+                      className="rounded border border-border bg-surface2 px-2 py-1.5 text-xs"
+                    >
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Tag color={entry.is_active ? "green" : "default"}>
+                          {entry.is_active
+                            ? t("sidepanel:persona.stateHistoryActive", "active")
+                            : t("sidepanel:persona.stateHistoryArchived", "archived")}
+                        </Tag>
+                        <Tag color="blue">{entry.field}</Tag>
+                        {typeof entry.version === "number" ? (
+                          <Tag color="purple">{`v${entry.version}`}</Tag>
+                        ) : null}
+                        <Button
+                          data-testid={`persona-state-restore-${entry.entry_id}`}
+                          size="small"
+                          disabled={entry.is_active === true}
+                          loading={restoringStateEntryId === entry.entry_id}
+                          onClick={() => {
+                            void restorePersonaStateHistoryEntry(entry.entry_id)
+                          }}
+                        >
+                          {t("sidepanel:persona.stateRestore", "Restore")}
+                        </Button>
+                      </div>
+                      <div className="mt-1 whitespace-pre-wrap text-text">
+                        {String(entry.content || "")}
+                      </div>
+                      {entry.created_at || entry.last_modified ? (
+                        <Typography.Text
+                          data-testid={`persona-state-history-meta-${entry.entry_id}`}
+                          type="secondary"
+                          className="mt-1 block text-[11px]"
+                        >
+                          {[
+                            entry.created_at
+                              ? `${t("sidepanel:persona.stateHistoryCreated", "created")} ${entry.created_at}`
+                              : null,
+                            entry.last_modified
+                              ? `${t("sidepanel:persona.stateHistoryUpdated", "updated")} ${entry.last_modified}`
+                              : null
+                          ]
+                            .filter((item): item is string => Boolean(item))
+                            .join(" · ")}
+                        </Typography.Text>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : personaStateHistoryLoaded ? (
+                <Typography.Text
+                  data-testid="persona-state-history-empty"
+                  type="secondary"
+                  className="mt-3 block text-xs"
+                >
+                  {t(
+                    "sidepanel:persona.stateHistoryEmpty",
+                    "No state history entries yet."
+                  )}
+                </Typography.Text>
+              ) : null}
+            </>
+          ) : null}
+        </div>
 
         <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-surface p-3">
           <div className="space-y-2">

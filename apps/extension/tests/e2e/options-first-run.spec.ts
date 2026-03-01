@@ -1,6 +1,5 @@
 import { test, expect } from "@playwright/test"
 import path from "path"
-import { grantHostPermission } from "./utils/permissions"
 import { waitForConnectionStore, forceConnected } from "./utils/connection"
 import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 
@@ -8,47 +7,27 @@ const normalizeServerUrl = (value: string) =>
   value.match(/^https?:\/\//) ? value : `http://${value}`
 
 test.describe('Options first-run and connection panel', () => {
-  test('shows connection card and inline Set up server link navigates to tldw settings', async () => {
+  test('shows onboarding shell on first run', async () => {
     const extPath = path.resolve('build/chrome-mv3')
     const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
-    // Seed default config so the card deterministically shows the connection error state.
-    await page.evaluate(async (apiKey) => {
+    // Clear storage to guarantee first-run onboarding state.
+    await page.evaluate(async () => {
       await new Promise<void>((resolve) => {
         // @ts-ignore
         chrome.storage.local.clear(() => resolve())
       })
-      // @ts-ignore
-      await new Promise<void>((resolve) => {
-        chrome.storage.local.set(
-          {
-            tldwConfig: {
-              serverUrl: 'http://127.0.0.1:8000',
-              authMode: 'single-user',
-              apiKey
-            }
-          },
-          () => resolve()
-        )
-      })
-    }, DEFAULT_TLDW_API_KEY)
+    })
     await page.reload()
 
-    // Expect deterministic error card copy and CTAs.
-    await expect(page.getByText(/Can.?t reach your tldw server/i)).toBeVisible()
+    // First-run path should show onboarding shell + connect form.
+    await expect(page.getByText(/Home Onboarding/i)).toBeVisible()
     await expect(
-      page.getByRole('button', {
-        name: /Health & diagnostics|Open diagnostics|View diagnostics/i
-      })
+      page.getByText(/Welcome to tldw Browser Assistant.*connected/i)
     ).toBeVisible()
-    await expect(page.getByRole('button', { name: /Change server/i })).toBeVisible()
-
-    // Inline link button: "Set up server" should navigate to Settings → tldw
-    await page.getByRole('button', { name: /Change server/i }).click()
-
-    // URL should include settings route and the tldw page should render
-    await expect(page).toHaveURL(/options\.html#\/settings\/tldw/i)
-    await expect(page.getByText(/tldw Server Configuration/i)).toBeVisible()
+    await expect(page.getByText(/^Server URL$/i)).toBeVisible()
+    await expect(page.getByText(/^API Key$/i)).toBeVisible()
+    await expect(page.getByRole('button', { name: /Try Demo/i })).toBeVisible()
 
     await context.close()
   })
@@ -56,10 +35,10 @@ test.describe('Options first-run and connection panel', () => {
   test('Start chatting focuses the composer when connected', async () => {
     const { serverUrl, apiKey } = requireRealServerConfig(test)
     const serverBaseUrl = normalizeServerUrl(serverUrl)
-    const hostPermissionOrigin = `${new URL(serverBaseUrl).origin}/*`
 
     const extPath = path.resolve('build/chrome-mv3')
     const seed = {
+      __tldw_first_run_complete: true,
       tldwConfig: {
         serverUrl: serverBaseUrl,
         authMode: 'single-user',
@@ -72,37 +51,25 @@ test.describe('Options first-run and connection panel', () => {
     let page = initialPage
     const optionsUrl = `chrome-extension://${extensionId}/options.html`
 
-    // Ensure host permission for the mock server is granted
-    const granted = await grantHostPermission(context, extensionId, hostPermissionOrigin)
-    if (!granted) {
-      test.skip(true, `Host permission not granted for ${hostPermissionOrigin}; allow it in chrome://extensions > tldw Assistant > Site access, then re-run`)
-    }
-
-    // Seed valid config so the card shows connected state
-    await page.evaluate((cfg) => new Promise<void>((resolve) => {
-      // @ts-ignore
-      chrome.storage.local.set({ tldwConfig: cfg }, () => resolve())
-    }), { serverUrl: serverBaseUrl, authMode: 'single-user', apiKey })
-    await page.reload()
-    page = await context.newPage()
-    page.on('console', (msg) => console.log('console', msg.type(), msg.text()))
-    page.on('pageerror', (err) => console.log('pageerror', err.message))
     await page.goto(optionsUrl, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('#root', { state: 'attached', timeout: 5000 })
-    // Ensure the connection card renders (error or connected)
-    const cardHeadline = page
-      .locator('body')
-      .getByText(/Can.?t reach your tldw server|Connected to/i)
-    await expect(cardHeadline).toBeVisible()
 
-    // Force connected state via shared helper to avoid network flakiness
+    // Force connected state via shared helper to avoid network flakiness.
     await waitForConnectionStore(page, 'options-first-run-connected')
     await forceConnected(page, { serverUrl: serverBaseUrl }, 'options-first-run-connected')
 
-    // Connected card shows Start chatting; clicking focuses the composer
-    await expect(page.getByRole('button', { name: /Start chatting/i })).toBeVisible()
-    await page.getByRole('button', { name: /Start chatting/i }).click()
-    await expect(page.locator('#textarea-message')).toBeFocused()
+    // Landing hub should expose Start Chatting and route to the chat composer.
+    const landingDialog = page.getByRole('dialog', { name: /Welcome to tldw Assistant/i })
+    const useDialogButton = await landingDialog.isVisible().catch(() => false)
+    const startChattingButton = useDialogButton
+      ? landingDialog.getByRole('button', { name: /Start Chatting/i }).first()
+      : page.getByRole('button', { name: /Start Chatting/i }).first()
+    await expect(startChattingButton).toBeVisible()
+    await startChattingButton.click()
+    await expect(page).toHaveURL(/options\.html#\/chat/i)
+    const composer = page.locator('#textarea-message')
+    await expect(composer).toBeVisible()
+    await expect(composer).toBeFocused()
 
     await context.close()
   })

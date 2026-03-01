@@ -4,7 +4,7 @@ from __future__ import annotations
 Audio-specific batch helper for the /process-audios endpoint.
 
 This module lifts the core "call audio library + merge results" logic out of
-the legacy `/process-audios` implementation while preserving behavior. The
+the prior `/process-audios` implementation while preserving behavior. The
 HTTP layer (status codes, request/response models) remains in the endpoint
 modules.
 """
@@ -46,7 +46,7 @@ async def run_audio_batch(
     Execute the audio processing library and merge results with file errors.
 
     This helper mirrors the logic that was previously embedded directly in
-    `_legacy_media.process_audios_endpoint`:
+    the endpoint-local audio batch handler:
 
     - starts from any file-handling errors (upload/save failures),
     - calls `process_audio_files` in a thread executor,
@@ -161,7 +161,7 @@ async def run_audio_batch(
         batch_func = functools.partial(process_audio_files, **audio_args)
         processing_output = await loop.run_in_executor(None, batch_func)
     except Exception as exec_err:
-        # Mirror legacy behavior on library execution failure: mark all
+        # Mirror previous behavior on library execution failure: mark all
         # attempted inputs as errors while preserving any prior file errors.
         logger.error(
             "Error executing process_audio_files: {}", exec_err, exc_info=True

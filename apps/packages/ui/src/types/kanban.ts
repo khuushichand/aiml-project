@@ -15,6 +15,31 @@ export interface PaginationInfo {
 }
 
 // =============================================================================
+// Label Types
+// =============================================================================
+
+export interface Label {
+  id: number
+  uuid: string
+  board_id: number
+  name: string
+  color: string
+  created_at: string
+  updated_at: string
+}
+
+export interface LabelCreate {
+  name: string
+  color: string
+  client_id: string
+}
+
+export interface LabelUpdate {
+  name?: string
+  color?: string
+}
+
+// =============================================================================
 // Board Types
 // =============================================================================
 
@@ -116,6 +141,12 @@ export interface Card {
   deleted_at?: string | null
   version: number
   metadata?: Record<string, any> | null
+  // Fields from backend GET /boards/{id} nested response
+  labels?: Label[]
+  checklist_count?: number
+  checklist_complete?: number
+  checklist_total?: number
+  comment_count?: number
 }
 
 export interface CardCreate {
@@ -172,6 +203,49 @@ export interface ReorderRequest {
 export interface ReorderResponse {
   success: boolean
   message?: string
+}
+
+// =============================================================================
+// Checklist Types
+// =============================================================================
+
+export interface Checklist {
+  id: number
+  uuid: string
+  card_id: number
+  title: string
+  position: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ChecklistItem {
+  id: number
+  uuid: string
+  checklist_id: number
+  content: string
+  checked: boolean
+  position: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ChecklistWithItems extends Checklist {
+  items: ChecklistItem[]
+}
+
+// =============================================================================
+// Comment Types
+// =============================================================================
+
+export interface Comment {
+  id: number
+  uuid: string
+  card_id: number
+  user_id: string
+  content: string
+  created_at: string
+  updated_at: string
 }
 
 // =============================================================================

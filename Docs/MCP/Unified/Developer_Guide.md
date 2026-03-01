@@ -14,6 +14,7 @@
 9. [Contributing](#contributing)
 10. [API Reference](#api-reference)
 11. [Validation Metrics](#validation-metrics)
+12. [Governance Preflight](#governance-preflight)
 
 ## Architecture Overview
 
@@ -834,6 +835,24 @@ async def call_tool(params: Dict[str, Any], context: Dict[str, Any] = None):
     result = await execute_tool(tool_name, arguments)
     return result
 ```
+
+## Governance Preflight
+
+MCP Unified now includes a governance preflight before tool execution for non-governance tools.
+
+Behavior summary:
+- `governance.*` tools bypass preflight to avoid recursion.
+- Any request context with `metadata.governance_bypass=true` also bypasses preflight.
+- When governance denies execution, the existing JSON-RPC authorization error contract is preserved and governance details are added under `error.data.governance`.
+- Error code compatibility is retained (`AUTHORIZATION_ERROR`); governance metadata is additive.
+
+Rollout and observability:
+- Rollout mode is configured via `GOVERNANCE_ROLLOUT_MODE` (supported values: `off`, `shadow`, `enforce`).
+- Governance checks are emitted via `mcp_governance_checks_total{surface,category,status,rollout_mode}`.
+- Internal metrics expose the same counter family under `governance_check` with low-cardinality label normalization.
+
+Operational details and deployment guidance:
+- `Docs/MCP/Unified/Governance_Operations.md`
 
 ## Testing
 

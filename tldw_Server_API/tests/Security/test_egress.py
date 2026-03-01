@@ -43,3 +43,31 @@ class TestEgressPolicy:
         res = egress.evaluate_url_policy("http://example.com:bad/path")
         assert res.allowed is False
         assert "port" in (res.reason or "").lower()
+
+    def test_resolved_ips_override_blocks_private_targets(self, monkeypatch):
+        monkeypatch.setenv("WORKFLOWS_EGRESS_PROFILE", "permissive")
+        monkeypatch.setenv("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "true")
+        monkeypatch.delenv("WORKFLOWS_EGRESS_ALLOWLIST", raising=False)
+        monkeypatch.delenv("WORKFLOWS_EGRESS_DENYLIST", raising=False)
+        monkeypatch.delenv("EGRESS_ALLOWLIST", raising=False)
+        monkeypatch.delenv("EGRESS_DENYLIST", raising=False)
+
+        res = egress.evaluate_url_policy(
+            "https://example.com/path",
+            resolved_ips_override=["127.0.0.1"],
+        )
+        assert res.allowed is False
+        assert "private" in (res.reason or "").lower()
+
+    def test_evaluate_url_policy_exposes_resolved_ips(self, monkeypatch):
+        monkeypatch.setenv("WORKFLOWS_EGRESS_PROFILE", "permissive")
+        monkeypatch.setenv("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "true")
+        monkeypatch.delenv("WORKFLOWS_EGRESS_ALLOWLIST", raising=False)
+        monkeypatch.delenv("WORKFLOWS_EGRESS_DENYLIST", raising=False)
+        monkeypatch.delenv("EGRESS_ALLOWLIST", raising=False)
+        monkeypatch.delenv("EGRESS_DENYLIST", raising=False)
+        monkeypatch.setattr(egress, "_resolve_and_check_private", lambda _host: (True, ["93.184.216.34"]))
+
+        res = egress.evaluate_url_policy("https://example.com/resource")
+        assert res.allowed is True
+        assert res.resolved_ips == ("93.184.216.34",)

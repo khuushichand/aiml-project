@@ -146,9 +146,14 @@ def mock_openai_server():
 
     # Wait for server to start
     max_retries = 30
+    # Configurable for slower CI/test hosts; defaults to a short local timeout.
+    try:
+        health_timeout_s = float(os.getenv("MOCK_OPENAI_HEALTH_TIMEOUT_SECONDS", "5"))
+    except ValueError:
+        health_timeout_s = 5.0
     for _ in range(max_retries):
         try:
-            response = requests.get("http://localhost:8080/health")
+            response = requests.get("http://localhost:8080/health", timeout=health_timeout_s)
             if response.status_code == 200:
                 break
         except requests.ConnectionError:
@@ -460,7 +465,7 @@ def mock_embeddings(monkeypatch):
         """Generate deterministic fake embeddings based on text hash."""
         # Generate a deterministic embedding based on the input text
         import hashlib
-        text_hash = hashlib.md5(text.encode()).hexdigest()
+        text_hash = hashlib.md5(text.encode()).hexdigest()  # nosec B324
         seed = int(text_hash[:8], 16)
         np.random.seed(seed)
         # Return 384 dimensions for all-MiniLM-L6-v2 compatibility

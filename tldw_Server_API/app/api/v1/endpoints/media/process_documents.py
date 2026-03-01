@@ -28,10 +28,22 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
+    save_uploaded_files as core_save_uploaded_files,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
+    download_url_async as core_download_url_async,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     ProcessItem,
     run_batch_processor,
+)
+from tldw_Server_API.app.api.v1.endpoints.media.input_contracts import (
+    normalize_urls_field,
+    validate_media_inputs,
+)
+from tldw_Server_API.app.api.v1.endpoints.media.deprecation_signals import (
+    apply_media_legacy_headers,
+    build_media_legacy_signal,
 )
 
 router = APIRouter()
@@ -67,10 +79,9 @@ async def process_documents_endpoint(
     """
     Process Documents (No Persistence).
 
-    This is a modularized version of the original legacy implementation in
-    `_legacy_media.process_documents_endpoint`, preserving behavior while
-    routing through the `media` package and using the media shim for helpers
-    that tests monkeypatch (e.g. `_save_uploaded_files`, `_download_url_async`).
+    This is a modularized version of the original legacy implementation,
+    preserving behavior while
+    routing through the `media` package with core ingestion helpers.
     """
 
     logger.info("Request received for /process-documents (no persistence).")
@@ -91,9 +102,28 @@ async def process_documents_endpoint(
         form_data.perform_analysis,
         form_data.perform_chunking,
     )
+    legacy_urls_empty_sentinel_used = bool(form_data.urls and form_data.urls == [""])
+    if legacy_urls_empty_sentinel_used:
+        logger.info(
+            "Received urls=[''], treating as no URLs provided for document processing."
+        )
+    form_data.urls = normalize_urls_field(form_data.urls)
+    legacy_signal = (
+        build_media_legacy_signal(
+            successor="/api/v1/media/process-documents",
+            warning_code="legacy_urls_empty_sentinel",
+        )
+        if legacy_urls_empty_sentinel_used
+        else None
+    )
 
     # Guardrails: restrict to a known set of document extensions for this endpoint.
-    media_mod._validate_inputs("document", form_data.urls, files)  # type: ignore[arg-type]
+    validate_media_inputs(
+        media_mod._validate_inputs,
+        "document",
+        form_data.urls,
+        files,
+    )
 
     # --- Prepare result structure ---
     batch_result: dict[str, Any] = {
@@ -118,8 +148,8 @@ async def process_documents_endpoint(
         # --- Handle Uploads ---
         if files:
             # Preserve test-time monkeypatching of `media.file_validator_instance`
-            # and `_save_uploaded_files` via the `media` shim.
-            save_uploaded_files = media_mod._save_uploaded_files
+            # while using the canonical core upload helper.
+            save_uploaded_files = core_save_uploaded_files
             validator = getattr(
                 media_mod,
                 "file_validator_instance",
@@ -183,9 +213,7 @@ async def process_documents_endpoint(
 
             allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)
 
-            # Preserve test-time monkeypatching of `_download_url_async`
-            # via the media shim.
-            download_url_async = media_mod._download_url_async
+            download_url_async = core_download_url_async
 
             download_tasks = [
                 download_url_async(
@@ -305,7 +333,10 @@ async def process_documents_endpoint(
                 batch_result["processed_count"] = 0
                 status_code = status.HTTP_400_BAD_REQUEST
 
-            return JSONResponse(status_code=status_code, content=batch_result)
+            response = JSONResponse(status_code=status_code, content=batch_result)
+            if legacy_signal is not None:
+                apply_media_legacy_headers(response, legacy_signal)
+            return response
 
         logger.info(
             "Starting processing for {} document(s).", len(local_paths_to_process)
@@ -535,7 +566,10 @@ async def process_documents_endpoint(
     except Exception:
         logger.debug("Re-chunking failed during metadata normalization", exc_info=True)
 
-    return JSONResponse(status_code=final_status_code, content=batch_result)
+    response = JSONResponse(status_code=final_status_code, content=batch_result)
+    if legacy_signal is not None:
+        apply_media_legacy_headers(response, legacy_signal)
+    return response
 
 
 __all__ = ["router"]

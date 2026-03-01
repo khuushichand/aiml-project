@@ -3,7 +3,7 @@
 Status: Active Baseline  
 Owner: WebUI + Accessibility  
 Date: February 13, 2026  
-Execution Plan: `Docs/Product/WebUI/M3_Design_System_A11y_Execution_Plan_2026_02.md`
+Execution Plan: `Docs/Product/Completed/WebUI-related/M3_Design_System_A11y_Execution_Plan_2026_02.md`
 
 ## 1) Purpose
 
@@ -79,7 +79,7 @@ Validation tests:
 
 This baseline is a required input to:
 
-- `Docs/Product/WebUI/M3_Release_Checklist_A11y_Baseline_2026_02.md`
+- `Docs/Product/Completed/WebUI-related/M3_Release_Checklist_A11y_Baseline_2026_02.md`
 
 ## 7) Exit Criteria
 

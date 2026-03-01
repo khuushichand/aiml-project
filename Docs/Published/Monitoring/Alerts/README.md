@@ -99,7 +99,7 @@ When RAG reranker alerts fire, use this quick triage:
   - If using a custom LLM reranker provider, validate model availability.
 
 Dashboards
-- Import `Docs/Deployment/Monitoring/rag-reranker-dashboard.json` for quick visibility into reranker behavior.
+- Use `Helper_Scripts/Samples/Grafana/README.md` for provisioning and dashboard import patterns; add reranker-focused panels using the metrics listed above.
 ## MCP Validation Alerts (examples)
 
 These sample rules help catch noisy clients or missing validator implementations in write tools.

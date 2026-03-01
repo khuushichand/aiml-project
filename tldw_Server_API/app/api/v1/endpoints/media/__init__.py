@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import inspect
 
 from fastapi import (
     APIRouter,
@@ -64,46 +63,21 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,  # pragma: no cover
     get_document_version,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
-    download_url_async as _download_url_async,
-)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager as CoreTempDirManager,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
-    save_uploaded_files as core_save_uploaded_files,
-)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
-    validate_add_media_inputs as _validate_inputs,
-)
-# Keep heavyweight processor imports lazy to avoid hard-abort side effects
-# (e.g., OpenMP/torch initialization) during router import.
-_process_audio_files_core = None
-_process_videos_core = None
 _smart_download = _optional_import_attr(
     "tldw_Server_API.app.core.Utils.Utils",
     "smart_download",
 )  # type: ignore[assignment]
 
 
-def _load_process_audio_files_core():
-    global _process_audio_files_core
-    if _process_audio_files_core is None:
-        _process_audio_files_core = _optional_import_attr(
-            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files",
-            "process_audio_files",
-        )
-    return _process_audio_files_core
+def _validate_inputs(media_type, urls, files):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
+        validate_add_media_inputs as _validate_add_media_inputs,
+    )
 
-
-def _load_process_videos_core():
-    global _process_videos_core
-    if _process_videos_core is None:
-        _process_videos_core = _optional_import_attr(
-            "tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib",
-            "process_videos",
-        )
-    return _process_videos_core
+    return _validate_add_media_inputs(media_type, urls, files)
 
 try:
     # Optional shim so tests can monkeypatch media.process_web_scraping_task
@@ -172,8 +146,6 @@ for _module_name in _MEDIA_ENDPOINT_MODULES:
 
 
 # Helpers/exported patch points
-_save_uploaded_files = core_save_uploaded_files
-_process_uploaded_files = _save_uploaded_files  # backward-compat alias for tests
 TempDirManager = CoreTempDirManager
 
 
@@ -211,7 +183,6 @@ class _DummyCache(dict):
 
 
 cache = _DummyCache()
-_legacy_media = None  # Backwards-compat attribute for tests expecting it.
 smart_download = _smart_download  # Backwards-compat for tests monkeypatching media.smart_download
 MEDIA_CACHE_EXCEPTIONS = (
     RuntimeError,
@@ -284,91 +255,14 @@ def invalidate_cache(media_id: int) -> None:
         return
 
 
-# Core-backed document-like processor shim so tests can patch core helper via media.*
-async def _process_document_like_item(*args, **kwargs):  # type: ignore[override]
-    from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore
-        persistence as _persistence_mod,
-    )
-
-    impl = _persistence_mod.process_document_like_item
-    return await impl(*args, **kwargs)
-
-
 # Convenience exports for tests/patching (legacy-compatible names)
 process_document_content = getattr(docs, "process_document_content", None)
 process_pdf_task = getattr(pdf_lib, "process_pdf_task", None)
 process_epub = getattr(books, "process_epub", None)
 
 
-def process_videos(*args, **kwargs):
-    impl = _load_process_videos_core()
-    if impl is None:
-        raise RuntimeError("Video processing backend is unavailable")
-    return _invoke_core_with_supported_kwargs(impl, *args, **kwargs)
-
-
-def process_audio_files(*args, **kwargs):
-    impl = _load_process_audio_files_core()
-    if impl is None:
-        raise RuntimeError("Audio processing backend is unavailable")
-    return _invoke_core_with_supported_kwargs(impl, *args, **kwargs)
-
-
-def _invoke_core_with_supported_kwargs(impl, *args, **kwargs):
-    """
-    Forward only kwargs accepted by the current core callable.
-
-    The endpoint-level shims intentionally keep permissive `*args, **kwargs`
-    signatures for test/legacy patch points. When callers send compatibility
-    kwargs that the current core callable does not support (for example
-    `chunk_options`), filter those keys here instead of raising `TypeError`.
-    """
-    if not kwargs:
-        return impl(*args, **kwargs)
-
-    try:
-        signature = inspect.signature(impl)
-    except (TypeError, ValueError):
-        return impl(*args, **kwargs)
-
-    parameters = signature.parameters
-    if any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters.values()
-    ):
-        return impl(*args, **kwargs)
-
-    supported_keyword_names = {
-        name
-        for name, parameter in parameters.items()
-        if parameter.kind
-        in (
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        )
-    }
-    dropped_keywords = sorted(set(kwargs) - supported_keyword_names)
-    if dropped_keywords:
-        logger.debug(
-            "Dropping unsupported kwargs for {}: {}",
-            getattr(impl, "__name__", repr(impl)),
-            dropped_keywords,
-        )
-
-    filtered_kwargs = {
-        key: value
-        for key, value in kwargs.items()
-        if key in supported_keyword_names
-    }
-    return impl(*args, **filtered_kwargs)
-
-
 __all__ = [
     "router",
-    "_download_url_async",
-    "_save_uploaded_files",
-    "_process_uploaded_files",
-    "_process_document_like_item",
     "_validate_inputs",
     "TempDirManager",
     "cache",
@@ -386,8 +280,6 @@ __all__ = [
     "process_document_content",
     "process_pdf_task",
     "process_epub",
-    "process_videos",
-    "process_audio_files",
     "process_web_scraping_task",
     "TemplateClassifier",
     "aiofiles",

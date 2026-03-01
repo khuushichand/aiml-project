@@ -107,3 +107,21 @@ def test_hub_close_respects_dedup_after_end(monkeypatch: pytest.MonkeyPatch) -> 
     assert run_id not in hub._truncated
     assert run_id not in hub._ended
     assert run_id not in hub._seq
+
+
+@pytest.mark.unit
+def test_hub_unsubscribe_removes_only_target_queue() -> None:
+    from tldw_Server_API.app.core.Sandbox.streams import RunStreamHub
+
+    hub = RunStreamHub()
+    run_id = "run-hub-4"
+    q1 = hub.subscribe(run_id)
+    q2 = hub.subscribe(run_id)
+
+    hub.unsubscribe(run_id, q1)
+    remaining = hub._queues.get(run_id) or []
+    assert len(remaining) == 1
+    assert remaining[0][1] is q2
+
+    hub.unsubscribe(run_id, q2)
+    assert run_id not in hub._queues

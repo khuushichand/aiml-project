@@ -990,7 +990,7 @@ For users migrating from the TUI application:
 
 ## Chat Tools (Slash Commands)
 
-Discovery endpoint for slash commands that run before LLM dispatch (e.g., `/time`, `/weather`).
+Discovery endpoint for slash commands that run before LLM dispatch (e.g., `/time`, `/weather`, `/skills`, `/skill`).
 
 Injection behavior (configurable):
 - `CHAT_COMMAND_INJECTION_MODE=system` (default): insert command result as a separate `system` message and strip the `/command` token from the user's text.
@@ -1012,8 +1012,7 @@ Response body:
       "required_permission": "chat.commands.time",
       "usage": "/time [timezone]",
       "args": ["timezone"],
-      "requires_provider_key": false,
-      "requires_client_auth": true,
+      "requires_api_key": true,
       "rate_limit": "per-user 10/min, global 100/min",
       "rbac_required": true
     },
@@ -1023,8 +1022,27 @@ Response body:
       "required_permission": "chat.commands.weather",
       "usage": "/weather [location]",
       "args": ["location"],
-      "requires_provider_key": true,
-      "requires_client_auth": true,
+      "requires_api_key": true,
+      "rate_limit": "per-user 10/min, global 100/min",
+      "rbac_required": true
+    },
+    {
+      "name": "skills",
+      "description": "List invocable skills for this user.",
+      "required_permission": "chat.commands.skills",
+      "usage": "/skills [filter]",
+      "args": ["filter"],
+      "requires_api_key": true,
+      "rate_limit": "per-user 10/min, global 100/min",
+      "rbac_required": true
+    },
+    {
+      "name": "skill",
+      "description": "Execute an invocable skill by name.",
+      "required_permission": "chat.commands.skill",
+      "usage": "/skill <name> [args]",
+      "args": ["name", "args"],
+      "requires_api_key": true,
       "rate_limit": "per-user 10/min, global 100/min",
       "rbac_required": true
     }
@@ -1033,9 +1051,10 @@ Response body:
 ```
 
 Field definitions:
-- **`requires_provider_key`** — `true` if the server needs a third-party service API key (e.g., a weather-provider key configured server-side) to fulfil this command. Commands where this is `true` may be omitted from the list or return an "unavailable" response when the provider key is not configured.
-- **`requires_client_auth`** — `true` if the caller must present valid client credentials (JWT in multi-user mode, or `X-API-KEY` in single-user mode) to invoke this command. Currently `true` for all commands; included for forward-compatibility with future anonymous/public commands.
+- **`requires_api_key`** — whether invoking this command requires authenticated API access.
 
 Notes:
-- The `commands` list is filtered per-user based on AuthNZ/RBAC and deployment configuration. Commands whose backing providers are not configured (e.g., `weather` without a weather-provider key) may be omitted entirely or returned but respond with a configurable "unavailable" message when invoked.
+- The `commands` list is filtered per-user based on AuthNZ/RBAC and deployment configuration.
+- `/skills` only lists invocable skills (`user_invocable=true` and `disable_model_invocation=false`) for the authenticated user.
+- `/skill` returns explicit error text for missing name, unknown skills, and non-invocable skills.
 - Clients should treat `GET /api/v1/chat/commands` as the per-session source of truth and avoid caching the list long-term, since RBAC or configuration changes can add or remove commands at any time.

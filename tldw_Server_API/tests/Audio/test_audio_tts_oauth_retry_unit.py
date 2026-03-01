@@ -120,7 +120,7 @@ async def test_audio_speech_openai_oauth_auth_failure_retries_once(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_audio_speech_openai_oauth_second_auth_failure_requires_reconnect(monkeypatch):
+async def test_audio_speech_openai_oauth_second_auth_failure_propagates_original_auth_error(monkeypatch):
     async def _resolve_tts_byok(*args, **kwargs):
         forced = bool(kwargs.get("force_oauth_refresh", False))
         resolution = _DummyByokResolution(
@@ -141,10 +141,9 @@ async def test_audio_speech_openai_oauth_second_auth_failure_requires_reconnect(
             usage_log=SimpleNamespace(log_event=lambda *args, **kwargs: None),
         )
 
-    assert exc.value.status_code == 401
+    assert exc.value.status_code == 502
     detail = exc.value.detail or {}
-    assert detail.get("error_code") == "oauth_reconnect_required"
-    assert detail.get("reconnect_required") is True
+    assert detail.get("message") == "TTS provider authentication failed"
 
 
 @pytest.mark.unit
@@ -177,7 +176,7 @@ async def test_audio_metadata_openai_oauth_auth_failure_retries_once(monkeypatch
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_audio_metadata_openai_oauth_second_auth_failure_requires_reconnect(monkeypatch):
+async def test_audio_metadata_openai_oauth_second_auth_failure_propagates_original_auth_error(monkeypatch):
     async def _resolve_tts_byok(*args, **kwargs):
         forced = bool(kwargs.get("force_oauth_refresh", False))
         resolution = _DummyByokResolution(
@@ -197,7 +196,6 @@ async def test_audio_metadata_openai_oauth_second_auth_failure_requires_reconnec
             usage_log=SimpleNamespace(log_event=lambda *args, **kwargs: None),
         )
 
-    assert exc.value.status_code == 401
+    assert exc.value.status_code == 502
     detail = exc.value.detail or {}
-    assert detail.get("error_code") == "oauth_reconnect_required"
-    assert detail.get("reconnect_required") is True
+    assert detail.get("message") == "TTS provider authentication failed"

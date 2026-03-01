@@ -579,23 +579,31 @@ async def get_session_manager_dep() -> SessionManager:
                     user_id: int,
                     access_token: str,
                     refresh_token: str,
-                    ip_address: str = "",
-                    user_agent: str = "",
+                    ip_address: Optional[str] = None,
+                    user_agent: Optional[str] = None,
+                    device_id: Optional[str] = None,
+                    expires_at_override: Optional[datetime] = None,
+                    refresh_expires_at_override: Optional[datetime] = None,
+                    **_kwargs: Any,
                 ) -> dict[str, Any]:
                     async with _get_test_session_lock():
                         with _TEST_SESSION_STATE_GUARD:
                             _TEST_SESSION_STATE["sid"] += 1
                             sid = _TEST_SESSION_STATE["sid"]
                             now = datetime.now(timezone.utc)
+                            expires_at = expires_at_override or now
+                            refresh_expires_at = refresh_expires_at_override or now
                             sess = {
                                 "id": sid,
                                 "session_id": sid,
                                 "user_id": user_id,
-                                "ip_address": ip_address,
-                                "user_agent": user_agent,
+                                "ip_address": ip_address or "",
+                                "user_agent": user_agent or "",
+                                "device_id": device_id,
                                 "created_at": now,
                                 "last_activity": now,
-                                "expires_at": now,
+                                "expires_at": expires_at,
+                                "refresh_expires_at": refresh_expires_at,
                                 "is_active": True,
                                 "is_revoked": False,
                             }

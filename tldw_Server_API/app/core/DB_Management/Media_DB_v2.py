@@ -43,7 +43,7 @@ from contextlib import contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone  # Use timezone-aware UTC
 from email.utils import getaddresses, parsedate_to_datetime
-from math import ceil
+from math import ceil, isfinite
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -12389,7 +12389,7 @@ class MediaDatabase:
         must_have_keywords: list[str] | None = None,
         must_not_have_keywords: list[str] | None = None,
         sort_by: str | None = "last_modified_desc", # Default sort order
-        # boost_fields: Optional[Dict[str, float]] = None, # Future: for FTS boosting
+        boost_fields: dict[str, float] | None = None,
         media_ids_filter: list[int | str] | None = None,
         page: int = 1,
         results_per_page: int = 20,
@@ -12440,6 +12440,11 @@ class MediaDatabase:
                 - 'title_asc': Sort by title alphabetically (A-Z).
                 - 'title_desc': Sort by title reverse alphabetically (Z-A).
                 Defaults to 'last_modified_desc'.
+            boost_fields (Optional[Dict[str, float]]): Optional relevance weights for
+                FTS fields. Supported keys are:
+                - 'title': Weight for title matches.
+                - 'content': Weight for content matches.
+                Values are clamped to [0.05, 50.0]. When omitted, backend defaults apply.
             media_ids_filter (Optional[List[Union[int, str]]]): A list of media IDs
                 (integer) or UUIDs (string) to restrict the search to. If provided,
                 only media items with these IDs/UUIDs will be considered.
@@ -12479,6 +12484,35 @@ class MediaDatabase:
 
         valid_text_search_fields = {"title", "content", "author", "type"}
         sanitized_text_search_fields = [f for f in search_fields if f in valid_text_search_fields]
+        supplied_boost_fields = boost_fields if isinstance(boost_fields, dict) else None
+        boost_fields_supplied = bool(supplied_boost_fields)
+
+        def _sanitize_field_boost(field_name: str, default_value: float = 1.0) -> float:
+            if not supplied_boost_fields:
+                return default_value
+            raw_value = supplied_boost_fields.get(field_name, default_value)
+            try:
+                parsed_value = float(raw_value)
+            except (TypeError, ValueError):
+                logging.debug(
+                    "Invalid boost_fields value for '{}': {}. Using default {}.",
+                    field_name,
+                    raw_value,
+                    default_value,
+                )
+                return default_value
+            if not isfinite(parsed_value):
+                logging.debug(
+                    "Non-finite boost_fields value for '{}': {}. Using default {}.",
+                    field_name,
+                    raw_value,
+                    default_value,
+                )
+                return default_value
+            return max(0.05, min(50.0, parsed_value))
+
+        title_boost = _sanitize_field_boost("title")
+        content_boost = _sanitize_field_boost("content")
 
         # Optional hardening: clamp very long FTS inputs to avoid pathological queries
         if search_query:
@@ -12760,12 +12794,29 @@ class MediaDatabase:
                 # Use bm25 for consistent relevance and let lower scores rank higher
                 if not any("AS relevance_score" in part for part in base_select_parts):
                     # bm25() expects the FTS5 table name, not the alias
-                    base_select_parts.append("bm25(media_fts) AS relevance_score")
+                    if boost_fields_supplied:
+                        base_select_parts.append(
+                            f"bm25(media_fts, {title_boost:.6f}, {content_boost:.6f}) AS relevance_score"
+                        )
+                    else:
+                        base_select_parts.append("bm25(media_fts) AS relevance_score")
                     fts_relevance_added = True
                 order_by_clause_str = "ORDER BY relevance_score ASC, m.last_modified DESC, m.id DESC"
             elif self.backend_type == BackendType.POSTGRESQL and postgres_tsquery:
                 if not any("relevance_score" in part for part in base_select_parts):
-                    base_select_parts.append("ts_rank(m.media_fts_tsv, to_tsquery('english', ?)) AS relevance_score")
+                    if boost_fields_supplied:
+                        # PostgreSQL ts_rank weights are ordered as {D, C, B, A}.
+                        postgres_weights_literal = (
+                            f"{content_boost:.6f},1.000000,{content_boost:.6f},{title_boost:.6f}"
+                        )
+                        base_select_parts.append(
+                            "ts_rank("
+                            f"ARRAY[{postgres_weights_literal}]::float4[], "
+                            "m.media_fts_tsv, to_tsquery('english', ?)"
+                            ") AS relevance_score"
+                        )
+                    else:
+                        base_select_parts.append("ts_rank(m.media_fts_tsv, to_tsquery('english', ?)) AS relevance_score")
                     fts_select_params.append(postgres_tsquery)
                     fts_relevance_added = True
                 order_by_clause_str = "ORDER BY relevance_score DESC, m.last_modified DESC, m.id DESC"
@@ -12952,6 +13003,13 @@ class MediaDatabase:
         page: int = 1,
         per_page: int = 20,
         group_by_media: bool = True,
+        text_query: str | None = None,
+        media_types: list[str] | None = None,
+        must_have_keywords: list[str] | None = None,
+        must_not_have_keywords: list[str] | None = None,
+        date_start: str | None = None,
+        date_end: str | None = None,
+        sort_by: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Search by fields inside DocumentVersions.safe_metadata and identifiers table.
 
@@ -13011,10 +13069,75 @@ class MediaDatabase:
                                 like_val = f"%{val}%"
                             params.append(like_val)
 
-            where_filters = ""
             if filter_exprs:
                 join_op = " AND " if match_all else " OR "
-                where_filters = " AND (" + join_op.join(filter_exprs) + ")"
+                clauses.append("(" + join_op.join(filter_exprs) + ")")
+
+            normalized_text_query = (text_query or "").strip()
+            if normalized_text_query:
+                clauses.append(
+                    "(LOWER(COALESCE(m.title, '')) LIKE ? OR LOWER(COALESCE(dv.safe_metadata, '')) LIKE ?)"
+                )
+                text_query_like = f"%{normalized_text_query.lower()}%"
+                params.extend([text_query_like, text_query_like])
+
+            normalized_media_types = [
+                str(media_type).strip().lower()
+                for media_type in (media_types or [])
+                if str(media_type).strip()
+            ]
+            if normalized_media_types:
+                media_type_placeholders = ",".join("?" * len(normalized_media_types))
+                clauses.append(f"LOWER(m.type) IN ({media_type_placeholders})")
+                params.extend(normalized_media_types)
+
+            cleaned_must_have = [
+                str(keyword).strip().lower()
+                for keyword in (must_have_keywords or [])
+                if str(keyword).strip()
+            ]
+            if cleaned_must_have:
+                kw_mh_placeholders = ",".join("?" * len(cleaned_must_have))
+                clauses.append(
+                    """
+                (SELECT COUNT(DISTINCT k_mh.id)
+                 FROM MediaKeywords mk_mh
+                 JOIN Keywords k_mh ON mk_mh.keyword_id = k_mh.id
+                 WHERE mk_mh.media_id = m.id AND k_mh.deleted = 0 AND LOWER(k_mh.keyword) IN ({kw_mh_placeholders})
+                ) = ?
+            """.format_map(locals())  # nosec B608
+                )
+                params.extend(cleaned_must_have)
+                params.append(len(cleaned_must_have))
+
+            cleaned_must_not_have = [
+                str(keyword).strip().lower()
+                for keyword in (must_not_have_keywords or [])
+                if str(keyword).strip()
+            ]
+            if cleaned_must_not_have:
+                kw_mnh_placeholders = ",".join("?" * len(cleaned_must_not_have))
+                clauses.append(
+                    """
+                NOT EXISTS (
+                    SELECT 1
+                    FROM MediaKeywords mk_mnh
+                    JOIN Keywords k_mnh ON mk_mnh.keyword_id = k_mnh.id
+                    WHERE mk_mnh.media_id = m.id AND k_mnh.deleted = 0 AND LOWER(k_mnh.keyword) IN ({kw_mnh_placeholders})
+                )
+            """.format_map(locals())  # nosec B608
+                )
+                params.extend(cleaned_must_not_have)
+
+            normalized_date_start = (date_start or "").strip()
+            if normalized_date_start:
+                clauses.append("dv.created_at >= ?")
+                params.append(normalized_date_start)
+
+            normalized_date_end = (date_end or "").strip()
+            if normalized_date_end:
+                clauses.append("dv.created_at <= ?")
+                params.append(normalized_date_end)
 
             base_from = "FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id"
             if join_ident:
@@ -13024,12 +13147,12 @@ class MediaDatabase:
             if group_by_media:
                 count_sql = (
                     f"SELECT COUNT(DISTINCT m.id) AS total_count {base_from} "
-                    f"WHERE {' AND '.join(clauses)}{where_filters}"
+                    f"WHERE {' AND '.join(clauses)}"
                 )
             else:
                 count_sql = (
                     f"SELECT COUNT(*) AS total_count {base_from} "
-                    f"WHERE {' AND '.join(clauses)}{where_filters}"
+                    f"WHERE {' AND '.join(clauses)}"
                 )
             count_cursor = self.execute_query(count_sql, tuple(params))
             count_row = count_cursor.fetchone()
@@ -13039,12 +13162,28 @@ class MediaDatabase:
                 return [], 0
 
             select_cols = "m.id AS media_id, m.title, m.type, dv.version_number, dv.created_at, dv.safe_metadata"
-            order_clause = "ORDER BY m.last_modified DESC"
+            normalized_sort_by = (sort_by or "").strip().lower()
+            if normalized_sort_by == "date_desc":
+                order_clause = "ORDER BY dv.created_at DESC, m.id DESC"
+            elif normalized_sort_by == "date_asc":
+                order_clause = "ORDER BY dv.created_at ASC, m.id ASC"
+            elif normalized_sort_by == "title_asc":
+                if self.backend_type == BackendType.POSTGRESQL:
+                    order_clause = "ORDER BY LOWER(m.title) ASC, m.title ASC, m.id ASC"
+                else:
+                    order_clause = "ORDER BY m.title COLLATE NOCASE ASC, m.id ASC"
+            elif normalized_sort_by == "title_desc":
+                if self.backend_type == BackendType.POSTGRESQL:
+                    order_clause = "ORDER BY LOWER(m.title) DESC, m.title DESC, m.id DESC"
+                else:
+                    order_clause = "ORDER BY m.title COLLATE NOCASE DESC, m.id DESC"
+            else:
+                order_clause = "ORDER BY m.last_modified DESC, m.id DESC"
             if group_by_media:
                 results_sql = f"""
                     SELECT {select_cols}
                     {base_from}
-                    WHERE {' AND '.join(clauses)}{where_filters}
+                    WHERE {' AND '.join(clauses)}
                     GROUP BY m.id
                     {order_clause}
                     LIMIT ? OFFSET ?
@@ -13054,7 +13193,7 @@ class MediaDatabase:
                 results_sql = f"""
                     SELECT {select_cols}
                     {base_from}
-                    WHERE {' AND '.join(clauses)}{where_filters}
+                    WHERE {' AND '.join(clauses)}
                     {order_clause}
                     LIMIT ? OFFSET ?
                 """

@@ -23,17 +23,33 @@ from tldw_Server_API.app.core.config import get_stt_config
 from tldw_Server_API.app.core.exceptions import BadRequestError, CancelCheckError, TranscriptionCancelled
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 
-try:
-    # Reuse the central model-name parser so HTTP/OpenAI-style model
-    # identifiers resolve consistently across REST, ingestion, and jobs.
-    from .Audio_Transcription_Lib import parse_transcription_model
-except ImportError:  # pragma: no cover - defensive fallback for minimal envs
+def _fallback_parse_transcription_model(
+    model_name: str,
+) -> tuple[str, str, str | None]:
+    model_name = (model_name or "").strip()
+    lowered = model_name.lower() or "whisper-1"
+    # Default everything to Whisper when the real parser is unavailable.
+    return "whisper", lowered, None
 
-    def parse_transcription_model(model_name: str) -> tuple[str, str, str | None]:  # type: ignore[override]
-        model_name = (model_name or "").strip()
-        lowered = model_name.lower() or "whisper-1"
-        # Default everything to Whisper when the real parser is unavailable.
-        return "whisper", lowered, None
+
+def _parse_transcription_model(model_name: str) -> tuple[str, str, str | None]:
+    """
+    Resolve model names without importing heavy STT modules at import time.
+
+    Importing Audio_Transcription_Lib can pull in torch/ctranslate stacks in
+    some environments; keep that dependency lazy so API module import remains
+    stable for lightweight endpoints and tests.
+    """
+    try:
+        # Reuse the central model-name parser so HTTP/OpenAI-style model
+        # identifiers resolve consistently across REST, ingestion, and jobs.
+        from .Audio_Transcription_Lib import parse_transcription_model as _real_parser
+    except Exception:
+        return _fallback_parse_transcription_model(model_name)
+    try:
+        return _real_parser(model_name)
+    except Exception:
+        return _fallback_parse_transcription_model(model_name)
 
 
 _SUPPORTED_PARAKEET_VARIANTS = {"standard", "onnx", "mlx", "cuda"}
@@ -45,6 +61,11 @@ _STT_PROVIDER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     TypeError,
     ValueError,
 )
+
+
+def _segment_text_value(segment: dict[str, Any]) -> str:
+    """Return segment text across legacy and normalized keys."""
+    return str(segment.get("text") or segment.get("Text") or "").strip()
 
 
 def _raise_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
@@ -249,7 +270,11 @@ class FasterWhisperAdapter(SttProviderAdapter):
         segments_list, detected_lang = result
         # Strip Whisper metadata header so callers see only user content
         segments_for_response = strip_whisper_metadata_header(segments_list)
-        text = " ".join(str(seg.get("Text", "")).strip() for seg in segments_for_response if isinstance(seg, dict))
+        text = " ".join(
+            _segment_text_value(seg)
+            for seg in segments_for_response
+            if isinstance(seg, dict)
+        )
 
         return {
             "text": text,
@@ -320,7 +345,11 @@ class ParakeetAdapter(SttProviderAdapter):
             base_dir=base_dir,
             cancel_check=cancel_check,
         )
-        text = " ".join(str(seg.get("Text", "")).strip() for seg in segments_list if isinstance(seg, dict))
+        text = " ".join(
+            _segment_text_value(seg)
+            for seg in segments_list
+            if isinstance(seg, dict)
+        )
         return {
             "text": text,
             "language": language or lang,
@@ -461,7 +490,11 @@ class Qwen2AudioAdapter(SttProviderAdapter):
             base_dir=base_dir,
             cancel_check=cancel_check,
         )
-        text = " ".join(str(seg.get("Text", "")).strip() for seg in segments_list if isinstance(seg, dict))
+        text = " ".join(
+            _segment_text_value(seg)
+            for seg in segments_list
+            if isinstance(seg, dict)
+        )
         return {
             "text": text,
             "language": language or lang,
@@ -860,7 +893,7 @@ class SttProviderRegistry:
                 provider = SttProviderName.EXTERNAL.value
                 return provider, normalized_name, None
 
-            raw_provider, model, variant = parse_transcription_model(normalized_name)
+            raw_provider, model, variant = _parse_transcription_model(normalized_name)
         except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
             # Defensive: treat unknown models as Whisper-family
             raw_provider, model, variant = "whisper", (model_name or "").strip(), None
@@ -902,6 +935,10 @@ def resolve_default_transcription_model(fallback_whisper_model: str) -> str:
         stt_cfg = get_stt_config() or {}
     except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
         stt_cfg = {}
+
+    configured_batch_model = str(stt_cfg.get("default_batch_transcription_model", "")).strip()
+    if configured_batch_model:
+        return configured_batch_model
 
     provider = registry.get_default_provider_name()
     model, _ = _resolve_default_model_for_provider(provider, stt_cfg)

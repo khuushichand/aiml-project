@@ -200,5 +200,16 @@
       "html": "HTML",
       "xml": "XML"
     }
+  },
+  "persona": {
+    "unsavedStateDiscardPrompt": "Vous avez des modifications non enregistrées dans les documents d’état. Ignorer les brouillons locaux ?",
+    "unsavedStateDiscardPromptConnect": "Vous avez des modifications non enregistrées dans les documents d’état. Vous connecter et ignorer les brouillons locaux ?",
+    "unsavedStateDiscardPromptDisconnect": "Vous avez des modifications non enregistrées dans les documents d’état. Vous déconnecter et ignorer les brouillons locaux ?",
+    "unsavedStateDiscardPromptReloadState": "Vous avez des modifications non enregistrées dans les documents d’état. Charger l’état et ignorer les brouillons locaux ?",
+    "unsavedStateDiscardPromptPersonaSwitch": "Vous avez des modifications non enregistrées dans les documents d’état. Changer de persona et ignorer les brouillons locaux ?",
+    "unsavedStateDiscardPromptSessionSwitch": "Vous avez des modifications non enregistrées dans les documents d’état. Changer de session et ignorer les brouillons locaux ?",
+    "unsavedStateDiscardPromptRestoreState": "Vous avez des modifications non enregistrées dans les documents d’état. Restaurer cette version de l’état et ignorer les brouillons locaux ?",
+    "unsavedStateDiscardPromptRouteTransition": "Vous avez des modifications non enregistrées dans les documents d’état. Quitter cette page et ignorer les brouillons locaux ?",
+    "unsavedStateBeforeUnloadPrompt": "Vous avez des modifications non enregistrées dans les documents d’état. Quitter cette page sans enregistrer ?"
   }
 }

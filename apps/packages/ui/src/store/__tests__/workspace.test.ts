@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   DEFAULT_AUDIO_SETTINGS,
   DEFAULT_WORKSPACE_NOTE
@@ -8,12 +8,27 @@ import {
   WORKSPACE_STORAGE_QUOTA_EVENT,
   type WorkspaceStorageQuotaEventDetail
 } from "@/store/workspace-events"
-import { createWorkspaceStorage, useWorkspaceStore } from "../workspace"
+import {
+  createWorkspaceStorage,
+  estimateWorkspacePersistenceMetrics,
+  WORKSPACE_STORAGE_INDEXEDDB_FLAG_STORAGE_KEY,
+  WORKSPACE_STORAGE_SPLIT_KEY_FLAG_STORAGE_KEY,
+  useWorkspaceStore
+} from "../workspace"
 
 const STORAGE_KEY = WORKSPACE_STORAGE_KEY
+const STORAGE_SPLIT_FLAG_KEY = WORKSPACE_STORAGE_SPLIT_KEY_FLAG_STORAGE_KEY
+const STORAGE_INDEXEDDB_FLAG_KEY = WORKSPACE_STORAGE_INDEXEDDB_FLAG_STORAGE_KEY
+const snapshotKey = (workspaceId: string) =>
+  `${STORAGE_KEY}:workspace:${encodeURIComponent(workspaceId)}:snapshot`
+const chatKey = (workspaceId: string) =>
+  `${STORAGE_KEY}:workspace:${encodeURIComponent(workspaceId)}:chat`
 
 const resetWorkspaceStore = () => {
   localStorage.removeItem(STORAGE_KEY)
+  localStorage.removeItem(STORAGE_SPLIT_FLAG_KEY)
+  localStorage.removeItem(STORAGE_INDEXEDDB_FLAG_KEY)
+  delete window.__tldwWorkspacePersistenceMetrics
   useWorkspaceStore.setState({
     workspaceId: "",
     workspaceName: "",
@@ -29,6 +44,11 @@ const resetWorkspaceStore = () => {
     generatedArtifacts: [],
     notes: "",
     currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+    workspaceBanner: {
+      title: "",
+      subtitle: "",
+      image: null
+    },
     isGeneratingOutput: false,
     generatingOutputType: null,
     storeHydrated: false,
@@ -186,6 +206,65 @@ describe("workspace store snapshot persistence", () => {
       "Workspace One Notes"
     )
     expect(state.workspaceSnapshots[workspaceTwoId]?.sources).toHaveLength(0)
+  })
+
+  it("creates workspaces with empty workspaceBanner defaults", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Banner Test")
+    const state = useWorkspaceStore.getState()
+    const snapshot = state.workspaceSnapshots[state.workspaceId] as
+      | Record<string, unknown>
+      | undefined
+
+    expect(snapshot?.workspaceBanner).toEqual({
+      title: "",
+      subtitle: "",
+      image: null
+    })
+  })
+
+  it("preserves workspaceBanner when switching workspaces", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Workspace Banner Alpha")
+    const alphaId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore.setState({
+      workspaceBanner: {
+        title: "Alpha Banner",
+        subtitle: "Alpha subtitle",
+        image: {
+          dataUrl: "data:image/webp;base64,alpha",
+          mimeType: "image/webp",
+          width: 1200,
+          height: 420,
+          bytes: 12288,
+          updatedAt: new Date("2026-02-25T00:00:00.000Z")
+        }
+      }
+    })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    useWorkspaceStore.getState().createNewWorkspace("Workspace Banner Beta")
+    const betaId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore.setState({
+      workspaceBanner: {
+        title: "Beta Banner",
+        subtitle: "Beta subtitle",
+        image: null
+      }
+    })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    useWorkspaceStore.getState().switchWorkspace(alphaId)
+    let state = useWorkspaceStore.getState()
+    expect(state.workspaceBanner.title).toBe("Alpha Banner")
+    expect(state.workspaceBanner.subtitle).toBe("Alpha subtitle")
+    expect(state.workspaceBanner.image?.dataUrl).toBe(
+      "data:image/webp;base64,alpha"
+    )
+
+    useWorkspaceStore.getState().switchWorkspace(betaId)
+    state = useWorkspaceStore.getState()
+    expect(state.workspaceBanner.title).toBe("Beta Banner")
+    expect(state.workspaceBanner.subtitle).toBe("Beta subtitle")
+    expect(state.workspaceBanner.image).toBeNull()
   })
 
   it("rehydrates from active workspace snapshot and restores pane state", async () => {
@@ -372,19 +451,518 @@ describe("workspace store snapshot persistence", () => {
     ).toBe("failed")
   })
 
-  it("uses a raw localStorage adapter without parse/stringify in getItem", () => {
+  it("uses a raw localStorage adapter without parse/stringify in getItem", async () => {
     const storage = createWorkspaceStorage()
     const testKey = "workspace-storage-adapter-test"
     const rawPayload = '{"state":{"workspaceCreatedAt":"2026-02-01T00:00:00.000Z"}}'
 
-    storage.setItem(testKey, rawPayload)
-    expect(storage.getItem(testKey)).toBe(rawPayload)
+    await storage.setItem(testKey, rawPayload)
+    expect(await Promise.resolve(storage.getItem(testKey))).toBe(rawPayload)
 
-    storage.removeItem(testKey)
-    expect(storage.getItem(testKey)).toBeNull()
+    await storage.removeItem(testKey)
+    expect(await Promise.resolve(storage.getItem(testKey))).toBeNull()
   })
 
-  it("dispatches a quota warning event when localStorage is full", () => {
+  it("skips IndexedDB offload when the rollout flag is disabled", async () => {
+    localStorage.setItem(STORAGE_SPLIT_FLAG_KEY, "1")
+    localStorage.setItem(STORAGE_INDEXEDDB_FLAG_KEY, "0")
+
+    const indexedDbAdapter = {
+      isAvailable: () => true,
+      putChatRecord: vi.fn(async () => true),
+      getChatRecord: vi.fn(async () => null),
+      deleteChatRecord: vi.fn(async () => true),
+      putArtifactPayloadRecord: vi.fn(async () => true),
+      getArtifactPayloadRecord: vi.fn(async () => null),
+      deleteArtifactPayloadRecord: vi.fn(async () => true)
+    }
+    const storage = createWorkspaceStorage({ indexedDbAdapter })
+    const payload = JSON.stringify({
+      state: {
+        workspaceId: "workspace-indexeddb-flag-disabled",
+        savedWorkspaces: [],
+        archivedWorkspaces: [],
+        workspaceSnapshots: {
+          "workspace-indexeddb-flag-disabled": {
+            workspaceId: "workspace-indexeddb-flag-disabled",
+            workspaceName: "No Offload Workspace",
+            workspaceTag: "workspace:no-offload",
+            workspaceCreatedAt: "2026-02-22T00:00:00.000Z",
+            workspaceChatReferenceId: "workspace-indexeddb-flag-disabled",
+            sources: [],
+            selectedSourceIds: [],
+            generatedArtifacts: [],
+            notes: "",
+            currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+            leftPaneCollapsed: false,
+            rightPaneCollapsed: false,
+            audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
+          }
+        },
+        workspaceChatSessions: {
+          "workspace-indexeddb-flag-disabled": {
+            messages: [
+              {
+                isBot: false,
+                name: "You",
+                message: "M".repeat(10 * 1024),
+                sources: []
+              }
+            ],
+            historyId: "no-offload-history",
+            serverChatId: "no-offload-chat"
+          }
+        }
+      },
+      version: 1
+    })
+
+    await storage.setItem(STORAGE_KEY, payload)
+
+    expect(indexedDbAdapter.putChatRecord).not.toHaveBeenCalled()
+    expect(indexedDbAdapter.putArtifactPayloadRecord).not.toHaveBeenCalled()
+  })
+
+  it("estimates persistence payload section sizes", () => {
+    const metrics = estimateWorkspacePersistenceMetrics({
+      state: {
+        workspaceId: "workspace-metrics",
+        workspaceName: "Metrics Workspace",
+        workspaceTag: "workspace:metrics",
+        workspaceCreatedAt: "2026-02-10T00:00:00.000Z",
+        workspaceChatReferenceId: "workspace-metrics",
+        sources: [
+          {
+            id: "source-1",
+            mediaId: 1,
+            title: "Source One",
+            type: "pdf",
+            addedAt: "2026-02-10T00:00:00.000Z"
+          }
+        ],
+        selectedSourceIds: ["source-1"],
+        generatedArtifacts: [
+          {
+            id: "artifact-1",
+            type: "summary",
+            title: "Artifact One",
+            status: "completed",
+            content: "summary",
+            createdAt: "2026-02-10T00:00:00.000Z"
+          }
+        ],
+        notes: "workspace notes",
+        currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+        workspaceBanner: {
+          title: "Metrics banner",
+          subtitle: "Banner subtitle",
+          image: {
+            dataUrl: "data:image/webp;base64,metrics-banner",
+            mimeType: "image/webp",
+            width: 1200,
+            height: 360,
+            bytes: 9000,
+            updatedAt: "2026-02-10T00:05:00.000Z"
+          }
+        },
+        leftPaneCollapsed: false,
+        rightPaneCollapsed: false,
+        audioSettings: { ...DEFAULT_AUDIO_SETTINGS },
+        savedWorkspaces: [],
+        archivedWorkspaces: [],
+        workspaceSnapshots: {
+          "workspace-metrics": {
+            workspaceId: "workspace-metrics",
+            workspaceName: "Metrics Workspace",
+            workspaceTag: "workspace:metrics",
+            workspaceCreatedAt: "2026-02-10T00:00:00.000Z",
+            workspaceChatReferenceId: "workspace-metrics",
+            sources: [],
+            selectedSourceIds: [],
+            generatedArtifacts: [],
+            notes: "",
+            currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+            workspaceBanner: {
+              title: "Metrics banner",
+              subtitle: "",
+              image: null
+            },
+            leftPaneCollapsed: false,
+            rightPaneCollapsed: false,
+            audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
+          }
+        },
+        workspaceChatSessions: {
+          "workspace-metrics": {
+            messages: [
+              {
+                isBot: false,
+                name: "You",
+                message: "hello",
+                sources: []
+              }
+            ],
+            history: [{ role: "user", content: "hello" }],
+            historyId: "history-1",
+            serverChatId: null
+          }
+        }
+      },
+      version: 0
+    })
+
+    expect(metrics.totalBytes).toBeGreaterThan(0)
+    expect(metrics.sections.workspaceSnapshots).toBeGreaterThan(0)
+    expect(metrics.sections.workspaceChatSessions).toBeGreaterThan(0)
+    expect(metrics.sections.workspaceBanner).toBeGreaterThan(0)
+    expect(metrics.sections.generatedArtifacts).toBeGreaterThan(0)
+    expect(metrics.sections.notes).toBeGreaterThan(0)
+    expect(metrics.sections.sources).toBeGreaterThan(0)
+    expect(metrics.sections.selectedSourceIds).toBeGreaterThan(0)
+    expect(metrics.sections.other).toBeGreaterThanOrEqual(0)
+  })
+
+  it("records workspace persistence diagnostics on persisted writes", () => {
+    const previousWriteCount =
+      window.__tldwWorkspacePersistenceMetrics?.writeCount ?? 0
+
+    useWorkspaceStore.getState().initializeWorkspace("Diagnostics Workspace")
+    useWorkspaceStore.getState().setNotes("Diagnostics notes")
+
+    const diagnostics = window.__tldwWorkspacePersistenceMetrics
+    expect(diagnostics?.key).toBe(STORAGE_KEY)
+    expect((diagnostics?.writeCount ?? 0) - previousWriteCount).toBeGreaterThan(0)
+    expect(diagnostics?.totalBytes ?? 0).toBeGreaterThan(0)
+    expect(diagnostics?.maxTotalBytes ?? 0).toBeGreaterThan(0)
+    expect(diagnostics?.sections.workspaceSnapshots ?? 0).toBeGreaterThan(0)
+    expect(diagnostics?.updatedAt ?? 0).toBeGreaterThan(0)
+  })
+
+  it("rehydrates array-shaped legacy snapshots and chat sessions safely", async () => {
+    resetWorkspaceStore()
+
+    const persistedState = {
+      state: {
+        workspaceId: "workspace-legacy",
+        workspaceName: "Legacy Top Level Name",
+        workspaceTag: "workspace:legacy-top",
+        workspaceCreatedAt: "2026-02-01T00:00:00.000Z",
+        workspaceChatReferenceId: "workspace-legacy",
+        sources: { invalid: true },
+        selectedSourceIds: "invalid",
+        generatedArtifacts: "invalid",
+        notes: "",
+        currentNote: null,
+        leftPaneCollapsed: false,
+        rightPaneCollapsed: false,
+        audioSettings: null,
+        savedWorkspaces: "invalid",
+        archivedWorkspaces: null,
+        workspaceSnapshots: [
+          {
+            id: "workspace-legacy",
+            workspaceName: "Legacy Snapshot Name",
+            workspaceTag: "workspace:legacy",
+            workspaceCreatedAt: "2026-02-02T00:00:00.000Z",
+            workspaceChatReferenceId: "legacy-chat-ref",
+            sources: [
+              {
+                id: "source-legacy-1",
+                mediaId: 999,
+                title: "Legacy Source",
+                type: "pdf",
+                addedAt: "2026-02-03T00:00:00.000Z"
+              }
+            ],
+            selectedSourceIds: ["source-legacy-1"],
+            generatedArtifacts: [],
+            notes: "Legacy snapshot note",
+            currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+            leftPaneCollapsed: true,
+            rightPaneCollapsed: false,
+            audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
+          }
+        ],
+        workspaceChatSessions: [
+          {
+            workspaceId: "workspace-legacy",
+            session: {
+              messages: [
+                {
+                  isBot: false,
+                  name: "You",
+                  message: "Legacy hello",
+                  sources: []
+                }
+              ],
+              history: "invalid-history",
+              historyId: "legacy-history",
+              serverChatId: null
+            }
+          },
+          {
+            workspaceId: "workspace-empty-session",
+            session: {
+              messages: [],
+              history: [],
+              historyId: null,
+              serverChatId: null
+            }
+          }
+        ]
+      },
+      version: 0
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistedState))
+    await useWorkspaceStore.persist.rehydrate()
+
+    const state = useWorkspaceStore.getState()
+    expect(state.workspaceId).toBe("workspace-legacy")
+    expect(state.workspaceName).toBe("Legacy Snapshot Name")
+    expect(state.workspaceTag).toBe("workspace:legacy")
+    expect(state.workspaceChatReferenceId).toBe("legacy-chat-ref")
+    expect(state.sources).toHaveLength(1)
+    expect(state.sources[0]?.title).toBe("Legacy Source")
+    expect(state.selectedSourceIds).toEqual(["source-legacy-1"])
+    expect(state.notes).toBe("Legacy snapshot note")
+    expect(state.leftPaneCollapsed).toBe(true)
+    expect(state.rightPaneCollapsed).toBe(false)
+    expect(state.workspaceSnapshots["workspace-legacy"]).toBeDefined()
+    expect(state.workspaceSnapshots["workspace-legacy"]?.workspaceName).toBe(
+      "Legacy Snapshot Name"
+    )
+    expect(
+      state.workspaceChatSessions["workspace-legacy"]?.history[0]?.content
+    ).toBe("Legacy hello")
+    expect(
+      state.workspaceChatSessions["workspace-empty-session"]
+    ).toBeUndefined()
+  })
+
+  it("persists snapshot-first schema with messages-only chat sessions", async () => {
+    useWorkspaceStore.getState().initializeWorkspace("Snapshot Canonical Workspace")
+    const workspaceId = useWorkspaceStore.getState().workspaceId
+
+    const source = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 5001, title: "Canonical Source", type: "pdf" })
+    useWorkspaceStore.getState().setSelectedSourceIds([source.id])
+    useWorkspaceStore
+      .getState()
+      .addArtifact({
+        type: "summary",
+        title: "Canonical Artifact",
+        status: "completed",
+        content: "Canonical content"
+      })
+    useWorkspaceStore.setState({
+      notes: "Canonical notes",
+      currentNote: {
+        ...DEFAULT_WORKSPACE_NOTE,
+        title: "Canonical note title",
+        content: "Canonical note content"
+      }
+    })
+    useWorkspaceStore.getState().saveWorkspaceChatSession(workspaceId, {
+      messages: [
+        {
+          isBot: false,
+          name: "You",
+          message: "Persist canonical",
+          sources: []
+        }
+      ],
+      history: [{ role: "user", content: "Persist canonical" }],
+      historyId: "canonical-history",
+      serverChatId: "canonical-chat"
+    })
+
+    const splitIndexRaw = localStorage.getItem(STORAGE_KEY)
+    expect(splitIndexRaw).toBeTruthy()
+
+    const splitIndex = splitIndexRaw ? JSON.parse(splitIndexRaw) : null
+    expect(splitIndex?.schema).toBe("workspace_split_v1")
+    expect(Array.isArray(splitIndex?.state?.workspaceIds)).toBe(true)
+    expect(splitIndex?.state?.workspaceIds).toContain(workspaceId)
+    expect(splitIndex?.state?.workspaceName).toBeUndefined()
+    expect(splitIndex?.state?.sources).toBeUndefined()
+    expect(splitIndex?.state?.selectedSourceIds).toBeUndefined()
+    expect(splitIndex?.state?.generatedArtifacts).toBeUndefined()
+    expect(splitIndex?.state?.notes).toBeUndefined()
+    expect(splitIndex?.state?.currentNote).toBeUndefined()
+    expect(splitIndex?.state?.audioSettings).toBeUndefined()
+
+    const reconstructedRaw = await Promise.resolve(
+      createWorkspaceStorage().getItem(STORAGE_KEY)
+    )
+    const reconstructed = reconstructedRaw ? JSON.parse(reconstructedRaw) : null
+    const persistedState = reconstructed?.state as Record<string, unknown>
+    expect(persistedState.workspaceId).toBe(workspaceId)
+    expect(persistedState.workspaceSnapshots).toBeDefined()
+    expect(persistedState.workspaceChatSessions).toBeDefined()
+
+    const persistedSnapshot = (persistedState.workspaceSnapshots as Record<string, any>)[
+      workspaceId
+    ]
+    expect(persistedSnapshot?.sources?.[0]?.title).toBe("Canonical Source")
+    expect(persistedSnapshot?.selectedSourceIds).toEqual([source.id])
+    expect(persistedSnapshot?.generatedArtifacts?.[0]?.title).toBe(
+      "Canonical Artifact"
+    )
+    expect(persistedSnapshot?.notes).toBe("Canonical notes")
+    expect(persistedSnapshot?.currentNote?.title).toBe("Canonical note title")
+
+    const persistedSession = (
+      persistedState.workspaceChatSessions as Record<string, any>
+    )[workspaceId]
+    expect(persistedSession?.messages?.[0]?.message).toBe("Persist canonical")
+    expect(persistedSession?.historyId).toBe("canonical-history")
+    expect(persistedSession?.serverChatId).toBe("canonical-chat")
+    expect(persistedSession?.history).toBeUndefined()
+  })
+
+  it("rehydrates messages-only chat sessions and derives history", async () => {
+    resetWorkspaceStore()
+
+    const persistedState = {
+      state: {
+        workspaceId: "workspace-messages-only",
+        savedWorkspaces: [],
+        archivedWorkspaces: [],
+        workspaceSnapshots: {
+          "workspace-messages-only": {
+            workspaceId: "workspace-messages-only",
+            workspaceName: "Messages Only Workspace",
+            workspaceTag: "workspace:messages-only",
+            workspaceCreatedAt: "2026-02-16T00:00:00.000Z",
+            workspaceChatReferenceId: "workspace-messages-only",
+            sources: [],
+            selectedSourceIds: [],
+            generatedArtifacts: [],
+            notes: "",
+            currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+            leftPaneCollapsed: false,
+            rightPaneCollapsed: false,
+            audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
+          }
+        },
+        workspaceChatSessions: {
+          "workspace-messages-only": {
+            messages: [
+              {
+                isBot: false,
+                name: "You",
+                message: "Hello from messages-only session",
+                sources: []
+              }
+            ],
+            historyId: "messages-only-history",
+            serverChatId: "messages-only-chat"
+          }
+        }
+      },
+      version: 1
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistedState))
+    await useWorkspaceStore.persist.rehydrate()
+
+    const session = useWorkspaceStore
+      .getState()
+      .getWorkspaceChatSession("workspace-messages-only")
+    expect(session?.messages[0]?.message).toBe("Hello from messages-only session")
+    expect(session?.history[0]?.content).toBe("Hello from messages-only session")
+    expect(session?.history[0]?.role).toBe("user")
+    expect(session?.historyId).toBe("messages-only-history")
+    expect(session?.serverChatId).toBe("messages-only-chat")
+  })
+
+  it("migrates legacy top-level persisted state without snapshots", async () => {
+    resetWorkspaceStore()
+
+    const persistedState = {
+      state: {
+        workspaceId: "workspace-legacy-top-level",
+        workspaceName: "Legacy Top-Level Workspace",
+        workspaceTag: "workspace:legacy-top-level",
+        workspaceCreatedAt: "2026-02-18T00:00:00.000Z",
+        workspaceChatReferenceId: "legacy-top-level-chat",
+        sources: [
+          {
+            id: "legacy-source-1",
+            mediaId: 4321,
+            title: "Legacy Top-Level Source",
+            type: "pdf",
+            addedAt: "2026-02-18T00:01:00.000Z"
+          }
+        ],
+        selectedSourceIds: ["legacy-source-1"],
+        generatedArtifacts: [
+          {
+            id: "legacy-artifact-1",
+            type: "summary",
+            title: "Legacy Top-Level Artifact",
+            status: "completed",
+            content: "Legacy artifact content",
+            createdAt: "2026-02-18T00:02:00.000Z"
+          }
+        ],
+        notes: "Legacy top-level notes",
+        currentNote: {
+          id: 7,
+          title: "Legacy note",
+          content: "Legacy note content",
+          keywords: ["legacy"],
+          version: 1,
+          isDirty: false
+        },
+        leftPaneCollapsed: true,
+        rightPaneCollapsed: false,
+        audioSettings: { ...DEFAULT_AUDIO_SETTINGS, speed: 1.1 },
+        savedWorkspaces: [],
+        archivedWorkspaces: [],
+        workspaceChatSessions: {
+          "workspace-legacy-top-level": {
+            messages: [
+              {
+                isBot: false,
+                name: "You",
+                message: "Legacy session message",
+                sources: []
+              }
+            ],
+            history: [{ role: "user", content: "Legacy session message" }],
+            historyId: "legacy-top-history",
+            serverChatId: null
+          }
+        }
+      },
+      version: 0
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistedState))
+    await useWorkspaceStore.persist.rehydrate()
+
+    const state = useWorkspaceStore.getState()
+    expect(state.workspaceId).toBe("workspace-legacy-top-level")
+    expect(state.workspaceName).toBe("Legacy Top-Level Workspace")
+    expect(state.workspaceTag).toBe("workspace:legacy-top-level")
+    expect(state.workspaceChatReferenceId).toBe("legacy-top-level-chat")
+    expect(state.sources[0]?.title).toBe("Legacy Top-Level Source")
+    expect(state.selectedSourceIds).toEqual(["legacy-source-1"])
+    expect(state.generatedArtifacts[0]?.title).toBe("Legacy Top-Level Artifact")
+    expect(state.notes).toBe("Legacy top-level notes")
+    expect(state.currentNote.title).toBe("Legacy note")
+    expect(state.leftPaneCollapsed).toBe(true)
+    expect(state.rightPaneCollapsed).toBe(false)
+    expect(state.workspaceSnapshots["workspace-legacy-top-level"]).toBeDefined()
+    expect(
+      state.workspaceChatSessions["workspace-legacy-top-level"]?.history[0]?.content
+    ).toBe("Legacy session message")
+  })
+
+  it("dispatches a quota warning event when localStorage is full", async () => {
     const storage = createWorkspaceStorage()
     const originalSetItem = Storage.prototype.setItem
     const quotaError =
@@ -410,9 +988,9 @@ describe("workspace store snapshot persistence", () => {
       onQuotaExceeded as EventListener
     )
 
-    expect(() => {
+    await expect(
       storage.setItem(STORAGE_KEY, '{"state":{"workspaceName":"Overflow"}}')
-    }).not.toThrow()
+    ).resolves.toBeUndefined()
 
     expect(quotaEvents).toHaveLength(1)
     expect(quotaEvents[0]?.detail.key).toBe(STORAGE_KEY)
@@ -492,6 +1070,54 @@ describe("workspace store snapshot persistence", () => {
     expect(originalStateAfterMutation.sources).toHaveLength(1)
     expect(originalStateAfterMutation.sources[0]?.title).toBe("Original Source")
     expect(originalStateAfterMutation.notes).toBe("Original notes")
+  })
+
+  it("duplicates workspaceBanner with isolated state", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Original Banner Workspace")
+    const originalId = useWorkspaceStore.getState().workspaceId
+
+    useWorkspaceStore.setState({
+      workspaceBanner: {
+        title: "Original Banner",
+        subtitle: "Original subtitle",
+        image: {
+          dataUrl: "data:image/jpeg;base64,original-banner",
+          mimeType: "image/jpeg",
+          width: 1400,
+          height: 460,
+          bytes: 24576,
+          updatedAt: new Date("2026-02-25T03:00:00.000Z")
+        }
+      }
+    })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    const duplicateId = useWorkspaceStore.getState().duplicateWorkspace(originalId)
+    expect(duplicateId).toBeTruthy()
+
+    const duplicatedState = useWorkspaceStore.getState()
+    expect(duplicatedState.workspaceBanner.title).toBe("Original Banner")
+    expect(duplicatedState.workspaceBanner.subtitle).toBe("Original subtitle")
+    expect(duplicatedState.workspaceBanner.image?.dataUrl).toBe(
+      "data:image/jpeg;base64,original-banner"
+    )
+
+    useWorkspaceStore.setState({
+      workspaceBanner: {
+        title: "Duplicate Banner",
+        subtitle: "Duplicate subtitle",
+        image: null
+      }
+    })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    useWorkspaceStore.getState().switchWorkspace(originalId)
+    const originalState = useWorkspaceStore.getState()
+    expect(originalState.workspaceBanner.title).toBe("Original Banner")
+    expect(originalState.workspaceBanner.subtitle).toBe("Original subtitle")
+    expect(originalState.workspaceBanner.image?.dataUrl).toBe(
+      "data:image/jpeg;base64,original-banner"
+    )
   })
 
   it("archives and restores workspaces without losing snapshot data", () => {
@@ -591,6 +1217,76 @@ describe("workspace store snapshot persistence", () => {
     expect(useWorkspaceStore.getState().getWorkspaceChatSession(workspaceBId)?.historyId).toBe(
       "history-b"
     )
+  })
+
+  it("persists only the most recent chat messages for each workspace session", async () => {
+    useWorkspaceStore.getState().initializeWorkspace("Chat Retention Workspace")
+    const workspaceId = useWorkspaceStore.getState().workspaceId
+
+    const messages = Array.from({ length: 300 }, (_, index) => ({
+      isBot: index % 2 === 0,
+      name: index % 2 === 0 ? "Assistant" : "You",
+      message: `Message ${index + 1}`,
+      sources: []
+    }))
+
+    useWorkspaceStore.getState().saveWorkspaceChatSession(workspaceId, {
+      messages,
+      history: messages.map((message) => ({
+        role: message.isBot ? "assistant" : "user",
+        content: message.message
+      })),
+      historyId: "history-retention",
+      serverChatId: "server-chat-retention"
+    })
+
+    expect(
+      useWorkspaceStore.getState().getWorkspaceChatSession(workspaceId)?.messages
+    ).toHaveLength(300)
+
+    const persistedRaw = await Promise.resolve(
+      createWorkspaceStorage().getItem(STORAGE_KEY)
+    )
+    const persisted = persistedRaw ? JSON.parse(persistedRaw) : null
+    const persistedSession =
+      persisted?.state?.workspaceChatSessions?.[workspaceId]
+
+    expect(Array.isArray(persistedSession?.messages)).toBe(true)
+    expect(persistedSession?.messages).toHaveLength(250)
+    expect(persistedSession?.messages?.[0]?.message).toBe("Message 51")
+    expect(persistedSession?.messages?.[249]?.message).toBe("Message 300")
+  })
+
+  it("truncates oversized server-backed artifact payloads in persisted snapshots", async () => {
+    useWorkspaceStore.getState().initializeWorkspace("Artifact Persistence Workspace")
+    const workspaceId = useWorkspaceStore.getState().workspaceId
+    const oversizedContent = "A".repeat(40 * 1024)
+    const oversizedData = {
+      payload: "B".repeat(20 * 1024)
+    }
+
+    useWorkspaceStore.getState().addArtifact({
+      type: "summary",
+      title: "Server-backed artifact",
+      status: "completed",
+      serverId: "server-output-42",
+      content: oversizedContent,
+      data: oversizedData
+    })
+
+    const persistedRaw = await Promise.resolve(
+      createWorkspaceStorage().getItem(STORAGE_KEY)
+    )
+    const persisted = persistedRaw ? JSON.parse(persistedRaw) : null
+    const persistedArtifact =
+      persisted?.state?.workspaceSnapshots?.[workspaceId]?.generatedArtifacts?.[0]
+
+    expect(typeof persistedArtifact?.content).toBe("string")
+    expect(persistedArtifact?.content.length).toBeLessThan(oversizedContent.length)
+    expect(persistedArtifact?.content).toContain(
+      "[Truncated in local persistence cache; open the server output for full content.]"
+    )
+    expect(persistedArtifact?.data).toBeUndefined()
   })
 
   it("focuses sources by media id and source id for cross-pane navigation", () => {
@@ -849,6 +1545,18 @@ describe("workspace store snapshot persistence", () => {
         version: 7,
         isDirty: false
       },
+      workspaceBanner: {
+        title: "Export Banner",
+        subtitle: "Export subtitle",
+        image: {
+          dataUrl: "data:image/webp;base64,export-banner",
+          mimeType: "image/webp",
+          width: 1280,
+          height: 420,
+          bytes: 20480,
+          updatedAt: new Date("2026-02-25T06:00:00.000Z")
+        }
+      },
       leftPaneCollapsed: true,
       rightPaneCollapsed: true,
       audioSettings: {
@@ -883,6 +1591,7 @@ describe("workspace store snapshot persistence", () => {
     expect(bundle?.workspace.snapshot.generatedArtifacts[0]?.previousVersionId).toBe(
       baseArtifact.id
     )
+    expect(bundle?.workspace.snapshot.workspaceBanner.title).toBe("Export Banner")
     expect(bundle?.workspace.snapshot.workspaceTag).toContain("workspace:")
     expect(bundle?.workspace.snapshot.workspaceCreatedAt).toBeTruthy()
 
@@ -908,6 +1617,11 @@ describe("workspace store snapshot persistence", () => {
     )
     expect(importedState.notes).toBe("Workspace export notes")
     expect(importedState.currentNote.title).toBe("Workspace note")
+    expect(importedState.workspaceBanner.title).toBe("Export Banner")
+    expect(importedState.workspaceBanner.subtitle).toBe("Export subtitle")
+    expect(importedState.workspaceBanner.image?.dataUrl).toBe(
+      "data:image/webp;base64,export-banner"
+    )
     expect(importedState.leftPaneCollapsed).toBe(true)
     expect(importedState.rightPaneCollapsed).toBe(true)
     expect(importedState.audioSettings.model).toBe("tts-1")
@@ -917,6 +1631,49 @@ describe("workspace store snapshot persistence", () => {
       .getWorkspaceChatSession(importedWorkspaceId as string)
     expect(importedSession?.historyId).toBe("history-export")
     expect(importedSession?.messages[0]?.message).toBe("Export this workspace")
+  })
+
+  it("clears invalid imported workspaceBanner image payload while preserving text", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Import Banner Workspace")
+    const workspaceId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore.setState({
+      workspaceBanner: {
+        title: "Source Banner",
+        subtitle: "Source subtitle",
+        image: null
+      }
+    })
+
+    const bundle = useWorkspaceStore
+      .getState()
+      .exportWorkspaceBundle(workspaceId)
+    expect(bundle).not.toBeNull()
+
+    const bundleWithInvalidImage = JSON.parse(
+      JSON.stringify(bundle)
+    ) as NonNullable<typeof bundle>
+    bundleWithInvalidImage.workspace.snapshot.workspaceBanner = {
+      title: "Imported Banner",
+      subtitle: "Imported subtitle",
+      image: {
+        dataUrl: "data:image/gif;base64,invalid",
+        mimeType: "image/gif",
+        width: 1200,
+        height: 400,
+        bytes: 19000,
+        updatedAt: "2026-02-25T07:00:00.000Z"
+      } as unknown as (typeof bundleWithInvalidImage.workspace.snapshot.workspaceBanner)["image"]
+    }
+
+    const importedId = useWorkspaceStore
+      .getState()
+      .importWorkspaceBundle(bundleWithInvalidImage)
+    expect(importedId).toBeTruthy()
+
+    const importedState = useWorkspaceStore.getState()
+    expect(importedState.workspaceBanner.title).toBe("Imported Banner")
+    expect(importedState.workspaceBanner.subtitle).toBe("Imported subtitle")
+    expect(importedState.workspaceBanner.image).toBeNull()
   })
 
   it("captures and restores workspace state snapshot for destructive undo", () => {

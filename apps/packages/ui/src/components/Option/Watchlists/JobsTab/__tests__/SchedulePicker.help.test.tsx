@@ -43,6 +43,10 @@ describe("SchedulePicker contextual help", () => {
   it("shows a cron help trigger in the advanced schedule section", () => {
     render(<SchedulePicker value={null} onChange={vi.fn()} />)
 
+    expect(
+      screen.getAllByText("Most users should use presets. Turn on cron only for uncommon timing.")
+        .length
+    ).toBeGreaterThan(0)
     expect(screen.getByTestId("watchlists-help-cron")).toBeInTheDocument()
   })
 
@@ -53,7 +57,7 @@ describe("SchedulePicker contextual help", () => {
     fireEvent.click(screen.getByRole("switch"))
     fireEvent.change(
       screen.getByPlaceholderText(
-        "Advanced schedule expression (cron, e.g., 0 9 * * MON)"
+        "Cron expression (advanced), e.g., 0 9 * * MON"
       ),
       { target: { value: "* * * * *" } }
     )
@@ -70,5 +74,43 @@ describe("SchedulePicker contextual help", () => {
         rule: "schedule_too_frequent"
       })
     )
+  })
+
+  it("shows invalid-format guidance before apply when cron fields are incomplete", () => {
+    const onChange = vi.fn()
+    render(<SchedulePicker value={null} onChange={onChange} />)
+
+    fireEvent.click(screen.getByRole("switch"))
+    fireEvent.change(
+      screen.getByPlaceholderText(
+        "Cron expression (advanced), e.g., 0 9 * * MON"
+      ),
+      { target: { value: "0 9 * *" } }
+    )
+
+    expect(
+      screen.getByText("Use exactly 5 cron fields: minute hour day-of-month month day-of-week.")
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled()
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it("offers quick examples for advanced cron entry", () => {
+    const onChange = vi.fn()
+    render(<SchedulePicker value={null} onChange={onChange} />)
+
+    fireEvent.click(screen.getByRole("switch"))
+    expect(
+      screen.getByText(
+        "If cron is new, start with a quick example below and edit one field at a time."
+      )
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("schedule-example-daily0900"))
+    expect(
+      screen.getByPlaceholderText("Cron expression (advanced), e.g., 0 9 * * MON")
+    ).toHaveValue("0 9 * * *")
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }))
+    expect(onChange).toHaveBeenCalledWith("0 9 * * *")
   })
 })

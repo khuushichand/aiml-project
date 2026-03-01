@@ -38,6 +38,9 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
     save_uploaded_files,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
+    download_url_async as core_download_url_async,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     ProcessItem,
     run_batch_processor,
@@ -46,6 +49,14 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.result_normalization im
     normalise_pdf_result,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
+from tldw_Server_API.app.api.v1.endpoints.media.input_contracts import (
+    normalize_urls_field,
+    validate_media_inputs,
+)
+from tldw_Server_API.app.api.v1.endpoints.media.deprecation_signals import (
+    apply_media_legacy_headers,
+    build_media_legacy_signal,
+)
 
 router = APIRouter()
 
@@ -97,10 +108,27 @@ async def process_pdfs_endpoint(
     except Exception as usage_log_error:
         # Usage logging is best-effort; do not fail the request.
         logger.debug("PDF process endpoint usage logging failed", exc_info=usage_log_error)
+    legacy_urls_empty_sentinel_used = bool(form_data.urls and form_data.urls == [""])
+    if legacy_urls_empty_sentinel_used:
+        logger.info("Received urls=[''], treating as no URLs provided for PDF processing.")
+    form_data.urls = normalize_urls_field(form_data.urls)
+    legacy_signal = (
+        build_media_legacy_signal(
+            successor="/api/v1/media/process-pdfs",
+            warning_code="legacy_urls_empty_sentinel",
+        )
+        if legacy_urls_empty_sentinel_used
+        else None
+    )
 
     # Reuse shared validation so that error messages and 400 semantics match
     # the legacy implementation (including "No valid media sources supplied").
-    media_mod._validate_inputs("pdf", form_data.urls, files)  # type: ignore[arg-type]
+    validate_media_inputs(
+        media_mod._validate_inputs,
+        "pdf",
+        form_data.urls,
+        files,
+    )
 
     batch: dict[str, Any] = {"results": [], "errors": []}
     items: list[ProcessItem] = []
@@ -111,8 +139,7 @@ async def process_pdfs_endpoint(
         temp_dir_path = Path(temp_dir)
 
         # Preserve test-time monkeypatching of `media.file_validator_instance`
-        # by resolving the validator via the shim and propagating it back into
-        # the legacy module.
+        # by resolving the validator from the media module export.
         validator: FileValidator = getattr(
             media_mod,
             "file_validator_instance",
@@ -159,7 +186,7 @@ async def process_pdfs_endpoint(
 
         # ---- Handle URL inputs via shared downloader ----
         if form_data.urls:
-            download_url_async = media_mod._download_url_async
+            download_url_async = core_download_url_async
             download_tasks = [
                 download_url_async(
                     client=None,
@@ -215,7 +242,10 @@ async def process_pdfs_endpoint(
                 if batch.get("results")
                 else status.HTTP_400_BAD_REQUEST
             )
-            return JSONResponse(status_code=status_code, content=batch)
+            response = JSONResponse(status_code=status_code, content=batch)
+            if legacy_signal is not None:
+                apply_media_legacy_headers(response, legacy_signal)
+            return response
 
         # Prepare chunking options (including templates/hierarchical when requested).
         if form_data.perform_chunking:
@@ -426,7 +456,10 @@ async def process_pdfs_endpoint(
         # Never fail the endpoint due to re-chunking issues.
         logger.debug("PDF process endpoint rechunking failed; returning original result", exc_info=rechunk_error)
 
-    return JSONResponse(status_code=final_status_code, content=batch)
+    response = JSONResponse(status_code=final_status_code, content=batch)
+    if legacy_signal is not None:
+        apply_media_legacy_headers(response, legacy_signal)
+    return response
 
 
 __all__ = ["router"]

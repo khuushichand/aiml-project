@@ -1,9 +1,9 @@
 import asyncio
-from typing import Any, Optional
+from typing import Any, Coroutine, Dict, Optional
 
 import pytest
 
-from tldw_Server_API.app.core.Claims_Extraction.claims_engine import ClaimsEngine
+from tldw_Server_API.app.core.Claims_Extraction.claims_engine import Claim, ClaimsEngine
 
 
 class Doc:
@@ -271,3 +271,105 @@ def test_claims_engine_records_response_format_selection(monkeypatch):
     modes = {item.get("mode") for item in captured}
     assert "extract" in modes
     assert "verify" in modes
+
+
+@pytest.mark.unit
+def test_claims_engine_multi_pass_dedupes_first_pass_wins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure ClaimsEngine multi-pass extraction de-duplicates repeated claim text.
+
+    The first-pass claim identity should win even when later passes repeat it.
+    """
+    import tldw_Server_API.app.core.Claims_Extraction.claims_engine as engine_mod
+
+    calls: Dict[str, int] = {"extract": 0}
+
+    monkeypatch.setattr(engine_mod, "_resolve_claims_extraction_passes", lambda: 3)
+    monkeypatch.setattr(engine_mod, "_resolve_claims_context_window_chars", lambda: 64)
+
+    def _analyze_multi_pass(
+        api_name: str,
+        input_data: Any,
+        custom_prompt_arg: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Return a repeated claim for extraction and a stub label for judge calls."""
+        if system_message and "fact-checking judge" in system_message:
+            return '{"label": "nei", "confidence": 0.4, "rationale": "stub"}'
+        calls["extract"] += 1
+        return '{"claims": [{"text": "Repeated multi-pass claim."}]}'
+
+    engine = ClaimsEngine(_analyze_multi_pass)
+
+    async def _run() -> None:
+        """Run ClaimsEngine with Doc input and assert first-pass de-dupe behavior."""
+        result: Dict[str, Any] = await engine.run(
+            answer="Repeated multi-pass claim.",
+            query="Q",
+            documents=[Doc("d1", "Repeated multi-pass claim context.", 0.5)],
+            claim_extractor="llm",
+            claim_verifier="nli",
+            claims_max=5,
+        )
+        claims = result.get("claims") or []
+        assert len(claims) == 1
+        assert claims[0].get("text") == "Repeated multi-pass claim."
+
+    run_coro: Coroutine[Any, Any, None] = _run()
+    asyncio.run(run_coro)
+    assert calls["extract"] == 3
+
+
+@pytest.mark.unit
+def test_dedupe_claims_replaces_missing_span_with_later_span():
+    claims = [
+        Claim(id="c1", text="Repeated multi-pass claim.", span=None),
+        Claim(id="c2", text="repeated   multi-pass claim.", span=(4, 28)),
+    ]
+
+    deduped = ClaimsEngine._dedupe_claims(claims, max_claims=5)
+
+    assert len(deduped) == 1
+    assert deduped[0].id == "c1"
+    assert deduped[0].span == (4, 28)
+
+
+@pytest.mark.unit
+def test_claims_engine_summary_includes_refuted_status_count() -> None:
+    """Verify summary counters include refuted status when judge returns refuted."""
+
+    def _analyze_refuted(
+        api_name: str,
+        input_data: Any,
+        custom_prompt_arg: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Return one claim for extraction and a refuted label for judge calls."""
+        if system_message and "fact-checking judge" in system_message:
+            return '{"label": "refuted", "confidence": 0.95, "rationale": "stub"}'
+        return '{"claims": [{"text": "Claim to refute."}]}'
+
+    engine = ClaimsEngine(_analyze_refuted)
+
+    async def _run() -> None:
+        """Run ClaimsEngine and assert refuted_status is counted in summary."""
+        result: Dict[str, Any] = await engine.run(
+            answer="Claim to refute.",
+            query="Q",
+            documents=[Doc("d1", "Contradictory context.", 0.9)],
+            claim_extractor="llm",
+            claim_verifier="llm",
+            claims_max=2,
+        )
+        summary = result.get("summary") or {}
+        assert int(summary.get("refuted_status", 0)) >= 1
+
+    run_coro: Coroutine[Any, Any, None] = _run()
+    asyncio.run(run_coro)

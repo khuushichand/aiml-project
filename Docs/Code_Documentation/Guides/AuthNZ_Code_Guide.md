@@ -39,7 +39,7 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
   - `single_user` – fixed API key, synthetic admin user, SQLite-backed by default.
   - `multi_user` – username/password + MFA + JWT, sessions, RBAC, orgs/teams, API keys.
 - In code, helpers `is_single_user_mode()` / `is_multi_user_mode()` read `AUTH_MODE` via `get_settings()`, but their use is now restricted to coordination/UX and a small number of operational knobs (startup banners, WebUI hints, warm-ups, quota toggles). They are **deprecated as authorization primitives**.
-- An explicit `PROFILE` setting (see `Docs/Product/User-Unification-PRD.md`) and a small set of feature/behavior flags now describe deployment behaviour more precisely:
+- An explicit `PROFILE` setting (see `Docs/Product/Completed/User-Unification-PRD.md`) and a small set of feature/behavior flags now describe deployment behaviour more precisely:
   - `PROFILE=local-single-user` (or legacy alias `single_user`).
   - `PROFILE=multi-user-postgres`.
   - Optional `PROFILE=multi-user-sqlite` for small dev setups.
@@ -446,7 +446,7 @@ References:
 Operator references:
 - JWT rotation runbook: `Docs/Deployment/Operations/JWT_Rotation_Runbook.md`
 - AuthNZ settings/env vars (AuthNZ section): `Docs/Operations/Env_Vars.md`
-- Authentication setup guide: `Docs/Published/User_Guides/Authentication_Setup.md`
+- Authentication setup guide: `Docs/Published/User_Guides/Server/Authentication_Setup.md`
 
 ## Database Backends
 

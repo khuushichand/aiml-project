@@ -5,14 +5,14 @@
 import re
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 #
 # 3rd-party imports
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 from pydantic_core.core_schema import ValidationInfo
-
-from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import load_mediawiki_import_config
+import yaml
 
 #
 # Local Imports
@@ -771,7 +771,22 @@ class IngestWebContentRequest(BaseModel):
 #
 # This is a schema for MediaWiki ingestion and analysis.
 
-media_wiki_global_config = load_mediawiki_import_config()
+def _load_mediawiki_global_config() -> dict[str, Any]:
+    """Load MediaWiki defaults without importing heavy MediaWiki ingestion module."""
+    try:
+        config_path = (
+            Path(__file__).resolve().parents[4]
+            / "Config_Files"
+            / "mediawiki_import_config.yaml"
+        )
+        with config_path.open("r", encoding="utf-8") as handle:
+            parsed = yaml.safe_load(handle) or {}
+            return parsed if isinstance(parsed, dict) else {}
+    except (OSError, ValueError, TypeError, yaml.YAMLError):
+        return {}
+
+
+media_wiki_global_config = _load_mediawiki_global_config()
 
 class MediaWikiDumpOptionsForm(BaseModel):
     wiki_name: str = Field(..., description="A unique name for this MediaWiki instance (e.g., 'my_custom_wiki').")

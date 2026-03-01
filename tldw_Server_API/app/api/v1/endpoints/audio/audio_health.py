@@ -240,6 +240,8 @@ async def get_stt_health(
         "alias": raw_model,
         "model": status_info.get("model", resolved_model),
         "available": bool(status_info.get("available", False)),
+        "usable": bool(status_info.get("usable", status_info.get("available", False))),
+        "on_demand": bool(status_info.get("on_demand", False)),
         "message": status_info.get("message"),
         "estimated_size": status_info.get("estimated_size"),
         "timestamp": datetime.utcnow().isoformat(),
@@ -251,6 +253,12 @@ async def get_stt_health(
         try:
             stt_lib.get_whisper_model(resolved_model, device, check_download_status=False)
             warm_info = {"ok": True, "device": device}
+            # Warm-up succeeded, so the model is ready to serve requests.
+            health["available"] = True
+            health["usable"] = True
+            health["on_demand"] = False
+            health["message"] = f"Model {resolved_model} is available and ready for use"
+            health["estimated_size"] = None
         except Exception:
             logger.exception(f"STT health warm-up failed for model={resolved_model}, device={device}")
             warm_info = {

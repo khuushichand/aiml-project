@@ -14,7 +14,7 @@ import {
   Copy,
 } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import type { ExportFormat, ExportOptions } from "./types"
 import type { RagCitationStyle } from "@/services/rag/unified-rag"
 import { useAntdMessage } from "@/hooks/useAntdMessage"

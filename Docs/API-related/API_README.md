@@ -10,6 +10,7 @@ See [API Design](API_Design.md) for more details.
 See also:
 - `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md` for the audio processing endpoint (`POST /api/v1/media/process-audios`).
 - `Docs/API-related/Email_Processing_API.md` for the email processing endpoint (`POST /api/v1/media/process-emails`) and email ingestion via `/media/add`.
+- `Docs/API-related/Reminder_Notifications_API.md` for reminder tasks, inbox notifications, SSE stream, and related env flags.
 
 ### URLs
 - **URLs**
@@ -68,6 +69,8 @@ For comprehensive documentation, see:
 - `GET /api/v1/media/ingest/jobs?batch_id=...` - list jobs for a batch
 - `GET /api/v1/media/ingest/jobs/{job_id}` - job status
 - `DELETE /api/v1/media/ingest/jobs/{job_id}` - cancel job
+- `POST /api/v1/media/ingest/jobs/cancel?batch_id=...` - cancel jobs for a batch (supports `session_id` alias)
+- `GET /api/v1/media/ingest/jobs/events/stream` - SSE stream for ingest events (supports `batch_id`, `after_id`)
 
 See: [Media Ingest Jobs API](Media_Ingest_Jobs_API.md)
 
@@ -86,6 +89,14 @@ Reading List supports URL capture, clean text extraction, tagging, import/export
 - `GET /api/v1/reading/export` - JSONL/ZIP export
 
 See: [Reading List API](Reading_List_API.md)
+
+#### Reminder Tasks and Notifications
+
+- Tasks: `POST /api/v1/tasks`, `GET /api/v1/tasks`, `PATCH /api/v1/tasks/{task_id}`, `DELETE /api/v1/tasks/{task_id}`
+- Notifications: `GET /api/v1/notifications`, `GET /api/v1/notifications/unread-count`, `POST /api/v1/notifications/mark-read`, `POST /api/v1/notifications/{id}/dismiss`, `POST /api/v1/notifications/{id}/snooze`
+- Realtime inbox stream: `GET /api/v1/notifications/stream` (SSE with `Last-Event-ID` / `after` cursoring)
+
+See: [Reminder Tasks and Notifications API](Reminder_Notifications_API.md)
 
 #### Collections Feeds - `/api/v1/collections/feeds`
 

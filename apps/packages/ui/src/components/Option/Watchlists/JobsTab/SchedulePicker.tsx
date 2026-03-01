@@ -46,6 +46,38 @@ const WEEKDAY_OPTIONS: Array<{ value: WeekdayToken; label: string }> = [
   { value: "SUN", label: "Sunday" }
 ]
 
+const CRON_FIELDS = 5
+const CRON_TOKEN_PATTERN = /^[A-Z0-9*,/?-]+$/i
+const CRON_EXAMPLES = [
+  {
+    id: "daily0900",
+    labelKey: "watchlists:schedule.examples.daily0900",
+    fallbackLabel: "Daily 09:00",
+    expression: "0 9 * * *"
+  },
+  {
+    id: "weekdays0800",
+    labelKey: "watchlists:schedule.examples.weekdays0800",
+    fallbackLabel: "Weekdays 08:00",
+    expression: "0 8 * * MON-FRI"
+  },
+  {
+    id: "every6hours",
+    labelKey: "watchlists:schedule.examples.every6hours",
+    fallbackLabel: "Every 6 hours",
+    expression: "0 */6 * * *"
+  }
+]
+
+type CronFormatValidationResult = "field_count" | "invalid_token" | null
+
+const validateCronFormat = (expression: string): CronFormatValidationResult => {
+  const tokens = expression.trim().split(/\s+/)
+  if (tokens.length !== CRON_FIELDS) return "field_count"
+  if (tokens.some((token) => !CRON_TOKEN_PATTERN.test(token))) return "invalid_token"
+  return null
+}
+
 export const SchedulePicker: React.FC<SchedulePickerProps> = ({
   value,
   onChange,
@@ -57,6 +89,31 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
   const [advancedMode, setAdvancedMode] = useState(false)
   const [presetState, setPresetState] = useState<PresetScheduleState>(createDefaultPresetState())
   const [customValidationError, setCustomValidationError] = useState<string | null>(null)
+
+  const getCronFormatError = (expression: string): string | null => {
+    const validationResult = validateCronFormat(expression)
+    if (validationResult === "field_count") {
+      return t(
+        "watchlists:schedule.cronFieldCountError",
+        "Use exactly 5 cron fields: minute hour day-of-month month day-of-week."
+      )
+    }
+    if (validationResult === "invalid_token") {
+      return t(
+        "watchlists:schedule.cronInvalidTokenError",
+        "Cron tokens can only include letters, numbers, *, /, -, ?, and comma."
+      )
+    }
+    return null
+  }
+
+  const customCronFormatError = !advancedMode
+    ? null
+    : (() => {
+        const normalized = customCron.trim()
+        if (!normalized) return null
+        return getCronFormatError(normalized)
+      })()
 
   useEffect(() => {
     setCustomCron(value || "")
@@ -164,6 +221,11 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
   const handleCustomApply = () => {
     const normalized = customCron.trim()
     if (!normalized) return
+    const formatError = getCronFormatError(normalized)
+    if (formatError) {
+      setCustomValidationError(formatError)
+      return
+    }
     const frequency = analyzeScheduleFrequency(normalized, MIN_SCHEDULE_INTERVAL_MINUTES)
     if (frequency.tooFrequent) {
       void trackWatchlistsPreventionTelemetry({
@@ -221,6 +283,12 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
         <div className="mt-2 text-xs text-text-muted">
           {selectedPreset?.description}
         </div>
+        <div className="mt-1 text-xs text-text-muted">
+          {t(
+            "watchlists:schedule.beginnerHint",
+            "Most users should use presets. Turn on cron only for uncommon timing."
+          )}
+        </div>
 
         <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
           {(presetState.preset === "daily" || presetState.preset === "weekly") && (
@@ -272,13 +340,13 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
       <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
         <div>
           <div className="flex items-center gap-1 text-sm font-medium">
-            {t("watchlists:schedule.advancedLabel", "Advanced cron expression")}
+            {t("watchlists:schedule.advancedLabel", "Use custom cron (advanced)")}
             <WatchlistsHelpTooltip topic="cron" />
           </div>
           <div className="text-xs text-text-muted">
             {t(
-              "watchlists:schedule.advancedHint",
-              "Enable only if presets cannot express the cadence you need."
+              "watchlists:schedule.advancedOptionalHint",
+              "Most users should use presets. Turn on cron only for uncommon timing."
             )}
           </div>
         </div>
@@ -294,19 +362,67 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
             <Input
               placeholder={t(
                 "watchlists:schedule.cronPlaceholder",
-                "Advanced schedule expression (cron, e.g., 0 9 * * MON)"
+                "Cron expression (advanced), e.g., 0 9 * * MON"
               )}
               value={customCron}
-              onChange={(event) => setCustomCron(event.target.value)}
+              onChange={(event) => {
+                setCustomCron(event.target.value)
+                setCustomValidationError(null)
+              }}
               className="flex-1"
               onPressEnter={handleCustomApply}
             />
-            <Button type="primary" onClick={handleCustomApply} disabled={!customCron.trim()}>
+            <Button
+              type="primary"
+              onClick={handleCustomApply}
+              disabled={!customCron.trim() || Boolean(customCronFormatError)}
+            >
               {t("watchlists:schedule.apply", "Apply")}
             </Button>
           </div>
+          <div className="mt-2 text-xs text-text-muted">
+            {t(
+              "watchlists:schedule.cronFieldOrderHint",
+              "Field order: minute hour day-of-month month day-of-week."
+            )}
+          </div>
+          <div className="mt-2 text-xs text-text-muted">
+            {t(
+              "watchlists:schedule.cronBeginnerHint",
+              "If cron is new, start with a quick example below and edit one field at a time."
+            )}
+          </div>
+          <div className="mt-2 rounded-md border border-border bg-surface p-2">
+            <div className="text-xs font-medium text-text-muted">
+              {t("watchlists:schedule.examplesTitle", "Quick examples")}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {CRON_EXAMPLES.map((example) => (
+                <Button
+                  key={example.id}
+                  size="small"
+                  data-testid={`schedule-example-${example.id}`}
+                  onClick={() => {
+                    setCustomCron(example.expression)
+                    setCustomValidationError(null)
+                  }}
+                >
+                  {t(example.labelKey, example.fallbackLabel)}
+                </Button>
+              ))}
+            </div>
+            <div className="mt-2 text-xs text-text-muted">
+              {t(
+                "watchlists:schedule.examplesHint",
+                "Choose one, then adjust values if you need a different cadence."
+              )}
+            </div>
+          </div>
           {customValidationError ? (
             <div className="mt-2 text-xs text-danger">{customValidationError}</div>
+          ) : null}
+          {!customValidationError && customCronFormatError ? (
+            <div className="mt-2 text-xs text-danger">{customCronFormatError}</div>
           ) : null}
           {customCron.trim().length > 0 && (
             <div className="mt-2 text-sm text-text-muted">
@@ -341,7 +457,7 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
             )
           : t(
               "watchlists:schedule.helpSimple",
-              "Pick a schedule preset above. You can switch to Advanced cron for uncommon timing patterns."
+              "Use a preset above for most schedules. Turn on Advanced cron only if you need uncommon timing patterns."
             )}
       </div>
     </div>

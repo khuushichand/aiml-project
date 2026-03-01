@@ -584,6 +584,8 @@ const MediaPageContent: React.FC = () => {
   const sidebarCollapsedValue = sidebarCollapsed === true
   const libraryToolsCollapsedValue = libraryToolsCollapsed !== false
   const hasRunInitialSearch = React.useRef(false)
+  const previousSearchCriteriaKeyRef = React.useRef<string | null>(null)
+  const previousPageSizeRef = React.useRef<number>(pageSize)
   const hasInitializedFromUrl = React.useRef(false)
   const suppressUrlSync = React.useRef(false)
   const keywordEndpointUnavailableRef = React.useRef(false)
@@ -1238,7 +1240,13 @@ const MediaPageContent: React.FC = () => {
               filters: normalizedFilters,
               matchMode: metadataMatchMode,
               page,
-              perPage: pageSize
+              perPage: pageSize,
+              textQuery: query,
+              mediaTypes,
+              includeKeywords: keywordTokens,
+              excludeKeywords: excludeKeywordTokens,
+              dateRange,
+              sortBy
             })
             const metadataResp = await bgRequest<any>({
               path: path as any,
@@ -1247,81 +1255,6 @@ const MediaPageContent: React.FC = () => {
             const rows = Array.isArray(metadataResp?.results)
               ? metadataResp.results
               : []
-
-            const includeTerms = keywordTokens
-              .map((token) => token.trim().toLowerCase())
-              .filter(Boolean)
-            const excludeTerms = excludeKeywordTokens
-              .map((token) => token.trim().toLowerCase())
-              .filter(Boolean)
-            const startMs = dateRange.startDate
-              ? new Date(dateRange.startDate).getTime()
-              : null
-            const endMs = dateRange.endDate
-              ? new Date(dateRange.endDate).getTime()
-              : null
-            const textQuery = query.trim().toLowerCase()
-
-            let filteredRows = rows.filter((row: any) => {
-              const type = String(row?.type ?? '').toLowerCase()
-              if (mediaTypes.length > 0 && !mediaTypes.includes(type)) {
-                return false
-              }
-
-              if (startMs != null || endMs != null) {
-                const createdAt = row?.created_at ? new Date(row.created_at).getTime() : null
-                if (createdAt == null || Number.isNaN(createdAt)) {
-                  return false
-                }
-                if (startMs != null && createdAt < startMs) {
-                  return false
-                }
-                if (endMs != null && createdAt > endMs) {
-                  return false
-                }
-              }
-
-              const metadataPayload =
-                row?.safe_metadata && typeof row.safe_metadata === 'object'
-                  ? JSON.stringify(row.safe_metadata)
-                  : ''
-              const haystack =
-                `${String(row?.title ?? '')} ${metadataPayload}`.toLowerCase()
-
-              if (textQuery && !haystack.includes(textQuery)) {
-                return false
-              }
-              if (includeTerms.some((term) => !haystack.includes(term))) {
-                return false
-              }
-              if (excludeTerms.some((term) => haystack.includes(term))) {
-                return false
-              }
-
-              return true
-            })
-
-            if (sortBy === 'date_desc') {
-              filteredRows = filteredRows.sort(
-                (a, b) =>
-                  (new Date(b?.created_at ?? 0).getTime() || 0) -
-                  (new Date(a?.created_at ?? 0).getTime() || 0)
-              )
-            } else if (sortBy === 'date_asc') {
-              filteredRows = filteredRows.sort(
-                (a, b) =>
-                  (new Date(a?.created_at ?? 0).getTime() || 0) -
-                  (new Date(b?.created_at ?? 0).getTime() || 0)
-              )
-            } else if (sortBy === 'title_asc') {
-              filteredRows = filteredRows.sort((a, b) =>
-                String(a?.title ?? '').localeCompare(String(b?.title ?? ''))
-              )
-            } else if (sortBy === 'title_desc') {
-              filteredRows = filteredRows.sort((a, b) =>
-                String(b?.title ?? '').localeCompare(String(a?.title ?? ''))
-              )
-            }
 
             const metadataKeys = [
               'doi',
@@ -1333,7 +1266,7 @@ const MediaPageContent: React.FC = () => {
               'license'
             ]
 
-            for (const row of filteredRows) {
+            for (const row of rows) {
               const id = row?.media_id ?? row?.id ?? row?.pk ?? row?.uuid
               const type =
                 typeof row?.type === 'string'
@@ -1375,19 +1308,8 @@ const MediaPageContent: React.FC = () => {
             }
 
             const serverTotal = Number(metadataResp?.pagination?.total || rows.length || 0)
-            const hasClientSideConstraints =
-              hasTextQuery ||
-              mediaTypes.length > 0 ||
-              keywordTokens.length > 0 ||
-              excludeKeywordTokens.length > 0 ||
-              Boolean(dateRange.startDate || dateRange.endDate) ||
-              sortBy !== 'relevance'
-
-            const effectiveMediaTotal = hasClientSideConstraints
-              ? filteredRows.length
-              : serverTotal
-            setMediaTotal(effectiveMediaTotal)
-            actualMediaCount = effectiveMediaTotal
+            setMediaTotal(serverTotal)
+            actualMediaCount = serverTotal
           }
         } else if (!hasQuery && !hasMediaFilters) {
           // Blank browse: GET listing with pagination
@@ -1676,6 +1598,49 @@ const MediaPageContent: React.FC = () => {
   const normalizedMetadataFilters = useMemo(
     () => normalizeMetadataSearchFilters(metadataFilters),
     [metadataFilters]
+  )
+  const searchCriteriaKey = useMemo(
+    () =>
+      JSON.stringify({
+        debouncedQuery,
+        kinds,
+        searchMode,
+        mediaTypes,
+        keywordTokens,
+        excludeKeywordTokens,
+        sortBy,
+        dateStart: dateRange.startDate,
+        dateEnd: dateRange.endDate,
+        exactPhrase: exactPhrase.trim(),
+        searchFields,
+        enableBoostFields,
+        boostTitle: boostFields.title,
+        boostContent: boostFields.content,
+        metadataMatchMode,
+        metadataFilters: normalizedMetadataFilters.map((filter) => ({
+          field: filter.field,
+          op: filter.op,
+          value: filter.value
+        }))
+      }),
+    [
+      boostFields.content,
+      boostFields.title,
+      dateRange.endDate,
+      dateRange.startDate,
+      debouncedQuery,
+      enableBoostFields,
+      exactPhrase,
+      excludeKeywordTokens,
+      keywordTokens,
+      kinds,
+      mediaTypes,
+      metadataMatchMode,
+      normalizedMetadataFilters,
+      searchFields,
+      searchMode,
+      sortBy
+    ]
   )
 
   // Compute active filters state
@@ -1974,54 +1939,37 @@ const MediaPageContent: React.FC = () => {
         : mediaTotal
   const totalPages = Math.ceil(activeTotalCount / pageSize)
 
-  // Auto-refetch when debounced query changes (including clearing to empty)
+  // Coordinate all search refetches so criteria/page transitions do not double-fetch.
   useEffect(() => {
-    if (!hasRunInitialSearch.current) {
+    const previousCriteriaKey = previousSearchCriteriaKeyRef.current
+    const isInitialRun = previousCriteriaKey === null
+    const criteriaChanged = !isInitialRun && previousCriteriaKey !== searchCriteriaKey
+    const pageSizeChanged = previousPageSizeRef.current !== pageSize
+
+    if (isInitialRun) {
       hasRunInitialSearch.current = true
-      if (debouncedQuery === '') return
-    }
-    if (page !== 1) {
-      setPage(1)
+      previousSearchCriteriaKeyRef.current = searchCriteriaKey
+      previousPageSizeRef.current = pageSize
+      refetch()
       return
     }
-    refetch()
-  }, [debouncedQuery, page, refetch])
 
-  // Auto-refetch when paginating
-  useEffect(() => {
-    refetch()
-  }, [page, pageSize, refetch])
-
-  // Refetch when switching between media/notes kinds.
-  useEffect(() => {
-    if (!hasRunInitialSearch.current) return
-    setPage(1)
-    refetch()
-  }, [kinds, refetch])
-
-  // Reset to page 1 when filters change and refetch
-  useEffect(() => {
-    if (page !== 1) {
-      setPage(1)
+    if (criteriaChanged || pageSizeChanged) {
+      previousSearchCriteriaKeyRef.current = searchCriteriaKey
+      previousPageSizeRef.current = pageSize
+      if (page !== 1) {
+        setPage(1)
+        return
+      }
+      refetch()
       return
     }
+
     refetch()
   }, [
-    searchMode,
+    searchCriteriaKey,
     page,
-    mediaTypes,
-    keywordTokens,
-    excludeKeywordTokens,
-    sortBy,
-    dateRange.startDate,
-    dateRange.endDate,
-    exactPhrase,
-    searchFields,
-    enableBoostFields,
-    boostFields.title,
-    boostFields.content,
-    metadataMatchMode,
-    metadataFilters,
+    pageSize,
     refetch
   ])
 

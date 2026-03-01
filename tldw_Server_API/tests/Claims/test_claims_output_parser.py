@@ -2,12 +2,21 @@ import pytest
 
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     ClaimsOutputNoJsonError,
+    ClaimsOutputParseError,
     ClaimsOutputSchemaError,
     coerce_llm_response_text,
     extract_claim_texts,
     parse_claims_llm_output,
     resolve_claims_response_format,
 )
+from tldw_Server_API.app.core.exceptions import BadRequestError
+
+
+@pytest.mark.unit
+def test_claims_output_exceptions_inherit_core_base():
+    assert issubclass(ClaimsOutputParseError, BadRequestError)
+    assert issubclass(ClaimsOutputNoJsonError, BadRequestError)
+    assert issubclass(ClaimsOutputSchemaError, BadRequestError)
 
 
 @pytest.mark.unit
@@ -24,6 +33,13 @@ def test_parse_raw_json_and_think_tag_lenient():
     payload = parse_claims_llm_output(raw, parse_mode="lenient", strip_think_tags=True)
     texts = extract_claim_texts(payload, wrapper_key="claims", parse_mode="lenient")
     assert texts == ["Claim B"]
+
+
+@pytest.mark.unit
+def test_parse_raw_json_and_think_tag_strict_rejects():
+    raw = "<think>reasoning</think>\n{\"claims\":[{\"text\":\"Claim B\"}]}"
+    with pytest.raises(ClaimsOutputNoJsonError):
+        parse_claims_llm_output(raw, parse_mode="strict", strip_think_tags=True)
 
 
 @pytest.mark.unit

@@ -3,18 +3,17 @@ import { formatErrorMessage } from "@/utils/format-error-message"
 type ErrorSeverity = "warning" | "error"
 type ErrorKind =
   | "network"
+  | "dns"
+  | "tls"
   | "timeout"
+  | "validation"
   | "auth"
   | "rate_limit"
   | "not_found"
   | "server"
   | "unknown"
 
-type Translator = (
-  key: string,
-  defaultValue?: string,
-  options?: Record<string, unknown>
-) => string
+type Translator = (...args: any[]) => string
 
 export interface WatchlistsMappedError {
   kind: ErrorKind
@@ -79,7 +78,8 @@ const classifyError = (status: number | null, rawMessage: string): ErrorKind => 
     status === 403 ||
     normalized.includes("forbidden") ||
     normalized.includes("unauthorized") ||
-    normalized.includes("permission denied")
+    normalized.includes("permission denied") ||
+    normalized.includes("token expired")
   ) {
     return "auth"
   }
@@ -92,12 +92,44 @@ const classifyError = (status: number | null, rawMessage: string): ErrorKind => 
     return "rate_limit"
   }
 
+  if (status === 408 || status === 504) {
+    return "timeout"
+  }
+
+  if (
+    status === 400 ||
+    status === 422 ||
+    normalized.includes("validation error") ||
+    normalized.includes("watchlists_validation_error") ||
+    normalized.includes("invalid input") ||
+    normalized.includes("invalid payload") ||
+    normalized.includes("unprocessable")
+  ) {
+    return "validation"
+  }
+
   if (status === 404) {
     return "not_found"
   }
 
   if (status != null && status >= 500) {
     return "server"
+  }
+
+  if (
+    normalized.includes("dnsresolutionerror") ||
+    normalized.includes("name resolution") ||
+    normalized.includes("dns")
+  ) {
+    return "dns"
+  }
+
+  if (
+    normalized.includes("tls") ||
+    normalized.includes("ssl") ||
+    normalized.includes("certificate")
+  ) {
+    return "tls"
   }
 
   if (
@@ -124,7 +156,12 @@ const classifyError = (status: number | null, rawMessage: string): ErrorKind => 
 }
 
 const toSeverity = (kind: ErrorKind): ErrorSeverity => {
-  if (kind === "auth" || kind === "rate_limit" || kind === "not_found") {
+  if (
+    kind === "auth" ||
+    kind === "rate_limit" ||
+    kind === "not_found" ||
+    kind === "validation"
+  ) {
     return "warning"
   }
   return "error"
@@ -163,6 +200,27 @@ const getNextStep = (
     return t(
       "watchlists:errors.next.timeout",
       "Retry now. If this continues, reduce scope or schedule intensity.",
+      { context }
+    )
+  }
+  if (kind === "validation") {
+    return t(
+      "watchlists:errors.next.validation",
+      "Review highlighted values for {{context}}, then retry.",
+      { context }
+    )
+  }
+  if (kind === "dns") {
+    return t(
+      "watchlists:errors.next.dns",
+      "Verify the source host resolves correctly and retry.",
+      { context }
+    )
+  }
+  if (kind === "tls") {
+    return t(
+      "watchlists:errors.next.tls",
+      "Verify TLS certificate settings for the endpoint and retry.",
       { context }
     )
   }
@@ -230,4 +288,3 @@ export const mapWatchlistsError = (
     rawMessage
   }
 }
-

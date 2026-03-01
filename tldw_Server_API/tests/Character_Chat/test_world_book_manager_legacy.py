@@ -14,8 +14,12 @@ import json
 from unittest.mock import MagicMock, patch, call
 from datetime import datetime
 
-from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService, WorldBookEntry
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.Character_Chat.world_book_manager import (
+    WorldBookService,
+    WorldBookEntry,
+    BoundedDict,
+)
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, InputError
 
 
 @pytest.fixture
@@ -132,6 +136,190 @@ class TestWorldBookService:
         assert wb_result["name"] == "Fantasy World"
         assert len(entries) == 1
         assert entries[0].keywords == ["dragon", "castle"]
+
+    def test_get_entries_cached_results_keep_hybrid_shape(self, service):
+        """Cached entry reads should preserve both dict-style and attr-style access."""
+        service._entry_cache = {
+            1: [
+                WorldBookEntry(
+                    entry_id=1,
+                    world_book_id=1,
+                    keywords=["dragon"],
+                    content="Dragon lore",
+                    priority=10,
+                    enabled=True,
+                )
+            ]
+        }
+
+        entries = service.get_entries(world_book_id=1)
+
+        assert len(entries) == 1
+        assert entries[0]["keywords"] == ["dragon"]
+        assert entries[0].keywords == ["dragon"]
+        assert entries[0].get("content") == "Dragon lore"
+
+    def test_get_entries_applies_server_side_filters_from_cache(self, service):
+        """Entry filters should be applied server-side for cached reads."""
+        service._entry_cache = {
+            1: [
+                WorldBookEntry(
+                    entry_id=1,
+                    world_book_id=1,
+                    keywords=["hero"],
+                    content="Hero lore",
+                    priority=100,
+                    enabled=True,
+                    metadata={"group": "Characters", "appendable": True, "recursive_scanning": True},
+                ),
+                WorldBookEntry(
+                    entry_id=2,
+                    world_book_id=1,
+                    keywords=["city"],
+                    content="City lore",
+                    priority=90,
+                    enabled=True,
+                    metadata={"group": "Locations", "appendable": False, "recursive_scanning": False},
+                ),
+            ]
+        }
+
+        entries = service.get_entries(
+            world_book_id=1,
+            enabled_only=False,
+            group="characters",
+            appendable=True,
+            recursive_scanning=True,
+        )
+
+        assert len(entries) == 1
+        assert entries[0]["id"] == 1
+
+    def test_get_entries_cache_filters_coerce_string_boolean_metadata(self, service):
+        """Cache-path metadata filters should treat string booleans like native booleans."""
+        service._entry_cache = {
+            1: [
+                WorldBookEntry(
+                    entry_id=1,
+                    world_book_id=1,
+                    keywords=["hero"],
+                    content="Hero lore",
+                    priority=100,
+                    enabled=True,
+                    metadata={"group": "Characters", "appendable": "false", "recursive_scanning": "true"},
+                ),
+            ]
+        }
+
+        entries = service.get_entries(
+            world_book_id=1,
+            enabled_only=False,
+            group="characters",
+            appendable=False,
+            recursive_scanning=True,
+        )
+
+        assert len(entries) == 1
+        assert entries[0]["appendable"] is False
+        assert entries[0]["recursive_scanning"] is True
+
+    def test_get_entries_cache_respects_disabled_book_when_enabled_only(self, service):
+        """Cache path should respect disabled world-book state for enabled_only reads."""
+        service._entry_cache = {
+            1: [
+                WorldBookEntry(
+                    entry_id=1,
+                    world_book_id=1,
+                    keywords=["hero"],
+                    content="Hero lore",
+                    priority=10,
+                    enabled=True,
+                )
+            ]
+        }
+        service.get_world_book = MagicMock(return_value={"id": 1, "enabled": False})
+
+        entries = service.get_entries(world_book_id=1, enabled_only=True)
+
+        assert entries == []
+
+    def test_get_entries_sql_includes_metadata_filters_for_sqlite(self, service, mock_db):
+        """SQLite query path should push metadata filters into SQL."""
+        mock_conn = mock_db.get_connection().__enter__()
+        mock_cursor = mock_conn.execute.return_value
+        mock_cursor.fetchall.return_value = []
+
+        _ = service.get_entries(
+            world_book_id=1,
+            enabled_only=False,
+            group="Characters",
+            appendable=True,
+            recursive_scanning=False,
+        )
+
+        call_args = mock_conn.execute.call_args[0]
+        sql_text = call_args[0]
+        params = call_args[1]
+        assert "json_extract" in sql_text
+        assert "$.group" in sql_text
+        assert "$.appendable" in sql_text
+        assert "$.recursive_scanning" in sql_text
+        assert "characters" in params
+
+    def test_get_entries_does_not_cache_partial_reads(self, service, mock_db):
+        """Enabled-only and metadata-filtered reads should not populate per-book cache."""
+        mock_conn = mock_db.get_connection().__enter__()
+        mock_cursor = mock_conn.execute.return_value
+        mock_cursor.fetchall.return_value = []
+
+        _ = service.get_entries(world_book_id=1, enabled_only=True)
+        assert 1 not in service._entry_cache
+
+        _ = service.get_entries(world_book_id=1, group="Characters")
+        assert 1 not in service._entry_cache
+
+    def test_get_entry_fetches_single_entry_by_id(self, service, mock_db):
+        """Single-entry lookup should query by id and return hybrid entry view."""
+        mock_conn = mock_db.get_connection().__enter__()
+        mock_cursor = mock_conn.execute.return_value
+        mock_cursor.fetchone.return_value = {
+            "id": 55,
+            "world_book_id": 9,
+            "keywords": '["dragon"]',
+            "content": "Dragon lore",
+            "priority": 5,
+            "enabled": 1,
+            "case_sensitive": 0,
+            "regex_match": 0,
+            "whole_word_match": 1,
+            "metadata": '{"recursive_scanning": true}',
+            "created_at": "2026-02-27 00:00:00",
+            "last_modified": "2026-02-27 00:00:01",
+            "book_enabled": 1,
+        }
+
+        entry = service.get_entry(55)
+
+        assert entry is not None
+        assert entry.id == 55
+        assert entry["keywords"] == ["dragon"]
+        assert entry["recursive_scanning"] is True
+        assert entry["created_at"] == "2026-02-27 00:00:00"
+        assert entry["last_modified"] == "2026-02-27 00:00:01"
+
+        call_args = mock_conn.execute.call_args[0]
+        assert "WHERE e.id = ? AND wb.deleted = ?" in call_args[0]
+        assert call_args[1] == (55, False)
+
+    def test_invalidate_cache_reinitializes_bounded_dicts(self, service):
+        """Cache invalidation should preserve bounded-cache semantics."""
+        service._entry_cache = {}
+        service._book_cache = {}
+
+        service._invalidate_cache()
+
+        assert isinstance(service._entry_cache, BoundedDict)
+        assert isinstance(service._book_cache, BoundedDict)
 
     def test_add_entry(self, service, mock_db):
         """Test adding an entry to a world book."""
@@ -268,6 +456,68 @@ class TestWorldBookService:
         # High priority should be processed first
         assert "High priority" in result["processed_context"]
 
+    def test_process_context_keyword_lookup_skips_non_candidate_literal_entries(self, service):
+        """Normalized keyword lookup should avoid scanning unrelated literal entries."""
+        service.get_world_book = MagicMock(
+            return_value={"id": 1, "name": "Test", "token_budget": 500, "enabled": 1}
+        )
+
+        non_candidate_entry = WorldBookEntry(
+            entry_id=1,
+            world_book_id=1,
+            keywords=["dragon"],
+            content="Dragon lore",
+            priority=90,
+            enabled=True,
+            case_sensitive=False,
+            regex_match=False,
+            whole_word_match=True,
+        )
+        non_candidate_entry.get_first_match_info = MagicMock(
+            side_effect=AssertionError("Unrelated literal entry should not be scanned")
+        )
+
+        matching_entry = WorldBookEntry(
+            entry_id=2,
+            world_book_id=1,
+            keywords=["hero"],
+            content="Hero lore",
+            priority=100,
+            enabled=True,
+            case_sensitive=False,
+            regex_match=False,
+            whole_word_match=True,
+        )
+
+        service._entry_cache = {1: [non_candidate_entry, matching_entry]}
+
+        result = service.process_context(text="A hero arrives", world_book_ids=[1], token_budget=1000)
+
+        assert "Hero lore" in result["processed_context"]
+
+    def test_process_context_keyword_lookup_falls_back_for_regex_entries(self, service):
+        """Regex entries should still be scanned when quick lookup cannot index them."""
+        service.get_world_book = MagicMock(
+            return_value={"id": 1, "name": "Test", "token_budget": 500, "enabled": 1}
+        )
+
+        regex_entry = WorldBookEntry(
+            entry_id=1,
+            world_book_id=1,
+            keywords=[r"hero.*"],
+            content="Regex hero lore",
+            priority=100,
+            enabled=True,
+            regex_match=True,
+            case_sensitive=False,
+            whole_word_match=True,
+        )
+        service._entry_cache = {1: [regex_entry]}
+
+        result = service.process_context(text="heroic legend", world_book_ids=[1], token_budget=1000)
+
+        assert "Regex hero lore" in result["processed_context"]
+
     def test_process_context_token_budget(self, service, mock_db):
         """Test that token budget is respected."""
         # Create a very long entry
@@ -336,6 +586,178 @@ class TestWorldBookService:
 
         # Should match "hero" first, then "sword" from the hero entry
         assert result["entries_matched"] >= 1
+
+    def test_recursive_scanning_inherits_book_setting_when_not_overridden(self, service):
+        """Book-level recursive_scanning should apply when call-level override is omitted."""
+        service.get_world_book = MagicMock(
+            return_value={
+                "id": 1,
+                "name": "Test",
+                "token_budget": 500,
+                "recursive_scanning": 1,
+                "enabled": 1,
+            }
+        )
+        service._entry_cache = {
+            1: [
+                WorldBookEntry(
+                    entry_id=1,
+                    world_book_id=1,
+                    keywords=["hero"],
+                    content="The hero has a sword",
+                    priority=100,
+                    enabled=True,
+                ),
+                WorldBookEntry(
+                    entry_id=2,
+                    world_book_id=1,
+                    keywords=["sword"],
+                    content="The sword is magical",
+                    priority=50,
+                    enabled=True,
+                ),
+            ]
+        }
+
+        result = service.process_context(text="Story about a hero", world_book_ids=[1], token_budget=1000)
+
+        assert result["entries_matched"] >= 2
+        assert "The sword is magical" in result["processed_context"]
+
+    def test_recursive_scanning_explicit_false_overrides_book_setting(self, service):
+        """Call-level recursive_scanning=False should disable recursive expansion."""
+        service.get_world_book = MagicMock(
+            return_value={
+                "id": 1,
+                "name": "Test",
+                "token_budget": 500,
+                "recursive_scanning": 1,
+                "enabled": 1,
+            }
+        )
+        service._entry_cache = {
+            1: [
+                WorldBookEntry(
+                    entry_id=1,
+                    world_book_id=1,
+                    keywords=["hero"],
+                    content="The hero has a sword",
+                    priority=100,
+                    enabled=True,
+                ),
+                WorldBookEntry(
+                    entry_id=2,
+                    world_book_id=1,
+                    keywords=["sword"],
+                    content="The sword is magical",
+                    priority=50,
+                    enabled=True,
+                ),
+            ]
+        }
+
+        result = service.process_context(
+            text="Story about a hero",
+            world_book_ids=[1],
+            token_budget=1000,
+            recursive_scanning=False,
+        )
+
+        assert result["entries_matched"] == 1
+        assert "The sword is magical" not in result["processed_context"]
+
+    def test_recursive_scanning_respects_entry_recursive_source_flags(self, service):
+        """Only entries flagged for recursive scanning should chain additional depth."""
+        service.get_world_book = MagicMock(
+            return_value={
+                "id": 1,
+                "name": "Test",
+                "token_budget": 500,
+                "recursive_scanning": 1,
+                "enabled": 1,
+            }
+        )
+        service._entry_cache = {
+            1: [
+                WorldBookEntry(
+                    entry_id=1,
+                    world_book_id=1,
+                    keywords=["hero"],
+                    content="The hero has a sword",
+                    priority=100,
+                    enabled=True,
+                    metadata={"recursive_scanning": True},
+                ),
+                WorldBookEntry(
+                    entry_id=2,
+                    world_book_id=1,
+                    keywords=["sword"],
+                    content="The sword was forged by ancient smiths",
+                    priority=50,
+                    enabled=True,
+                ),
+                WorldBookEntry(
+                    entry_id=3,
+                    world_book_id=1,
+                    keywords=["smiths"],
+                    content="Ancient smiths lived in the mountain",
+                    priority=25,
+                    enabled=True,
+                ),
+            ]
+        }
+
+        result = service.process_context(
+            text="Story about a hero",
+            world_book_ids=[1],
+            token_budget=1000,
+            recursive_depth=3,
+        )
+
+        assert "The sword was forged by ancient smiths" in result["processed_context"]
+        assert "Ancient smiths lived in the mountain" not in result["processed_context"]
+
+    def test_recursive_scanning_falls_back_to_legacy_behavior_without_recursive_flags(self, service):
+        """When no entry has recursive_scanning metadata, legacy chaining remains enabled."""
+        service.get_world_book = MagicMock(
+            return_value={
+                "id": 1,
+                "name": "Test",
+                "token_budget": 500,
+                "recursive_scanning": 1,
+                "enabled": 1,
+            }
+        )
+        service._entry_cache = {
+            1: [
+                WorldBookEntry(
+                    entry_id=1,
+                    world_book_id=1,
+                    keywords=["hero"],
+                    content="The hero has a sword",
+                    priority=100,
+                    enabled=True,
+                ),
+                WorldBookEntry(
+                    entry_id=2,
+                    world_book_id=1,
+                    keywords=["sword"],
+                    content="The sword is magical",
+                    priority=50,
+                    enabled=True,
+                ),
+            ]
+        }
+
+        result = service.process_context(
+            text="Story about a hero",
+            world_book_ids=[1],
+            token_budget=1000,
+            recursive_depth=1,
+        )
+
+        assert result["entries_matched"] >= 2
+        assert "The sword is magical" in result["processed_context"]
 
     def test_import_world_book(self, service, mock_db):
         """Test importing a world book from JSON."""
@@ -414,6 +836,27 @@ class TestWorldBookService:
         assert "UPDATE world_book_entries SET" in call_args[0]
         assert '["new", "keywords"]' in call_args[1]
 
+    def test_update_entry_validates_keywords_when_existing_entry_is_regex(
+        self, service, mock_db
+    ):
+        """Updating keywords should still validate regex patterns when regex mode is already enabled."""
+        mock_conn = mock_db.get_connection().__enter__()
+        update_cursor = mock_conn.execute.return_value
+        update_cursor.rowcount = 1
+
+        select_cursor = MagicMock()
+        select_cursor.fetchone.return_value = {"regex_match": 1}
+
+        def execute_side_effect(sql, params=()):
+            if "SELECT regex_match FROM world_book_entries" in sql:
+                return select_cursor
+            return update_cursor
+
+        mock_conn.execute.side_effect = execute_side_effect
+
+        with pytest.raises(InputError):
+            service.update_entry(entry_id=1, keywords=["[invalid"])
+
     def test_get_statistics(self, service, mock_db):
         """Test getting world book statistics."""
         mock_conn = mock_db.get_connection().__enter__()
@@ -432,6 +875,21 @@ class TestWorldBookService:
         assert stats["total_entries"] == 150
         assert stats["total_character_attachments"] == 25
         assert stats["average_entries_per_world_book"] == 15.0
+
+    def test_get_entry_counts_for_world_books(self, service, mock_db):
+        """Entry counts should be returned in a single mapping with missing IDs defaulted to 0."""
+        mock_conn = mock_db.get_connection().__enter__()
+        mock_cursor = mock_conn.execute.return_value
+        mock_cursor.fetchall.return_value = [
+            {"world_book_id": 1, "entry_count": 4},
+            {"world_book_id": 3, "entry_count": 1},
+        ]
+
+        counts = service.get_entry_counts_for_world_books([1, 2, 3])
+
+        assert counts[1] == 4
+        assert counts[2] == 0
+        assert counts[3] == 1
 
     def test_search_entries(self, service, mock_db):
         """Test searching for entries by keyword or content."""

@@ -49,7 +49,7 @@ def _require_hf_cache(repo_id: str, *, required_files: list[str] | None = None) 
 
     try:
         snapshot_path = Path(
-            snapshot_download(
+            snapshot_download(  # nosec B615
                 repo_id=repo_id,
                 local_files_only=True,
             )

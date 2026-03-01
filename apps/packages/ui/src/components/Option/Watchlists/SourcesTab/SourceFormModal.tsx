@@ -1,9 +1,14 @@
-import React, { useEffect } from "react"
+import React, { useEffect, useLayoutEffect, useRef } from "react"
 import { Alert, Button, Form, Input, Modal, Select, message } from "antd"
 import { useTranslation } from "react-i18next"
 import { testWatchlistSource, testWatchlistSourceDraft } from "@/services/watchlists"
 import type { JobPreviewResult } from "@/types/watchlists"
 import type { WatchlistSource, SourceType } from "@/types/watchlists"
+import { mapWatchlistsError } from "../shared/watchlists-error"
+import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
 
 interface SourceFormModalProps {
   open: boolean
@@ -72,9 +77,26 @@ export const SourceFormModal: React.FC<SourceFormModalProps> = ({
   const [testResult, setTestResult] = React.useState<JobPreviewResult | null>(null)
   const [testError, setTestError] = React.useState<string | null>(null)
   const [testErrorHint, setTestErrorHint] = React.useState<string | null>(null)
+  const restoreFocusTargetRef = useRef<HTMLElement | null>(null)
+  const wasOpenRef = useRef(false)
 
   const isEditing = !!initialValues
   const testSourceId = typeof initialValues?.id === "number" ? initialValues.id : null
+
+  useLayoutEffect(() => {
+    if (open) {
+      if (!wasOpenRef.current) {
+        restoreFocusTargetRef.current = getFocusableActiveElement()
+      }
+      wasOpenRef.current = true
+      return
+    }
+
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      restoreFocusToElement(restoreFocusTargetRef.current)
+    }
+  }, [open])
 
   // Reset form when modal opens/closes or initialValues change
   useEffect(() => {
@@ -170,14 +192,21 @@ export const SourceFormModal: React.FC<SourceFormModalProps> = ({
       }
       console.error("Source test failed:", err)
       const fallback = t("watchlists:sources.form.testSourceError", "Source test failed")
-      const detailed =
-        err && typeof err === "object" && "message" in err && typeof err.message === "string"
-          ? err.message
-          : fallback
+      const mapped = mapWatchlistsError(err, {
+        t,
+        context: t("watchlists:sources.form.testSourceContext", "feed preflight"),
+        fallbackMessage: fallback,
+        operationLabel: t("watchlists:errors.operation.test", "test")
+      })
       setTestResult(null)
-      setTestError(detailed)
-      setTestErrorHint(resolveTestSourceErrorHint(detailed, t))
-      message.error(fallback)
+      setTestError(mapped.title)
+      const contextualHint = resolveTestSourceErrorHint(mapped.rawMessage, t)
+      setTestErrorHint(`${mapped.description} ${contextualHint}`.trim())
+      if (mapped.severity === "warning") {
+        message.warning(mapped.title)
+      } else {
+        message.error(mapped.title)
+      }
     } finally {
       setTestingSource(false)
     }
@@ -301,8 +330,17 @@ export const SourceFormModal: React.FC<SourceFormModalProps> = ({
             <Alert
               type="error"
               showIcon
-              message={t("watchlists:sources.form.testSourceError", "Source test failed")}
-              description={testErrorHint ? `${testError} ${testErrorHint}` : testError}
+              message={testError}
+              description={testErrorHint || testError}
+              action={(
+                <Button
+                  size="small"
+                  onClick={() => void handleTestSource()}
+                  loading={testingSource}
+                >
+                  {t("watchlists:errors.retry", "Retry")}
+                </Button>
+              )}
             />
           )}
         </div>

@@ -2,6 +2,7 @@
 Integration tests for Writing Playground endpoints using a real ChaChaNotes DB.
 """
 
+import configparser
 import importlib
 
 import pytest
@@ -35,8 +36,11 @@ def client_with_writing_db(tmp_path, monkeypatch):
     def override_db_dep():
         return db
 
-    monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+    # Keep this suite focused on writing routes and avoid heavyweight media/audio imports.
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
+    monkeypatch.setenv("ROUTES_DISABLE", "media,audio")
+    monkeypatch.setenv("SKIP_AUDIO_ROUTERS_IN_TESTS", "1")
 
     from tldw_Server_API.app import main as app_main
 
@@ -173,6 +177,181 @@ def test_writing_templates_and_themes_crud(client_with_writing_db: TestClient):
     assert client.get("/api/v1/writing/themes/Theme A").status_code == 404
 
 
+def test_writing_snapshot_export_import_replace(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+
+    session_resp = client.post(
+        "/api/v1/writing/sessions",
+        json={"name": "Snapshot Session", "payload": {"text": "draft"}},
+    )
+    assert session_resp.status_code == 201, session_resp.text
+
+    template_resp = client.post(
+        "/api/v1/writing/templates",
+        json={"name": "Snapshot Template", "payload": {"inst_pre": "[INST]"}},
+    )
+    assert template_resp.status_code == 201, template_resp.text
+
+    theme_resp = client.post(
+        "/api/v1/writing/themes",
+        json={
+            "name": "Snapshot Theme",
+            "class_name": "snapshot-theme",
+            "css": ".snapshot-theme { color: #111; }",
+            "order": 1,
+        },
+    )
+    assert theme_resp.status_code == 201, theme_resp.text
+
+    export_resp = client.get("/api/v1/writing/snapshot/export")
+    assert export_resp.status_code == 200, export_resp.text
+    exported = export_resp.json()
+    assert exported["version"] == 1
+    assert exported["counts"]["sessions"] >= 1
+    assert exported["counts"]["templates"] >= 1
+    assert exported["counts"]["themes"] >= 1
+    assert any(item["name"] == "Snapshot Session" for item in exported["sessions"])
+    assert any(item["name"] == "Snapshot Template" for item in exported["templates"])
+    assert any(item["name"] == "Snapshot Theme" for item in exported["themes"])
+
+    import_resp = client.post(
+        "/api/v1/writing/snapshot/import",
+        json={
+            "mode": "replace",
+            "snapshot": {
+                "sessions": [
+                    {
+                        "id": "snapshot-restore-session-1",
+                        "name": "Restored Session",
+                        "payload": {"text": "restored"},
+                        "schema_version": 1,
+                    }
+                ],
+                "templates": [
+                    {
+                        "name": "Restored Template",
+                        "payload": {"inst_pre": "<U>"},
+                        "schema_version": 1,
+                        "is_default": True,
+                    }
+                ],
+                "themes": [
+                    {
+                        "name": "Restored Theme",
+                        "class_name": "restored-theme",
+                        "css": ".restored-theme { color: #123; }",
+                        "schema_version": 1,
+                        "is_default": True,
+                        "order": 0,
+                    }
+                ],
+            },
+        },
+    )
+    assert import_resp.status_code == 200, import_resp.text
+    imported = import_resp.json()
+    assert imported["imported"]["sessions"] == 1
+    assert imported["imported"]["templates"] == 1
+    assert imported["imported"]["themes"] == 1
+
+    sessions_payload = client.get("/api/v1/writing/sessions").json()
+    template_payload = client.get("/api/v1/writing/templates").json()
+    theme_payload = client.get("/api/v1/writing/themes").json()
+
+    session_names = {item["name"] for item in sessions_payload["sessions"]}
+    template_names = {item["name"] for item in template_payload["templates"]}
+    theme_names = {item["name"] for item in theme_payload["themes"]}
+
+    assert "Restored Session" in session_names
+    assert "Snapshot Session" not in session_names
+    assert "Restored Template" in template_names
+    assert "Snapshot Template" not in template_names
+    assert "Restored Theme" in theme_names
+    assert "Snapshot Theme" not in theme_names
+
+
+def test_writing_snapshot_import_merge_preserves_existing(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+
+    assert (
+        client.post(
+            "/api/v1/writing/sessions",
+            json={"name": "Existing Session", "payload": {"text": "existing"}},
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/api/v1/writing/templates",
+            json={"name": "Existing Template", "payload": {"inst_pre": "[E]"}},
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/api/v1/writing/themes",
+            json={"name": "Existing Theme", "class_name": "existing-theme", "css": ".existing-theme{}", "order": 1},
+        ).status_code
+        == 201
+    )
+
+    import_resp = client.post(
+        "/api/v1/writing/snapshot/import",
+        json={
+            "mode": "merge",
+            "snapshot": {
+                "sessions": [
+                    {
+                        "id": "snapshot-merge-session-1",
+                        "name": "Merged Session",
+                        "payload": {"text": "merged"},
+                        "schema_version": 1,
+                    }
+                ],
+                "templates": [
+                    {
+                        "name": "Merged Template",
+                        "payload": {"inst_pre": "<M>"},
+                        "schema_version": 1,
+                        "is_default": False,
+                    }
+                ],
+                "themes": [
+                    {
+                        "name": "Merged Theme",
+                        "class_name": "merged-theme",
+                        "css": ".merged-theme { color: #0a0; }",
+                        "schema_version": 1,
+                        "is_default": False,
+                        "order": 2,
+                    }
+                ],
+            },
+        },
+    )
+    assert import_resp.status_code == 200, import_resp.text
+    imported = import_resp.json()
+    assert imported["mode"] == "merge"
+    assert imported["imported"]["sessions"] == 1
+    assert imported["imported"]["templates"] == 1
+    assert imported["imported"]["themes"] == 1
+
+    sessions_payload = client.get("/api/v1/writing/sessions").json()
+    template_payload = client.get("/api/v1/writing/templates").json()
+    theme_payload = client.get("/api/v1/writing/themes").json()
+
+    session_names = {item["name"] for item in sessions_payload["sessions"]}
+    template_names = {item["name"] for item in template_payload["templates"]}
+    theme_names = {item["name"] for item in theme_payload["themes"]}
+
+    assert "Existing Session" in session_names
+    assert "Merged Session" in session_names
+    assert "Existing Template" in template_names
+    assert "Merged Template" in template_names
+    assert "Existing Theme" in theme_names
+    assert "Merged Theme" in theme_names
+
+
 def test_writing_capabilities_basic(client_with_writing_db: TestClient):
     client = client_with_writing_db
 
@@ -185,8 +364,32 @@ def test_writing_capabilities_basic(client_with_writing_db: TestClient):
     data = resp.json()
     assert data["version"] == 1
     assert data["server"]["sessions"] is True
+    assert data["server"]["defaults_catalog"] is True
+    assert data["server"]["snapshots"] is True
     assert data["server"]["wordclouds"] is True
+    assert data["server"]["detokenize"] is True
+    assert data["server"]["token_probabilities"]["inline_reroll"] is True
+    assert data["server"]["context"]["author_note_depth_mode"] == "insertion"
+    assert data["server"]["context"]["context_order"] is True
+    assert data["server"]["context"]["context_budget"] is True
     assert data["providers"] is None
+
+
+def test_writing_defaults_catalog(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+
+    resp = client.get("/api/v1/writing/defaults")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["version"] == 1
+    assert isinstance(data["templates"], list)
+    assert isinstance(data["themes"], list)
+    assert data["templates"]
+    assert data["themes"]
+    assert data["templates"][0]["name"] == "default"
+    assert data["templates"][0]["is_default"] is True
+    assert data["themes"][0]["name"] == "default"
+    assert data["themes"][0]["is_default"] is True
 
 
 def test_writing_wordclouds_flow(client_with_writing_db: TestClient):
@@ -264,12 +467,171 @@ def test_writing_capabilities_provider_tokenizers(client_with_writing_db: TestCl
     assert "gpt-3.5-turbo" in tokenizers
     assert "definitely-not-a-real-model" in tokenizers
     assert tokenizers["definitely-not-a-real-model"]["available"] is False
+    assert tokenizers["definitely-not-a-real-model"]["count_accuracy"] == "unavailable"
     if _has_tiktoken():
         assert tokenizers["gpt-3.5-turbo"]["available"] is True
         assert tokenizers["gpt-3.5-turbo"]["tokenizer"].startswith("tiktoken:")
+        assert tokenizers["gpt-3.5-turbo"]["kind"] == "tiktoken"
+        assert tokenizers["gpt-3.5-turbo"]["source"].startswith("tiktoken.encoding_for_model")
+        assert tokenizers["gpt-3.5-turbo"]["detokenize"] is True
+        assert tokenizers["gpt-3.5-turbo"]["count_accuracy"] == "exact"
+        assert tokenizers["gpt-3.5-turbo"]["strict_mode_effective"] is False
     else:
         assert tokenizers["gpt-3.5-turbo"]["available"] is False
         assert "unavailable" in tokenizers["gpt-3.5-turbo"]["error"].lower()
+
+
+def test_writing_capabilities_includes_extra_body_compat(client_with_writing_db: TestClient, monkeypatch):
+    client = client_with_writing_db
+
+    async def fake_get_configured_providers_async(include_deprecated: bool = False):
+        return {
+            "default_provider": "openai",
+            "providers": [
+                {
+                    "name": "openai",
+                    "models": ["gpt-4o-mini"],
+                    "capabilities": {},
+                }
+            ],
+        }
+
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    monkeypatch.setattr(writing_endpoints, "get_configured_providers_async", fake_get_configured_providers_async)
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_tokenizer_support",
+        lambda _provider, _model: writing_endpoints.WritingTokenizerSupport(available=False, error="test"),
+    )
+
+    resp = client.get("/api/v1/writing/capabilities")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    providers = data["providers"]
+    assert providers
+    assert "extra_body_compat" in providers[0]
+    assert isinstance(providers[0]["extra_body_compat"]["known_params"], list)
+    assert "model_extra_body_compat" in providers[0]
+    assert "gpt-4o-mini" in providers[0]["model_extra_body_compat"]
+    assert isinstance(providers[0]["model_extra_body_compat"]["gpt-4o-mini"]["known_params"], list)
+
+
+def test_writing_capabilities_requested_extra_body_compat_unknown_fallback(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+    resp = client.get(
+        "/api/v1/writing/capabilities",
+        params={
+            "include_providers": "false",
+            "provider": "definitely-unknown-provider",
+            "model": "definitely-unknown-model",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    requested = data["requested"]
+    assert requested is not None
+    assert requested["extra_body_compat"]["supported"] is False
+    assert requested["extra_body_compat"]["known_params"] == []
+
+
+def test_writing_capabilities_requested_extra_body_compat_reflects_strict_runtime(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    monkeypatch.setenv("LOCAL_LLM_STRICT_OPENAI_COMPAT", "true")
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_resolve_tokenizer",
+        lambda _provider, _model: (object(), "test-tokenizer"),
+    )
+    resp = client.get(
+        "/api/v1/writing/capabilities",
+        params={
+            "include_providers": "false",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    requested = data["requested"]
+    assert requested is not None
+    assert requested["extra_body_compat"]["supported"] is False
+    assert "strict_openai_compat" in str(requested["extra_body_compat"]["effective_reason"])
+
+
+def test_writing_capabilities_requested_reports_non_exact_count_accuracy(
+    client_with_writing_db: TestClient,
+):
+    client = client_with_writing_db
+    resp = client.get(
+        "/api/v1/writing/capabilities",
+        params={
+            "include_providers": "false",
+            "provider": "deepseek",
+            "model": "gpt-3.5-turbo",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    requested = resp.json()["requested"]
+    assert requested is not None
+    assert requested["count_accuracy"] == "unavailable"
+    assert requested["strict_mode_effective"] is False
+
+
+def test_writing_capabilities_requested_reflects_strict_token_counting_runtime(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    monkeypatch.setenv("STRICT_TOKEN_COUNTING", "true")
+    resp = client.get(
+        "/api/v1/writing/capabilities",
+        params={
+            "include_providers": "false",
+            "provider": "deepseek",
+            "model": "gpt-3.5-turbo",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    requested = resp.json()["requested"]
+    assert requested is not None
+    assert requested["count_accuracy"] == "unavailable"
+    assert requested["strict_mode_effective"] is True
+
+
+def test_writing_capabilities_provider_tokenizers_reflect_strict_runtime(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    monkeypatch.setenv("STRICT_TOKEN_COUNTING", "true")
+
+    async def fake_get_configured_providers_async(include_deprecated: bool = False):
+        return {
+            "default_provider": "openai",
+            "providers": [
+                {
+                    "name": "openai",
+                    "models": ["gpt-3.5-turbo", "definitely-not-a-real-model"],
+                    "capabilities": {},
+                }
+            ],
+        }
+
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    monkeypatch.setattr(writing_endpoints, "get_configured_providers_async", fake_get_configured_providers_async)
+
+    resp = client.get("/api/v1/writing/capabilities")
+    assert resp.status_code == 200, resp.text
+    tokenizers = resp.json()["providers"][0]["tokenizers"]
+    assert tokenizers["gpt-3.5-turbo"]["strict_mode_effective"] is True
+    assert tokenizers["definitely-not-a-real-model"]["strict_mode_effective"] is True
 
 
 def test_writing_tokenize_and_count(client_with_writing_db: TestClient):
@@ -284,6 +646,11 @@ def test_writing_tokenize_and_count(client_with_writing_db: TestClient):
     assert count_resp.status_code == 200, count_resp.text
     count_payload = count_resp.json()
     assert count_payload["count"] >= 1
+    assert count_payload["meta"]["tokenizer_kind"] == "tiktoken"
+    assert count_payload["meta"]["tokenizer_source"].startswith("tiktoken.encoding_for_model")
+    assert count_payload["meta"]["detokenize_available"] is True
+    assert count_payload["meta"]["count_accuracy"] == "exact"
+    assert count_payload["meta"]["strict_mode_effective"] is False
 
     tokenize_resp = client.post(
         "/api/v1/writing/tokenize",
@@ -297,6 +664,58 @@ def test_writing_tokenize_and_count(client_with_writing_db: TestClient):
     assert tokenize_resp.status_code == 200, tokenize_resp.text
     tokens = tokenize_resp.json()
     assert tokens["strings"] is None
+    assert tokens["meta"]["tokenizer_kind"] == "tiktoken"
+    assert tokens["meta"]["tokenizer_source"].startswith("tiktoken.encoding_for_model")
+    assert tokens["meta"]["detokenize_available"] is True
+    assert tokens["meta"]["count_accuracy"] == "exact"
+    assert tokens["meta"]["strict_mode_effective"] is False
+
+
+def test_writing_detokenize_roundtrip(client_with_writing_db: TestClient):
+    if not _has_tiktoken():
+        pytest.skip("tiktoken not available")
+
+    client = client_with_writing_db
+    source_text = "Hello world"
+    tokenize_resp = client.post(
+        "/api/v1/writing/tokenize",
+        json={
+            "provider": "openai",
+            "model": "gpt-3.5-turbo",
+            "text": source_text,
+            "options": {"include_strings": False},
+        },
+    )
+    assert tokenize_resp.status_code == 200, tokenize_resp.text
+    token_ids = tokenize_resp.json()["ids"]
+    assert token_ids
+
+    detok_resp = client.post(
+        "/api/v1/writing/detokenize",
+        json={
+            "provider": "openai",
+            "model": "gpt-3.5-turbo",
+            "ids": token_ids,
+        },
+    )
+    assert detok_resp.status_code == 200, detok_resp.text
+    payload = detok_resp.json()
+    assert payload["text"] == source_text
+    assert isinstance(payload["strings"], list)
+    assert payload["meta"]["tokenizer_kind"] == "tiktoken"
+    assert payload["meta"]["tokenizer_source"].startswith("tiktoken.encoding_for_model")
+    assert payload["meta"]["detokenize_available"] is True
+    assert payload["meta"]["count_accuracy"] == "exact"
+    assert payload["meta"]["strict_mode_effective"] is False
+
+
+def test_writing_detokenize_unavailable(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+    resp = client.post(
+        "/api/v1/writing/detokenize",
+        json={"provider": "openai", "model": "definitely-not-a-real-model", "ids": [1, 2]},
+    )
+    assert resp.status_code == 422, resp.text
 
 
 def test_writing_tokenize_provider_model_mismatch(client_with_writing_db: TestClient):
@@ -306,10 +725,101 @@ def test_writing_tokenize_provider_model_mismatch(client_with_writing_db: TestCl
     client = client_with_writing_db
     resp = client.post(
         "/api/v1/writing/token-count",
-        json={"provider": "anthropic", "model": "gpt-3.5-turbo", "text": "Mismatch OK"},
+        json={"provider": "deepseek", "model": "gpt-3.5-turbo", "text": "Mismatch OK"},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["count"] >= 1
+
+
+def test_writing_tokenize_provider_model_mismatch_strict_rejected(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    if not _has_tiktoken():
+        pytest.skip("tiktoken not available")
+
+    client = client_with_writing_db
+    monkeypatch.setenv("STRICT_TOKEN_COUNTING", "true")
+    resp = client.post(
+        "/api/v1/writing/token-count",
+        json={"provider": "deepseek", "model": "gpt-3.5-turbo", "text": "Mismatch strict"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "exact tokenizer unavailable" in str(resp.json().get("detail", "")).lower()
+
+
+def test_writing_token_count_allows_exact_count_only_tokenizer(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    monkeypatch.setenv("STRICT_TOKEN_COUNTING", "true")
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    class _FakeCountOnlyTokenizer:
+        def count_tokens(self, text: str) -> int:
+            if text == "Hello strict":
+                return 3
+            return 1
+
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_resolve_tokenizer",
+        lambda _provider, _model: (
+            _FakeCountOnlyTokenizer(),
+            "anthropic:remote-count",
+            "provider-native-count",
+            "anthropic.http.count_tokens",
+            False,
+            "exact",
+            True,
+        ),
+    )
+
+    count_resp = client.post(
+        "/api/v1/writing/token-count",
+        json={"provider": "anthropic", "model": "claude-opus-4-20250514", "text": "Hello strict"},
+    )
+    assert count_resp.status_code == 200, count_resp.text
+    payload = count_resp.json()
+    assert payload["count"] == 3
+    assert payload["meta"]["count_accuracy"] == "exact"
+    assert payload["meta"]["strict_mode_effective"] is True
+    assert payload["meta"]["tokenizer_kind"] == "provider-native-count"
+
+
+def test_writing_tokenize_rejects_count_only_tokenizer(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    monkeypatch.setenv("STRICT_TOKEN_COUNTING", "true")
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    class _FakeCountOnlyTokenizer:
+        def count_tokens(self, text: str) -> int:  # noqa: ARG002
+            return 2
+
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_resolve_tokenizer",
+        lambda _provider, _model: (
+            _FakeCountOnlyTokenizer(),
+            "google:remote-count",
+            "provider-native-count",
+            "google.http.count_tokens",
+            False,
+            "exact",
+            True,
+        ),
+    )
+
+    tokenize_resp = client.post(
+        "/api/v1/writing/tokenize",
+        json={"provider": "google", "model": "gemini-2.5-flash", "text": "Hello"},
+    )
+    assert tokenize_resp.status_code == 422, tokenize_resp.text
+    assert "tokenize not available" in str(tokenize_resp.json().get("detail", "")).lower()
 
 
 def test_writing_tokenize_unavailable(client_with_writing_db: TestClient):
@@ -324,3 +834,296 @@ def test_writing_tokenize_unavailable(client_with_writing_db: TestClient):
         assert "not available" in detail
     else:
         assert "unavailable" in detail
+
+
+def test_writing_tokenize_prefers_provider_native_tokenizer(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    class _FakeNativeTokenizer:
+        def encode(self, text: str):
+            if text == "Hello native":
+                return [10, 20]
+            if text == "x":
+                return [1]
+            return [99]
+
+        def decode(self, token_ids):
+            if list(token_ids) == [10]:
+                return "He"
+            if list(token_ids) == [20]:
+                return "llo native"
+            if list(token_ids) == [10, 20]:
+                return "Hello native"
+            return ""
+
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_resolve_provider_native_tokenizer",
+        lambda _provider, _model: (
+            _FakeNativeTokenizer(),
+            "native:fake",
+            "provider-native",
+            "llama.http.tokenize",
+            True,
+        ),
+    )
+
+    def _fail_tiktoken(_model: str):
+        raise AssertionError("tiktoken fallback should not be used when native tokenizer resolves")
+
+    monkeypatch.setattr(writing_endpoints, "_resolve_tiktoken_encoding", _fail_tiktoken)
+
+    count_resp = client.post(
+        "/api/v1/writing/token-count",
+        json={"provider": "llama", "model": "local-model", "text": "Hello native"},
+    )
+    assert count_resp.status_code == 200, count_resp.text
+    count_payload = count_resp.json()
+    assert count_payload["count"] == 2
+    assert count_payload["meta"]["tokenizer"] == "native:fake"
+    assert count_payload["meta"]["tokenizer_kind"] == "provider-native"
+    assert count_payload["meta"]["tokenizer_source"] == "llama.http.tokenize"
+    assert count_payload["meta"]["detokenize_available"] is True
+    assert count_payload["meta"]["count_accuracy"] == "exact"
+    assert count_payload["meta"]["strict_mode_effective"] is False
+
+    tokenize_resp = client.post(
+        "/api/v1/writing/tokenize",
+        json={"provider": "llama", "model": "local-model", "text": "Hello native"},
+    )
+    assert tokenize_resp.status_code == 200, tokenize_resp.text
+    tokenize_payload = tokenize_resp.json()
+    assert tokenize_payload["ids"] == [10, 20]
+    assert tokenize_payload["strings"] == ["He", "llo native"]
+    assert tokenize_payload["meta"]["tokenizer_kind"] == "provider-native"
+    assert tokenize_payload["meta"]["count_accuracy"] == "exact"
+
+    detok_resp = client.post(
+        "/api/v1/writing/detokenize",
+        json={"provider": "llama", "model": "local-model", "ids": [10, 20]},
+    )
+    assert detok_resp.status_code == 200, detok_resp.text
+    detok_payload = detok_resp.json()
+    assert detok_payload["text"] == "Hello native"
+    assert detok_payload["meta"]["tokenizer_kind"] == "provider-native"
+    assert detok_payload["meta"]["count_accuracy"] == "exact"
+
+
+def test_writing_capabilities_requested_native_tokenizer_metadata(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_resolve_tokenizer_details",
+        lambda _provider, _model: (
+            object(),
+            "native:fake",
+            "provider-native",
+            "llama.http.tokenize",
+            True,
+            "exact",
+            False,
+        ),
+    )
+
+    resp = client.get(
+        "/api/v1/writing/capabilities",
+        params={
+            "include_providers": "false",
+            "provider": "llama",
+            "model": "local-model",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    requested = payload.get("requested")
+    assert requested is not None
+    assert requested["tokenizer_available"] is True
+    assert requested["tokenizer"] == "native:fake"
+    assert requested["tokenizer_kind"] == "provider-native"
+    assert requested["tokenizer_source"] == "llama.http.tokenize"
+    assert requested["detokenize_available"] is True
+    assert requested["count_accuracy"] == "exact"
+    assert requested["strict_mode_effective"] is False
+
+
+def test_writing_capabilities_requested_downgrades_failed_native_exact(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    class _FailingNativeTokenizer:
+        def encode(self, text: str):  # noqa: ARG002
+            raise RuntimeError("endpoint down")
+
+        def decode(self, token_ids):  # noqa: ARG002
+            return ""
+
+    class _FakeFallbackTokenizer:
+        name = "cl100k_base"
+
+        def encode(self, text: str, disallowed_special=()):  # noqa: ARG002
+            return [1, 2, 3]
+
+        def decode(self, token_ids):  # noqa: ARG002
+            return "fallback"
+
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_resolve_provider_native_tokenizer",
+        lambda _provider, _model: (
+            _FailingNativeTokenizer(),
+            "native:fake",
+            "provider-native",
+            "ollama.http.tokenize",
+            True,
+        ),
+    )
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_resolve_tiktoken_encoding",
+        lambda _model: _FakeFallbackTokenizer(),
+    )
+
+    resp = client.get(
+        "/api/v1/writing/capabilities",
+        params={
+            "include_providers": "false",
+            "provider": "ollama",
+            "model": "local-model",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    requested = payload.get("requested")
+    assert requested is not None
+    assert requested["tokenizer_available"] is False
+    assert requested["count_accuracy"] == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "provider,section,endpoint_field,api_key_field,endpoint,expected_base_url,expected_label",
+    [
+        (
+            "llama",
+            "Local-API",
+            "llama_api_IP",
+            "llama_api_key",
+            "http://127.0.0.1:8080/v1/chat/completions",
+            "http://127.0.0.1:8080",
+            "llama.cpp",
+        ),
+        (
+            "kobold",
+            "Local-API",
+            "kobold_api_IP",
+            "kobold_api_key",
+            "http://127.0.0.1:5001/api/v1/generate",
+            "http://127.0.0.1:5001",
+            "kobold.cpp",
+        ),
+        (
+            "ooba",
+            "Local-API",
+            "ooba_api_IP",
+            "ooba_api_key",
+            "http://127.0.0.1:5000/v1/chat/completions",
+            "http://127.0.0.1:5000",
+            "oobabooga",
+        ),
+        (
+            "tabby",
+            "Local-API",
+            "tabby_api_IP",
+            "tabby_api_key",
+            "http://127.0.0.1:5000/api/v1/generate",
+            "http://127.0.0.1:5000",
+            "tabbyapi",
+        ),
+        (
+            "vllm",
+            "Local-API",
+            "vllm_api_IP",
+            "vllm_api_key",
+            "http://127.0.0.1:8000/v1/chat/completions",
+            "http://127.0.0.1:8000",
+            "vllm",
+        ),
+        (
+            "aphrodite",
+            "Local-API",
+            "aphrodite_api_IP",
+            "aphrodite_api_key",
+            "http://127.0.0.1:2242/v1/chat/completions",
+            "http://127.0.0.1:2242",
+            "aphrodite",
+        ),
+        (
+            "custom_openai_api",
+            "API",
+            "custom_openai_api_ip",
+            "custom_openai_api_key",
+            "http://127.0.0.1:8088/v1/chat/completions",
+            "http://127.0.0.1:8088",
+            "custom-openai-api",
+        ),
+    ],
+)
+def test_resolve_provider_native_tokenizer_configured_local_provider_matrix(
+    monkeypatch,
+    provider: str,
+    section: str,
+    endpoint_field: str,
+    api_key_field: str,
+    endpoint: str,
+    expected_base_url: str,
+    expected_label: str,
+):
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    parser = configparser.ConfigParser()
+    parser.add_section(section)
+    parser.set(section, endpoint_field, endpoint)
+    parser.set(section, api_key_field, "test-key")
+    monkeypatch.setattr(writing_endpoints, "load_comprehensive_config", lambda: parser)
+
+    captured = {}
+
+    class _FakeAdapter:
+        def __init__(self, *, base_url: str, model: str | None, api_key: str | None, timeout_seconds: float = 10.0) -> None:
+            captured["base_url"] = base_url
+            captured["model"] = model
+            captured["api_key"] = api_key
+            captured["timeout_seconds"] = timeout_seconds
+
+        def encode(self, text: str, disallowed_special=()):  # noqa: ARG002
+            return [1] if text is not None else []
+
+        def count_tokens(self, text: str) -> int:
+            return len(self.encode(text))
+
+    monkeypatch.setattr(writing_endpoints, "_ProviderNativeTokenizerHTTPAdapter", _FakeAdapter)
+
+    adapter, tokenizer_name, tokenizer_kind, tokenizer_source, detokenize_available = (
+        writing_endpoints._resolve_provider_native_tokenizer(provider, "local-model")
+    )
+
+    assert isinstance(adapter, _FakeAdapter)
+    assert captured["base_url"] == expected_base_url
+    assert captured["model"] == "local-model"
+    assert captured["api_key"] == "test-key"
+
+    assert tokenizer_kind == "provider-native"
+    assert tokenizer_name == f"{expected_label}:remote"
+    assert tokenizer_source == f"{expected_label}.http.tokenize"
+    assert detokenize_available is True

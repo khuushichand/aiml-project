@@ -9,6 +9,7 @@ const revokeConversationShareLinkMock = vi.fn()
 const setHeaderShortcutsExpandedMock = vi.fn().mockResolvedValue(undefined)
 const toggleDarkModeMock = vi.fn()
 const setSelectedCharacterMock = vi.fn()
+const navigateMock = vi.fn()
 const mockT = (
   key: string,
   fallback?: string,
@@ -37,7 +38,7 @@ vi.mock("react-i18next", () => ({
 
 vi.mock("react-router-dom", () => ({
   useLocation: () => ({ pathname: "/chat" }),
-  useNavigate: () => vi.fn()
+  useNavigate: () => navigateMock
 }))
 
 vi.mock("antd", () => ({
@@ -248,5 +249,28 @@ describe("Header share links integration", () => {
         "new-link"
       )
     })
+  })
+
+  it("shows read-only role scope and opens workflow automation shortcut", async () => {
+    listConversationShareLinksMock.mockResolvedValue({
+      conversation_id: "server-chat-1",
+      links: []
+    })
+
+    render(<Header />)
+    fireEvent.click(screen.getByRole("button", { name: "Open share modal" }))
+
+    expect(screen.getByTestId("chat-share-role-scope")).toHaveTextContent(
+      "Read-only viewer"
+    )
+    expect(screen.getByTestId("chat-share-role-scope")).toHaveTextContent(
+      "cannot send, edit, or delete"
+    )
+
+    fireEvent.click(screen.getByTestId("chat-share-open-workflows"))
+
+    expect(navigateMock).toHaveBeenCalledWith(
+      "/workflow-editor?source=chat-share&conversationId=server-chat-1"
+    )
   })
 })

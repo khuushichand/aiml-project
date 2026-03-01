@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -163,19 +164,19 @@ class _QuotasRepoStub:
         return {"scope": "team", "team_id": team_id}
 
 
-def _make_service(pool: _PoolStub) -> StorageQuotaService:
+def _make_service(pool: _PoolStub, tmp_path: Path) -> StorageQuotaService:
     service = StorageQuotaService(
         db_pool=pool,
-        settings=SimpleNamespace(USER_DATA_BASE_PATH="/tmp", CHROMADB_BASE_PATH=""),
+        settings=SimpleNamespace(USER_DATA_BASE_PATH=tmp_path.as_posix(), CHROMADB_BASE_PATH=""),
     )
     service._initialized = True
     return service
 
 
 @pytest.mark.asyncio
-async def test_update_usage_sqlite_backend_selection_ignores_conn_fetchrow():
+async def test_update_usage_sqlite_backend_selection_ignores_conn_fetchrow(tmp_path: Path):
     conn = _SQLiteUpdateConnWithFetchrowTrap()
-    service = _make_service(_PoolStub(postgres=False, tx_conn=conn))
+    service = _make_service(_PoolStub(postgres=False, tx_conn=conn), tmp_path)
 
     result = await service.update_usage(user_id=1, bytes_delta=1024 * 1024, operation="add")
 
@@ -186,9 +187,9 @@ async def test_update_usage_sqlite_backend_selection_ignores_conn_fetchrow():
 
 
 @pytest.mark.asyncio
-async def test_recalculate_org_usage_postgres_backend_selection_uses_fetchval():
+async def test_recalculate_org_usage_postgres_backend_selection_uses_fetchval(tmp_path: Path):
     conn = _PostgresFetchvalConn(bytes_value=10 * 1024 * 1024)
-    service = _make_service(_PoolStub(postgres=True, acquire_conn=conn))
+    service = _make_service(_PoolStub(postgres=True, acquire_conn=conn), tmp_path)
     repo = _QuotasRepoStub()
     service.get_storage_quotas_repo = AsyncMock(return_value=repo)
 
@@ -201,9 +202,9 @@ async def test_recalculate_org_usage_postgres_backend_selection_uses_fetchval():
 
 
 @pytest.mark.asyncio
-async def test_recalculate_team_usage_sqlite_backend_selection_ignores_conn_fetchval():
+async def test_recalculate_team_usage_sqlite_backend_selection_ignores_conn_fetchval(tmp_path: Path):
     conn = _SQLiteSumConnWithFetchvalTrap(bytes_value=3 * 1024 * 1024)
-    service = _make_service(_PoolStub(postgres=False, acquire_conn=conn))
+    service = _make_service(_PoolStub(postgres=False, acquire_conn=conn), tmp_path)
     repo = _QuotasRepoStub()
     service.get_storage_quotas_repo = AsyncMock(return_value=repo)
 
@@ -216,9 +217,9 @@ async def test_recalculate_team_usage_sqlite_backend_selection_ignores_conn_fetc
 
 
 @pytest.mark.asyncio
-async def test_get_all_users_storage_postgres_backend_selection_uses_fetch():
+async def test_get_all_users_storage_postgres_backend_selection_uses_fetch(tmp_path: Path):
     conn = _PostgresUsersConnWithExecuteTrap()
-    service = _make_service(_PoolStub(postgres=True, acquire_conn=conn))
+    service = _make_service(_PoolStub(postgres=True, acquire_conn=conn), tmp_path)
 
     result = await service.get_all_users_storage()
 
@@ -228,9 +229,9 @@ async def test_get_all_users_storage_postgres_backend_selection_uses_fetch():
 
 
 @pytest.mark.asyncio
-async def test_get_all_users_storage_sqlite_backend_selection_ignores_conn_fetch():
+async def test_get_all_users_storage_sqlite_backend_selection_ignores_conn_fetch(tmp_path: Path):
     conn = _SQLiteUsersConnWithFetchTrap()
-    service = _make_service(_PoolStub(postgres=False, acquire_conn=conn))
+    service = _make_service(_PoolStub(postgres=False, acquire_conn=conn), tmp_path)
 
     result = await service.get_all_users_storage()
 

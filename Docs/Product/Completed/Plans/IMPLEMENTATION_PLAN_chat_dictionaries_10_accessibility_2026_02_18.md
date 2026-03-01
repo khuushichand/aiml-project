@@ -62,7 +62,7 @@ Finding IDs: `10.1` through `10.9`
   - `Quick assign` modal
   - `Dictionary Statistics` modal
 - Added manual screen-reader/keyboard verification artifact:
-  - `Docs/Plans/CHAT_DICTIONARIES_A11Y_STAGE2_MODAL_FOCUS_CHECKLIST_2026_02_18.md`
+  - `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_10_accessibility_2026_02_18.md`
 
 ## Stage 3: Contrast Compliance and A11y Regression Gates
 **Goal**: Keep status/validation visuals compliant across supported themes.
@@ -90,7 +90,7 @@ Finding IDs: `10.1` through `10.9`
 - Added theme token contrast regression coverage for dictionaries:
   - File: `apps/packages/ui/src/themes/__tests__/dictionaries-accessibility-contrast.stage10.test.ts`
 - Added measured contrast audit artifact (light + dark preset minima):
-  - File: `Docs/Plans/CHAT_DICTIONARIES_CONTRAST_AUDIT_STAGE3_2026_02_18.md`
+  - File: `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_10_accessibility_2026_02_18.md`
 
 ## Dependencies
 

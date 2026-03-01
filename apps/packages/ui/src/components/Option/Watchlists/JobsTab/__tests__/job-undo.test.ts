@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { WatchlistJob } from "@/types/watchlists"
-import { toJobRestoreId } from "../job-undo"
+import { resolveJobUndoWindowSeconds, toJobRestoreId } from "../job-undo"
 
 const sampleJob: WatchlistJob = {
   id: 42,
@@ -41,5 +41,13 @@ describe("job undo helpers", () => {
       job_filters: null
     } as WatchlistJob
     expect(toJobRestoreId(minimalJob)).toBe(42)
+  })
+
+  it("normalizes job undo window seconds with fallback support", () => {
+    expect(resolveJobUndoWindowSeconds(30)).toBe(30)
+    expect(resolveJobUndoWindowSeconds("11")).toBe(11)
+    expect(resolveJobUndoWindowSeconds(0)).toBe(10)
+    expect(resolveJobUndoWindowSeconds(undefined, 22)).toBe(22)
+    expect(resolveJobUndoWindowSeconds(-3, 14)).toBe(14)
   })
 })

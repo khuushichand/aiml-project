@@ -42,10 +42,31 @@ vi.mock("antd", () => {
   )
   FormComponent.useForm = () => [formApi]
 
+  const Modal = ({ open, title, children, onCancel, afterOpenChange }: any) => {
+    const closeRef = React.useRef<HTMLButtonElement | null>(null)
+    React.useEffect(() => {
+      afterOpenChange?.(open)
+      if (open) {
+        closeRef.current?.focus()
+      }
+    }, [open, afterOpenChange])
+
+    if (!open) return null
+    return (
+      <div>
+        <h2>{title}</h2>
+        <button type="button" ref={closeRef} onClick={() => onCancel?.()}>
+          Close
+        </button>
+        {children}
+      </div>
+    )
+  }
+
   return {
     Form: FormComponent,
     Input: ({ placeholder }: any) => <input placeholder={placeholder} />,
-    Modal: ({ open, title, children }: any) => (open ? <div><h2>{title}</h2>{children}</div> : null),
+    Modal,
     Select: ({ options = [] }: any) => (
       <div>
         {options.map((option: any) => (
@@ -58,10 +79,11 @@ vi.mock("antd", () => {
         {children}
       </button>
     ),
-    Alert: ({ message, description }: any) => (
+    Alert: ({ message, description, action }: any) => (
       <div>
         <span>{message}</span>
         <span>{description}</span>
+        {action}
       </div>
     ),
     message: {
@@ -180,11 +202,54 @@ describe("SourceFormModal test-source preflight", () => {
     fireEvent.click(screen.getByRole("button", { name: "Test Feed" }))
 
     await waitFor(() => {
-      expect(mocks.messageError).toHaveBeenCalledWith("Source test failed")
-      expect(screen.getByText("Source test failed")).toBeInTheDocument()
+      expect(mocks.messageError).toHaveBeenCalledWith("Could not test feed preflight.")
+      expect(screen.getByText("Could not test feed preflight.")).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
       expect(
         screen.getByText(/Use a canonical YouTube feed URL \(channel_id or playlist_id\) and retry\./)
       ).toBeInTheDocument()
     })
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+
+    await waitFor(() => {
+      expect(mocks.testWatchlistSourceDraft).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it("restores focus to the launch control when modal closes", async () => {
+    const trigger = document.createElement("button")
+    trigger.type = "button"
+    trigger.textContent = "Open source form"
+    document.body.appendChild(trigger)
+    trigger.focus()
+
+    const { rerender } = render(
+      <SourceFormModal
+        open
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        existingTags={[]}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Close" })).toHaveFocus()
+    })
+
+    rerender(
+      <SourceFormModal
+        open={false}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        existingTags={[]}
+      />
+    )
+
+    await waitFor(() => {
+      expect(trigger).toHaveFocus()
+    })
+
+    trigger.remove()
   })
 })

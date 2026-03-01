@@ -305,6 +305,40 @@ class TestKnowledgeStripsProcessor:
             avg_weather = sum(s.relevance_score for s in weather_strips) / len(weather_strips)
             assert avg_ml > avg_weather
 
+    @pytest.mark.asyncio
+    async def test_llm_scoring_parses_fenced_json_with_think_tags(self):
+        def _mock_analyze(*args, **kwargs):
+            return (
+                "<think>grading</think>\n"
+                "```json\n"
+                '[{"strip_num": 1, "relevance": 0.92}]\n'
+                "```"
+            )
+
+        docs = [
+            Document(
+                id="doc1",
+                content="Machine learning relies on data.",
+                source=DataSource.MEDIA_DB,
+                score=0.8,
+                metadata={},
+            )
+        ]
+        processor = KnowledgeStripsProcessor(
+            strip_size_tokens=200,
+            min_relevance_score=0.0,
+            analyze_fn=_mock_analyze,
+        )
+
+        result = await processor.process(
+            query="machine learning",
+            documents=docs,
+            top_k=5,
+        )
+
+        assert result.strips
+        assert result.strips[0].relevance_score == pytest.approx(0.92, rel=1e-6)
+
 
 class TestProcessKnowledgeStrips:
     """Tests for the convenience function."""

@@ -1,0 +1,49 @@
+{
+  "name": "pipeline_l1_acp",
+  "version": 1,
+  "description": "Domain-only ACP pipeline (L1): requirements to implementation with completion summary.",
+  "tags": [
+    "acp",
+    "pipeline",
+    "domain",
+    "l1"
+  ],
+  "metadata": {
+    "scope": "domain-only",
+    "future_integration": [
+      "sandbox_module",
+      "acp_module"
+    ]
+  },
+  "steps": [
+    {
+      "id": "req",
+      "type": "acp_stage",
+      "config": {
+        "stage": "req",
+        "session_context_key": "pipeline_acp_session_id",
+        "prompt_template": "Capture clear domain requirements for: {{ inputs.task }}",
+        "workspace_id": "{{ inputs.workspace_id }}",
+        "workspace_group_id": "{{ inputs.workspace_group_id }}"
+      }
+    },
+    {
+      "id": "impl",
+      "type": "acp_stage",
+      "config": {
+        "stage": "impl",
+        "session_context_key": "pipeline_acp_session_id",
+        "prompt_template": "Implement the domain-only solution for task: {{ inputs.task }}",
+        "workspace_id": "{{ inputs.workspace_id }}",
+        "workspace_group_id": "{{ inputs.workspace_group_id }}"
+      }
+    },
+    {
+      "id": "done",
+      "type": "prompt",
+      "config": {
+        "template": "L1 ACP pipeline completed for {{ inputs.task }}"
+      }
+    }
+  ]
+}

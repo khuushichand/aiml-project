@@ -7,7 +7,10 @@ import { ItemsTab } from "../ItemsTab"
 import { useWatchlistsStore } from "@/store/watchlists"
 
 const serviceMocks = vi.hoisted(() => ({
+  createWatchlistOutput: vi.fn(),
+  fetchScrapedItemSmartCounts: vi.fn(),
   fetchWatchlistSources: vi.fn(),
+  fetchWatchlistRuns: vi.fn(),
   fetchScrapedItems: vi.fn(),
   updateScrapedItem: vi.fn()
 }))
@@ -64,7 +67,11 @@ vi.mock("antd", async () => {
 })
 
 vi.mock("@/services/watchlists", () => ({
+  createWatchlistOutput: (...args: unknown[]) => serviceMocks.createWatchlistOutput(...args),
+  fetchScrapedItemSmartCounts: (...args: unknown[]) =>
+    serviceMocks.fetchScrapedItemSmartCounts(...args),
   fetchWatchlistSources: (...args: unknown[]) => serviceMocks.fetchWatchlistSources(...args),
+  fetchWatchlistRuns: (...args: unknown[]) => serviceMocks.fetchWatchlistRuns(...args),
   fetchScrapedItems: (...args: unknown[]) => serviceMocks.fetchScrapedItems(...args),
   updateScrapedItem: (...args: unknown[]) => serviceMocks.updateScrapedItem(...args)
 }))
@@ -81,8 +88,9 @@ const itemsFixture = [
     tags: ["tech"],
     status: "ingested",
     reviewed: false,
-    created_at: "2026-02-18T08:00:00Z",
-    published_at: "2026-02-18T08:00:00Z"
+    queued_for_briefing: false,
+    created_at: "2026-02-18T08:20:00Z",
+    published_at: "2026-02-18T08:20:00Z"
   },
   {
     id: 102,
@@ -95,6 +103,7 @@ const itemsFixture = [
     tags: ["tech"],
     status: "ingested",
     reviewed: false,
+    queued_for_briefing: false,
     created_at: "2026-02-18T08:10:00Z",
     published_at: "2026-02-18T08:10:00Z"
   }
@@ -105,6 +114,14 @@ describe("ItemsTab keyboard shortcuts", () => {
     vi.clearAllMocks()
     window.localStorage.clear()
     useWatchlistsStore.getState().resetStore()
+    serviceMocks.fetchScrapedItemSmartCounts.mockResolvedValue({
+      all: 2,
+      today: 2,
+      today_unread: 2,
+      unread: 2,
+      reviewed: 0,
+      queued: 0
+    })
 
     serviceMocks.fetchWatchlistSources.mockResolvedValue({
       items: [
@@ -126,6 +143,14 @@ describe("ItemsTab keyboard shortcuts", () => {
       size: 200,
       has_more: false
     })
+    serviceMocks.fetchWatchlistRuns.mockResolvedValue({
+      items: [{ id: 1, job_id: 1, status: "completed" }],
+      total: 1,
+      page: 1,
+      size: 200,
+      has_more: false
+    })
+    serviceMocks.createWatchlistOutput.mockResolvedValue({ id: 1, run_id: 1 })
 
     ;(serviceMocks.fetchScrapedItems as Mock).mockImplementation(async (params?: Record<string, unknown>) => {
       if (params?.size === 1) {
@@ -197,6 +222,54 @@ describe("ItemsTab keyboard shortcuts", () => {
     expect(useWatchlistsStore.getState().sourceFormOpen).toBe(true)
   })
 
+  it("ignores navigation shortcuts when focus is inside contenteditable regions", async () => {
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    const editable = document.createElement("div")
+    editable.setAttribute("contenteditable", "true")
+    editable.textContent = "Draft note"
+    document.body.appendChild(editable)
+    editable.focus()
+
+    fireEvent.keyDown(editable, { key: "j" })
+    expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item One")
+
+    editable.remove()
+  })
+
+  it("announces reader selection changes in a screen-reader live region", async () => {
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    const liveRegion = screen.getByTestId("watchlists-items-live-region")
+    expect(liveRegion).toHaveTextContent("")
+
+    fireEvent.keyDown(document, { key: "j" })
+    await waitFor(() => {
+      expect(liveRegion).toHaveTextContent("Selected Item Two from Tech Daily (Unread).")
+    })
+  })
+
+  it("provides row-level aria labels for list navigation context", async () => {
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId("watchlists-item-row-101")).toHaveAttribute(
+      "aria-label",
+      "Item One from Tech Daily. Unread."
+    )
+  })
+
   it("opens shortcut help panel from keyboard", async () => {
     render(<ItemsTab />)
 
@@ -218,5 +291,85 @@ describe("ItemsTab keyboard shortcuts", () => {
 
     fireEvent.click(screen.getByTestId("watchlists-items-shortcuts-help"))
     expect(await screen.findByTestId("watchlists-items-shortcuts-modal")).toBeInTheDocument()
+  })
+
+  it("supports shortcut hint strip dismiss and restore lifecycle", async () => {
+    const { unmount } = render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId("watchlists-items-shortcuts-hint-strip")).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("watchlists-items-shortcuts-hint-dismiss"))
+    expect(screen.queryByTestId("watchlists-items-shortcuts-hint-strip")).not.toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-items-shortcuts-hint-restore")).toBeInTheDocument()
+    expect(window.localStorage.getItem("watchlists:items:shortcuts-hint-dismissed")).toBe("1")
+
+    unmount()
+    render(<ItemsTab />)
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId("watchlists-items-shortcuts-hint-strip")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("watchlists-items-shortcuts-hint-restore"))
+    expect(screen.getByTestId("watchlists-items-shortcuts-hint-strip")).toBeInTheDocument()
+    expect(window.localStorage.getItem("watchlists:items:shortcuts-hint-dismissed")).toBe("0")
+  })
+
+  it("restores focus to shortcuts button after dismissing help opened from keyboard", async () => {
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    const shortcutsButton = screen.getByTestId("watchlists-items-shortcuts-help")
+
+    fireEvent.keyDown(document, { key: "?", shiftKey: true })
+    expect(await screen.findByTestId("watchlists-items-shortcuts-modal")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("watchlists-items-shortcuts-close"))
+
+    await waitFor(() => {
+      expect(shortcutsButton).toHaveFocus()
+    })
+  })
+
+  it("blocks navigation shortcuts while help is open", async () => {
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    const shortcutsButton = screen.getByTestId("watchlists-items-shortcuts-help")
+    fireEvent.click(shortcutsButton)
+    expect(await screen.findByTestId("watchlists-items-shortcuts-modal")).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: "j" })
+    expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item One")
+  })
+
+  it("keeps reader panes and triage controls available in narrow viewport", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 390
+    })
+    window.dispatchEvent(new Event("resize"))
+
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId("watchlists-items-left-pane")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-items-list-pane")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-items-reader-pane")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-items-shortcuts-help")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-items-mark-page")).toBeInTheDocument()
   })
 })

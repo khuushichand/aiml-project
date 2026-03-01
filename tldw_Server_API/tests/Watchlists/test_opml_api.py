@@ -63,7 +63,7 @@ def test_opml_import_export_endpoints(client_with_user):
     assert "<opml" in r.text
     assert "https://feed1.example.com/rss" in r.text
     assert "https://feed2.example.com/rss" in r.text
-    root = ET.fromstring(r.text)
+    root = ET.fromstring(r.text)  # nosec B314
     exported_urls = [
         (outline.attrib.get("xmlUrl") or outline.attrib.get("xmlurl") or "")
         for outline in root.findall(".//outline")
