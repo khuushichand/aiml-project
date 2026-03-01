@@ -381,4 +381,80 @@ test.describe("Writing Playground themes + templates", () => {
       await context.close()
     }
   })
+
+  test("navigates inspector tabs and preserves editor content", async () => {
+    const { serverUrl, apiKey } = requireRealServerConfig(test)
+    const normalizedServerUrl = normalizeServerUrl(serverUrl)
+    const caps = await fetchWritingCapabilities(normalizedServerUrl, apiKey)
+    if (!caps?.server?.sessions) {
+      test.skip(true, "Writing sessions not available on the configured server.")
+    }
+
+    const extPath = path.resolve("build/chrome-mv3")
+    const { context, page, extensionId, optionsUrl } = await launchWithExtensionOrSkip(
+      test,
+      extPath,
+      {
+        seedConfig: {
+          __tldw_first_run_complete: true,
+          __tldw_allow_offline: true,
+          tldwConfig: {
+            serverUrl: normalizedServerUrl,
+            authMode: "single-user",
+            apiKey
+          }
+        }
+      }
+    )
+
+    try {
+      const origin = new URL(normalizedServerUrl).origin + "/*"
+      const granted = await grantHostPermission(context, extensionId, origin)
+      if (!granted) {
+        test.skip(
+          true,
+          "Host permission not granted for tldw_server origin; allow it in chrome://extensions > tldw Assistant > Site access, then re-run"
+        )
+      }
+
+      await openWritingPlayground(page, optionsUrl)
+      await waitForConnected(page, "writing-playground-inspector-tabs")
+      await expect(
+        page.getByRole("heading", { name: /Writing Playground/i })
+      ).toBeVisible()
+
+      const unique = `${Date.now()}-${test.info().workerIndex}-${Math.random()
+        .toString(36)
+        .slice(2, 6)}`
+      const sessionName = `E2E Writing Inspector ${unique}`
+      await createSession(page, sessionName)
+
+      const editor = page.getByPlaceholder(/Start writing your prompt/i)
+      const persistedPrompt = `Inspector tab persistence ${unique}`
+      await editor.fill(persistedPrompt)
+      await expect(editor).toHaveValue(persistedPrompt)
+
+      const generationTab = page.getByRole("tab", { name: "Generation" })
+      const planningTab = page.getByRole("tab", { name: "Planning" })
+      const diagnosticsTab = page.getByRole("tab", { name: "Diagnostics" })
+
+      await generationTab.focus()
+      await page.keyboard.press("ArrowRight")
+      await expect(planningTab).toHaveAttribute("aria-selected", "true")
+      await page.keyboard.press("ArrowRight")
+      await expect(diagnosticsTab).toHaveAttribute("aria-selected", "true")
+      await expect(page.getByTestId("writing-playground-diagnostics-card")).toBeVisible()
+
+      await page.keyboard.press("Home")
+      await expect(generationTab).toHaveAttribute("aria-selected", "true")
+      await expect(editor).toHaveValue(persistedPrompt)
+
+      await planningTab.click()
+      await diagnosticsTab.click()
+      await generationTab.click()
+      await expect(editor).toHaveValue(persistedPrompt)
+    } finally {
+      await context.close()
+    }
+  })
 })
