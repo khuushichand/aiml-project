@@ -20,6 +20,14 @@ GUIDE_FILES = (
     REPO_ROOT / "New-User-Guide.md",
     REPO_ROOT / "CONTRIBUTING.md",
     REPO_ROOT / ".github/pull_request_template.md",
+    REPO_ROOT / "tldw_Server_API/README.md",
+    REPO_ROOT / "tldw_Server_API/app/core/MCP_unified/README.md",
+    REPO_ROOT / "tldw_Server_API/app/core/RAG/README.md",
+    REPO_ROOT / "tldw_Server_API/app/core/Resource_Governance/README.md",
+    REPO_ROOT / "tldw_Server_API/app/core/TTS/README.md",
+    REPO_ROOT / "tldw_Server_API/app/core/TTS/TTS-DEPLOYMENT.md",
+    REPO_ROOT / "Docs/STT-TTS/VIBEVOICE_GETTING_STARTED.md",
+    REPO_ROOT / "Docs/STT-TTS/QWEN3_TTS_SETUP.md",
 )
 DOC_PATH_PATTERN = re.compile(r"Docs/[A-Za-z0-9_./-]+")
 

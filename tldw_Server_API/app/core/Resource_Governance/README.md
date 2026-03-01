@@ -3,7 +3,7 @@
 Centralized rate limiting and concurrency control with policy-based configuration, DB/file-backed stores, and optional Redis backend. This module enforces request, token, and stream limits across endpoints and integrates with FastAPI via helpers and optional middleware.
 
 ## Overview & PRD
-- Design PRD: `Docs/Product/Resource_Governor_PRD.md`
+- Design PRD: `Docs/Product/Completed/AuthNZ-Refactor/Resource_Governor_PRD.md`
 - Example policies YAML: `tldw_Server_API/Config_Files/resource_governor_policies.yaml`
 
 ## New endpoints checklist (RG-aware design)
