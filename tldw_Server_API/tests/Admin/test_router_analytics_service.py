@@ -738,3 +738,54 @@ async def test_router_analytics_log_returns_recent_rows(monkeypatch, tmp_path):
     assert log_payload.items[0].status == 503
     assert log_payload.items[0].error is True
     assert log_payload.items[0].estimated is True
+
+
+@pytest.mark.asyncio
+async def test_router_analytics_log_falls_back_for_legacy_schema(monkeypatch, tmp_path):
+    _setup_env(tmp_path)
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    await reset_db_pool()
+    reset_settings()
+    await reset_session_manager()
+    user_id = await _ensure_router_usage_seed_rows()
+    pool = await get_db_pool()
+    principal = _single_user_principal(user_id)
+
+    original_fetch_rows = admin_router_analytics_service._fetch_rows
+
+    async def _fetch_rows_legacy_query_error(db_obj, sql: str, params: list[object]):
+        if "TRIM(conversation_id)" in sql:
+            raise ValueError("no such column: conversation_id")
+        return await original_fetch_rows(db_obj, sql, params)
+
+    monkeypatch.setattr(admin_router_analytics_service, "_fetch_rows", _fetch_rows_legacy_query_error)
+
+    monkeypatch.setattr(
+        admin_router_analytics_service,
+        "_utcnow",
+        lambda: datetime(2026, 3, 1, 10, 30, tzinfo=timezone.utc),
+    )
+
+    log_payload = await admin_router_analytics_service.get_router_analytics_log(
+        principal=principal,
+        db=pool,
+        range_value="1h",
+        org_id=None,
+        provider=None,
+        model=None,
+        token_id=None,
+        granularity=None,
+    )
+
+    assert log_payload.summary.requests_total == 4
+    assert log_payload.partial is True
+    assert log_payload.warnings is not None
+    assert "legacy_llm_usage_log_schema_missing_router_dimensions" in log_payload.warnings
+    assert len(log_payload.items) == 4
+    assert log_payload.items[0].conversation_id == "unknown"
+    assert log_payload.items[0].token_name == "unknown"
+    assert log_payload.items[0].remote_ip == "unknown"
+    assert log_payload.items[0].user_agent == "unknown"

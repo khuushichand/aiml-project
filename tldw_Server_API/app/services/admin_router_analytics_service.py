@@ -1722,7 +1722,61 @@ async def get_router_analytics_log(
         summary_rows = await _fetch_rows(db, summary_sql, params)
         summary_row = summary_rows[0] if summary_rows else None
 
-        item_rows = await _fetch_rows(db, items_sql, params)
+        partial = False
+        warnings: list[str] = []
+        try:
+            item_rows = await _fetch_rows(db, items_sql, params)
+        except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS as exc:
+            # Backward-compatible fallback for pre-054 schemas missing router dimension columns.
+            logger.debug("Router analytics log items fallback due to legacy schema query error: {}", exc)
+            partial = True
+            warnings.append("legacy_llm_usage_log_schema_missing_router_dimensions")
+            if is_pg:
+                fallback_items_sql = (  # nosec B608
+                    "SELECT "  # nosec B608
+                    "ts, request_id, "
+                    "'unknown' AS conversation_id, "
+                    "COALESCE(NULLIF(TRIM(provider), ''), 'unknown') AS provider, "
+                    "COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS model, "
+                    "'unknown' AS token_name, "
+                    "COALESCE(NULLIF(TRIM(endpoint), ''), 'unknown') AS endpoint, "
+                    "COALESCE(NULLIF(TRIM(operation), ''), 'unknown') AS operation, "
+                    "status, latency_ms, "
+                    "COALESCE(prompt_tokens,0) AS prompt_tokens, "
+                    "COALESCE(completion_tokens,0) AS completion_tokens, "
+                    "COALESCE(total_tokens,0) AS total_tokens, "
+                    "COALESCE(total_cost_usd,0)::float AS total_cost_usd, "
+                    "'unknown' AS remote_ip, "
+                    "'unknown' AS user_agent, "
+                    "COALESCE(estimated::int, 0) AS estimated "
+                    f"FROM llm_usage_log{join_clause}{where_clause} "
+                    "ORDER BY ts DESC, id DESC "
+                    "LIMIT 200"
+                )
+            else:
+                fallback_items_sql = (  # nosec B608
+                    "SELECT "  # nosec B608
+                    "ts, request_id, "
+                    "'unknown' AS conversation_id, "
+                    "COALESCE(NULLIF(TRIM(provider), ''), 'unknown') AS provider, "
+                    "COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS model, "
+                    "'unknown' AS token_name, "
+                    "COALESCE(NULLIF(TRIM(endpoint), ''), 'unknown') AS endpoint, "
+                    "COALESCE(NULLIF(TRIM(operation), ''), 'unknown') AS operation, "
+                    "status, latency_ms, "
+                    "IFNULL(prompt_tokens,0) AS prompt_tokens, "
+                    "IFNULL(completion_tokens,0) AS completion_tokens, "
+                    "IFNULL(total_tokens,0) AS total_tokens, "
+                    "IFNULL(total_cost_usd,0.0) AS total_cost_usd, "
+                    "'unknown' AS remote_ip, "
+                    "'unknown' AS user_agent, "
+                    "IFNULL(estimated,0) AS estimated "
+                    f"FROM llm_usage_log{join_clause}{where_clause} "
+                    "ORDER BY datetime(ts) DESC, id DESC "
+                    "LIMIT 200"
+                )
+            item_rows = await _fetch_rows(db, fallback_items_sql, params)
+
         items: list[RouterAnalyticsLogRow] = []
         for row in item_rows:
             status_code = _row_value(row, "status", 8, None)
@@ -1763,6 +1817,8 @@ async def get_router_analytics_log(
             items=items,
             generated_at=generated_at,
             data_window=data_window,
+            partial=partial,
+            warnings=warnings or None,
         )
     except _ADMIN_ROUTER_ANALYTICS_NONCRITICAL_EXCEPTIONS:
         logger.exception("Failed to build router analytics log payload")
