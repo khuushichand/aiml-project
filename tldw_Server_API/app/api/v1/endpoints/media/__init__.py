@@ -262,16 +262,6 @@ def invalidate_cache(media_id: int) -> None:
         return
 
 
-# Core-backed document-like processor shim so tests can patch core helper via media.*
-async def _process_document_like_item(*args, **kwargs):  # type: ignore[override]
-    from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore
-        persistence as _persistence_mod,
-    )
-
-    impl = _persistence_mod.process_document_like_item
-    return await impl(*args, **kwargs)
-
-
 # Convenience exports for tests/patching (legacy-compatible names)
 process_document_content = getattr(docs, "process_document_content", None)
 process_pdf_task = getattr(pdf_lib, "process_pdf_task", None)
@@ -282,7 +272,6 @@ __all__ = [
     "router",
     "_download_url_async",
     "_save_uploaded_files",
-    "_process_document_like_item",
     "_validate_inputs",
     "TempDirManager",
     "cache",

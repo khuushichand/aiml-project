@@ -1961,23 +1961,11 @@ async def add_media_orchestrate(
             "TempDirManager",
             CoreTempDirManager,
         )
-        _process_doc_item_fn = getattr(  # type: ignore[assignment]
-            media_mod,
-            "_process_document_like_item",
-            None,
-        )
     else:  # pragma: no cover - fallback for minimal profiles
         _save_uploaded_files = core_save_uploaded_files  # type: ignore[assignment]
         file_validator_instance = core_file_validator_instance  # type: ignore[assignment]
         TemplateClassifier = None  # type: ignore[assignment]
         TempDirManagerCls = CoreTempDirManager  # type: ignore[assignment]
-        _process_doc_item_fn = None
-
-    if _process_doc_item_fn is None:
-        # Fall back to the core helper when the modular shim is not
-        # present; this still centralizes behaviour while keeping
-        # resolver logic simple.
-        _process_doc_item_fn = process_document_like_item  # type: ignore[assignment]
 
     request_started_at = time.monotonic()
     request_outcome = "error"
@@ -2480,7 +2468,7 @@ async def add_media_orchestrate(
 
                 async def _run_doc_item(source: str) -> dict[str, Any]:
                     async with semaphore:
-                        return await _process_doc_item_fn(  # type: ignore[misc]
+                        return await process_document_like_item(
                             item_input_ref=source_to_ref_map.get(source, source),
                             processing_source=source,
                             media_type=form_data.media_type,

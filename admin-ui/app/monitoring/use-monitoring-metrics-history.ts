@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   buildSyntheticMonitoringMetricsHistory,
   extractAdditionalMetricSnapshot,
@@ -55,15 +55,10 @@ export const useMonitoringMetricsHistory = ({
 
   const [metricsHistory, setMetricsHistory] = useState<MetricsHistoryPoint[]>([]);
   const [timeRange, setTimeRange] = useState<MonitoringTimeRangeOption>('24h');
-  const [customRangeStart, setCustomRangeStartState] = useState<string>(defaultCustomRange.start);
-  const [customRangeEnd, setCustomRangeEndState] = useState<string>(defaultCustomRange.end);
-  const [appliedCustomRangeStart, setAppliedCustomRangeStart] = useState<string>(defaultCustomRange.start);
-  const [appliedCustomRangeEnd, setAppliedCustomRangeEnd] = useState<string>(defaultCustomRange.end);
-  const [hasAppliedCustomRange, setHasAppliedCustomRange] = useState(false);
-  const [manualReloadNonce, setManualReloadNonce] = useState(0);
+  const [customRangeStart, setCustomRangeStart] = useState<string>(defaultCustomRange.start);
+  const [customRangeEnd, setCustomRangeEnd] = useState<string>(defaultCustomRange.end);
   const [rangeValidationError, setRangeValidationError] = useState('');
   const [activeRangeLabel, setActiveRangeLabel] = useState('24h');
-  const pendingManualRangeLoadSuccessRef = useRef(false);
 
   const loadMetricsHistoryForRange = useCallback(async (
     selectedRange: MonitoringTimeRangeOption,
@@ -126,85 +121,34 @@ export const useMonitoringMetricsHistory = ({
     }
   }, [apiClient]);
 
-  const setCustomRangeStart = useCallback((value: string) => {
-    setCustomRangeStartState(value);
-    if (rangeValidationError) {
-      setRangeValidationError('');
-    }
-  }, [rangeValidationError]);
-
-  const setCustomRangeEnd = useCallback((value: string) => {
-    setCustomRangeEndState(value);
-    if (rangeValidationError) {
-      setRangeValidationError('');
-    }
-  }, [rangeValidationError]);
-
   useEffect(() => {
-    if (timeRange === 'custom' && !hasAppliedCustomRange) {
-      return;
-    }
-
-    const executeLoad = async () => {
-      const loaded = await loadMetricsHistoryForRange(
-        timeRange,
-        appliedCustomRangeStart,
-        appliedCustomRangeEnd
-      );
-      if (pendingManualRangeLoadSuccessRef.current) {
-        if (loaded) {
-          onManualRangeLoadSuccess?.();
-        }
-        pendingManualRangeLoadSuccessRef.current = false;
-      }
-    };
-
-    void executeLoad();
+    void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);
     const intervalId = window.setInterval(() => {
-      void loadMetricsHistoryForRange(
-        timeRange,
-        appliedCustomRangeStart,
-        appliedCustomRangeEnd
-      );
+      void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);
     }, pollIntervalMs);
     return () => window.clearInterval(intervalId);
-  }, [
-    appliedCustomRangeEnd,
-    appliedCustomRangeStart,
-    hasAppliedCustomRange,
-    loadMetricsHistoryForRange,
-    manualReloadNonce,
-    onManualRangeLoadSuccess,
-    pollIntervalMs,
-    timeRange
-  ]);
+  }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, pollIntervalMs, timeRange]);
 
   const handleSelectTimeRange = useCallback(async (nextRange: MonitoringTimeRangeOption): Promise<boolean> => {
     setTimeRange(nextRange);
     if (nextRange === 'custom') {
-      setHasAppliedCustomRange(false);
       return false;
     }
-    pendingManualRangeLoadSuccessRef.current = true;
-    return true;
-  }, []);
+    const loaded = await loadMetricsHistoryForRange(nextRange, customRangeStart, customRangeEnd);
+    if (loaded) {
+      onManualRangeLoadSuccess?.();
+    }
+    return loaded;
+  }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, onManualRangeLoadSuccess]);
 
   const handleApplyCustomTimeRange = useCallback(async (): Promise<boolean> => {
-    const resolvedRange = resolveMonitoringRangeParams('custom', customRangeStart, customRangeEnd);
-    if (!resolvedRange.ok) {
-      setRangeValidationError(resolvedRange.error);
-      return false;
-    }
-
-    setRangeValidationError('');
-    setAppliedCustomRangeStart(customRangeStart);
-    setAppliedCustomRangeEnd(customRangeEnd);
-    setHasAppliedCustomRange(true);
     setTimeRange('custom');
-    pendingManualRangeLoadSuccessRef.current = true;
-    setManualReloadNonce((value) => value + 1);
-    return true;
-  }, [customRangeEnd, customRangeStart]);
+    const loaded = await loadMetricsHistoryForRange('custom', customRangeStart, customRangeEnd);
+    if (loaded) {
+      onManualRangeLoadSuccess?.();
+    }
+    return loaded;
+  }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, onManualRangeLoadSuccess]);
 
   return {
     metricsHistory,
