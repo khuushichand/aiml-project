@@ -1,4 +1,4 @@
-"""Fail when source/published guide docs reference missing Docs paths."""
+"""Fail when guide and contributor docs reference missing Docs paths."""
 
 from __future__ import annotations
 
@@ -17,6 +17,9 @@ GUIDE_DIRS = (
 )
 GUIDE_FILES = (
     REPO_ROOT / "Helper_Scripts/Samples/Grafana/README.md",
+    REPO_ROOT / "New-User-Guide.md",
+    REPO_ROOT / "CONTRIBUTING.md",
+    REPO_ROOT / ".github/pull_request_template.md",
 )
 DOC_PATH_PATTERN = re.compile(r"Docs/[A-Za-z0-9_./-]+")
 
