@@ -13,6 +13,7 @@ import csv
 import json
 import os
 from collections.abc import Generator
+from importlib import resources
 from pathlib import Path
 from typing import Any, Optional
 
@@ -335,6 +336,70 @@ class BenchmarkDatasetLoader:
             else:
                 return SimpleQADataset.load_from_file(source)
 
+    @staticmethod
+    def load_bullshit_benchmark(source: Optional[str] = None) -> list[dict[str, Any]]:
+        """Load and normalize the bullshit benchmark dataset."""
+        if source and source.startswith("builtin://"):
+            builtin_id = source.replace("builtin://", "", 1)
+            if builtin_id not in {"bullshit_benchmark_v2", "bullshit_benchmark"}:
+                raise ValueError(f"Unsupported builtin bullshit benchmark source: {source}")
+            source = None
+
+        if source:
+            if source.startswith(("http://", "https://")):
+                payload = fetch_json(method="GET", url=source, timeout=15)
+            else:
+                with open(source, encoding="utf-8") as f:
+                    payload = json.load(f)
+        else:
+            pkg = "tldw_Server_API.app.core.Evaluations.data.bullshit_benchmark"
+            with resources.files(pkg).joinpath("questions_v2.json").open(
+                "r",
+                encoding="utf-8",
+            ) as f:
+                payload = json.load(f)
+
+        if not isinstance(payload, dict):
+            raise ValueError("Bullshit benchmark payload must be a JSON object")
+        techniques = payload.get("techniques")
+        if not isinstance(techniques, list):
+            raise ValueError(
+                "Bullshit benchmark payload must contain a top-level 'techniques' list"
+            )
+
+        rows: list[dict[str, Any]] = []
+        for technique in techniques:
+            if not isinstance(technique, dict):
+                continue
+            technique_id = str(technique.get("technique", "")).strip()
+            technique_description = str(technique.get("description", "")).strip()
+            questions = technique.get("questions", [])
+            if not isinstance(questions, list):
+                continue
+            for question in questions:
+                if not isinstance(question, dict):
+                    continue
+                required_fields = ("id", "question", "nonsensical_element", "domain")
+                missing_fields = [field for field in required_fields if field not in question]
+                if missing_fields:
+                    raise ValueError(
+                        f"Missing required field(s) {missing_fields} for technique={technique_id}"
+                    )
+                rows.append(
+                    {
+                        "id": question["id"],
+                        "question": question["question"],
+                        "nonsensical_element": question["nonsensical_element"],
+                        "domain": question["domain"],
+                        "technique": technique_id,
+                        "technique_description": technique_description,
+                        "is_control": bool(question.get("is_control", False)),
+                    }
+                )
+
+        rows.sort(key=lambda row: str(row.get("id", "")))
+        return [row for row in rows if not row.get("is_control", False)]
+
 
 def load_benchmark_dataset(benchmark_name: str,
                           source: Optional[str] = None,
@@ -356,6 +421,7 @@ def load_benchmark_dataset(benchmark_name: str,
         "mmlu_pro": BenchmarkDatasetLoader.load_mmlu_pro,
         "simple_bench": BenchmarkDatasetLoader.load_simple_bench,
         "simpleqa": BenchmarkDatasetLoader.load_simpleqa,
+        "bullshit_benchmark": BenchmarkDatasetLoader.load_bullshit_benchmark,
         "aider_polyglot": BenchmarkDatasetLoader.load_aider_polyglot,
         "swe_bench": BenchmarkDatasetLoader.load_swe_bench,
         "gpqa": BenchmarkDatasetLoader.load_gpqa,

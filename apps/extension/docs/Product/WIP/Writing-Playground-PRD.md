@@ -3,7 +3,7 @@
 ## Status
 - Status: Draft (aligned with server final plan)
 - Owner: TBD
-- Last Updated: 2026-01-04
+- Last Updated: 2026-03-01
 
 ## Summary
 Create a Writing Playground page inside extension Options that recreates the mikupad.html feature set without reusing AGPL code. The playground is server-backed via tldw_server, uses OpenAI-compatible chat completions for generation, and persists sessions/templates/themes in the new `/api/v1/writing/*` API surface.
@@ -75,10 +75,22 @@ Create a Writing Playground page inside extension Options that recreates the mik
 
 ## UX + IA
 - New Options route: `/writing-playground`.
-- Layout: main editor (overlay + textarea) and right sidebar for parameters.
+- Layout: mode-aware shell with `Draft` and `Manage`.
+- Draft: editor-first with quick controls and session list.
+- Manage: full control surface for templates/themes, generation tuning, context, and analysis tools.
 - Modals/widgets for templates, context, grammar, logit bias, themes, and TTS settings.
 - Use the existing Option layout and shared UI components.
 - Use a dedicated CSS module for editor overlay and per-token highlighting.
+
+### Mode Precedence and Persistence
+- First visit defaults to `Draft`.
+- Persisted mode wins on later visits (`stored mode > default Draft`) when valid.
+- Invalid or missing persisted mode normalizes to `Draft`.
+- Switching `Draft`/`Manage` must not drop unsaved editor or form input state.
+
+### Cross-Surface Parity Contract
+- WebUI and extension use the same section names, ordering, and core action semantics.
+- Allowed responsive differences: panel width ratios, breakpoint stack behavior, and compact control grouping on narrow widths.
 
 ## Data Model
 ### Session

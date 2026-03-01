@@ -426,11 +426,6 @@ class CookieManager:
         domain = urlparse(url).netloc
         return self._cookies.get(domain)
 
-    async def close_all(self):
-        """No-op retained for backward compatibility."""
-        return None
-
-
 class ContentDeduplicator:
     """Handles content deduplication"""
 
@@ -1290,7 +1285,6 @@ class EnhancedWebScraper:
     async def stop(self):
         """Stop the scraper"""
         await self.job_queue.stop()
-        await self.cookie_manager.close_all()
 
         if self._browser:
             await self._browser.close()

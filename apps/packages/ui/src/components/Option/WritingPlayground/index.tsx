@@ -169,6 +169,14 @@ import {
   DEFAULT_THEME_CATALOG,
   buildDuplicateName
 } from "./writing-template-theme-utils"
+import {
+  DEFAULT_WRITING_WORKSPACE_MODE,
+  type WritingWorkspaceMode
+} from "./writing-workspace-mode-utils"
+import {
+  WRITING_WORKSPACE_MODE_STORAGE_KEY,
+  resolveInitialWorkspaceMode
+} from "./writing-workspace-mode-prefs"
 
 const { Title, Paragraph } = Typography
 
@@ -1233,9 +1241,15 @@ export const WritingPlayground = () => {
   const {
     activeSessionId,
     activeSessionName,
+    workspaceMode,
     setActiveSessionId,
-    setActiveSessionName
+    setActiveSessionName,
+    setWorkspaceMode
   } = useWritingPlaygroundStore()
+  const [storedWorkspaceMode, setStoredWorkspaceMode] = useStorage<string>(
+    WRITING_WORKSPACE_MODE_STORAGE_KEY,
+    DEFAULT_WRITING_WORKSPACE_MODE
+  )
   const [selectedModel, setSelectedModel] = useStorage<string>("selectedModel")
   const apiProviderOverride = useStoreChatModelSettings(
     (state) => state.apiProvider
@@ -1250,6 +1264,22 @@ export const WritingPlayground = () => {
       rate: 1,
       voiceURI: null
     })
+  const resolvedWorkspaceMode = React.useMemo(
+    () => resolveInitialWorkspaceMode(storedWorkspaceMode),
+    [storedWorkspaceMode]
+  )
+  React.useEffect(() => {
+    if (workspaceMode === resolvedWorkspaceMode) return
+    setWorkspaceMode(resolvedWorkspaceMode)
+  }, [resolvedWorkspaceMode, setWorkspaceMode, workspaceMode])
+  const handleWorkspaceModeChange = React.useCallback(
+    (nextMode: WritingWorkspaceMode) => {
+      if (workspaceMode === nextMode) return
+      setWorkspaceMode(nextMode)
+      void setStoredWorkspaceMode(nextMode)
+    },
+    [setStoredWorkspaceMode, setWorkspaceMode, workspaceMode]
+  )
   const [createModalOpen, setCreateModalOpen] = React.useState(false)
   const [newSessionName, setNewSessionName] = React.useState("")
   const [sessionImporting, setSessionImporting] = React.useState(false)
@@ -5379,10 +5409,53 @@ export const WritingPlayground = () => {
         activeThemeClassName
       )}>
       {activeThemeCss ? <style>{activeThemeCss}</style> : null}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <Title level={2}>
+            {t("option:writingPlayground.title", "Writing Playground")}
+          </Title>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-text-muted">
+            {t("option:writingPlayground.workspaceModeLabel", "Workspace mode")}
+          </span>
+          <Segmented
+            data-testid="writing-workspace-mode-switch"
+            size="small"
+            value={workspaceMode}
+            onChange={(value) => {
+              handleWorkspaceModeChange(String(value) as WritingWorkspaceMode)
+            }}
+            options={[
+              {
+                value: "draft",
+                label: (
+                  <span data-testid="writing-mode-draft">
+                    {t("option:writingPlayground.modeDraft", "Draft")}
+                  </span>
+                )
+              },
+              {
+                value: "manage",
+                label: (
+                  <span data-testid="writing-mode-manage">
+                    {t("option:writingPlayground.modeManage", "Manage")}
+                  </span>
+                )
+              }
+            ]}
+          />
+          <span
+            aria-live="polite"
+            className="sr-only"
+            data-testid="writing-mode-live-region">
+            {workspaceMode === "draft"
+              ? t("option:writingPlayground.modeDraft", "Draft")
+              : t("option:writingPlayground.modeManage", "Manage")}
+          </span>
+        </div>
+      </div>
       <div>
-        <Title level={2}>
-          {t("option:writingPlayground.title", "Writing Playground")}
-        </Title>
         <Paragraph type="secondary">
           {t(
             "option:writingPlayground.subtitle",
@@ -5421,6 +5494,7 @@ export const WritingPlayground = () => {
       {!showOffline && !showUnsupported && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_1fr]">
           <Card
+            data-testid="writing-section-sessions"
             title={t("option:writingPlayground.sessionsTitle", "Sessions")}
             extra={
               <div className="flex items-center gap-2">
@@ -5608,7 +5682,10 @@ export const WritingPlayground = () => {
           </Card>
 
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <Card>
+            <Card
+              data-testid={
+                workspaceMode === "draft" ? "writing-section-draft-editor" : undefined
+              }>
               {activeSession ? (
                 activeSessionLoading ? (
                   <Skeleton active />
@@ -6129,779 +6206,793 @@ export const WritingPlayground = () => {
                         ) : null}
                       </div>
                     ) : null}
-                    <Collapse
-                      ghost
-                      size="small"
-                      defaultActiveKey={["chunks"]}
-                      items={[
-                        {
-                          key: "chunks",
-                          label: t(
-                            "option:writingPlayground.promptChunksTitle",
-                            "Prompt chunks ({{count}})",
-                            { count: promptChunkData.total }
-                          ),
-                          children:
-                            promptChunkData.total === 0 ? (
-                              <Paragraph type="secondary" className="!mb-0">
-                                {t(
-                                  "option:writingPlayground.promptChunksEmpty",
-                                  "No chunks yet."
-                                )}
-                              </Paragraph>
-                            ) : (
-                              <div className="flex flex-col gap-2">
-                                <div className="max-h-48 overflow-y-auto rounded-md border border-border bg-surface px-3 py-2">
-                                  <div className="flex flex-col gap-2">
-                                    {promptChunkData.chunks.map((chunk, index) => (
-                                      <div
-                                        key={chunk.key}
-                                        className="flex items-start gap-2 text-xs">
-                                        <Tag
-                                          color={
-                                            chunk.type === "placeholder"
-                                              ? "blue"
-                                              : "default"
-                                          }>
-                                          {chunk.type === "placeholder"
-                                            ? t(
-                                                "option:writingPlayground.chunkPlaceholder",
-                                                "Placeholder"
-                                              )
-                                            : t(
-                                                "option:writingPlayground.chunkText",
-                                                "Text"
-                                              )}
-                                        </Tag>
-                                        <span className="text-text-muted">
-                                          {index + 1}.
-                                        </span>
-                                        <span className="whitespace-pre-wrap text-text">
-                                          {chunk.label}
-                                        </span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                                {promptChunkData.truncated ? (
-                                  <span className="text-xs text-text-muted">
+                    {workspaceMode === "manage" ? (
+                      <div data-testid="writing-section-manage-analysis">
+                        <Collapse
+                          ghost
+                          size="small"
+                          defaultActiveKey={["chunks"]}
+                          items={[
+                            {
+                              key: "chunks",
+                              label: t(
+                                "option:writingPlayground.promptChunksTitle",
+                                "Prompt chunks ({{count}})",
+                                { count: promptChunkData.total }
+                              ),
+                              children:
+                                promptChunkData.total === 0 ? (
+                                  <Paragraph type="secondary" className="!mb-0">
                                     {t(
-                                      "option:writingPlayground.promptChunksTruncated",
-                                      "Showing first {{count}} chunks.",
-                                      { count: promptChunkData.chunks.length }
+                                      "option:writingPlayground.promptChunksEmpty",
+                                      "No chunks yet."
                                     )}
-                                  </span>
-                                ) : null}
-                              </div>
-                            )
-                        }
-                      ].concat(
-                        showResponseInspectorPanel
-                          ? [
-                              {
-                                key: "response-inspector",
-                                label: t(
-                                  "option:writingPlayground.responseInspectorTitle",
-                                  "Response inspector"
-                                ),
-                                children: (
-                                  <div className="flex flex-col gap-3">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      {responseInspectorHasRows ? (
-                                        <Tag color="blue">
-                                          {t(
-                                            "option:writingPlayground.responseInspectorCount",
-                                            "{{count}} rows",
-                                            { count: responseInspectorRowsAll.length }
-                                          )}
-                                        </Tag>
-                                      ) : null}
-                                      {responseLogprobs.length > 0 ? (
-                                        <Button
-                                          size="small"
-                                          disabled={settingsDisabled}
-                                          onClick={() => {
-                                            void handleCopyResponseInspectorJson()
-                                          }}>
-                                          {t(
-                                            "option:writingPlayground.responseInspectorCopyAction",
-                                            "Copy JSON"
-                                          )}
-                                        </Button>
-                                      ) : null}
-                                      {responseInspectorHasRows ? (
-                                        <Button
-                                          size="small"
-                                          disabled={settingsDisabled}
-                                          onClick={handleExportResponseInspectorCsv}>
-                                          {t(
-                                            "option:writingPlayground.responseInspectorExportAction",
-                                            "Export CSV"
-                                          )}
-                                        </Button>
-                                      ) : null}
-                                      {responseLogprobs.length > 0 ? (
-                                        <Button
-                                          size="small"
-                                          disabled={settingsDisabled}
-                                          onClick={clearResponseInspector}>
-                                          {t("common:clear", "Clear")}
-                                        </Button>
-                                      ) : null}
-                                    </div>
-                                    <span className="text-xs text-text-muted">
-                                      {t(
-                                        "option:writingPlayground.responseInspectorHint",
-                                        "Inspect generated token logprobs from the latest run."
-                                      )}
-                                    </span>
-                                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_170px_auto]">
-                                      <Input
-                                        size="small"
-                                        value={responseInspectorQuery}
-                                        disabled={settingsDisabled}
-                                        placeholder={t(
-                                          "option:writingPlayground.responseInspectorSearchPlaceholder",
-                                          "Filter tokens or alternatives"
-                                        )}
-                                        onChange={(event) =>
-                                          setResponseInspectorQuery(event.target.value)
-                                        }
-                                      />
-                                      <Select
-                                        size="small"
-                                        value={responseInspectorSort}
-                                        disabled={settingsDisabled}
-                                        options={RESPONSE_INSPECTOR_SORT_OPTIONS}
-                                        onChange={(value) =>
-                                          setResponseInspectorSort(
-                                            value as ResponseInspectorSort
-                                          )
-                                        }
-                                      />
-                                      <Checkbox
-                                        checked={responseInspectorHideWhitespace}
-                                        disabled={settingsDisabled}
-                                        onChange={(event) =>
-                                          setResponseInspectorHideWhitespace(
-                                            event.target.checked
-                                          )
-                                        }>
-                                        {t(
-                                          "option:writingPlayground.responseInspectorHideWhitespace",
-                                          "Hide whitespace"
-                                        )}
-                                      </Checkbox>
-                                    </div>
-                                    {!settings.logprobs ? (
-                                      <Alert
-                                        type="info"
-                                        showIcon
-                                        message={t(
-                                          "option:writingPlayground.responseInspectorDisabled",
-                                          "Enable logprobs in generation settings to capture response token scores."
-                                        )}
-                                      />
-                                    ) : null}
-                                    {settings.logprobs &&
-                                    responseLogprobs.length === 0 ? (
-                                      <Empty
-                                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                        description={t(
-                                          "option:writingPlayground.responseInspectorEmpty",
-                                          "No logprob data captured yet."
-                                        )}
-                                      />
-                                    ) : null}
-                                    {settings.logprobs &&
-                                    responseLogprobs.length > 0 &&
-                                    responseLogprobRows.length === 0 ? (
-                                      <Empty
-                                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                        description={t(
-                                          "option:writingPlayground.responseInspectorFilteredEmpty",
-                                          "No rows match the active response-inspector filters."
-                                        )}
-                                      />
-                                    ) : null}
-                                    {responseLogprobRows.length > 0 ? (
+                                  </Paragraph>
+                                ) : (
+                                  <div className="flex flex-col gap-2">
+                                    <div className="max-h-48 overflow-y-auto rounded-md border border-border bg-surface px-3 py-2">
                                       <div className="flex flex-col gap-2">
-                                        <div className="max-h-64 overflow-y-auto rounded-md border border-border bg-surface">
-                                          <div className="grid grid-cols-[auto_1fr_auto_auto_2fr_auto] gap-x-3 gap-y-1 px-3 py-2 text-xs">
-                                            <span className="font-medium text-text-muted">
-                                              #
+                                        {promptChunkData.chunks.map((chunk, index) => (
+                                          <div
+                                            key={chunk.key}
+                                            className="flex items-start gap-2 text-xs">
+                                            <Tag
+                                              color={
+                                                chunk.type === "placeholder"
+                                                  ? "blue"
+                                                  : "default"
+                                              }>
+                                              {chunk.type === "placeholder"
+                                                ? t(
+                                                    "option:writingPlayground.chunkPlaceholder",
+                                                    "Placeholder"
+                                                  )
+                                                : t(
+                                                    "option:writingPlayground.chunkText",
+                                                    "Text"
+                                                  )}
+                                            </Tag>
+                                            <span className="text-text-muted">
+                                              {index + 1}.
                                             </span>
-                                            <span className="font-medium text-text-muted">
-                                              {t(
-                                                "option:writingPlayground.responseInspectorTokenLabel",
-                                                "Token"
-                                              )}
+                                            <span className="whitespace-pre-wrap text-text">
+                                              {chunk.label}
                                             </span>
-                                            <span className="font-medium text-text-muted">
-                                              {t(
-                                                "option:writingPlayground.responseInspectorLogprobLabel",
-                                                "Logprob"
-                                              )}
-                                            </span>
-                                            <span className="font-medium text-text-muted">
-                                              {t(
-                                                "option:writingPlayground.responseInspectorProbabilityLabel",
-                                                "P(token)"
-                                              )}
-                                            </span>
-                                            <span className="font-medium text-text-muted">
-                                              {t(
-                                                "option:writingPlayground.responseInspectorTopLabel",
-                                                "Top alternatives"
-                                              )}
-                                            </span>
-                                            <span className="font-medium text-text-muted">
-                                              {t(
-                                                "option:writingPlayground.responseInspectorActionLabel",
-                                                "Action"
-                                              )}
-                                            </span>
-                                            {responseLogprobRows.map((row) => {
-                                              const alternatives = row.topLogprobs
-                                                .slice(0, 5)
-                                                .map(
-                                                  (alt) =>
-                                                    `${alt.token} (${alt.logprob.toFixed(3)})`
-                                                )
-                                                .join(", ")
-                                              return (
-                                                <React.Fragment
-                                                  key={`${row.sequence}-${row.token}-${row.logprob}`}>
-                                                  <span className="text-text-muted">
-                                                    {row.sequence + 1}
-                                                  </span>
-                                                  <span className="whitespace-pre-wrap text-text">
-                                                    {row.token}
-                                                  </span>
-                                                  <span className="text-text">
-                                                    {row.logprob.toFixed(4)}
-                                                  </span>
-                                                  <span className="text-text">
-                                                    {row.probability >= 0.001
-                                                      ? row.probability.toFixed(4)
-                                                      : row.probability.toExponential(2)}
-                                                  </span>
-                                                  <span className="whitespace-pre-wrap text-text-muted">
-                                                    {alternatives || "(none)"}
-                                                  </span>
-                                                  <div>
-                                                    <Button
-                                                      size="small"
-                                                      disabled={settingsDisabled}
-                                                      onClick={() =>
-                                                        handleRerollFromResponseToken(
-                                                          row.sequence
-                                                        )
-                                                      }>
-                                                      {t(
-                                                        "option:writingPlayground.responseInspectorRerollAction",
-                                                        "Reroll"
-                                                      )}
-                                                    </Button>
-                                                  </div>
-                                                </React.Fragment>
-                                              )
-                                            })}
                                           </div>
-                                        </div>
-                                        {responseLogprobTruncated ? (
-                                          <span className="text-xs text-text-muted">
-                                            {t(
-                                              "option:writingPlayground.responseInspectorTruncated",
-                                              "Showing first {{count}} rows.",
-                                              {
-                                                count: responseLogprobRows.length
-                                              }
-                                            )}
-                                          </span>
-                                        ) : null}
+                                        ))}
                                       </div>
+                                    </div>
+                                    {promptChunkData.truncated ? (
+                                      <span className="text-xs text-text-muted">
+                                        {t(
+                                          "option:writingPlayground.promptChunksTruncated",
+                                          "Showing first {{count}} chunks.",
+                                          { count: promptChunkData.chunks.length }
+                                        )}
+                                      </span>
                                     ) : null}
                                   </div>
                                 )
-                              }
-                            ]
-                          : []
-                      )
-                      .concat(
-                        showTokenInspectorPanel
-                          ? [
-                              {
-                                key: "token-inspector",
-                                label: t(
-                                  "option:writingPlayground.tokenInspectorTitle",
-                                  "Token inspector"
-                                ),
-                                children: (
-                                  <div className="flex flex-col gap-3">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      {serverSupportsTokenCount ? (
-                                        <Button
-                                          size="small"
-                                          disabled={!canCountTokens}
-                                          loading={isCountingTokens}
-                                          onClick={() => {
-                                            void handleCountTokens()
-                                          }}>
-                                          {t(
-                                            "option:writingPlayground.countTokensAction",
-                                            "Count tokens"
-                                          )}
-                                        </Button>
-                                      ) : null}
-                                      {serverSupportsTokenize ? (
-                                        <Button
-                                          size="small"
-                                          disabled={!canTokenizePreview}
-                                          loading={isTokenizingText}
-                                          onClick={() => {
-                                            void handleTokenizePreview()
-                                          }}>
-                                          {t(
-                                            "option:writingPlayground.tokenizePreviewAction",
-                                            "Tokenize preview"
-                                          )}
-                                        </Button>
-                                      ) : null}
-                                      {tokenCountResult ||
-                                      tokenizeResult ||
-                                      tokenInspectorError ? (
-                                        <Button
-                                          size="small"
-                                          disabled={tokenInspectorBusy}
-                                          onClick={clearTokenInspector}>
-                                          {t("common:clear", "Clear")}
-                                        </Button>
-                                      ) : null}
-                                    </div>
-                                    <span className="text-xs text-text-muted">
-                                      {tokenizerName
-                                        ? t(
-                                            "option:writingPlayground.tokenInspectorTokenizer",
-                                            "Tokenizer: {{tokenizer}}",
-                                            { tokenizer: tokenizerName }
-                                          )
-                                        : t(
-                                            "option:writingPlayground.tokenInspectorHint",
-                                            "Inspect token count and tokenization output for the selected model."
-                                          )}
-                                    </span>
-                                    {tokenInspectorUnavailableReason ? (
-                                      <Alert
-                                        type="info"
-                                        showIcon
-                                        message={tokenInspectorUnavailableReason}
-                                      />
-                                    ) : null}
-                                    {tokenInspectorError ? (
-                                      <Alert
-                                        type="error"
-                                        showIcon
-                                        message={tokenInspectorError}
-                                      />
-                                    ) : null}
-                                    {tokenCountResult ? (
-                                      <div className="rounded-md border border-border bg-surface p-3">
-                                        <div className="flex flex-wrap items-center gap-3 text-xs">
-                                          <Tag color="blue">
-                                            {t(
-                                              "option:writingPlayground.tokenInspectorCountLabel",
-                                              "{{count}} tokens",
-                                              {
-                                                count: tokenCountResult.count
-                                              }
-                                            )}
-                                          </Tag>
-                                          <span className="text-text-muted">
-                                            {t(
-                                              "option:writingPlayground.tokenInspectorCharsLabel",
-                                              "{{count}} chars",
-                                              {
-                                                count: tokenCountResult.meta.input_chars
-                                              }
-                                            )}
-                                          </span>
+                            }
+                          ].concat(
+                            showResponseInspectorPanel
+                              ? [
+                                  {
+                                    key: "response-inspector",
+                                    label: t(
+                                      "option:writingPlayground.responseInspectorTitle",
+                                      "Response inspector"
+                                    ),
+                                    children: (
+                                      <div className="flex flex-col gap-3">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          {responseInspectorHasRows ? (
+                                            <Tag color="blue">
+                                              {t(
+                                                "option:writingPlayground.responseInspectorCount",
+                                                "{{count}} rows",
+                                                { count: responseInspectorRowsAll.length }
+                                              )}
+                                            </Tag>
+                                          ) : null}
+                                          {responseLogprobs.length > 0 ? (
+                                            <Button
+                                              size="small"
+                                              disabled={settingsDisabled}
+                                              onClick={() => {
+                                                void handleCopyResponseInspectorJson()
+                                              }}>
+                                              {t(
+                                                "option:writingPlayground.responseInspectorCopyAction",
+                                                "Copy JSON"
+                                              )}
+                                            </Button>
+                                          ) : null}
+                                          {responseInspectorHasRows ? (
+                                            <Button
+                                              size="small"
+                                              disabled={settingsDisabled}
+                                              onClick={handleExportResponseInspectorCsv}>
+                                              {t(
+                                                "option:writingPlayground.responseInspectorExportAction",
+                                                "Export CSV"
+                                              )}
+                                            </Button>
+                                          ) : null}
+                                          {responseLogprobs.length > 0 ? (
+                                            <Button
+                                              size="small"
+                                              disabled={settingsDisabled}
+                                              onClick={clearResponseInspector}>
+                                              {t("common:clear", "Clear")}
+                                            </Button>
+                                          ) : null}
                                         </div>
+                                        <span className="text-xs text-text-muted">
+                                          {t(
+                                            "option:writingPlayground.responseInspectorHint",
+                                            "Inspect generated token logprobs from the latest run."
+                                          )}
+                                        </span>
+                                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_170px_auto]">
+                                          <Input
+                                            size="small"
+                                            value={responseInspectorQuery}
+                                            disabled={settingsDisabled}
+                                            placeholder={t(
+                                              "option:writingPlayground.responseInspectorSearchPlaceholder",
+                                              "Filter tokens or alternatives"
+                                            )}
+                                            onChange={(event) =>
+                                              setResponseInspectorQuery(event.target.value)
+                                            }
+                                          />
+                                          <Select
+                                            size="small"
+                                            value={responseInspectorSort}
+                                            disabled={settingsDisabled}
+                                            options={RESPONSE_INSPECTOR_SORT_OPTIONS}
+                                            onChange={(value) =>
+                                              setResponseInspectorSort(
+                                                value as ResponseInspectorSort
+                                              )
+                                            }
+                                          />
+                                          <Checkbox
+                                            checked={responseInspectorHideWhitespace}
+                                            disabled={settingsDisabled}
+                                            onChange={(event) =>
+                                              setResponseInspectorHideWhitespace(
+                                                event.target.checked
+                                              )
+                                            }>
+                                            {t(
+                                              "option:writingPlayground.responseInspectorHideWhitespace",
+                                              "Hide whitespace"
+                                            )}
+                                          </Checkbox>
+                                        </div>
+                                        {!settings.logprobs ? (
+                                          <Alert
+                                            type="info"
+                                            showIcon
+                                            message={t(
+                                              "option:writingPlayground.responseInspectorDisabled",
+                                              "Enable logprobs in generation settings to capture response token scores."
+                                            )}
+                                          />
+                                        ) : null}
+                                        {settings.logprobs &&
+                                        responseLogprobs.length === 0 ? (
+                                          <Empty
+                                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                            description={t(
+                                              "option:writingPlayground.responseInspectorEmpty",
+                                              "No logprob data captured yet."
+                                            )}
+                                          />
+                                        ) : null}
+                                        {settings.logprobs &&
+                                        responseLogprobs.length > 0 &&
+                                        responseLogprobRows.length === 0 ? (
+                                          <Empty
+                                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                            description={t(
+                                              "option:writingPlayground.responseInspectorFilteredEmpty",
+                                              "No rows match the active response-inspector filters."
+                                            )}
+                                          />
+                                        ) : null}
+                                        {responseLogprobRows.length > 0 ? (
+                                          <div className="flex flex-col gap-2">
+                                            <div className="max-h-64 overflow-y-auto rounded-md border border-border bg-surface">
+                                              <div className="grid grid-cols-[auto_1fr_auto_auto_2fr_auto] gap-x-3 gap-y-1 px-3 py-2 text-xs">
+                                                <span className="font-medium text-text-muted">
+                                                  #
+                                                </span>
+                                                <span className="font-medium text-text-muted">
+                                                  {t(
+                                                    "option:writingPlayground.responseInspectorTokenLabel",
+                                                    "Token"
+                                                  )}
+                                                </span>
+                                                <span className="font-medium text-text-muted">
+                                                  {t(
+                                                    "option:writingPlayground.responseInspectorLogprobLabel",
+                                                    "Logprob"
+                                                  )}
+                                                </span>
+                                                <span className="font-medium text-text-muted">
+                                                  {t(
+                                                    "option:writingPlayground.responseInspectorProbabilityLabel",
+                                                    "P(token)"
+                                                  )}
+                                                </span>
+                                                <span className="font-medium text-text-muted">
+                                                  {t(
+                                                    "option:writingPlayground.responseInspectorTopLabel",
+                                                    "Top alternatives"
+                                                  )}
+                                                </span>
+                                                <span className="font-medium text-text-muted">
+                                                  {t(
+                                                    "option:writingPlayground.responseInspectorActionLabel",
+                                                    "Action"
+                                                  )}
+                                                </span>
+                                                {responseLogprobRows.map((row) => {
+                                                  const alternatives = row.topLogprobs
+                                                    .slice(0, 5)
+                                                    .map(
+                                                      (alt) =>
+                                                        `${alt.token} (${alt.logprob.toFixed(3)})`
+                                                    )
+                                                    .join(", ")
+                                                  return (
+                                                    <React.Fragment
+                                                      key={`${row.sequence}-${row.token}-${row.logprob}`}>
+                                                      <span className="text-text-muted">
+                                                        {row.sequence + 1}
+                                                      </span>
+                                                      <span className="whitespace-pre-wrap text-text">
+                                                        {row.token}
+                                                      </span>
+                                                      <span className="text-text">
+                                                        {row.logprob.toFixed(4)}
+                                                      </span>
+                                                      <span className="text-text">
+                                                        {row.probability >= 0.001
+                                                          ? row.probability.toFixed(4)
+                                                          : row.probability.toExponential(2)}
+                                                      </span>
+                                                      <span className="whitespace-pre-wrap text-text-muted">
+                                                        {alternatives || "(none)"}
+                                                      </span>
+                                                      <div>
+                                                        <Button
+                                                          size="small"
+                                                          disabled={settingsDisabled}
+                                                          onClick={() =>
+                                                            handleRerollFromResponseToken(
+                                                              row.sequence
+                                                            )
+                                                          }>
+                                                          {t(
+                                                            "option:writingPlayground.responseInspectorRerollAction",
+                                                            "Reroll"
+                                                          )}
+                                                        </Button>
+                                                      </div>
+                                                    </React.Fragment>
+                                                  )
+                                                })}
+                                              </div>
+                                            </div>
+                                            {responseLogprobTruncated ? (
+                                              <span className="text-xs text-text-muted">
+                                                {t(
+                                                  "option:writingPlayground.responseInspectorTruncated",
+                                                  "Showing first {{count}} rows.",
+                                                  {
+                                                    count: responseLogprobRows.length
+                                                  }
+                                                )}
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                        ) : null}
                                       </div>
-                                    ) : null}
-                                    {tokenizeResult ? (
-                                      <div className="flex flex-col gap-2">
+                                    )
+                                  }
+                                ]
+                              : []
+                          )
+                          .concat(
+                            showTokenInspectorPanel
+                              ? [
+                                  {
+                                    key: "token-inspector",
+                                    label: t(
+                                      "option:writingPlayground.tokenInspectorTitle",
+                                      "Token inspector"
+                                    ),
+                                    children: (
+                                      <div className="flex flex-col gap-3">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          {serverSupportsTokenCount ? (
+                                            <Button
+                                              size="small"
+                                              disabled={!canCountTokens}
+                                              loading={isCountingTokens}
+                                              onClick={() => {
+                                                void handleCountTokens()
+                                              }}>
+                                              {t(
+                                                "option:writingPlayground.countTokensAction",
+                                                "Count tokens"
+                                              )}
+                                            </Button>
+                                          ) : null}
+                                          {serverSupportsTokenize ? (
+                                            <Button
+                                              size="small"
+                                              disabled={!canTokenizePreview}
+                                              loading={isTokenizingText}
+                                              onClick={() => {
+                                                void handleTokenizePreview()
+                                              }}>
+                                              {t(
+                                                "option:writingPlayground.tokenizePreviewAction",
+                                                "Tokenize preview"
+                                              )}
+                                            </Button>
+                                          ) : null}
+                                          {tokenCountResult ||
+                                          tokenizeResult ||
+                                          tokenInspectorError ? (
+                                            <Button
+                                              size="small"
+                                              disabled={tokenInspectorBusy}
+                                              onClick={clearTokenInspector}>
+                                              {t("common:clear", "Clear")}
+                                            </Button>
+                                          ) : null}
+                                        </div>
+                                        <span className="text-xs text-text-muted">
+                                          {tokenizerName
+                                            ? t(
+                                                "option:writingPlayground.tokenInspectorTokenizer",
+                                                "Tokenizer: {{tokenizer}}",
+                                                { tokenizer: tokenizerName }
+                                              )
+                                            : t(
+                                                "option:writingPlayground.tokenInspectorHint",
+                                                "Inspect token count and tokenization output for the selected model."
+                                              )}
+                                        </span>
+                                        {tokenInspectorUnavailableReason ? (
+                                          <Alert
+                                            type="info"
+                                            showIcon
+                                            message={tokenInspectorUnavailableReason}
+                                          />
+                                        ) : null}
+                                        {tokenInspectorError ? (
+                                          <Alert
+                                            type="error"
+                                            showIcon
+                                            message={tokenInspectorError}
+                                          />
+                                        ) : null}
+                                        {tokenCountResult ? (
+                                          <div className="rounded-md border border-border bg-surface p-3">
+                                            <div className="flex flex-wrap items-center gap-3 text-xs">
+                                              <Tag color="blue">
+                                                {t(
+                                                  "option:writingPlayground.tokenInspectorCountLabel",
+                                                  "{{count}} tokens",
+                                                  {
+                                                    count: tokenCountResult.count
+                                                  }
+                                                )}
+                                              </Tag>
+                                              <span className="text-text-muted">
+                                                {t(
+                                                  "option:writingPlayground.tokenInspectorCharsLabel",
+                                                  "{{count}} chars",
+                                                  {
+                                                    count: tokenCountResult.meta.input_chars
+                                                  }
+                                                )}
+                                              </span>
+                                            </div>
+                                          </div>
+                                        ) : null}
+                                        {tokenizeResult ? (
+                                          <div className="flex flex-col gap-2">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                              <Button
+                                                size="small"
+                                                disabled={
+                                                  isGenerating ||
+                                                  tokenPreviewRawText.length === 0
+                                                }
+                                                onClick={() =>
+                                                  insertTokenTextAtCursor(
+                                                    tokenPreviewRawText
+                                                  )
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.tokenInspectorUseAllAction",
+                                                  "Use all token text"
+                                                )}
+                                              </Button>
+                                              {tokenInspectorSupportsLogitBias ? (
+                                                <>
+                                                  <Button
+                                                    size="small"
+                                                    disabled={
+                                                      settingsDisabled ||
+                                                      tokenizeResult.ids.length === 0
+                                                    }
+                                                    onClick={() =>
+                                                      applyTokenInspectorLogitBiasPresetBatch(
+                                                        tokenizeResult.ids,
+                                                        "ban"
+                                                      )
+                                                    }>
+                                                    {t(
+                                                      "option:writingPlayground.tokenInspectorBiasBanAllAction",
+                                                      "Ban all IDs"
+                                                    )}
+                                                  </Button>
+                                                  <Button
+                                                    size="small"
+                                                    disabled={
+                                                      settingsDisabled ||
+                                                      tokenizeResult.ids.length === 0
+                                                    }
+                                                    onClick={() =>
+                                                      applyTokenInspectorLogitBiasPresetBatch(
+                                                        tokenizeResult.ids,
+                                                        "favor"
+                                                      )
+                                                    }>
+                                                    {t(
+                                                      "option:writingPlayground.tokenInspectorBiasFavorAllAction",
+                                                      "Favor all IDs"
+                                                    )}
+                                                  </Button>
+                                                </>
+                                              ) : null}
+                                            </div>
+                                            <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-surface">
+                                              <div className="grid grid-cols-[auto_auto_1fr_auto] gap-x-3 gap-y-1 px-3 py-2 text-xs">
+                                                <span className="font-medium text-text-muted">
+                                                  #
+                                                </span>
+                                                <span className="font-medium text-text-muted">
+                                                  ID
+                                                </span>
+                                                <span className="font-medium text-text-muted">
+                                                  {t(
+                                                    "option:writingPlayground.tokenInspectorTextLabel",
+                                                    "Text"
+                                                  )}
+                                                </span>
+                                                <span className="font-medium text-text-muted">
+                                                  {t(
+                                                    "option:writingPlayground.tokenInspectorActionLabel",
+                                                    "Action"
+                                                  )}
+                                                </span>
+                                                {tokenPreviewRows.map((row) => (
+                                                  <React.Fragment
+                                                    key={`${row.index}-${row.id}`}>
+                                                    <span className="text-text-muted">
+                                                      {row.index + 1}
+                                                    </span>
+                                                    <span className="text-text">
+                                                      {row.id}
+                                                    </span>
+                                                    <span className="whitespace-pre-wrap text-text">
+                                                      {row.text}
+                                                    </span>
+                                                    <div className="flex flex-wrap gap-1">
+                                                      <Button
+                                                        size="small"
+                                                        disabled={isGenerating}
+                                                        onClick={() =>
+                                                          insertTokenTextAtCursor(
+                                                            row.rawText
+                                                          )
+                                                        }>
+                                                        {t(
+                                                          "option:writingPlayground.tokenInspectorUseAction",
+                                                          "Use"
+                                                        )}
+                                                      </Button>
+                                                      {tokenInspectorSupportsLogitBias ? (
+                                                        <>
+                                                          <Button
+                                                            size="small"
+                                                            disabled={settingsDisabled}
+                                                            onClick={() =>
+                                                              applyTokenInspectorLogitBiasPreset(
+                                                                row.id,
+                                                                "ban"
+                                                              )
+                                                            }>
+                                                            {t(
+                                                              "option:writingPlayground.tokenInspectorBiasBanAction",
+                                                              "Ban"
+                                                            )}
+                                                          </Button>
+                                                          <Button
+                                                            size="small"
+                                                            disabled={settingsDisabled}
+                                                            onClick={() =>
+                                                              applyTokenInspectorLogitBiasPreset(
+                                                                row.id,
+                                                                "favor"
+                                                              )
+                                                            }>
+                                                            {t(
+                                                              "option:writingPlayground.tokenInspectorBiasFavorAction",
+                                                              "Favor"
+                                                            )}
+                                                          </Button>
+                                                        </>
+                                                      ) : null}
+                                                    </div>
+                                                  </React.Fragment>
+                                                ))}
+                                              </div>
+                                            </div>
+                                            {tokenPreviewTruncated ? (
+                                              <span className="text-xs text-text-muted">
+                                                {t(
+                                                  "option:writingPlayground.tokenInspectorTruncated",
+                                                  "Showing first {{count}} of {{total}} tokens.",
+                                                  {
+                                                    count: tokenPreviewRows.length,
+                                                    total: tokenPreviewTotal
+                                                  }
+                                                )}
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    )
+                                  }
+                                ]
+                              : []
+                          )
+                          .concat(
+                            showWordcloudPanel
+                              ? [
+                                  {
+                                    key: "wordcloud",
+                                    label: t(
+                                      "option:writingPlayground.wordcloudTitle",
+                                      "Wordcloud"
+                                    ),
+                                    children: (
+                                      <div className="flex flex-col gap-3">
                                         <div className="flex flex-wrap items-center gap-2">
                                           <Button
                                             size="small"
-                                            disabled={
-                                              isGenerating || tokenPreviewRawText.length === 0
-                                            }
-                                            onClick={() =>
-                                              insertTokenTextAtCursor(tokenPreviewRawText)
-                                            }>
+                                            disabled={!canGenerateWordcloud}
+                                            loading={isGeneratingWordcloud}
+                                            onClick={() => {
+                                              void handleGenerateWordcloud()
+                                            }}>
                                             {t(
-                                              "option:writingPlayground.tokenInspectorUseAllAction",
-                                              "Use all token text"
+                                              "option:writingPlayground.wordcloudGenerateAction",
+                                              "Generate wordcloud"
                                             )}
                                           </Button>
-                                          {tokenInspectorSupportsLogitBias ? (
-                                            <>
-                                              <Button
-                                                size="small"
-                                                disabled={
-                                                  settingsDisabled ||
-                                                  tokenizeResult.ids.length === 0
-                                                }
-                                                onClick={() =>
-                                                  applyTokenInspectorLogitBiasPresetBatch(
-                                                    tokenizeResult.ids,
-                                                    "ban"
-                                                  )
-                                                }>
-                                                {t(
-                                                  "option:writingPlayground.tokenInspectorBiasBanAllAction",
-                                                  "Ban all IDs"
-                                                )}
-                                              </Button>
-                                              <Button
-                                                size="small"
-                                                disabled={
-                                                  settingsDisabled ||
-                                                  tokenizeResult.ids.length === 0
-                                                }
-                                                onClick={() =>
-                                                  applyTokenInspectorLogitBiasPresetBatch(
-                                                    tokenizeResult.ids,
-                                                    "favor"
-                                                  )
-                                                }>
-                                                {t(
-                                                  "option:writingPlayground.tokenInspectorBiasFavorAllAction",
-                                                  "Favor all IDs"
-                                                )}
-                                              </Button>
-                                            </>
+                                          {wordcloudStatus || wordcloudError ? (
+                                            <Button
+                                              size="small"
+                                              disabled={isGeneratingWordcloud}
+                                              onClick={clearWordcloud}>
+                                              {t("common:clear", "Clear")}
+                                            </Button>
+                                          ) : null}
+                                          {wordcloudStatus ? (
+                                            <Tag color={wordcloudStatusColor}>
+                                              {wordcloudStatus}
+                                            </Tag>
                                           ) : null}
                                         </div>
-                                        <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-surface">
-                                          <div className="grid grid-cols-[auto_auto_1fr_auto] gap-x-3 gap-y-1 px-3 py-2 text-xs">
-                                            <span className="font-medium text-text-muted">
-                                              #
-                                            </span>
-                                            <span className="font-medium text-text-muted">
-                                              ID
-                                            </span>
-                                            <span className="font-medium text-text-muted">
+                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                          <div className="flex flex-col gap-1">
+                                            <span className="text-xs text-text-muted">
                                               {t(
-                                                "option:writingPlayground.tokenInspectorTextLabel",
-                                                "Text"
+                                                "option:writingPlayground.wordcloudMaxWordsLabel",
+                                                "Max words"
                                               )}
                                             </span>
-                                            <span className="font-medium text-text-muted">
+                                            <InputNumber
+                                              size="small"
+                                              min={1}
+                                              max={MAX_WORDCLOUD_WORDS}
+                                              step={1}
+                                              value={wordcloudMaxWords}
+                                              disabled={isGeneratingWordcloud}
+                                              onChange={(value) =>
+                                                setWordcloudMaxWords(
+                                                  value == null
+                                                    ? 100
+                                                    : Math.max(
+                                                        1,
+                                                        Math.min(
+                                                          MAX_WORDCLOUD_WORDS,
+                                                          Math.floor(value)
+                                                        )
+                                                      )
+                                                )
+                                              }
+                                              className="w-full"
+                                            />
+                                          </div>
+                                          <div className="flex flex-col gap-1">
+                                            <span className="text-xs text-text-muted">
                                               {t(
-                                                "option:writingPlayground.tokenInspectorActionLabel",
-                                                "Action"
+                                                "option:writingPlayground.wordcloudMinLengthLabel",
+                                                "Min word length"
                                               )}
                                             </span>
-                                            {tokenPreviewRows.map((row) => (
-                                              <React.Fragment
-                                                key={`${row.index}-${row.id}`}>
-                                                <span className="text-text-muted">
-                                                  {row.index + 1}
-                                                </span>
-                                                <span className="text-text">
-                                                  {row.id}
-                                                </span>
-                                                <span className="whitespace-pre-wrap text-text">
-                                                  {row.text}
-                                                </span>
-                                                <div className="flex flex-wrap gap-1">
-                                                  <Button
-                                                    size="small"
-                                                    disabled={isGenerating}
-                                                    onClick={() =>
-                                                      insertTokenTextAtCursor(row.rawText)
-                                                    }>
-                                                    {t(
-                                                      "option:writingPlayground.tokenInspectorUseAction",
-                                                      "Use"
-                                                    )}
-                                                  </Button>
-                                                  {tokenInspectorSupportsLogitBias ? (
-                                                    <>
-                                                      <Button
-                                                        size="small"
-                                                        disabled={settingsDisabled}
-                                                        onClick={() =>
-                                                          applyTokenInspectorLogitBiasPreset(
-                                                            row.id,
-                                                            "ban"
-                                                          )
-                                                        }>
-                                                        {t(
-                                                          "option:writingPlayground.tokenInspectorBiasBanAction",
-                                                          "Ban"
-                                                        )}
-                                                      </Button>
-                                                      <Button
-                                                        size="small"
-                                                        disabled={settingsDisabled}
-                                                        onClick={() =>
-                                                          applyTokenInspectorLogitBiasPreset(
-                                                            row.id,
-                                                            "favor"
-                                                          )
-                                                        }>
-                                                        {t(
-                                                          "option:writingPlayground.tokenInspectorBiasFavorAction",
-                                                          "Favor"
-                                                        )}
-                                                      </Button>
-                                                    </>
-                                                  ) : null}
-                                                </div>
-                                              </React.Fragment>
-                                            ))}
+                                            <InputNumber
+                                              size="small"
+                                              min={1}
+                                              max={64}
+                                              step={1}
+                                              value={wordcloudMinWordLength}
+                                              disabled={isGeneratingWordcloud}
+                                              onChange={(value) =>
+                                                setWordcloudMinWordLength(
+                                                  value == null
+                                                    ? 3
+                                                    : Math.max(
+                                                        1,
+                                                        Math.min(
+                                                          64,
+                                                          Math.floor(value)
+                                                        )
+                                                      )
+                                                )
+                                              }
+                                              className="w-full"
+                                            />
                                           </div>
                                         </div>
-                                        {tokenPreviewTruncated ? (
+                                        <Checkbox
+                                          checked={wordcloudKeepNumbers}
+                                          disabled={isGeneratingWordcloud}
+                                          onChange={(event) =>
+                                            setWordcloudKeepNumbers(
+                                              event.target.checked
+                                            )
+                                          }>
+                                          {t(
+                                            "option:writingPlayground.wordcloudKeepNumbers",
+                                            "Include numeric tokens"
+                                          )}
+                                        </Checkbox>
+                                        <div className="flex flex-col gap-1">
                                           <span className="text-xs text-text-muted">
                                             {t(
-                                              "option:writingPlayground.tokenInspectorTruncated",
-                                              "Showing first {{count}} of {{total}} tokens.",
-                                              {
-                                                count: tokenPreviewRows.length,
-                                                total: tokenPreviewTotal
-                                              }
+                                              "option:writingPlayground.wordcloudStopwordsLabel",
+                                              "Custom stopwords (comma or newline separated)"
+                                            )}
+                                          </span>
+                                          <Input.TextArea
+                                            value={wordcloudStopwordsInput}
+                                            rows={3}
+                                            disabled={isGeneratingWordcloud}
+                                            onChange={(event) =>
+                                              setWordcloudStopwordsInput(
+                                                event.target.value
+                                              )
+                                            }
+                                            placeholder={t(
+                                              "option:writingPlayground.wordcloudStopwordsHint",
+                                              "Leave empty to use server defaults."
+                                            )}
+                                          />
+                                        </div>
+                                        {wordcloudError ? (
+                                          <Alert
+                                            type="error"
+                                            showIcon
+                                            message={wordcloudError}
+                                          />
+                                        ) : null}
+                                        {wordcloudMeta ? (
+                                          <div className="rounded-md border border-border bg-surface p-3">
+                                            <div className="flex flex-wrap items-center gap-3 text-xs">
+                                              <Tag color="blue">
+                                                {t(
+                                                  "option:writingPlayground.wordcloudTopWords",
+                                                  "{{count}} words",
+                                                  { count: wordcloudMeta.top_n }
+                                                )}
+                                              </Tag>
+                                              <span className="text-text-muted">
+                                                {t(
+                                                  "option:writingPlayground.wordcloudInputChars",
+                                                  "{{count}} chars",
+                                                  { count: wordcloudMeta.input_chars }
+                                                )}
+                                              </span>
+                                              <span className="text-text-muted">
+                                                {t(
+                                                  "option:writingPlayground.wordcloudTotalTokens",
+                                                  "{{count}} tokens",
+                                                  { count: wordcloudMeta.total_tokens }
+                                                )}
+                                              </span>
+                                            </div>
+                                          </div>
+                                        ) : null}
+                                        {wordcloudWords.length > 0 ? (
+                                          <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-surface px-3 py-2">
+                                            <div className="flex flex-col gap-2">
+                                              {wordcloudWords.map((word) => (
+                                                <div
+                                                  key={`${word.text}-${word.weight}`}
+                                                  className="grid grid-cols-[1fr_auto] gap-2 text-xs">
+                                                  <div className="flex flex-col gap-1">
+                                                    <span className="text-text">
+                                                      {word.text}
+                                                    </span>
+                                                    <div className="h-1.5 rounded bg-background">
+                                                      <div
+                                                        className="h-1.5 rounded bg-primary"
+                                                        style={{
+                                                          width: `${wordcloudTopWeight > 0 ? (word.weight / wordcloudTopWeight) * 100 : 0}%`
+                                                        }}
+                                                      />
+                                                    </div>
+                                                  </div>
+                                                  <span className="text-text-muted">
+                                                    {word.weight}
+                                                  </span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        ) : wordcloudStatus === "ready" ? (
+                                          <Paragraph
+                                            type="secondary"
+                                            className="!mb-0">
+                                            {t(
+                                              "option:writingPlayground.wordcloudEmpty",
+                                              "No words matched the current filters."
+                                            )}
+                                          </Paragraph>
+                                        ) : null}
+                                        {wordcloudId ? (
+                                          <span className="text-xs text-text-muted">
+                                            {t(
+                                              "option:writingPlayground.wordcloudJobId",
+                                              "Job ID: {{id}}",
+                                              { id: wordcloudId }
                                             )}
                                           </span>
                                         ) : null}
                                       </div>
-                                    ) : null}
-                                  </div>
-                                )
-                              }
-                            ]
-                          : []
-                      )
-                      .concat(
-                        showWordcloudPanel
-                          ? [
-                              {
-                                key: "wordcloud",
-                                label: t(
-                                  "option:writingPlayground.wordcloudTitle",
-                                  "Wordcloud"
-                                ),
-                                children: (
-                                  <div className="flex flex-col gap-3">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <Button
-                                        size="small"
-                                        disabled={!canGenerateWordcloud}
-                                        loading={isGeneratingWordcloud}
-                                        onClick={() => {
-                                          void handleGenerateWordcloud()
-                                        }}>
-                                        {t(
-                                          "option:writingPlayground.wordcloudGenerateAction",
-                                          "Generate wordcloud"
-                                        )}
-                                      </Button>
-                                      {wordcloudStatus || wordcloudError ? (
-                                        <Button
-                                          size="small"
-                                          disabled={isGeneratingWordcloud}
-                                          onClick={clearWordcloud}>
-                                          {t("common:clear", "Clear")}
-                                        </Button>
-                                      ) : null}
-                                      {wordcloudStatus ? (
-                                        <Tag color={wordcloudStatusColor}>
-                                          {wordcloudStatus}
-                                        </Tag>
-                                      ) : null}
-                                    </div>
-                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                      <div className="flex flex-col gap-1">
-                                        <span className="text-xs text-text-muted">
-                                          {t(
-                                            "option:writingPlayground.wordcloudMaxWordsLabel",
-                                            "Max words"
-                                          )}
-                                        </span>
-                                        <InputNumber
-                                          size="small"
-                                          min={1}
-                                          max={MAX_WORDCLOUD_WORDS}
-                                          step={1}
-                                          value={wordcloudMaxWords}
-                                          disabled={isGeneratingWordcloud}
-                                          onChange={(value) =>
-                                            setWordcloudMaxWords(
-                                              value == null
-                                                ? 100
-                                                : Math.max(
-                                                    1,
-                                                    Math.min(
-                                                      MAX_WORDCLOUD_WORDS,
-                                                      Math.floor(value)
-                                                    )
-                                                  )
-                                            )
-                                          }
-                                          className="w-full"
-                                        />
-                                      </div>
-                                      <div className="flex flex-col gap-1">
-                                        <span className="text-xs text-text-muted">
-                                          {t(
-                                            "option:writingPlayground.wordcloudMinLengthLabel",
-                                            "Min word length"
-                                          )}
-                                        </span>
-                                        <InputNumber
-                                          size="small"
-                                          min={1}
-                                          max={64}
-                                          step={1}
-                                          value={wordcloudMinWordLength}
-                                          disabled={isGeneratingWordcloud}
-                                          onChange={(value) =>
-                                            setWordcloudMinWordLength(
-                                              value == null
-                                                ? 3
-                                                : Math.max(
-                                                    1,
-                                                    Math.min(64, Math.floor(value))
-                                                  )
-                                            )
-                                          }
-                                          className="w-full"
-                                        />
-                                      </div>
-                                    </div>
-                                    <Checkbox
-                                      checked={wordcloudKeepNumbers}
-                                      disabled={isGeneratingWordcloud}
-                                      onChange={(event) =>
-                                        setWordcloudKeepNumbers(
-                                          event.target.checked
-                                        )
-                                      }>
-                                      {t(
-                                        "option:writingPlayground.wordcloudKeepNumbers",
-                                        "Include numeric tokens"
-                                      )}
-                                    </Checkbox>
-                                    <div className="flex flex-col gap-1">
-                                      <span className="text-xs text-text-muted">
-                                        {t(
-                                          "option:writingPlayground.wordcloudStopwordsLabel",
-                                          "Custom stopwords (comma or newline separated)"
-                                        )}
-                                      </span>
-                                      <Input.TextArea
-                                        value={wordcloudStopwordsInput}
-                                        rows={3}
-                                        disabled={isGeneratingWordcloud}
-                                        onChange={(event) =>
-                                          setWordcloudStopwordsInput(
-                                            event.target.value
-                                          )
-                                        }
-                                        placeholder={t(
-                                          "option:writingPlayground.wordcloudStopwordsHint",
-                                          "Leave empty to use server defaults."
-                                        )}
-                                      />
-                                    </div>
-                                    {wordcloudError ? (
-                                      <Alert
-                                        type="error"
-                                        showIcon
-                                        message={wordcloudError}
-                                      />
-                                    ) : null}
-                                    {wordcloudMeta ? (
-                                      <div className="rounded-md border border-border bg-surface p-3">
-                                        <div className="flex flex-wrap items-center gap-3 text-xs">
-                                          <Tag color="blue">
-                                            {t(
-                                              "option:writingPlayground.wordcloudTopWords",
-                                              "{{count}} words",
-                                              { count: wordcloudMeta.top_n }
-                                            )}
-                                          </Tag>
-                                          <span className="text-text-muted">
-                                            {t(
-                                              "option:writingPlayground.wordcloudInputChars",
-                                              "{{count}} chars",
-                                              { count: wordcloudMeta.input_chars }
-                                            )}
-                                          </span>
-                                          <span className="text-text-muted">
-                                            {t(
-                                              "option:writingPlayground.wordcloudTotalTokens",
-                                              "{{count}} tokens",
-                                              { count: wordcloudMeta.total_tokens }
-                                            )}
-                                          </span>
-                                        </div>
-                                      </div>
-                                    ) : null}
-                                    {wordcloudWords.length > 0 ? (
-                                      <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-surface px-3 py-2">
-                                        <div className="flex flex-col gap-2">
-                                          {wordcloudWords.map((word) => (
-                                            <div
-                                              key={`${word.text}-${word.weight}`}
-                                              className="grid grid-cols-[1fr_auto] gap-2 text-xs">
-                                              <div className="flex flex-col gap-1">
-                                                <span className="text-text">
-                                                  {word.text}
-                                                </span>
-                                                <div className="h-1.5 rounded bg-background">
-                                                  <div
-                                                    className="h-1.5 rounded bg-primary"
-                                                    style={{
-                                                      width: `${wordcloudTopWeight > 0 ? (word.weight / wordcloudTopWeight) * 100 : 0}%`
-                                                    }}
-                                                  />
-                                                </div>
-                                              </div>
-                                              <span className="text-text-muted">
-                                                {word.weight}
-                                              </span>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    ) : wordcloudStatus === "ready" ? (
-                                      <Paragraph type="secondary" className="!mb-0">
-                                        {t(
-                                          "option:writingPlayground.wordcloudEmpty",
-                                          "No words matched the current filters."
-                                        )}
-                                      </Paragraph>
-                                    ) : null}
-                                    {wordcloudId ? (
-                                      <span className="text-xs text-text-muted">
-                                        {t(
-                                          "option:writingPlayground.wordcloudJobId",
-                                          "Job ID: {{id}}",
-                                          { id: wordcloudId }
-                                        )}
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                )
-                              }
-                            ]
-                          : []
-                      )}
-                    />
+                                    )
+                                  }
+                                ]
+                              : []
+                          )}
+                        />
+                      </div>
+                    ) : null}
                   </div>
                 )
               ) : (
@@ -6914,30 +7005,112 @@ export const WritingPlayground = () => {
               )}
             </Card>
 
-            <Card
-              title={t("option:writingPlayground.settingsTitle", "Settings")}
-              extra={
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="small"
-                    onClick={handleOpenTemplatesModal}
-                    disabled={templateSelectDisabled}>
+            {workspaceMode === "draft" ? (
+              <Card
+                data-testid="writing-section-draft-inspector"
+                title={t(
+                  "option:writingPlayground.draftQuickControls",
+                  "Quick controls"
+                )}>
+                <div className="grid grid-cols-1 gap-3">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs text-text-muted">
+                      {t("option:writingPlayground.temperatureLabel", "Temperature")}
+                    </span>
+                    <InputNumber
+                      size="small"
+                      min={0}
+                      max={2}
+                      step={0.01}
+                      value={settings.temperature}
+                      disabled={settingsDisabled}
+                      onChange={(value) =>
+                        updateSetting({
+                          temperature:
+                            value == null ? DEFAULT_SETTINGS.temperature : value
+                        })
+                      }
+                      className="w-full"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs text-text-muted">
+                      {t("option:writingPlayground.maxTokensLabel", "Max tokens")}
+                    </span>
+                    <InputNumber
+                      size="small"
+                      min={1}
+                      max={8192}
+                      step={1}
+                      value={settings.max_tokens}
+                      disabled={settingsDisabled}
+                      onChange={(value) =>
+                        updateSetting({
+                          max_tokens:
+                            value == null
+                              ? DEFAULT_SETTINGS.max_tokens
+                              : Math.max(1, Math.round(value))
+                        })
+                      }
+                      className="w-full"
+                    />
+                  </div>
+                  <Checkbox
+                    checked={settings.token_streaming}
+                    disabled={settingsDisabled}
+                    onChange={(event) =>
+                      updateSetting({
+                        token_streaming: event.target.checked
+                      })
+                    }>
                     {t(
-                      "option:writingPlayground.manageTemplates",
-                      "Manage templates"
+                      "option:writingPlayground.tokenStreamingLabel",
+                      "Token streaming"
                     )}
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={handleOpenThemesModal}
-                    disabled={themeSelectDisabled}>
+                  </Checkbox>
+                  <Checkbox
+                    checked={settings.use_basic_stopping_mode}
+                    disabled={settingsDisabled}
+                    onChange={(event) =>
+                      updateSetting({
+                        use_basic_stopping_mode: event.target.checked
+                      })
+                    }>
                     {t(
-                      "option:writingPlayground.manageThemes",
-                      "Manage themes"
+                      "option:writingPlayground.basicStoppingModeLabel",
+                      "Use basic stopping mode"
                     )}
-                  </Button>
+                  </Checkbox>
                 </div>
-              }>
+              </Card>
+            ) : null}
+
+            {workspaceMode === "manage" ? (
+              <Card
+                data-testid="writing-section-manage-generation"
+                title={t("option:writingPlayground.settingsTitle", "Settings")}
+                extra={
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="small"
+                      onClick={handleOpenTemplatesModal}
+                      disabled={templateSelectDisabled}>
+                      {t(
+                        "option:writingPlayground.manageTemplates",
+                        "Manage templates"
+                      )}
+                    </Button>
+                    <Button
+                      size="small"
+                      onClick={handleOpenThemesModal}
+                      disabled={themeSelectDisabled}>
+                      {t(
+                        "option:writingPlayground.manageThemes",
+                        "Manage themes"
+                      )}
+                    </Button>
+                  </div>
+                }>
               {activeSession ? (
                 activeSessionLoading ? (
                   <Skeleton active />
@@ -6952,7 +7125,9 @@ export const WritingPlayground = () => {
                   />
                 ) : (
                   <div className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-3">
+                    <div
+                      className="flex flex-col gap-3"
+                      data-testid="writing-section-manage-styling">
                       <div className="flex flex-col gap-1">
                         <span className="text-xs text-text-muted">
                           {t(
@@ -7355,6 +7530,7 @@ export const WritingPlayground = () => {
                       />
                     </div>
                     <Collapse
+                      data-testid="writing-section-manage-context"
                       ghost
                       size="small"
                       defaultActiveKey={[]}
@@ -8299,7 +8475,8 @@ export const WritingPlayground = () => {
                   )}
                 />
               )}
-            </Card>
+              </Card>
+            ) : null}
           </div>
         </div>
       )}

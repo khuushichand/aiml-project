@@ -302,14 +302,6 @@ except _USER_DB_NONCRITICAL_EXCEPTIONS:
     _single_user_instance = None
 
 
-def is_single_user_mode() -> bool:  # noqa: F811
-    """Compatibility shim for tests that expect this helper in User_DB_Handling."""
-    try:
-        return get_settings().AUTH_MODE == "single_user"
-    except _USER_DB_NONCRITICAL_EXCEPTIONS:
-        return False
-
-
 def _is_test_context() -> bool:
     """Return True when running in pytest or explicit test-mode contexts."""
     try:

@@ -66,21 +66,6 @@ _PLATFORM_ADMIN_ROLES = frozenset({"admin", "owner", "super_admin"})
 _ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure", "admin"})
 
 
-def is_single_user_mode() -> bool:
-    """
-    Compatibility shim for tests that expect this helper in auth_principal_resolver.
-
-    The canonical implementation lives in AuthNZ settings; this thin wrapper
-    allows tests to monkeypatch the mode without touching global settings.
-    """
-    try:
-        from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode as _is_single_user_mode  # noqa: WPS433
-
-        return _is_single_user_mode()
-    except _RESOLVER_MODE_EXCEPTIONS:
-        return False
-
-
 def _extract_bearer_token(request: Request) -> Optional[str]:
     """Extract Bearer token from Authorization header."""
     try:

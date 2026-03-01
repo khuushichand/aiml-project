@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
+from tldw_Server_API.app.core.RAG.rag_service.types import (
     ClaimType,
     MatchLevel,
     SourceAuthority,

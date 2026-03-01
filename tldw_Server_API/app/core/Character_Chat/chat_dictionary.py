@@ -3452,10 +3452,6 @@ class ChatDictionaryService:
         """
         return self._get_entry_dict_id(entry_id)
 
-    def _estimate_tokens(self, text: str) -> int:
-        """Deprecated: use count_tokens instead."""
-        return self.count_tokens(text)
-
     def toggle_dictionary_active(self, dictionary_id: int, is_active: Optional[bool] = None) -> bool:
         """
         Toggle dictionary active status.

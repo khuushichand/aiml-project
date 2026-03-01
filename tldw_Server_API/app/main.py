@@ -5997,18 +5997,6 @@ else:
         _include_if_enabled("watchlists", _watchlists_router, prefix=f"{API_V1_PREFIX}", tags=["watchlists"])
     except _IMPORT_EXCEPTIONS as _e:
         logger.warning(f"Watchlists endpoint not available: {_e}")
-    # Legacy subscriptions API deprecation shim (returns 410 with replacement link)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.subscriptions_legacy import router as _subs_legacy_router
-
-        _include_if_enabled(
-            "subscriptions-deprecated",
-            _subs_legacy_router,
-            prefix=f"{API_V1_PREFIX}",
-            tags=["subscriptions-deprecated"],
-        )
-    except _IMPORT_EXCEPTIONS as _e:
-        logger.warning(f"Legacy subscriptions shim not available: {_e}")
     # Include Notes Graph routes before generic notes routes so /graph is not shadowed by /{note_id}
     if _HAS_NOTES_GRAPH:
         _include_if_enabled(

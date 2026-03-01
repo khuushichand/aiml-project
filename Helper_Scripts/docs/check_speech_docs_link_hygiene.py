@@ -8,6 +8,18 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+MONITORED_FILES = [
+    Path("README.md"),
+    Path("Docs/API-related/Audio_Transcription_API.md"),
+    Path("Docs/Published/API-related/Audio_Transcription_API.md"),
+    Path("Docs/API-related/TTS_API.md"),
+    Path("Docs/Published/API-related/TTS_API.md"),
+    Path("Docs/User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md"),
+    Path("Docs/Published/User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md"),
+    Path("Docs/User_Guides/WebUI_Extension/TTS_Getting_Started.md"),
+    Path("Docs/Published/User_Guides/WebUI_Extension/TTS_Getting_Started.md"),
+    Path("Docs/User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md"),
+    Path("Docs/Published/User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md"),
 MONITORED_ENTRYPOINTS = [
     Path("README.md"),
 ]

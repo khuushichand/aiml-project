@@ -1453,25 +1453,6 @@ async def get_current_active_user(
     return current_user
 
 
-async def get_user_org_policy(
-    db: Any = Depends(get_db_transaction),  # noqa: B008
-    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: dict[str, Any] | None = None,  # compat arg for legacy call sites/tests
-) -> dict[str, Any]:
-    """
-    Deprecated compatibility shim for user-dict org policy lookups.
-
-    New code should prefer ``get_org_policy_from_principal``. This helper
-    now delegates to the claim-first resolver so org policy resolution stays
-    consistent across all authentication flows.
-    """
-    _ = current_user
-    return await get_org_policy_from_principal(
-        db=db,
-        principal=principal,
-    )
-
-
 async def _load_org_policy(db: Any, org_id: int) -> dict[str, Any]:
     """
     Internal helper to load an organization policy with consistent error handling.
@@ -1505,8 +1486,8 @@ async def get_org_policy_from_principal(
     2. Synthetic org_id=1 for explicit single-user principals (subject=single_user).
     3. HTTP 400 when no organization can be resolved.
 
-    This helper is the principal-first counterpart to ``get_user_org_policy`` and
-    is intended for new code paths that already depend on ``get_auth_principal``.
+    This helper is intended for code paths that already depend on
+    ``get_auth_principal``.
     """
     def _should_use_synthetic_single_user_org(p: AuthPrincipal) -> bool:
         """
@@ -1580,49 +1561,6 @@ def _principal_has_admin_claims(principal: AuthPrincipal | None) -> bool:
     if "admin" in roles:
         return True
     return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
-
-
-async def get_optional_current_user(
-    request: Request,
-    response: Response,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    session_manager: SessionManager = Depends(get_session_manager_dep),
-    db_pool: DatabasePool = Depends(get_db_pool),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-) -> Optional[dict[str, Any]]:
-    """
-    Legacy shim - do not use in new code.
-
-    Get current user if authenticated, None otherwise.
-
-    This is useful for endpoints that have different behavior
-    for authenticated vs unauthenticated users
-
-    Args:
-        request: FastAPI request object
-        response: FastAPI response object
-        credentials: Optional bearer token
-        session_manager: Session manager instance
-        db_pool: Database pool instance
-        x_api_key: Optional API key from X-API-KEY header
-
-    Returns:
-        User dictionary if authenticated, None otherwise
-    """
-    if not credentials and not x_api_key:
-        return None
-
-    try:
-        return await get_current_user(
-            request=request,
-            response=response,
-            credentials=credentials,  # may be None if authenticating via X-API-KEY only
-            session_manager=session_manager,
-            db_pool=db_pool,
-            x_api_key=x_api_key,
-        )
-    except HTTPException:
-        return None
 
 
 #######################################################################################################################

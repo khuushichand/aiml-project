@@ -1485,11 +1485,6 @@ def parse_brave_results(raw_results: dict, output_dict: dict) -> None:
 #
 # https://github.com/deedy5/duckduckgo_search
 # Copied request format/structure from https://github.com/deedy5/duckduckgo_search/blob/main/duckduckgo_search/duckduckgo_search.py
-def create_session():
-    """Deprecated: kept for legacy compatibility; unused."""
-    return None
-
-
 def search_web_duckduckgo(
         keywords: str,
         region: str = "wt-wt",
@@ -1969,11 +1964,6 @@ def parse_kagi_results(raw_results: dict, output_dict: dict) -> None:
 #
 # https://searx.space
 # https://searx.github.io/searx/dev/search_api.html
-def searx_create_session():
-    """Deprecated: kept for legacy compatibility; unused."""
-    return None
-
-
 def search_web_searx(search_query, language='auto', time_range='', safesearch=0, pageno=1, categories='general',
                      searx_url=None):
     """

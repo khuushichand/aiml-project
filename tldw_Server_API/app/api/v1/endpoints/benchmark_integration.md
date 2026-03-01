@@ -53,11 +53,9 @@ app.include_router(benchmark_api.router, prefix="/api/v1")
 ```
 
 This adds these new endpoints:
-- `GET /api/v1/benchmarks/list` - List available benchmarks
-- `GET /api/v1/benchmarks/{name}/info` - Get benchmark details
-- `GET /api/v1/benchmarks/{name}/samples` - Preview benchmark questions
-- `POST /api/v1/benchmarks/{name}/run` - Run a benchmark
-- `POST /api/v1/benchmarks/simpleqa/evaluate` - SimpleQA-specific evaluation
+- `GET /api/v1/evaluations/benchmarks` - List available benchmarks
+- `GET /api/v1/evaluations/benchmarks/{benchmark_name}` - Get benchmark details
+- `POST /api/v1/evaluations/benchmarks/{benchmark_name}/run` - Run a benchmark
 
 ## Option 3: Minimal Enhancement (Add Helper Endpoint)
 
@@ -128,7 +126,7 @@ curl -X POST "/api/v1/evaluations/custom-metric" \
   }'
 
 # Test with new benchmark endpoint (if added)
-curl -X POST "/api/v1/benchmarks/simpleqa/run" \
+curl -X POST "/api/v1/evaluations/benchmarks/bullshit_benchmark/run" \
   -H "Content-Type: application/json" \
   -d '{
     "limit": 10,
