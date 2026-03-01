@@ -31,7 +31,7 @@ Recursive crawling uses a best-first priority queue with a normalized composite 
 
 Result metadata provides `depth`, `parent_url`, and `score`; the service persists `crawl_depth`, `crawl_parent_url`, and `crawl_score` into Media DB safe metadata.
 
-For configuration and request overrides, see `Docs/Design/WebCrawl_Priority_BFS.md`.
+For configuration and request overrides, see `Docs/Product/Completed/WebCrawl_Priority_BFS.md`.
 
 Start/stop lifecycle initializes Playwright if available; absence of Playwright no longer breaks scraping-`playwright` calls transparently fall back to `trafilatura`.
 

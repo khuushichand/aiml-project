@@ -1,0 +1,12 @@
+{
+  "schemas": [
+    {
+      "name": "tldw.embeddings.v1",
+      "version": 1,
+      "schema_path": "Docs/Development/schema/embeddings_v1.schema.json",
+      "schema_url": "https://schemas.tldw.ai/embeddings/v1.json",
+      "status": "active",
+      "notes": "Current embeddings envelope schema."
+    }
+  ]
+}

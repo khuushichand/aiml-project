@@ -282,6 +282,8 @@ errors.log
 !Docs/Product/WebUI/M1_4_Alias_Rollup_Week3_Natural_2026_02_13.json
 !Docs/Deployment/sidecar_workers_manifest.json
 !Docs/Monitoring/claims_grafana_dashboard.json
+!Docs/Development/schema/embeddings_registry.json
+!Docs/Development/schema/embeddings_v1.schema.json
 !admin-ui/package.json
 all_summaries.txt
 all_transcriptions.json
