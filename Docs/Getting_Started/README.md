@@ -23,3 +23,13 @@ Optional add-ons:
 
 - This page is the onboarding index for self-hosting.
 - For legacy/deeper reference material, use linked docs from each profile guide.
+
+## Migration Disposition (2026-02-28)
+
+Onboarding setup content was consolidated into these canonical guides.
+
+| Path | Action | Replacement |
+| --- | --- | --- |
+| `README.md` | migrated | `Docs/Getting_Started/README.md` |
+| `Docs/Deployment/First_Time_Production_Setup.md` | redirected | `Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md` |
+| `Docs/User_Guides/Server/CLI_Reference.md` | redirected | `Docs/Getting_Started/README.md` |
