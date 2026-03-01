@@ -388,3 +388,56 @@ def test_rag_streaming_profile_defaults_affect_generation_config(monkeypatch, cl
     assert generation_config is not None
     assert generation_config["max_tokens"] == 1000
     assert generation_config["prompt_template"] == "multi_hop_compact"
+
+
+def test_rag_streaming_profile_fast_applies_instruction_prompt(monkeypatch, client_with_stream_overrides):
+    import tldw_Server_API.app.api.v1.endpoints.rag_unified as rag_ep
+
+    captured = {"generation_config": None}
+
+    class StubRetriever:
+        def __init__(self, *args, **kwargs):
+            self.retrievers = {}
+
+        async def retrieve(self, query, **kwargs):
+            from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
+
+            return [
+                Document(
+                    id="doc-1",
+                    content="Context content",
+                    metadata={"title": "Doc"},
+                    source=DataSource.MEDIA_DB,
+                    score=0.9,
+                )
+            ]
+
+    async def fake_generate_streaming_response(context, **kwargs):  # noqa: ANN001
+        captured["generation_config"] = context.config.get("generation")
+
+        async def _gen():
+            yield "chunk"
+
+        context.stream_generator = _gen()
+        context.metadata = {"streaming": True}
+        return context
+
+    monkeypatch.setattr(rag_ep, "MultiDatabaseRetriever", StubRetriever)
+    monkeypatch.setattr(rag_ep, "generate_streaming_response", fake_generate_streaming_response)
+
+    payload = {
+        "query": "Fast profile streaming parity",
+        "search_mode": "hybrid",
+        "sources": ["media_db"],
+        "enable_generation": True,
+        "rag_profile": "fast",
+    }
+
+    with client_with_stream_overrides.stream("POST", "/api/v1/rag/search/stream", json=payload) as resp:
+        assert resp.status_code == 200
+        next(resp.iter_lines(), None)
+
+    generation_config = captured["generation_config"]
+    assert generation_config is not None
+    assert generation_config["max_tokens"] == 440
+    assert generation_config["prompt_template"] == "instruction_tuned"
