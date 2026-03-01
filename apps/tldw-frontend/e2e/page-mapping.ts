@@ -241,6 +241,22 @@ export const PAGE_MAPPINGS: PageMapping[] = [
       "Refresh/check button works"
     ]
   },
+  {
+    name: "Family Guardrails Wizard",
+    category: "settings",
+    webuiPath: "/settings/family-guardrails",
+    extensionOptionsPath: "/settings/family-guardrails",
+    extensionSidepanelPath: null,
+    sharedComponent: "FamilyGuardrailsWizard",
+    session: 2,
+    checklistItems: [
+      "Wizard stepper renders all core setup steps",
+      "Can progress through household + guardian + dependent setup",
+      "Template apply controls are visible",
+      "Acceptance tracker shows queued/active statuses",
+      "Back/Save & Continue controls remain responsive"
+    ]
+  },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Session 3: Knowledge & Content
