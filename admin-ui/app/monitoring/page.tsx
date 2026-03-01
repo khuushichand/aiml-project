@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
@@ -10,11 +10,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import {
-  isAlertSnoozed,
-  readStoredAlertHistory,
-  writeStoredAlertHistory,
-} from '@/lib/monitoring-alerts';
+import { isAlertSnoozed } from '@/lib/monitoring-alerts';
 import {
   MONITORING_DEFAULT_SERIES_VISIBILITY,
   toggleMonitoringSeriesVisibility,
@@ -42,16 +38,14 @@ import WatchlistsPanel from './components/WatchlistsPanel';
 import { useMonitoringMetricsHistory } from './use-monitoring-metrics-history';
 import { useAlertActions } from './use-alert-actions';
 import { useAlertRules } from './use-alert-rules';
+import { useMonitoringAlertState } from './use-monitoring-alert-state';
 import { useMonitoringMessages } from './use-monitoring-messages';
 import { useNotificationActions } from './use-notification-actions';
 import { useWatchlistActions } from './use-watchlist-actions';
 import type {
-  AlertAssignableUser,
-  AlertHistoryEntry,
   Metric,
   NotificationSettings,
   RecentNotification,
-  SystemAlert,
   SystemHealthStatus,
   SystemStatusItem,
   Watchlist,
@@ -84,14 +78,12 @@ export default function MonitoringPage() {
   const confirm = useConfirm();
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
-  const [alerts, setAlerts] = useState<SystemAlert[]>([]);
   const [seriesVisibility, setSeriesVisibility] = useState<MonitoringMetricsSeriesVisibility>(
     MONITORING_DEFAULT_SERIES_VISIBILITY
   );
   const [systemStatus, setSystemStatus] = useState<SystemStatusItem[]>(DEFAULT_SYSTEM_STATUS);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const alertStorageHydratedRef = useRef(false);
 
   // Notification settings
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
@@ -99,11 +91,18 @@ export default function MonitoringPage() {
   const [notificationSettingsStatus, setNotificationSettingsStatus] = useState<'pending' | 'fulfilled' | 'rejected'>('pending');
 
   // Stage 2: Alert rules + enhanced alert management
-  const [assignableUsers, setAssignableUsers] = useState<AlertAssignableUser[]>([]);
-  const [showSnoozedAlerts, setShowSnoozedAlerts] = useState(false);
-  const [alertHistory, setAlertHistory] = useState<AlertHistoryEntry[]>([]);
-  const alertsRef = useRef<SystemAlert[]>([]);
-  const alertHistoryRef = useRef<AlertHistoryEntry[]>([]);
+  const {
+    alerts,
+    setAlerts,
+    alertsRef,
+    assignableUsers,
+    setAssignableUsers,
+    showSnoozedAlerts,
+    setShowSnoozedAlerts,
+    alertHistory,
+    setAlertHistory,
+    alertHistoryRef,
+  } = useMonitoringAlertState();
 
   const handleManualRangeLoadSuccess = useCallback(() => {
     setLastUpdated(new Date());
@@ -192,7 +191,18 @@ export default function MonitoringPage() {
     } finally {
       setLoading(false);
     }
-  }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, setError, timeRange]);
+  }, [
+    alertHistoryRef,
+    alertsRef,
+    customRangeEnd,
+    customRangeStart,
+    loadMetricsHistoryForRange,
+    setAlertHistory,
+    setAlerts,
+    setAssignableUsers,
+    setError,
+    timeRange,
+  ]);
 
   const {
     showCreateWatchlist,
@@ -253,25 +263,7 @@ export default function MonitoringPage() {
   });
 
   useEffect(() => {
-    setAlertHistory(readStoredAlertHistory());
-    alertStorageHydratedRef.current = true;
-  }, []);
-
-  useEffect(() => {
-    if (!alertStorageHydratedRef.current) return;
-    writeStoredAlertHistory(alertHistory);
-  }, [alertHistory]);
-
-  useEffect(() => {
-    alertsRef.current = alerts;
-  }, [alerts]);
-
-  useEffect(() => {
-    alertHistoryRef.current = alertHistory;
-  }, [alertHistory]);
-
-  useEffect(() => {
-    loadData();
+    void loadData();
   }, [loadData]);
 
   const activeAlerts = alerts.filter((alert) => !alert.acknowledged && !isAlertSnoozed(alert));
