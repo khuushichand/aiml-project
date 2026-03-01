@@ -90,6 +90,11 @@ Want something else? Please open an issue.
 - Side Panel: `Ctrl+Shift+Y`
 - Web UI (new tab): `Ctrl+Shift+L`
 
+### repo2txt in Extension
+
+- Options route: `chrome-extension://<extension-id>/options.html#/repo2txt`
+- The sidepanel should keep repo2txt as an options link-out for V1 (not an in-panel page).
+
 Shortcuts are configurable from your browser’s extension settings and inside the app for in‑app actions.
 
 ### In‑App Shortcuts (defaults)

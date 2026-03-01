@@ -39,7 +39,7 @@ import {
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import { createSettingsRoute } from "./settings-route"
 import { Navigate } from "react-router-dom"
-import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
+import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
 
 // Eagerly loaded routes for instant navigation on frequently visited pages
 import OptionIndex from "./option-index"
@@ -193,6 +193,7 @@ const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
 const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
 const OptionSkills = lazy(() => import("./option-skills"))
+const OptionRepo2Txt = lazy(() => import("./option-repo2txt"))
 const OptionSetup = lazy(() => import("./option-setup"))
 const OptionOnboardingTest = lazy(() => import("./option-onboarding-test"))
 const OptionWorkspacePlayground = lazy(() => import("./option-workspace-playground"))
@@ -488,6 +489,17 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       icon: SquarePen,
       order: 6,
       beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: REPO2TXT_PATH,
+    element: <OptionRepo2Txt />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:repo2txt.nav",
+      icon: FileText,
+      order: 7
     }
   },
   {

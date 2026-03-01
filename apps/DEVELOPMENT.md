@@ -215,6 +215,14 @@ The web shim maps:
 - `useNavigate()` → `useRouter().push/replace`
 - `useLocation()` → `useRouter().asPath` parsing
 
+### repo2txt Route Parity
+
+The `repo2txt` feature is implemented as a shared options route in `packages/ui/src/routes/option-repo2txt.tsx`.
+
+- Extension options route: `options.html#/repo2txt`
+- Web wrapper route: `tldw-frontend/pages/repo2txt.tsx` (dynamic import of the shared route)
+- Sidepanel behavior (V1): link-out only to options; no in-panel repo2txt surface
+
 ### Authentication Abstraction
 
 | Context | Auth Method |

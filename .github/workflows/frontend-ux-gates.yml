@@ -22,9 +22,9 @@ jobs:
     env:
       PYTHONPATH: .
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-      TEST_MODE: 'true'
       DISABLE_HEAVY_STARTUP: '1'
       MINIMAL_TEST_APP: '1'
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
       AUTH_MODE: single_user
       SINGLE_USER_API_KEY: smoke-ci-key-12345
@@ -58,6 +58,11 @@ jobs:
       - name: Install Playwright Chromium
         run: bunx playwright install --with-deps chromium
         working-directory: apps/tldw-frontend
+
+      - name: Install FFmpeg and PortAudio (Linux)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
 
       - name: Setup Python and server dependencies
         uses: ./.github/actions/setup-python-deps
@@ -121,9 +126,9 @@ jobs:
     env:
       PYTHONPATH: .
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-      TEST_MODE: 'true'
       DISABLE_HEAVY_STARTUP: '1'
       MINIMAL_TEST_APP: '1'
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
       AUTH_MODE: single_user
       SINGLE_USER_API_KEY: smoke-ci-key-12345
@@ -157,6 +162,11 @@ jobs:
       - name: Install Playwright Chromium
         run: bunx playwright install --with-deps chromium
         working-directory: apps/tldw-frontend
+
+      - name: Install FFmpeg and PortAudio (Linux)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
 
       - name: Setup Python and server dependencies
         uses: ./.github/actions/setup-python-deps

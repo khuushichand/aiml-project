@@ -6,10 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
 
+## [0.1.26] 2026-03-01
+
+### Added
+
+- repo2txt V1 integration across shared UI, web, and extension options surfaces:
+  - Added shared options route scaffold and route wiring for `/repo2txt`.
+  - Added repo2txt page shell and interaction flow in shared UI.
+  - Added GitHub provider support for repo2txt generation.
+  - Added local file/folder provider support for repo2txt generation.
+  - Added repo2txt file-tree state slice for selection/exclusion behavior.
+  - Added repo2txt formatter and tokenizer worker pipeline.
+  - Added locale keys and parity guard coverage for repo2txt copy.
+  - Added Next.js wrapper route at `apps/tldw-frontend/pages/repo2txt.tsx`.
+  - Added extension E2E coverage for options route loading and sidepanel link-out behavior:
+    - `apps/extension/tests/e2e/repo2txt-options.spec.ts`
+    - `apps/extension/tests/e2e/repo2txt-sidepanel-linkout.spec.ts`
+- Added repo2txt discoverability in the launcher/shortcuts modal.
+- Added docs coverage for repo2txt route behavior in:
+  - `apps/DEVELOPMENT.md`
+  - `apps/tldw-frontend/README.md`
+  - `apps/extension/README.md`
+- Added third-party notice attribution for upstream `repo2txt` (project + MIT license) in:
+  - `THIRD_PARTY_NOTICES.txt`
+- Added extension compile tsconfig and entrypoint module declarations:
+  - `apps/extension/tsconfig.compile.json`
+  - `apps/extension/types/tldw-ui-entries.d.ts`
+
+### Changed
+
+- Extension compile script now targets explicit config:
+  - `apps/extension/package.json` `compile` now uses `tsc --noEmit -p tsconfig.compile.json`.
+- Frontend compile script now uses webpack build path for deterministic completion in this environment:
+  - `apps/tldw-frontend/package.json` `compile` now uses `next build --webpack` before token-sync verification.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed extension compile command failure caused by missing local `tsconfig.json` in `apps/extension`.
+- Fixed frontend compile gate stalling under Turbopack in this environment by switching compile verification to webpack build mode.
+
+
 ## [0.1.25] 2026-02-X
 
 ### Added
 
+- Repo2Txt V1 integration across shared UI, web app, and extension options (PR #790):
+  - Added new shared options route `/repo2txt` with web page wrapper (`apps/tldw-frontend/pages/repo2txt.tsx`) and extension/options route registration.
+  - Added Repo2Txt providers and contracts for GitHub + Local sources, including repository tree/file retrieval and local directory/zip ingestion.
+  - Added Repo2Txt formatter pipeline with worker-backed token counting and structured output generation (directory tree + file contents).
+  - Added Repo2Txt UI surfaces for provider selection, file filtering/selection, output preview, copy, and download flows.
+  - Added Repo2Txt state management slice (Zustand) plus focused route/component/provider/store/formatter test coverage.
+  - Added route/navigation integration in shared options registry and header shortcuts for Repo2Txt discoverability.
+  - Added locale key coverage and synchronized locale mirrors for Repo2Txt copy across supported option locales.
+  - Added extension E2E coverage for Repo2Txt options route rendering and sidepanel link-out behavior.
+  - Added upstream repo2txt attribution updates in `THIRD_PARTY_NOTICES.txt`.
 - Strict LimaVM sandbox provider parity across REST, MCP, and ACP:
   - Added Lima runtime capability/preflight contracts and host enforcement probing (`runtime_capabilities.py`, `runners/lima_enforcer.py`, `runners/lima_runner.py`).
   - Added strict fail-closed Lima admission and execution-time revalidation in sandbox service flows.
@@ -81,8 +135,18 @@ and this project adheres to Some kind of Versioning
   - Added/updated bridge regression coverage to validate abstraction-backed notifications event processing behavior.
 - Reminders/notifications review-remediation coverage:
   - Added API/DB regressions for scheduler-managed PATCH field rejection, dismissed-notification list filtering, reminders scheduler failure logging, and snooze reconciliation behavior.
+- Writing Playground Phase-1 UI and diagnostics experience:
+  - Added modular Writing Playground structure components (`WritingPlaygroundShell`, `WritingPlaygroundLibraryPanel`, `WritingPlaygroundEditorPanel`, `WritingPlaygroundInspectorPanel`) with tabbed inspector routing for Generation, Planning, and Diagnostics.
+  - Added dedicated diagnostics UI components (`WritingPlaygroundDiagnosticsPanel`, `WritingPlaygroundResponseInspectorCard`, `WritingPlaygroundTokenInspectorCard`, `WritingPlaygroundWordcloudCard`) with shared diagnostics prop contracts.
+  - Added utility helpers and coverage for diagnostics state summarization and responsive layout classification.
+  - Added extension E2E coverage for inspector tab keyboard navigation and editor-content persistence across tab switches in `apps/extension/tests/e2e/writing-playground-themes-templates.spec.ts`.
 
 ### Changed
+- Repo2Txt implementation hardening updates after review:
+  - Repo2Txt page state now subscribes to the vanilla Zustand store via `useStore` instead of mirroring store state with local React state copies.
+  - Token counting now uses `gpt-tokenizer` in Repo2Txt tokenizer worker paths (with guarded fallback behavior).
+  - Repo2Txt user-facing strings now resolve through `useTranslation` + `option:repo2txt.*` keys instead of hardcoded English copy.
+  - Repo2Txt output file fetching now uses bounded concurrency with progress status updates instead of unbounded `Promise.all` fanout.
 - CI gate classification now computes `coverage_required` via dedicated coverage globs instead of mirroring `backend_changed`, preserving backend gate behavior while allowing workflow-only exclusions.
 - Media ingestion compatibility reduction (phase 1):
   - Added shared endpoint helpers for compatibility patchpoints and input contracts (`compat_patchpoints.py`, `input_contracts.py`).
@@ -132,12 +196,23 @@ and this project adheres to Some kind of Versioning
   - Frontend UX gates now use a stable Bun-based dependency/install + Playwright invocation flow with a single all-pages smoke gate entrypoint.
   - Watchlists extension strict gate flow now preserves explicit launch/target wait timeout controls and aligns with the stable extension-launch helper contract.
   - All-pages smoke gate behavior now follows the stabilized route traversal baseline used by the current release-gate suite.
+- Writing Playground UI interaction behavior:
+  - Moved template/theme/chat-mode and context controls from the Generation inspector view into Planning for clearer IA separation.
+  - Added compact-mode shell grid overrides plus `data-testid` layout markers to improve narrow-layout behavior and regression observability.
+  - Improved inspector keyboard interaction to support Arrow/Home/End traversal with active-tab focus movement.
 
 ### Removed
 - No removals in this session.
 
 ### Fixed
 
+- Fixed Repo2Txt local source selection reliability:
+  - Replaced ambiguous local multi-file picker with explicit directory (`webkitdirectory`) and zip pickers.
+  - Added local duplicate-filename collision guard when directory context is unavailable.
+  - Reset local file input value after selection to allow repeat-selection workflows.
+- Fixed Repo2Txt extension reliability for GitHub provider by declaring `https://api.github.com/*` in extension `host_permissions`.
+- Fixed Repo2Txt tokenizer worker hang risk by adding worker `onerror`/`onmessageerror` handling, per-request timeouts, pending-request cleanup, and worker recovery re-init.
+- Fixed portability gaps in the Repo2Txt implementation plan by replacing machine-specific absolute paths with `<repo_root>` / `<repo_worktree>` placeholders.
 - Fixed Lima strict-policy contract gaps:
   - Rejected unsupported `allowlist` strict mode until enforcement support exists, removing false-positive strict capability advertisement.
   - Added foreground execution-time preflight failure handling so Lima policy/preflight failures mark runs failed consistently (matching background behavior).
@@ -172,6 +247,9 @@ and this project adheres to Some kind of Versioning
 - Fixed strict watchlists no-skip gate regressions caused by stale/undefined local assertions in E2E specs and aligned those checks to deterministic harness behavior.
 - Fixed extension E2E launch instability in CI by removing unsupported forced Playwright channel behavior and retaining explicit timeout override controls in workflow env.
 - Fixed UX smoke gate branch instability by restoring the stabilized all-pages gate command path and traversal behavior expected by current frontend release gates.
+- Fixed Writing Playground diagnostics prop leakage by removing `enabled` from card-prop spreads before passing props into inspector card components.
+- Fixed monitoring metrics-history range interactions to avoid redundant API loads on manual range selection/apply and to avoid interval resets/reloads while editing draft custom-range inputs.
+- Fixed monitoring custom-range UX by clearing range validation errors when users edit custom range start/end values.
 
 
 ## [0.1.24] 2026-02-22

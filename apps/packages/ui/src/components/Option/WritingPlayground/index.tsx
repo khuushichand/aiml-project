@@ -133,6 +133,13 @@ import {
   computeTokensPerSecond,
   estimateTokenCountFromText
 } from "./writing-generation-stats-utils"
+import { buildDiagnosticsSummary } from "./writing-diagnostics-utils"
+import { WritingPlaygroundShell } from "./WritingPlaygroundShell"
+import { WritingPlaygroundLibraryPanel } from "./WritingPlaygroundLibraryPanel"
+import { WritingPlaygroundEditorPanel } from "./WritingPlaygroundEditorPanel"
+import { WritingPlaygroundInspectorPanel } from "./WritingPlaygroundInspectorPanel"
+import { WritingPlaygroundDiagnosticsPanel } from "./WritingPlaygroundDiagnosticsPanel"
+import type { InspectorTabKey } from "./WritingPlayground.types"
 import { WritingWorldInfoImportControls } from "./WritingWorldInfoImportControls"
 import {
   buildSpeechVoiceOptions,
@@ -1263,6 +1270,8 @@ export const WritingPlayground = () => {
     React.useState<WritingSessionListItem | null>(null)
   const [editorText, setEditorText] = React.useState("")
   const [editorView, setEditorView] = React.useState<EditorViewMode>("edit")
+  const [activeInspectorTab, setActiveInspectorTab] =
+    React.useState<InspectorTabKey>("generation")
   const [settings, setSettings] =
     React.useState<WritingSessionSettings>(() => cloneDefaultSettings())
   const [stopStringsInput, setStopStringsInput] = React.useState("")
@@ -1495,6 +1504,11 @@ export const WritingPlayground = () => {
   const showOffline = !isOnline
   const showUnsupported =
     !showOffline && !capsLoading && (!hasWriting || Boolean(capsError))
+  const diagnosticsSummary = buildDiagnosticsSummary({
+    showOffline,
+    showUnsupported,
+    isGenerating
+  })
 
   const {
     data: sessionsData,
@@ -2486,6 +2500,10 @@ export const WritingPlayground = () => {
 
   React.useEffect(() => {
     if (!activeSessionDetail) {
+      // Only reset once when transitioning from a loaded session to no session.
+      if (lastLoadedSessionIdRef.current === null) {
+        return
+      }
       setEditorText("")
       setSettings(cloneDefaultSettings())
       setStopStringsInput("")
@@ -5419,8 +5437,11 @@ export const WritingPlayground = () => {
       )}
 
       {!showOffline && !showUnsupported && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_1fr]">
-          <Card
+        <WritingPlaygroundShell>
+          <div
+            data-testid="writing-playground-main-grid"
+            className="writing-playground-grid-main grid grid-cols-1 gap-6 lg:grid-cols-[320px_1fr]">
+            <WritingPlaygroundLibraryPanel
             title={t("option:writingPlayground.sessionsTitle", "Sessions")}
             extra={
               <div className="flex items-center gap-2">
@@ -5587,28 +5608,34 @@ export const WritingPlayground = () => {
                           ) : null}
                           <Dropdown menu={{ items: menuItems }} trigger={["click"]}>
                             <Button
-                      type="text"
-                      size="small"
-                      icon={<MoreHorizontal className="h-4 w-4" />}
-                      loading={
-                        deleteSessionMutation.isPending ||
-                        renameSessionMutation.isPending ||
-                        cloneSessionMutation.isPending ||
-                        sessionImporting
-                      }
-                    />
-                  </Dropdown>
-                </div>
-              </div>
+                              type="text"
+                              size="small"
+                              aria-label={t(
+                                "option:writingPlayground.sessionActionsAria",
+                                "Session actions"
+                              )}
+                              icon={<MoreHorizontal className="h-4 w-4" />}
+                              loading={
+                                deleteSessionMutation.isPending ||
+                                renameSessionMutation.isPending ||
+                                cloneSessionMutation.isPending ||
+                                sessionImporting
+                              }
+                            />
+                          </Dropdown>
+                        </div>
+                      </div>
                     </List.Item>
                   )
                 }}
               />
             )}
-          </Card>
+            </WritingPlaygroundLibraryPanel>
 
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <Card>
+            <div
+              data-testid="writing-playground-content-grid"
+              className="writing-playground-grid-side grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <WritingPlaygroundEditorPanel>
               {activeSession ? (
                 activeSessionLoading ? (
                   <Skeleton active />
@@ -6195,712 +6222,7 @@ export const WritingPlayground = () => {
                               </div>
                             )
                         }
-                      ].concat(
-                        showResponseInspectorPanel
-                          ? [
-                              {
-                                key: "response-inspector",
-                                label: t(
-                                  "option:writingPlayground.responseInspectorTitle",
-                                  "Response inspector"
-                                ),
-                                children: (
-                                  <div className="flex flex-col gap-3">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      {responseInspectorHasRows ? (
-                                        <Tag color="blue">
-                                          {t(
-                                            "option:writingPlayground.responseInspectorCount",
-                                            "{{count}} rows",
-                                            { count: responseInspectorRowsAll.length }
-                                          )}
-                                        </Tag>
-                                      ) : null}
-                                      {responseLogprobs.length > 0 ? (
-                                        <Button
-                                          size="small"
-                                          disabled={settingsDisabled}
-                                          onClick={() => {
-                                            void handleCopyResponseInspectorJson()
-                                          }}>
-                                          {t(
-                                            "option:writingPlayground.responseInspectorCopyAction",
-                                            "Copy JSON"
-                                          )}
-                                        </Button>
-                                      ) : null}
-                                      {responseInspectorHasRows ? (
-                                        <Button
-                                          size="small"
-                                          disabled={settingsDisabled}
-                                          onClick={handleExportResponseInspectorCsv}>
-                                          {t(
-                                            "option:writingPlayground.responseInspectorExportAction",
-                                            "Export CSV"
-                                          )}
-                                        </Button>
-                                      ) : null}
-                                      {responseLogprobs.length > 0 ? (
-                                        <Button
-                                          size="small"
-                                          disabled={settingsDisabled}
-                                          onClick={clearResponseInspector}>
-                                          {t("common:clear", "Clear")}
-                                        </Button>
-                                      ) : null}
-                                    </div>
-                                    <span className="text-xs text-text-muted">
-                                      {t(
-                                        "option:writingPlayground.responseInspectorHint",
-                                        "Inspect generated token logprobs from the latest run."
-                                      )}
-                                    </span>
-                                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_170px_auto]">
-                                      <Input
-                                        size="small"
-                                        value={responseInspectorQuery}
-                                        disabled={settingsDisabled}
-                                        placeholder={t(
-                                          "option:writingPlayground.responseInspectorSearchPlaceholder",
-                                          "Filter tokens or alternatives"
-                                        )}
-                                        onChange={(event) =>
-                                          setResponseInspectorQuery(event.target.value)
-                                        }
-                                      />
-                                      <Select
-                                        size="small"
-                                        value={responseInspectorSort}
-                                        disabled={settingsDisabled}
-                                        options={RESPONSE_INSPECTOR_SORT_OPTIONS}
-                                        onChange={(value) =>
-                                          setResponseInspectorSort(
-                                            value as ResponseInspectorSort
-                                          )
-                                        }
-                                      />
-                                      <Checkbox
-                                        checked={responseInspectorHideWhitespace}
-                                        disabled={settingsDisabled}
-                                        onChange={(event) =>
-                                          setResponseInspectorHideWhitespace(
-                                            event.target.checked
-                                          )
-                                        }>
-                                        {t(
-                                          "option:writingPlayground.responseInspectorHideWhitespace",
-                                          "Hide whitespace"
-                                        )}
-                                      </Checkbox>
-                                    </div>
-                                    {!settings.logprobs ? (
-                                      <Alert
-                                        type="info"
-                                        showIcon
-                                        message={t(
-                                          "option:writingPlayground.responseInspectorDisabled",
-                                          "Enable logprobs in generation settings to capture response token scores."
-                                        )}
-                                      />
-                                    ) : null}
-                                    {settings.logprobs &&
-                                    responseLogprobs.length === 0 ? (
-                                      <Empty
-                                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                        description={t(
-                                          "option:writingPlayground.responseInspectorEmpty",
-                                          "No logprob data captured yet."
-                                        )}
-                                      />
-                                    ) : null}
-                                    {settings.logprobs &&
-                                    responseLogprobs.length > 0 &&
-                                    responseLogprobRows.length === 0 ? (
-                                      <Empty
-                                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                        description={t(
-                                          "option:writingPlayground.responseInspectorFilteredEmpty",
-                                          "No rows match the active response-inspector filters."
-                                        )}
-                                      />
-                                    ) : null}
-                                    {responseLogprobRows.length > 0 ? (
-                                      <div className="flex flex-col gap-2">
-                                        <div className="max-h-64 overflow-y-auto rounded-md border border-border bg-surface">
-                                          <div className="grid grid-cols-[auto_1fr_auto_auto_2fr_auto] gap-x-3 gap-y-1 px-3 py-2 text-xs">
-                                            <span className="font-medium text-text-muted">
-                                              #
-                                            </span>
-                                            <span className="font-medium text-text-muted">
-                                              {t(
-                                                "option:writingPlayground.responseInspectorTokenLabel",
-                                                "Token"
-                                              )}
-                                            </span>
-                                            <span className="font-medium text-text-muted">
-                                              {t(
-                                                "option:writingPlayground.responseInspectorLogprobLabel",
-                                                "Logprob"
-                                              )}
-                                            </span>
-                                            <span className="font-medium text-text-muted">
-                                              {t(
-                                                "option:writingPlayground.responseInspectorProbabilityLabel",
-                                                "P(token)"
-                                              )}
-                                            </span>
-                                            <span className="font-medium text-text-muted">
-                                              {t(
-                                                "option:writingPlayground.responseInspectorTopLabel",
-                                                "Top alternatives"
-                                              )}
-                                            </span>
-                                            <span className="font-medium text-text-muted">
-                                              {t(
-                                                "option:writingPlayground.responseInspectorActionLabel",
-                                                "Action"
-                                              )}
-                                            </span>
-                                            {responseLogprobRows.map((row) => {
-                                              const alternatives = row.topLogprobs
-                                                .slice(0, 5)
-                                                .map(
-                                                  (alt) =>
-                                                    `${alt.token} (${alt.logprob.toFixed(3)})`
-                                                )
-                                                .join(", ")
-                                              return (
-                                                <React.Fragment
-                                                  key={`${row.sequence}-${row.token}-${row.logprob}`}>
-                                                  <span className="text-text-muted">
-                                                    {row.sequence + 1}
-                                                  </span>
-                                                  <span className="whitespace-pre-wrap text-text">
-                                                    {row.token}
-                                                  </span>
-                                                  <span className="text-text">
-                                                    {row.logprob.toFixed(4)}
-                                                  </span>
-                                                  <span className="text-text">
-                                                    {row.probability >= 0.001
-                                                      ? row.probability.toFixed(4)
-                                                      : row.probability.toExponential(2)}
-                                                  </span>
-                                                  <span className="whitespace-pre-wrap text-text-muted">
-                                                    {alternatives || "(none)"}
-                                                  </span>
-                                                  <div>
-                                                    <Button
-                                                      size="small"
-                                                      disabled={settingsDisabled}
-                                                      onClick={() =>
-                                                        handleRerollFromResponseToken(
-                                                          row.sequence
-                                                        )
-                                                      }>
-                                                      {t(
-                                                        "option:writingPlayground.responseInspectorRerollAction",
-                                                        "Reroll"
-                                                      )}
-                                                    </Button>
-                                                  </div>
-                                                </React.Fragment>
-                                              )
-                                            })}
-                                          </div>
-                                        </div>
-                                        {responseLogprobTruncated ? (
-                                          <span className="text-xs text-text-muted">
-                                            {t(
-                                              "option:writingPlayground.responseInspectorTruncated",
-                                              "Showing first {{count}} rows.",
-                                              {
-                                                count: responseLogprobRows.length
-                                              }
-                                            )}
-                                          </span>
-                                        ) : null}
-                                      </div>
-                                    ) : null}
-                                  </div>
-                                )
-                              }
-                            ]
-                          : []
-                      )
-                      .concat(
-                        showTokenInspectorPanel
-                          ? [
-                              {
-                                key: "token-inspector",
-                                label: t(
-                                  "option:writingPlayground.tokenInspectorTitle",
-                                  "Token inspector"
-                                ),
-                                children: (
-                                  <div className="flex flex-col gap-3">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      {serverSupportsTokenCount ? (
-                                        <Button
-                                          size="small"
-                                          disabled={!canCountTokens}
-                                          loading={isCountingTokens}
-                                          onClick={() => {
-                                            void handleCountTokens()
-                                          }}>
-                                          {t(
-                                            "option:writingPlayground.countTokensAction",
-                                            "Count tokens"
-                                          )}
-                                        </Button>
-                                      ) : null}
-                                      {serverSupportsTokenize ? (
-                                        <Button
-                                          size="small"
-                                          disabled={!canTokenizePreview}
-                                          loading={isTokenizingText}
-                                          onClick={() => {
-                                            void handleTokenizePreview()
-                                          }}>
-                                          {t(
-                                            "option:writingPlayground.tokenizePreviewAction",
-                                            "Tokenize preview"
-                                          )}
-                                        </Button>
-                                      ) : null}
-                                      {tokenCountResult ||
-                                      tokenizeResult ||
-                                      tokenInspectorError ? (
-                                        <Button
-                                          size="small"
-                                          disabled={tokenInspectorBusy}
-                                          onClick={clearTokenInspector}>
-                                          {t("common:clear", "Clear")}
-                                        </Button>
-                                      ) : null}
-                                    </div>
-                                    <span className="text-xs text-text-muted">
-                                      {tokenizerName
-                                        ? t(
-                                            "option:writingPlayground.tokenInspectorTokenizer",
-                                            "Tokenizer: {{tokenizer}}",
-                                            { tokenizer: tokenizerName }
-                                          )
-                                        : t(
-                                            "option:writingPlayground.tokenInspectorHint",
-                                            "Inspect token count and tokenization output for the selected model."
-                                          )}
-                                    </span>
-                                    {tokenInspectorUnavailableReason ? (
-                                      <Alert
-                                        type="info"
-                                        showIcon
-                                        message={tokenInspectorUnavailableReason}
-                                      />
-                                    ) : null}
-                                    {tokenInspectorError ? (
-                                      <Alert
-                                        type="error"
-                                        showIcon
-                                        message={tokenInspectorError}
-                                      />
-                                    ) : null}
-                                    {tokenCountResult ? (
-                                      <div className="rounded-md border border-border bg-surface p-3">
-                                        <div className="flex flex-wrap items-center gap-3 text-xs">
-                                          <Tag color="blue">
-                                            {t(
-                                              "option:writingPlayground.tokenInspectorCountLabel",
-                                              "{{count}} tokens",
-                                              {
-                                                count: tokenCountResult.count
-                                              }
-                                            )}
-                                          </Tag>
-                                          <span className="text-text-muted">
-                                            {t(
-                                              "option:writingPlayground.tokenInspectorCharsLabel",
-                                              "{{count}} chars",
-                                              {
-                                                count: tokenCountResult.meta.input_chars
-                                              }
-                                            )}
-                                          </span>
-                                        </div>
-                                      </div>
-                                    ) : null}
-                                    {tokenizeResult ? (
-                                      <div className="flex flex-col gap-2">
-                                        <div className="flex flex-wrap items-center gap-2">
-                                          <Button
-                                            size="small"
-                                            disabled={
-                                              isGenerating || tokenPreviewRawText.length === 0
-                                            }
-                                            onClick={() =>
-                                              insertTokenTextAtCursor(tokenPreviewRawText)
-                                            }>
-                                            {t(
-                                              "option:writingPlayground.tokenInspectorUseAllAction",
-                                              "Use all token text"
-                                            )}
-                                          </Button>
-                                          {tokenInspectorSupportsLogitBias ? (
-                                            <>
-                                              <Button
-                                                size="small"
-                                                disabled={
-                                                  settingsDisabled ||
-                                                  tokenizeResult.ids.length === 0
-                                                }
-                                                onClick={() =>
-                                                  applyTokenInspectorLogitBiasPresetBatch(
-                                                    tokenizeResult.ids,
-                                                    "ban"
-                                                  )
-                                                }>
-                                                {t(
-                                                  "option:writingPlayground.tokenInspectorBiasBanAllAction",
-                                                  "Ban all IDs"
-                                                )}
-                                              </Button>
-                                              <Button
-                                                size="small"
-                                                disabled={
-                                                  settingsDisabled ||
-                                                  tokenizeResult.ids.length === 0
-                                                }
-                                                onClick={() =>
-                                                  applyTokenInspectorLogitBiasPresetBatch(
-                                                    tokenizeResult.ids,
-                                                    "favor"
-                                                  )
-                                                }>
-                                                {t(
-                                                  "option:writingPlayground.tokenInspectorBiasFavorAllAction",
-                                                  "Favor all IDs"
-                                                )}
-                                              </Button>
-                                            </>
-                                          ) : null}
-                                        </div>
-                                        <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-surface">
-                                          <div className="grid grid-cols-[auto_auto_1fr_auto] gap-x-3 gap-y-1 px-3 py-2 text-xs">
-                                            <span className="font-medium text-text-muted">
-                                              #
-                                            </span>
-                                            <span className="font-medium text-text-muted">
-                                              ID
-                                            </span>
-                                            <span className="font-medium text-text-muted">
-                                              {t(
-                                                "option:writingPlayground.tokenInspectorTextLabel",
-                                                "Text"
-                                              )}
-                                            </span>
-                                            <span className="font-medium text-text-muted">
-                                              {t(
-                                                "option:writingPlayground.tokenInspectorActionLabel",
-                                                "Action"
-                                              )}
-                                            </span>
-                                            {tokenPreviewRows.map((row) => (
-                                              <React.Fragment
-                                                key={`${row.index}-${row.id}`}>
-                                                <span className="text-text-muted">
-                                                  {row.index + 1}
-                                                </span>
-                                                <span className="text-text">
-                                                  {row.id}
-                                                </span>
-                                                <span className="whitespace-pre-wrap text-text">
-                                                  {row.text}
-                                                </span>
-                                                <div className="flex flex-wrap gap-1">
-                                                  <Button
-                                                    size="small"
-                                                    disabled={isGenerating}
-                                                    onClick={() =>
-                                                      insertTokenTextAtCursor(row.rawText)
-                                                    }>
-                                                    {t(
-                                                      "option:writingPlayground.tokenInspectorUseAction",
-                                                      "Use"
-                                                    )}
-                                                  </Button>
-                                                  {tokenInspectorSupportsLogitBias ? (
-                                                    <>
-                                                      <Button
-                                                        size="small"
-                                                        disabled={settingsDisabled}
-                                                        onClick={() =>
-                                                          applyTokenInspectorLogitBiasPreset(
-                                                            row.id,
-                                                            "ban"
-                                                          )
-                                                        }>
-                                                        {t(
-                                                          "option:writingPlayground.tokenInspectorBiasBanAction",
-                                                          "Ban"
-                                                        )}
-                                                      </Button>
-                                                      <Button
-                                                        size="small"
-                                                        disabled={settingsDisabled}
-                                                        onClick={() =>
-                                                          applyTokenInspectorLogitBiasPreset(
-                                                            row.id,
-                                                            "favor"
-                                                          )
-                                                        }>
-                                                        {t(
-                                                          "option:writingPlayground.tokenInspectorBiasFavorAction",
-                                                          "Favor"
-                                                        )}
-                                                      </Button>
-                                                    </>
-                                                  ) : null}
-                                                </div>
-                                              </React.Fragment>
-                                            ))}
-                                          </div>
-                                        </div>
-                                        {tokenPreviewTruncated ? (
-                                          <span className="text-xs text-text-muted">
-                                            {t(
-                                              "option:writingPlayground.tokenInspectorTruncated",
-                                              "Showing first {{count}} of {{total}} tokens.",
-                                              {
-                                                count: tokenPreviewRows.length,
-                                                total: tokenPreviewTotal
-                                              }
-                                            )}
-                                          </span>
-                                        ) : null}
-                                      </div>
-                                    ) : null}
-                                  </div>
-                                )
-                              }
-                            ]
-                          : []
-                      )
-                      .concat(
-                        showWordcloudPanel
-                          ? [
-                              {
-                                key: "wordcloud",
-                                label: t(
-                                  "option:writingPlayground.wordcloudTitle",
-                                  "Wordcloud"
-                                ),
-                                children: (
-                                  <div className="flex flex-col gap-3">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <Button
-                                        size="small"
-                                        disabled={!canGenerateWordcloud}
-                                        loading={isGeneratingWordcloud}
-                                        onClick={() => {
-                                          void handleGenerateWordcloud()
-                                        }}>
-                                        {t(
-                                          "option:writingPlayground.wordcloudGenerateAction",
-                                          "Generate wordcloud"
-                                        )}
-                                      </Button>
-                                      {wordcloudStatus || wordcloudError ? (
-                                        <Button
-                                          size="small"
-                                          disabled={isGeneratingWordcloud}
-                                          onClick={clearWordcloud}>
-                                          {t("common:clear", "Clear")}
-                                        </Button>
-                                      ) : null}
-                                      {wordcloudStatus ? (
-                                        <Tag color={wordcloudStatusColor}>
-                                          {wordcloudStatus}
-                                        </Tag>
-                                      ) : null}
-                                    </div>
-                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                      <div className="flex flex-col gap-1">
-                                        <span className="text-xs text-text-muted">
-                                          {t(
-                                            "option:writingPlayground.wordcloudMaxWordsLabel",
-                                            "Max words"
-                                          )}
-                                        </span>
-                                        <InputNumber
-                                          size="small"
-                                          min={1}
-                                          max={MAX_WORDCLOUD_WORDS}
-                                          step={1}
-                                          value={wordcloudMaxWords}
-                                          disabled={isGeneratingWordcloud}
-                                          onChange={(value) =>
-                                            setWordcloudMaxWords(
-                                              value == null
-                                                ? 100
-                                                : Math.max(
-                                                    1,
-                                                    Math.min(
-                                                      MAX_WORDCLOUD_WORDS,
-                                                      Math.floor(value)
-                                                    )
-                                                  )
-                                            )
-                                          }
-                                          className="w-full"
-                                        />
-                                      </div>
-                                      <div className="flex flex-col gap-1">
-                                        <span className="text-xs text-text-muted">
-                                          {t(
-                                            "option:writingPlayground.wordcloudMinLengthLabel",
-                                            "Min word length"
-                                          )}
-                                        </span>
-                                        <InputNumber
-                                          size="small"
-                                          min={1}
-                                          max={64}
-                                          step={1}
-                                          value={wordcloudMinWordLength}
-                                          disabled={isGeneratingWordcloud}
-                                          onChange={(value) =>
-                                            setWordcloudMinWordLength(
-                                              value == null
-                                                ? 3
-                                                : Math.max(
-                                                    1,
-                                                    Math.min(64, Math.floor(value))
-                                                  )
-                                            )
-                                          }
-                                          className="w-full"
-                                        />
-                                      </div>
-                                    </div>
-                                    <Checkbox
-                                      checked={wordcloudKeepNumbers}
-                                      disabled={isGeneratingWordcloud}
-                                      onChange={(event) =>
-                                        setWordcloudKeepNumbers(
-                                          event.target.checked
-                                        )
-                                      }>
-                                      {t(
-                                        "option:writingPlayground.wordcloudKeepNumbers",
-                                        "Include numeric tokens"
-                                      )}
-                                    </Checkbox>
-                                    <div className="flex flex-col gap-1">
-                                      <span className="text-xs text-text-muted">
-                                        {t(
-                                          "option:writingPlayground.wordcloudStopwordsLabel",
-                                          "Custom stopwords (comma or newline separated)"
-                                        )}
-                                      </span>
-                                      <Input.TextArea
-                                        value={wordcloudStopwordsInput}
-                                        rows={3}
-                                        disabled={isGeneratingWordcloud}
-                                        onChange={(event) =>
-                                          setWordcloudStopwordsInput(
-                                            event.target.value
-                                          )
-                                        }
-                                        placeholder={t(
-                                          "option:writingPlayground.wordcloudStopwordsHint",
-                                          "Leave empty to use server defaults."
-                                        )}
-                                      />
-                                    </div>
-                                    {wordcloudError ? (
-                                      <Alert
-                                        type="error"
-                                        showIcon
-                                        message={wordcloudError}
-                                      />
-                                    ) : null}
-                                    {wordcloudMeta ? (
-                                      <div className="rounded-md border border-border bg-surface p-3">
-                                        <div className="flex flex-wrap items-center gap-3 text-xs">
-                                          <Tag color="blue">
-                                            {t(
-                                              "option:writingPlayground.wordcloudTopWords",
-                                              "{{count}} words",
-                                              { count: wordcloudMeta.top_n }
-                                            )}
-                                          </Tag>
-                                          <span className="text-text-muted">
-                                            {t(
-                                              "option:writingPlayground.wordcloudInputChars",
-                                              "{{count}} chars",
-                                              { count: wordcloudMeta.input_chars }
-                                            )}
-                                          </span>
-                                          <span className="text-text-muted">
-                                            {t(
-                                              "option:writingPlayground.wordcloudTotalTokens",
-                                              "{{count}} tokens",
-                                              { count: wordcloudMeta.total_tokens }
-                                            )}
-                                          </span>
-                                        </div>
-                                      </div>
-                                    ) : null}
-                                    {wordcloudWords.length > 0 ? (
-                                      <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-surface px-3 py-2">
-                                        <div className="flex flex-col gap-2">
-                                          {wordcloudWords.map((word) => (
-                                            <div
-                                              key={`${word.text}-${word.weight}`}
-                                              className="grid grid-cols-[1fr_auto] gap-2 text-xs">
-                                              <div className="flex flex-col gap-1">
-                                                <span className="text-text">
-                                                  {word.text}
-                                                </span>
-                                                <div className="h-1.5 rounded bg-background">
-                                                  <div
-                                                    className="h-1.5 rounded bg-primary"
-                                                    style={{
-                                                      width: `${wordcloudTopWeight > 0 ? (word.weight / wordcloudTopWeight) * 100 : 0}%`
-                                                    }}
-                                                  />
-                                                </div>
-                                              </div>
-                                              <span className="text-text-muted">
-                                                {word.weight}
-                                              </span>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    ) : wordcloudStatus === "ready" ? (
-                                      <Paragraph type="secondary" className="!mb-0">
-                                        {t(
-                                          "option:writingPlayground.wordcloudEmpty",
-                                          "No words matched the current filters."
-                                        )}
-                                      </Paragraph>
-                                    ) : null}
-                                    {wordcloudId ? (
-                                      <span className="text-xs text-text-muted">
-                                        {t(
-                                          "option:writingPlayground.wordcloudJobId",
-                                          "Job ID: {{id}}",
-                                          { id: wordcloudId }
-                                        )}
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                )
-                              }
-                            ]
-                          : []
-                      )}
+                      ]}
                     />
                   </div>
                 )
@@ -6912,32 +6234,26 @@ export const WritingPlayground = () => {
                   )}
                 />
               )}
-            </Card>
+              </WritingPlaygroundEditorPanel>
 
-            <Card
-              title={t("option:writingPlayground.settingsTitle", "Settings")}
-              extra={
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="small"
-                    onClick={handleOpenTemplatesModal}
-                    disabled={templateSelectDisabled}>
-                    {t(
-                      "option:writingPlayground.manageTemplates",
-                      "Manage templates"
-                    )}
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={handleOpenThemesModal}
-                    disabled={themeSelectDisabled}>
-                    {t(
-                      "option:writingPlayground.manageThemes",
-                      "Manage themes"
-                    )}
-                  </Button>
-                </div>
-              }>
+              <WritingPlaygroundInspectorPanel
+                activeTab={activeInspectorTab}
+                onTabChange={setActiveInspectorTab}
+                tabLabels={{
+                  generation: t(
+                    "option:writingPlayground.sidebarGeneration",
+                    "Generation"
+                  ),
+                  planning: t("option:writingPlayground.sidebarPlanning", "Planning"),
+                  diagnostics: t(
+                    "option:writingPlayground.sidebarDiagnostics",
+                    "Diagnostics"
+                  )
+                }}
+                generation={(
+                  <Card
+                    data-testid="writing-playground-settings-card"
+                    title={t("option:writingPlayground.settingsTitle", "Settings")}>
               {activeSession ? (
                 activeSessionLoading ? (
                   <Skeleton active />
@@ -6952,102 +6268,6 @@ export const WritingPlayground = () => {
                   />
                 ) : (
                   <div className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-3">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs text-text-muted">
-                          {t(
-                            "option:writingPlayground.templateLabel",
-                            "Template"
-                          )}
-                        </span>
-                        <Select
-                          allowClear
-                          size="small"
-                          options={templateOptions}
-                          loading={templatesLoading}
-                          value={selectedTemplateName ?? undefined}
-                          disabled={templateSelectDisabled}
-                          placeholder={t(
-                            "option:writingPlayground.templatePlaceholder",
-                            "Server default"
-                          )}
-                          onChange={(value) =>
-                            handleTemplateChange(value ? String(value) : null)
-                          }
-                        />
-                        <span className="text-xs text-text-muted">
-                          {templatesError
-                            ? t(
-                                "option:writingPlayground.templateError",
-                                "Unable to load templates."
-                              )
-                            : !hasTemplates
-                              ? t(
-                                  "option:writingPlayground.templateUnavailable",
-                                  "Templates unavailable."
-                                )
-                              : t(
-                                  "option:writingPlayground.templateHint",
-                                  "Choose an instruct template for chat parsing and FIM."
-                                )}
-                        </span>
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs text-text-muted">
-                          {t("option:writingPlayground.themeLabel", "Theme")}
-                        </span>
-                        <Select
-                          allowClear
-                          size="small"
-                          options={themeOptions}
-                          loading={themesLoading}
-                          value={selectedThemeName ?? undefined}
-                          disabled={themeSelectDisabled}
-                          placeholder={t(
-                            "option:writingPlayground.themePlaceholder",
-                            "Server default"
-                          )}
-                          onChange={(value) =>
-                            handleThemeChange(value ? String(value) : null)
-                          }
-                        />
-                        <span className="text-xs text-text-muted">
-                          {themesError
-                            ? t(
-                                "option:writingPlayground.themeError",
-                                "Unable to load themes."
-                              )
-                            : !hasThemes
-                              ? t(
-                                  "option:writingPlayground.themeUnavailable",
-                                  "Themes unavailable."
-                                )
-                              : t(
-                                  "option:writingPlayground.themeHint",
-                                  "Apply a theme to style the editor."
-                                )}
-                        </span>
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <Checkbox
-                          checked={chatMode}
-                          disabled={settingsDisabled}
-                          onChange={(event) =>
-                            handleChatModeChange(event.target.checked)
-                          }>
-                          {t(
-                            "option:writingPlayground.chatModeLabel",
-                            "Chat mode"
-                          )}
-                        </Checkbox>
-                        <span className="text-xs text-text-muted">
-                          {t(
-                            "option:writingPlayground.chatModeHint",
-                            "Parse prompt text into messages using the selected template."
-                          )}
-                        </span>
-                      </div>
-                    </div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div className="flex flex-col gap-1">
                         <span className="text-xs text-text-muted">
@@ -7354,572 +6574,6 @@ export const WritingPlayground = () => {
                         rows={4}
                       />
                     </div>
-                    <Collapse
-                      ghost
-                      size="small"
-                      defaultActiveKey={[]}
-                      items={[
-                        {
-                          key: "context-controls",
-                          label: t(
-                            "option:writingPlayground.contextControlsLabel",
-                            "Context controls"
-                          ),
-                          children: (
-                            <div className="flex flex-col gap-4">
-                              <div className="flex items-center justify-end">
-                                <Button
-                                  size="small"
-                                  disabled={settingsDisabled}
-                                  onClick={() => setContextPreviewModalOpen(true)}>
-                                  {t(
-                                    "option:writingPlayground.contextPreviewAction",
-                                    "Show context preview"
-                                  )}
-                                </Button>
-                              </div>
-                              <div className="rounded-md border border-border bg-surface p-3">
-                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                  <div className="flex flex-col gap-1">
-                                    <span className="text-xs text-text-muted">
-                                      {t(
-                                        "option:writingPlayground.contextLengthLabel",
-                                        "Context length (tokens)"
-                                      )}
-                                    </span>
-                                    <InputNumber
-                                      size="small"
-                                      min={0}
-                                      step={128}
-                                      value={settings.context_length}
-                                      disabled={settingsDisabled}
-                                      onChange={(value) =>
-                                        updateSetting({
-                                          context_length:
-                                            value == null
-                                              ? DEFAULT_SETTINGS.context_length
-                                              : Math.max(0, Math.floor(value))
-                                        })
-                                      }
-                                    />
-                                  </div>
-                                  <div className="flex flex-col gap-1">
-                                    <span className="text-xs text-text-muted">
-                                      {t(
-                                        "option:writingPlayground.authorDepthModeLabel",
-                                        "Author note depth mode"
-                                      )}
-                                    </span>
-                                    <Select
-                                      size="small"
-                                      value={settings.author_note_depth_mode}
-                                      disabled={settingsDisabled}
-                                      onChange={(value) =>
-                                        updateSetting({
-                                          author_note_depth_mode:
-                                            value === "annotation"
-                                              ? "annotation"
-                                              : "insertion"
-                                        })
-                                      }
-                                      options={[
-                                        {
-                                          value: "insertion",
-                                          label: t(
-                                            "option:writingPlayground.authorDepthModeInsertion",
-                                            "Insertion"
-                                          )
-                                        },
-                                        {
-                                          value: "annotation",
-                                          label: t(
-                                            "option:writingPlayground.authorDepthModeAnnotation",
-                                            "Annotation"
-                                          )
-                                        }
-                                      ]}
-                                    />
-                                  </div>
-                                </div>
-                                <div className="mt-3 flex flex-col gap-1">
-                                  <span className="text-xs text-text-muted">
-                                    {t(
-                                      "option:writingPlayground.contextOrderLabel",
-                                      "Context order"
-                                    )}
-                                  </span>
-                                  <Input.TextArea
-                                    value={settings.context_order}
-                                    rows={2}
-                                    disabled={settingsDisabled}
-                                    placeholder={DEFAULT_CONTEXT_ORDER}
-                                    onChange={(event) =>
-                                      updateSetting({
-                                        context_order: event.target.value
-                                      })
-                                    }
-                                  />
-                                  <span className="text-[11px] text-text-muted">
-                                    {t(
-                                      "option:writingPlayground.contextOrderHint",
-                                      "Placeholders: {memPrefix}, {wiPrefix}, {wiText}, {wiSuffix}, {memText}, {memSuffix}, {prompt}"
-                                    )}
-                                  </span>
-                                </div>
-                              </div>
-                              <div className="rounded-md border border-border bg-surface p-3">
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-xs font-medium text-text">
-                                    {t(
-                                      "option:writingPlayground.memoryBlockLabel",
-                                      "Memory block"
-                                    )}
-                                  </span>
-                                  <Checkbox
-                                    checked={memoryBlock.enabled}
-                                    disabled={settingsDisabled}
-                                    onChange={(event) =>
-                                      updateMemoryBlock({
-                                        enabled: event.target.checked
-                                      })
-                                    }>
-                                    {t("common:enabled", "Enabled")}
-                                  </Checkbox>
-                                </div>
-                                <div className="mt-3 grid grid-cols-1 gap-3">
-                                  <Input
-                                    value={memoryBlock.prefix}
-                                    disabled={settingsDisabled}
-                                    placeholder={t(
-                                      "option:writingPlayground.prefixLabel",
-                                      "Prefix"
-                                    )}
-                                    onChange={(event) =>
-                                      updateMemoryBlock({
-                                        prefix: event.target.value
-                                      })
-                                    }
-                                  />
-                                  <Input.TextArea
-                                    value={memoryBlock.text}
-                                    rows={3}
-                                    disabled={settingsDisabled}
-                                    placeholder={t(
-                                      "option:writingPlayground.memoryTextPlaceholder",
-                                      "Facts and reminders to keep consistent."
-                                    )}
-                                    onChange={(event) =>
-                                      updateMemoryBlock({
-                                        text: event.target.value
-                                      })
-                                    }
-                                  />
-                                  <Input
-                                    value={memoryBlock.suffix}
-                                    disabled={settingsDisabled}
-                                    placeholder={t(
-                                      "option:writingPlayground.suffixLabel",
-                                      "Suffix"
-                                    )}
-                                    onChange={(event) =>
-                                      updateMemoryBlock({
-                                        suffix: event.target.value
-                                      })
-                                    }
-                                  />
-                                </div>
-                              </div>
-                              <div className="rounded-md border border-border bg-surface p-3">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <span className="text-xs font-medium text-text">
-                                    {t(
-                                      "option:writingPlayground.authorNoteLabel",
-                                      "Author note"
-                                    )}
-                                  </span>
-                                  <div className="flex items-center gap-3">
-                                    <span className="text-xs text-text-muted">
-                                      {t(
-                                        "option:writingPlayground.authorDepthLabel",
-                                        "Depth"
-                                      )}
-                                    </span>
-                                    <InputNumber
-                                      size="small"
-                                      min={1}
-                                      step={1}
-                                      value={authorNote.insertion_depth}
-                                      disabled={settingsDisabled}
-                                      onChange={(value) =>
-                                        updateAuthorNote({
-                                          insertion_depth:
-                                            value == null
-                                              ? 1
-                                              : Math.max(1, Math.floor(value))
-                                        })
-                                      }
-                                    />
-                                    <Checkbox
-                                      checked={authorNote.enabled}
-                                      disabled={settingsDisabled}
-                                      onChange={(event) =>
-                                        updateAuthorNote({
-                                          enabled: event.target.checked
-                                        })
-                                      }>
-                                      {t("common:enabled", "Enabled")}
-                                    </Checkbox>
-                                  </div>
-                                </div>
-                                <div className="mt-3 grid grid-cols-1 gap-3">
-                                  <Input
-                                    value={authorNote.prefix}
-                                    disabled={settingsDisabled}
-                                    placeholder={t(
-                                      "option:writingPlayground.prefixLabel",
-                                      "Prefix"
-                                    )}
-                                    onChange={(event) =>
-                                      updateAuthorNote({
-                                        prefix: event.target.value
-                                      })
-                                    }
-                                  />
-                                  <Input.TextArea
-                                    value={authorNote.text}
-                                    rows={3}
-                                    disabled={settingsDisabled}
-                                    placeholder={t(
-                                      "option:writingPlayground.authorNotePlaceholder",
-                                      "Guidance to inject during generation."
-                                    )}
-                                    onChange={(event) =>
-                                      updateAuthorNote({
-                                        text: event.target.value
-                                      })
-                                    }
-                                  />
-                                  <Input
-                                    value={authorNote.suffix}
-                                    disabled={settingsDisabled}
-                                    placeholder={t(
-                                      "option:writingPlayground.suffixLabel",
-                                      "Suffix"
-                                    )}
-                                    onChange={(event) =>
-                                      updateAuthorNote({
-                                        suffix: event.target.value
-                                      })
-                                    }
-                                  />
-                                </div>
-                              </div>
-                              <div className="rounded-md border border-border bg-surface p-3">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <span className="text-xs font-medium text-text">
-                                    {t(
-                                      "option:writingPlayground.worldInfoLabel",
-                                      "World info"
-                                    )}
-                                  </span>
-                                  <div className="flex items-center gap-2">
-                                    <Checkbox
-                                      checked={worldInfo.enabled}
-                                      disabled={settingsDisabled}
-                                      onChange={(event) =>
-                                        updateWorldInfo({
-                                          enabled: event.target.checked
-                                        })
-                                      }>
-                                      {t("common:enabled", "Enabled")}
-                                    </Checkbox>
-                                    <Button
-                                      size="small"
-                                      disabled={settingsDisabled}
-                                      onClick={addWorldInfoEntry}>
-                                      {t(
-                                        "option:writingPlayground.addWorldInfo",
-                                        "Add entry"
-                                      )}
-                                    </Button>
-                                    <WritingWorldInfoImportControls
-                                      disabled={settingsDisabled}
-                                      worldInfo={worldInfo}
-                                      onImported={handleWorldInfoImported}
-                                      onImportError={handleWorldInfoImportError}
-                                      t={t}
-                                    />
-                                    <Button
-                                      size="small"
-                                      disabled={settingsDisabled}
-                                      onClick={handleWorldInfoExport}>
-                                      {t(
-                                        "option:writingPlayground.worldInfoExportAction",
-                                        "Export"
-                                      )}
-                                    </Button>
-                                  </div>
-                                </div>
-                                <div className="mt-3 flex flex-col gap-3">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs text-text-muted">
-                                      {t(
-                                        "option:writingPlayground.worldInfoSearchRange",
-                                        "Search range (chars)"
-                                      )}
-                                    </span>
-                                    <InputNumber
-                                      size="small"
-                                      min={0}
-                                      step={100}
-                                      value={worldInfo.search_range}
-                                      disabled={settingsDisabled}
-                                      onChange={(value) =>
-                                        updateWorldInfo({
-                                          search_range:
-                                            value == null
-                                              ? 0
-                                              : Math.max(0, Math.floor(value))
-                                        })
-                                      }
-                                    />
-                                  </div>
-                                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                                    <Input
-                                      value={worldInfo.prefix}
-                                      disabled={settingsDisabled}
-                                      placeholder={t(
-                                        "option:writingPlayground.worldInfoPrefixLabel",
-                                        "World info prefix"
-                                      )}
-                                      onChange={(event) =>
-                                        updateWorldInfo({
-                                          prefix: event.target.value
-                                        })
-                                      }
-                                    />
-                                    <Input
-                                      value={worldInfo.suffix}
-                                      disabled={settingsDisabled}
-                                      placeholder={t(
-                                        "option:writingPlayground.worldInfoSuffixLabel",
-                                        "World info suffix"
-                                      )}
-                                      onChange={(event) =>
-                                        updateWorldInfo({
-                                          suffix: event.target.value
-                                        })
-                                      }
-                                    />
-                                  </div>
-                                  {worldInfoEntries.length === 0 ? (
-                                    <span className="text-xs text-text-muted">
-                                      {t(
-                                        "option:writingPlayground.worldInfoEmpty",
-                                        "No world info entries yet."
-                                      )}
-                                    </span>
-                                  ) : (
-                                    <div className="flex flex-col gap-3">
-                                      {worldInfoEntries.map((entry, index) => (
-                                        <div
-                                          key={entry.id}
-                                          className="rounded-md border border-border bg-background p-3">
-                                          <div className="flex items-center justify-between gap-2">
-                                            <span className="text-xs font-medium text-text">
-                                              {entry.display_name?.trim()
-                                                ? entry.display_name
-                                                : t(
-                                                    "option:writingPlayground.worldInfoEntryLabel",
-                                                    "Entry {{index}}",
-                                                    { index: index + 1 }
-                                                  )}
-                                            </span>
-                                            <div className="flex items-center gap-2">
-                                              <Button
-                                                size="small"
-                                                disabled={
-                                                  settingsDisabled || index === 0
-                                                }
-                                                onClick={() =>
-                                                  moveWorldInfoEntryById(
-                                                    entry.id,
-                                                    "up"
-                                                  )
-                                                }>
-                                                {t(
-                                                  "option:writingPlayground.worldInfoMoveUp",
-                                                  "Move up"
-                                                )}
-                                              </Button>
-                                              <Button
-                                                size="small"
-                                                disabled={
-                                                  settingsDisabled ||
-                                                  index >=
-                                                    worldInfoEntries.length - 1
-                                                }
-                                                onClick={() =>
-                                                  moveWorldInfoEntryById(
-                                                    entry.id,
-                                                    "down"
-                                                  )
-                                                }>
-                                                {t(
-                                                  "option:writingPlayground.worldInfoMoveDown",
-                                                  "Move down"
-                                                )}
-                                              </Button>
-                                              <Button
-                                                size="small"
-                                                danger
-                                                disabled={settingsDisabled}
-                                                onClick={() =>
-                                                  removeWorldInfoEntry(entry.id)
-                                                }>
-                                                {t("common:delete", "Delete")}
-                                              </Button>
-                                            </div>
-                                          </div>
-                                          <div className="mt-3 flex flex-col gap-3">
-                                            <Input
-                                              value={entry.display_name || ""}
-                                              disabled={settingsDisabled}
-                                              placeholder={t(
-                                                "option:writingPlayground.worldInfoDisplayNamePlaceholder",
-                                                "Display name (optional)"
-                                              )}
-                                              onChange={(event) =>
-                                                updateWorldInfoEntry(entry.id, {
-                                                  display_name:
-                                                    event.target.value
-                                                })
-                                              }
-                                            />
-                                            <div className="flex flex-wrap items-center gap-3">
-                                              <Checkbox
-                                                checked={entry.enabled}
-                                                disabled={settingsDisabled}
-                                                onChange={(event) =>
-                                                  updateWorldInfoEntry(entry.id, {
-                                                    enabled: event.target.checked
-                                                  })
-                                                }>
-                                                {t("common:enabled", "Enabled")}
-                                              </Checkbox>
-                                              <Checkbox
-                                                checked={entry.use_regex}
-                                                disabled={settingsDisabled}
-                                                onChange={(event) =>
-                                                  updateWorldInfoEntry(entry.id, {
-                                                    use_regex:
-                                                      event.target.checked
-                                                  })
-                                                }>
-                                                {t(
-                                                  "option:writingPlayground.worldInfoRegex",
-                                                  "Regex"
-                                                )}
-                                              </Checkbox>
-                                              <Checkbox
-                                                checked={entry.case_sensitive}
-                                                disabled={settingsDisabled}
-                                                onChange={(event) =>
-                                                  updateWorldInfoEntry(entry.id, {
-                                                    case_sensitive:
-                                                      event.target.checked
-                                                  })
-                                                }>
-                                                {t(
-                                                  "option:writingPlayground.worldInfoCaseSensitive",
-                                                  "Case sensitive"
-                                                )}
-                                              </Checkbox>
-                                            </div>
-                                            <div className="flex flex-wrap items-center gap-2">
-                                              <span className="text-xs text-text-muted">
-                                                {t(
-                                                  "option:writingPlayground.worldInfoEntrySearchRange",
-                                                  "Entry search range (chars)"
-                                                )}
-                                              </span>
-                                              <InputNumber
-                                                size="small"
-                                                min={0}
-                                                step={100}
-                                                value={
-                                                  entry.search_range ??
-                                                  worldInfo.search_range
-                                                }
-                                                disabled={settingsDisabled}
-                                                onChange={(value) =>
-                                                  updateWorldInfoEntry(entry.id, {
-                                                    search_range:
-                                                      value == null
-                                                        ? undefined
-                                                        : Math.max(
-                                                            0,
-                                                            Math.floor(value)
-                                                          )
-                                                  })
-                                                }
-                                              />
-                                              <Button
-                                                size="small"
-                                                disabled={settingsDisabled}
-                                                onClick={() =>
-                                                  updateWorldInfoEntry(entry.id, {
-                                                    search_range: undefined
-                                                  })
-                                                }>
-                                                {t(
-                                                  "option:writingPlayground.worldInfoUseGlobalRange",
-                                                  "Use global"
-                                                )}
-                                              </Button>
-                                            </div>
-                                            <Input.TextArea
-                                              value={entry.keys.join("\n")}
-                                              rows={2}
-                                              disabled={settingsDisabled}
-                                              placeholder={t(
-                                                "option:writingPlayground.worldInfoKeysPlaceholder",
-                                                "Trigger keys (comma or newline separated)"
-                                              )}
-                                              onChange={(event) =>
-                                                updateWorldInfoEntry(entry.id, {
-                                                  keys: parseWorldInfoKeysInput(
-                                                    event.target.value
-                                                  )
-                                                })
-                                              }
-                                            />
-                                            <Input.TextArea
-                                              value={entry.content}
-                                              rows={3}
-                                              disabled={settingsDisabled}
-                                              placeholder={t(
-                                                "option:writingPlayground.worldInfoContentPlaceholder",
-                                                "Context to inject when triggered."
-                                              )}
-                                              onChange={(event) =>
-                                                updateWorldInfoEntry(entry.id, {
-                                                  content: event.target.value
-                                                })
-                                              }
-                                            />
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          )
-                        }
-                      ]}
-                    />
                     {showAdvancedSamplerControls && (
                       <Collapse
                         ghost
@@ -8299,9 +6953,779 @@ export const WritingPlayground = () => {
                   )}
                 />
               )}
-            </Card>
+                  </Card>
+                )}
+                planning={(
+                  <Card
+                    title={t("option:writingPlayground.sidebarPlanning", "Planning")}
+                    extra={
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="small"
+                          onClick={handleOpenTemplatesModal}
+                          disabled={templateSelectDisabled}>
+                          {t(
+                            "option:writingPlayground.manageTemplates",
+                            "Manage templates"
+                          )}
+                        </Button>
+                        <Button
+                          size="small"
+                          onClick={handleOpenThemesModal}
+                          disabled={themeSelectDisabled}>
+                          {t(
+                            "option:writingPlayground.manageThemes",
+                            "Manage themes"
+                          )}
+                        </Button>
+                      </div>
+                    }>
+                    {activeSession ? (
+                      activeSessionLoading ? (
+                        <Skeleton active />
+                      ) : activeSessionError ? (
+                        <Alert
+                          type="error"
+                          showIcon
+                          title={t(
+                            "option:writingPlayground.settingsError",
+                            "Unable to load session settings."
+                          )}
+                        />
+                      ) : (
+                        <div className="flex flex-col gap-4">
+                          <div className="flex flex-col gap-3">
+                            <div className="flex flex-col gap-1">
+                              <span className="text-xs text-text-muted">
+                                {t(
+                                  "option:writingPlayground.templateLabel",
+                                  "Template"
+                                )}
+                              </span>
+                              <Select
+                                allowClear
+                                size="small"
+                                options={templateOptions}
+                                loading={templatesLoading}
+                                value={selectedTemplateName ?? undefined}
+                                disabled={templateSelectDisabled}
+                                placeholder={t(
+                                  "option:writingPlayground.templatePlaceholder",
+                                  "Server default"
+                                )}
+                                onChange={(value) =>
+                                  handleTemplateChange(value ? String(value) : null)
+                                }
+                              />
+                              <span className="text-xs text-text-muted">
+                                {templatesError
+                                  ? t(
+                                      "option:writingPlayground.templateError",
+                                      "Unable to load templates."
+                                    )
+                                  : !hasTemplates
+                                    ? t(
+                                        "option:writingPlayground.templateUnavailable",
+                                        "Templates unavailable."
+                                      )
+                                    : t(
+                                        "option:writingPlayground.templateHint",
+                                        "Choose an instruct template for chat parsing and FIM."
+                                      )}
+                              </span>
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <span className="text-xs text-text-muted">
+                                {t("option:writingPlayground.themeLabel", "Theme")}
+                              </span>
+                              <Select
+                                allowClear
+                                size="small"
+                                options={themeOptions}
+                                loading={themesLoading}
+                                value={selectedThemeName ?? undefined}
+                                disabled={themeSelectDisabled}
+                                placeholder={t(
+                                  "option:writingPlayground.themePlaceholder",
+                                  "Server default"
+                                )}
+                                onChange={(value) =>
+                                  handleThemeChange(value ? String(value) : null)
+                                }
+                              />
+                              <span className="text-xs text-text-muted">
+                                {themesError
+                                  ? t(
+                                      "option:writingPlayground.themeError",
+                                      "Unable to load themes."
+                                    )
+                                  : !hasThemes
+                                    ? t(
+                                        "option:writingPlayground.themeUnavailable",
+                                        "Themes unavailable."
+                                      )
+                                    : t(
+                                        "option:writingPlayground.themeHint",
+                                        "Apply a theme to style the editor."
+                                      )}
+                              </span>
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <Checkbox
+                                checked={chatMode}
+                                disabled={settingsDisabled}
+                                onChange={(event) =>
+                                  handleChatModeChange(event.target.checked)
+                                }>
+                                {t(
+                                  "option:writingPlayground.chatModeLabel",
+                                  "Chat mode"
+                                )}
+                              </Checkbox>
+                              <span className="text-xs text-text-muted">
+                                {t(
+                                  "option:writingPlayground.chatModeHint",
+                                  "Parse prompt text into messages using the selected template."
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                          <Collapse
+                            ghost
+                            size="small"
+                            defaultActiveKey={[]}
+                            items={[
+                              {
+                                key: "context-controls",
+                                label: t(
+                                  "option:writingPlayground.contextControlsLabel",
+                                  "Context controls"
+                                ),
+                                children: (
+                                  <div className="flex flex-col gap-4">
+                                    <div className="flex items-center justify-end">
+                                      <Button
+                                        size="small"
+                                        disabled={settingsDisabled}
+                                        onClick={() => setContextPreviewModalOpen(true)}>
+                                        {t(
+                                          "option:writingPlayground.contextPreviewAction",
+                                          "Show context preview"
+                                        )}
+                                      </Button>
+                                    </div>
+                                    <div className="rounded-md border border-border bg-surface p-3">
+                                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                        <div className="flex flex-col gap-1">
+                                          <span className="text-xs text-text-muted">
+                                            {t(
+                                              "option:writingPlayground.contextLengthLabel",
+                                              "Context length (tokens)"
+                                            )}
+                                          </span>
+                                          <InputNumber
+                                            size="small"
+                                            min={0}
+                                            step={128}
+                                            value={settings.context_length}
+                                            disabled={settingsDisabled}
+                                            onChange={(value) =>
+                                              updateSetting({
+                                                context_length:
+                                                  value == null
+                                                    ? DEFAULT_SETTINGS.context_length
+                                                    : Math.max(0, Math.floor(value))
+                                              })
+                                            }
+                                          />
+                                        </div>
+                                        <div className="flex flex-col gap-1">
+                                          <span className="text-xs text-text-muted">
+                                            {t(
+                                              "option:writingPlayground.authorDepthModeLabel",
+                                              "Author note depth mode"
+                                            )}
+                                          </span>
+                                          <Select
+                                            size="small"
+                                            value={settings.author_note_depth_mode}
+                                            disabled={settingsDisabled}
+                                            onChange={(value) =>
+                                              updateSetting({
+                                                author_note_depth_mode:
+                                                  value === "annotation"
+                                                    ? "annotation"
+                                                    : "insertion"
+                                              })
+                                            }
+                                            options={[
+                                              {
+                                                value: "insertion",
+                                                label: t(
+                                                  "option:writingPlayground.authorDepthModeInsertion",
+                                                  "Insertion"
+                                                )
+                                              },
+                                              {
+                                                value: "annotation",
+                                                label: t(
+                                                  "option:writingPlayground.authorDepthModeAnnotation",
+                                                  "Annotation"
+                                                )
+                                              }
+                                            ]}
+                                          />
+                                        </div>
+                                      </div>
+                                      <div className="mt-3 flex flex-col gap-1">
+                                        <span className="text-xs text-text-muted">
+                                          {t(
+                                            "option:writingPlayground.contextOrderLabel",
+                                            "Context order"
+                                          )}
+                                        </span>
+                                        <Input.TextArea
+                                          value={settings.context_order}
+                                          rows={2}
+                                          disabled={settingsDisabled}
+                                          placeholder={DEFAULT_CONTEXT_ORDER}
+                                          onChange={(event) =>
+                                            updateSetting({
+                                              context_order: event.target.value
+                                            })
+                                          }
+                                        />
+                                        <span className="text-[11px] text-text-muted">
+                                          {t(
+                                            "option:writingPlayground.contextOrderHint",
+                                            "Placeholders: {memPrefix}, {wiPrefix}, {wiText}, {wiSuffix}, {memText}, {memSuffix}, {prompt}"
+                                          )}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div className="rounded-md border border-border bg-surface p-3">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="text-xs font-medium text-text">
+                                          {t(
+                                            "option:writingPlayground.memoryBlockLabel",
+                                            "Memory block"
+                                          )}
+                                        </span>
+                                        <Checkbox
+                                          checked={memoryBlock.enabled}
+                                          disabled={settingsDisabled}
+                                          onChange={(event) =>
+                                            updateMemoryBlock({
+                                              enabled: event.target.checked
+                                            })
+                                          }>
+                                          {t("common:enabled", "Enabled")}
+                                        </Checkbox>
+                                      </div>
+                                      <div className="mt-3 grid grid-cols-1 gap-3">
+                                        <Input
+                                          value={memoryBlock.prefix}
+                                          disabled={settingsDisabled}
+                                          placeholder={t(
+                                            "option:writingPlayground.prefixLabel",
+                                            "Prefix"
+                                          )}
+                                          onChange={(event) =>
+                                            updateMemoryBlock({
+                                              prefix: event.target.value
+                                            })
+                                          }
+                                        />
+                                        <Input.TextArea
+                                          value={memoryBlock.text}
+                                          rows={3}
+                                          disabled={settingsDisabled}
+                                          placeholder={t(
+                                            "option:writingPlayground.memoryTextPlaceholder",
+                                            "Facts and reminders to keep consistent."
+                                          )}
+                                          onChange={(event) =>
+                                            updateMemoryBlock({
+                                              text: event.target.value
+                                            })
+                                          }
+                                        />
+                                        <Input
+                                          value={memoryBlock.suffix}
+                                          disabled={settingsDisabled}
+                                          placeholder={t(
+                                            "option:writingPlayground.suffixLabel",
+                                            "Suffix"
+                                          )}
+                                          onChange={(event) =>
+                                            updateMemoryBlock({
+                                              suffix: event.target.value
+                                            })
+                                          }
+                                        />
+                                      </div>
+                                    </div>
+                                    <div className="rounded-md border border-border bg-surface p-3">
+                                      <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <span className="text-xs font-medium text-text">
+                                          {t(
+                                            "option:writingPlayground.authorNoteLabel",
+                                            "Author note"
+                                          )}
+                                        </span>
+                                        <div className="flex items-center gap-3">
+                                          <span className="text-xs text-text-muted">
+                                            {t(
+                                              "option:writingPlayground.authorDepthLabel",
+                                              "Depth"
+                                            )}
+                                          </span>
+                                          <InputNumber
+                                            size="small"
+                                            min={1}
+                                            step={1}
+                                            value={authorNote.insertion_depth}
+                                            disabled={settingsDisabled}
+                                            onChange={(value) =>
+                                              updateAuthorNote({
+                                                insertion_depth:
+                                                  value == null
+                                                    ? 1
+                                                    : Math.max(1, Math.floor(value))
+                                              })
+                                            }
+                                          />
+                                          <Checkbox
+                                            checked={authorNote.enabled}
+                                            disabled={settingsDisabled}
+                                            onChange={(event) =>
+                                              updateAuthorNote({
+                                                enabled: event.target.checked
+                                              })
+                                            }>
+                                            {t("common:enabled", "Enabled")}
+                                          </Checkbox>
+                                        </div>
+                                      </div>
+                                      <div className="mt-3 grid grid-cols-1 gap-3">
+                                        <Input
+                                          value={authorNote.prefix}
+                                          disabled={settingsDisabled}
+                                          placeholder={t(
+                                            "option:writingPlayground.prefixLabel",
+                                            "Prefix"
+                                          )}
+                                          onChange={(event) =>
+                                            updateAuthorNote({
+                                              prefix: event.target.value
+                                            })
+                                          }
+                                        />
+                                        <Input.TextArea
+                                          value={authorNote.text}
+                                          rows={3}
+                                          disabled={settingsDisabled}
+                                          placeholder={t(
+                                            "option:writingPlayground.authorNotePlaceholder",
+                                            "Guidance to inject during generation."
+                                          )}
+                                          onChange={(event) =>
+                                            updateAuthorNote({
+                                              text: event.target.value
+                                            })
+                                          }
+                                        />
+                                        <Input
+                                          value={authorNote.suffix}
+                                          disabled={settingsDisabled}
+                                          placeholder={t(
+                                            "option:writingPlayground.suffixLabel",
+                                            "Suffix"
+                                          )}
+                                          onChange={(event) =>
+                                            updateAuthorNote({
+                                              suffix: event.target.value
+                                            })
+                                          }
+                                        />
+                                      </div>
+                                    </div>
+                                    <div className="rounded-md border border-border bg-surface p-3">
+                                      <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <span className="text-xs font-medium text-text">
+                                          {t(
+                                            "option:writingPlayground.worldInfoLabel",
+                                            "World info"
+                                          )}
+                                        </span>
+                                        <div className="flex items-center gap-2">
+                                          <Checkbox
+                                            checked={worldInfo.enabled}
+                                            disabled={settingsDisabled}
+                                            onChange={(event) =>
+                                              updateWorldInfo({
+                                                enabled: event.target.checked
+                                              })
+                                            }>
+                                            {t("common:enabled", "Enabled")}
+                                          </Checkbox>
+                                          <Button
+                                            size="small"
+                                            disabled={settingsDisabled}
+                                            onClick={addWorldInfoEntry}>
+                                            {t(
+                                              "option:writingPlayground.addWorldInfo",
+                                              "Add entry"
+                                            )}
+                                          </Button>
+                                          <WritingWorldInfoImportControls
+                                            disabled={settingsDisabled}
+                                            worldInfo={worldInfo}
+                                            onImported={handleWorldInfoImported}
+                                            onImportError={handleWorldInfoImportError}
+                                            t={t}
+                                          />
+                                          <Button
+                                            size="small"
+                                            disabled={settingsDisabled}
+                                            onClick={handleWorldInfoExport}>
+                                            {t(
+                                              "option:writingPlayground.worldInfoExportAction",
+                                              "Export"
+                                            )}
+                                          </Button>
+                                        </div>
+                                      </div>
+                                      <div className="mt-3 flex flex-col gap-3">
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-xs text-text-muted">
+                                            {t(
+                                              "option:writingPlayground.worldInfoSearchRange",
+                                              "Search range (chars)"
+                                            )}
+                                          </span>
+                                          <InputNumber
+                                            size="small"
+                                            min={0}
+                                            step={100}
+                                            value={worldInfo.search_range}
+                                            disabled={settingsDisabled}
+                                            onChange={(value) =>
+                                              updateWorldInfo({
+                                                search_range:
+                                                  value == null
+                                                    ? 0
+                                                    : Math.max(0, Math.floor(value))
+                                              })
+                                            }
+                                          />
+                                        </div>
+                                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                          <Input
+                                            value={worldInfo.prefix}
+                                            disabled={settingsDisabled}
+                                            placeholder={t(
+                                              "option:writingPlayground.worldInfoPrefixLabel",
+                                              "World info prefix"
+                                            )}
+                                            onChange={(event) =>
+                                              updateWorldInfo({
+                                                prefix: event.target.value
+                                              })
+                                            }
+                                          />
+                                          <Input
+                                            value={worldInfo.suffix}
+                                            disabled={settingsDisabled}
+                                            placeholder={t(
+                                              "option:writingPlayground.worldInfoSuffixLabel",
+                                              "World info suffix"
+                                            )}
+                                            onChange={(event) =>
+                                              updateWorldInfo({
+                                                suffix: event.target.value
+                                              })
+                                            }
+                                          />
+                                        </div>
+                                        {worldInfoEntries.length === 0 ? (
+                                          <span className="text-xs text-text-muted">
+                                            {t(
+                                              "option:writingPlayground.worldInfoEmpty",
+                                              "No world info entries yet."
+                                            )}
+                                          </span>
+                                        ) : (
+                                          <div className="flex flex-col gap-3">
+                                            {worldInfoEntries.map((entry, index) => (
+                                              <div
+                                                key={entry.id}
+                                                className="rounded-md border border-border bg-background p-3">
+                                                <div className="flex items-center justify-between gap-2">
+                                                  <span className="text-xs font-medium text-text">
+                                                    {entry.display_name?.trim()
+                                                      ? entry.display_name
+                                                      : t(
+                                                          "option:writingPlayground.worldInfoEntryLabel",
+                                                          "Entry {{index}}",
+                                                          { index: index + 1 }
+                                                        )}
+                                                  </span>
+                                                  <div className="flex items-center gap-2">
+                                                    <Button
+                                                      size="small"
+                                                      disabled={
+                                                        settingsDisabled || index === 0
+                                                      }
+                                                      onClick={() =>
+                                                        moveWorldInfoEntryById(
+                                                          entry.id,
+                                                          "up"
+                                                        )
+                                                      }>
+                                                      {t(
+                                                        "option:writingPlayground.worldInfoMoveUp",
+                                                        "Move up"
+                                                      )}
+                                                    </Button>
+                                                    <Button
+                                                      size="small"
+                                                      disabled={
+                                                        settingsDisabled ||
+                                                        index >=
+                                                          worldInfoEntries.length - 1
+                                                      }
+                                                      onClick={() =>
+                                                        moveWorldInfoEntryById(
+                                                          entry.id,
+                                                          "down"
+                                                        )
+                                                      }>
+                                                      {t(
+                                                        "option:writingPlayground.worldInfoMoveDown",
+                                                        "Move down"
+                                                      )}
+                                                    </Button>
+                                                    <Button
+                                                      size="small"
+                                                      danger
+                                                      disabled={settingsDisabled}
+                                                      onClick={() =>
+                                                        removeWorldInfoEntry(entry.id)
+                                                      }>
+                                                      {t("common:delete", "Delete")}
+                                                    </Button>
+                                                  </div>
+                                                </div>
+                                                <div className="mt-3 flex flex-col gap-3">
+                                                  <Input
+                                                    value={entry.display_name || ""}
+                                                    disabled={settingsDisabled}
+                                                    placeholder={t(
+                                                      "option:writingPlayground.worldInfoDisplayNamePlaceholder",
+                                                      "Display name (optional)"
+                                                    )}
+                                                    onChange={(event) =>
+                                                      updateWorldInfoEntry(entry.id, {
+                                                        display_name:
+                                                          event.target.value
+                                                      })
+                                                    }
+                                                  />
+                                                  <div className="flex flex-wrap items-center gap-3">
+                                                    <Checkbox
+                                                      checked={entry.enabled}
+                                                      disabled={settingsDisabled}
+                                                      onChange={(event) =>
+                                                        updateWorldInfoEntry(entry.id, {
+                                                          enabled:
+                                                            event.target.checked
+                                                        })
+                                                      }>
+                                                      {t("common:enabled", "Enabled")}
+                                                    </Checkbox>
+                                                    <Checkbox
+                                                      checked={entry.use_regex}
+                                                      disabled={settingsDisabled}
+                                                      onChange={(event) =>
+                                                        updateWorldInfoEntry(entry.id, {
+                                                          use_regex:
+                                                            event.target.checked
+                                                        })
+                                                      }>
+                                                      {t(
+                                                        "option:writingPlayground.worldInfoRegex",
+                                                        "Regex"
+                                                      )}
+                                                    </Checkbox>
+                                                    <Checkbox
+                                                      checked={entry.case_sensitive}
+                                                      disabled={settingsDisabled}
+                                                      onChange={(event) =>
+                                                        updateWorldInfoEntry(entry.id, {
+                                                          case_sensitive:
+                                                            event.target.checked
+                                                        })
+                                                      }>
+                                                      {t(
+                                                        "option:writingPlayground.worldInfoCaseSensitive",
+                                                        "Case sensitive"
+                                                      )}
+                                                    </Checkbox>
+                                                  </div>
+                                                  <div className="flex flex-wrap items-center gap-2">
+                                                    <span className="text-xs text-text-muted">
+                                                      {t(
+                                                        "option:writingPlayground.worldInfoEntrySearchRange",
+                                                        "Entry search range (chars)"
+                                                      )}
+                                                    </span>
+                                                    <InputNumber
+                                                      size="small"
+                                                      min={0}
+                                                      step={100}
+                                                      value={
+                                                        entry.search_range ??
+                                                        worldInfo.search_range
+                                                      }
+                                                      disabled={settingsDisabled}
+                                                      onChange={(value) =>
+                                                        updateWorldInfoEntry(entry.id, {
+                                                          search_range:
+                                                            value == null
+                                                              ? undefined
+                                                              : Math.max(
+                                                                  0,
+                                                                  Math.floor(value)
+                                                                )
+                                                        })
+                                                      }
+                                                    />
+                                                    <Button
+                                                      size="small"
+                                                      disabled={settingsDisabled}
+                                                      onClick={() =>
+                                                        updateWorldInfoEntry(entry.id, {
+                                                          search_range: undefined
+                                                        })
+                                                      }>
+                                                      {t(
+                                                        "option:writingPlayground.worldInfoUseGlobalRange",
+                                                        "Use global"
+                                                      )}
+                                                    </Button>
+                                                  </div>
+                                                  <Input.TextArea
+                                                    value={entry.keys.join("\n")}
+                                                    rows={2}
+                                                    disabled={settingsDisabled}
+                                                    placeholder={t(
+                                                      "option:writingPlayground.worldInfoKeysPlaceholder",
+                                                      "Trigger keys (comma or newline separated)"
+                                                    )}
+                                                    onChange={(event) =>
+                                                      updateWorldInfoEntry(entry.id, {
+                                                        keys: parseWorldInfoKeysInput(
+                                                          event.target.value
+                                                        )
+                                                      })
+                                                    }
+                                                  />
+                                                  <Input.TextArea
+                                                    value={entry.content}
+                                                    rows={3}
+                                                    disabled={settingsDisabled}
+                                                    placeholder={t(
+                                                      "option:writingPlayground.worldInfoContentPlaceholder",
+                                                      "Context to inject when triggered."
+                                                    )}
+                                                    onChange={(event) =>
+                                                      updateWorldInfoEntry(entry.id, {
+                                                        content: event.target.value
+                                                      })
+                                                    }
+                                                  />
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              }
+                            ]}
+                          />
+                        </div>
+                      )
+                    ) : (
+                      <Empty
+                        description={t(
+                          "option:writingPlayground.settingsEmpty",
+                          "Select a session to edit settings."
+                        )}
+                      />
+                    )}
+                  </Card>
+                )}
+                diagnostics={(
+                  <WritingPlaygroundDiagnosticsPanel
+                    t={t}
+                    status={diagnosticsSummary.status}
+                    showOffline={showOffline}
+                    showUnsupported={showUnsupported}
+                    hasActiveSession={Boolean(activeSession)}
+                    response={{
+                      enabled: showResponseInspectorPanel,
+                      responseInspectorRowsCount: responseInspectorRowsAll.length,
+                      responseLogprobsCount: responseLogprobs.length,
+                      settingsLogprobsEnabled: settings.logprobs,
+                      settingsDisabled,
+                      responseLogprobRowsCount: responseLogprobRows.length,
+                      responseLogprobTruncated,
+                      onCopyResponseInspectorJson: handleCopyResponseInspectorJson,
+                      onExportResponseInspectorCsv: handleExportResponseInspectorCsv,
+                      onClearResponseInspector: clearResponseInspector
+                    }}
+                    token={{
+                      enabled: showTokenInspectorPanel,
+                      tokenizerName,
+                      serverSupportsTokenCount,
+                      canCountTokens,
+                      isCountingTokens,
+                      onCountTokens: handleCountTokens,
+                      serverSupportsTokenize,
+                      canTokenizePreview,
+                      isTokenizingText,
+                      onTokenizePreview: handleTokenizePreview,
+                      hasTokenCountResult: Boolean(tokenCountResult),
+                      tokenCountValue: tokenCountResult?.count ?? null,
+                      hasTokenizeResult: Boolean(tokenizeResult),
+                      tokenInspectorError,
+                      tokenInspectorBusy,
+                      tokenInspectorUnavailableReason,
+                      onClearTokenInspector: clearTokenInspector,
+                      tokenPreviewRowsCount: tokenPreviewRows.length,
+                      tokenPreviewTotal
+                    }}
+                    wordcloud={{
+                      enabled: showWordcloudPanel,
+                      wordcloudStatus,
+                      wordcloudStatusColor,
+                      canGenerateWordcloud,
+                      isGeneratingWordcloud,
+                      onGenerateWordcloud: handleGenerateWordcloud,
+                      wordcloudError,
+                      onClearWordcloud: clearWordcloud,
+                      wordcloudWords
+                    }}
+                  />
+                )}
+              />
+            </div>
           </div>
-        </div>
+        </WritingPlaygroundShell>
       )}
 
       <Modal

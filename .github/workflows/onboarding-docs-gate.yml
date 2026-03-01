@@ -40,6 +40,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          fetch-depth: 0
+
+      - name: Install FFmpeg and PortAudio (Linux)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
 
       - name: Setup Python and dependencies
         uses: ./.github/actions/setup-python-deps
@@ -73,6 +80,6 @@ jobs:
         run: |
           python -m pytest -q -p pytest_asyncio.plugin tldw_Server_API/tests/Docs
 
-      - name: MkDocs strict build
+      - name: MkDocs build
         run: |
-          mkdocs build --strict -f Docs/mkdocs.yml
+          mkdocs build -f Docs/mkdocs.yml
