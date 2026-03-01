@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  FAMILY_WIZARD_SETTINGS_PATH,
   GUARDIAN_SETTINGS_PATH,
   PERSONA_DOCK_PATH,
   isGuardianSettingsAvailable,
@@ -20,6 +21,26 @@ const makeCapabilities = (
   } as ServerCapabilities)
 
 describe("route capability gating", () => {
+  it("exposes the canonical family wizard route path", () => {
+    expect(FAMILY_WIZARD_SETTINGS_PATH).toBe("/settings/family-guardrails")
+  })
+
+  it("enables family wizard route when guardian capability exists without self-monitoring", () => {
+    const caps = makeCapabilities({
+      hasGuardian: true,
+      hasSelfMonitoring: false
+    })
+    expect(isRouteEnabledForCapabilities(FAMILY_WIZARD_SETTINGS_PATH, caps)).toBe(true)
+  })
+
+  it("hides family wizard route when guardian capability is missing", () => {
+    const caps = makeCapabilities({
+      hasGuardian: false,
+      hasSelfMonitoring: true
+    })
+    expect(isRouteEnabledForCapabilities(FAMILY_WIZARD_SETTINGS_PATH, caps)).toBe(false)
+  })
+
   it("hides guardian route when capabilities are missing", () => {
     expect(isRouteEnabledForCapabilities(GUARDIAN_SETTINGS_PATH, null)).toBe(false)
   })
