@@ -32,8 +32,10 @@ def test_db(temp_db_path):
     db = PromptStudioDatabase(str(temp_db_path), "test_client")
     yield db
     # Close connection if needed
-    if hasattr(db, 'conn'):
-        db.conn.close()
+    if hasattr(db, "close_connection"):
+        db.close_connection()
+    elif hasattr(db, "close"):
+        db.close()
 
 @pytest.fixture
 def populated_db(test_db):
@@ -85,14 +87,14 @@ def multi_user_prompt_dbs():
         yield dbs
     finally:
         for db in dbs:
-            if hasattr(db, "close"):
+            if hasattr(db, "close_connection"):
                 try:
-                    db.close()
+                    db.close_connection()
                 except Exception:
                     _ = None
-            elif hasattr(db, "conn"):
+            elif hasattr(db, "close"):
                 try:
-                    db.conn.close()
+                    db.close()
                 except Exception:
                     _ = None
         for path in temp_paths:

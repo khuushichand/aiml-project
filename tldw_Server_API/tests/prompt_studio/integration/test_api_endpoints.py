@@ -48,10 +48,10 @@ def test_db():
     yield db
 
     # Cleanup
-    if hasattr(db, 'close'):
+    if hasattr(db, "close_connection"):
+        db.close_connection()
+    elif hasattr(db, "close"):
         db.close()
-    elif hasattr(db, 'conn'):
-        db.conn.close()
     os.unlink(db_path)
 
 @pytest.fixture
