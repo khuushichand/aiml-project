@@ -55,6 +55,7 @@ from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (
     RetrievalConfig,
 )
 from tldw_Server_API.app.core.RAG.rag_service.generation import generate_streaming_response
+from tldw_Server_API.app.core.RAG.rag_service.profiles import get_profile_kwargs
 from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
 from tldw_Server_API.app.core.config import get_config_value
 
@@ -209,6 +210,53 @@ def _apply_search_agent_defaults(
             payload[field_name] = parsed_value
 
 
+def _apply_rag_profile_defaults(
+    request: Any,
+    payload: dict[str, Any],
+    *,
+    allowed_fields: Optional[set[str]] = None,
+) -> None:
+    """Apply rag_profile defaults for fields omitted by the caller."""
+    profile_name = getattr(request, "rag_profile", None)
+    if not profile_name:
+        return
+
+    explicit_fields = _request_fields_set(request)
+    try:
+        profile_defaults = get_profile_kwargs(profile_name)
+    except ValueError:
+        logger.warning(f"Skipping unknown rag_profile '{profile_name}' while building payload defaults")
+        return
+
+    for field_name, value in profile_defaults.items():
+        if allowed_fields is not None and field_name not in allowed_fields:
+            continue
+        if field_name in explicit_fields:
+            continue
+        payload[field_name] = value
+
+
+def _build_effective_request_payload(
+    request: Any,
+    *,
+    allowed_search_agent_fields: Optional[set[str]] = None,
+    allowed_profile_fields: Optional[set[str]] = None,
+) -> dict[str, Any]:
+    """Resolve effective payload with explicit > profile > search-agent > schema defaults."""
+    payload = model_dump_compat(request)
+    _apply_search_agent_defaults(
+        request,
+        payload,
+        allowed_fields=allowed_search_agent_fields,
+    )
+    _apply_rag_profile_defaults(
+        request,
+        payload,
+        allowed_fields=allowed_profile_fields,
+    )
+    return payload
+
+
 def _build_unified_pipeline_kwargs(
     request: UnifiedRAGRequest,
     db_paths: dict[str, Optional[str]],
@@ -216,8 +264,7 @@ def _build_unified_pipeline_kwargs(
     chacha_db: CharactersRAGDB,
     current_user: Optional[User],
 ) -> dict[str, Any]:
-    payload = model_dump_compat(request)
-    _apply_search_agent_defaults(request, payload)
+    payload = _build_effective_request_payload(request)
     payload["media_db_path"] = db_paths.get("media_db_path")
     payload["notes_db_path"] = db_paths.get("notes_db_path")
     payload["character_db_path"] = db_paths.get("character_db_path")
@@ -1872,7 +1919,11 @@ async def unified_search_stream_endpoint(
     async def event_stream():
         try:
             # Prepare retrieval like the unified pipeline (simplified)
-            index_namespace = request.index_namespace or getattr(request, "corpus", None)
+            effective_payload = _build_effective_request_payload(request)
+            index_namespace = (
+                effective_payload.get("index_namespace")
+                or effective_payload.get("corpus")
+            )
             db_paths = {}
             if media_db:
                 db_paths["media_db"] = media_db.db_path
@@ -1920,7 +1971,7 @@ async def unified_search_stream_endpoint(
 
                         if (
                             progress_queue is not None
-                            and bool(getattr(request, "enable_research_progress", False))
+                            and bool(effective_payload.get("enable_research_progress", False))
                         ):
                             async def _stream_research_progress(event: Any) -> None:
                                 await progress_queue.put(_normalize_research_event(event))
@@ -1938,7 +1989,7 @@ async def unified_search_stream_endpoint(
                     if progress_queue is not None and done_marker is not None:
                         await progress_queue.put(done_marker)
 
-            if bool(getattr(request, "enable_research_progress", False)) and db_paths:
+            if bool(effective_payload.get("enable_research_progress", False)) and db_paths:
                 progress_queue: asyncio.Queue[Any] = asyncio.Queue()
                 done_marker = object()
                 retrieval_task = asyncio.create_task(
@@ -2032,8 +2083,14 @@ async def unified_search_stream_endpoint(
 
             # Emit initial contexts (top-k with minimal fields) + a safe rationale plan (standard path)
             try:
+                top_k_requested = effective_payload.get("top_k", request.top_k or 10)
+                try:
+                    top_k_limit = min(10, int(top_k_requested))
+                except (TypeError, ValueError):
+                    top_k_limit = min(10, (request.top_k or 10))
+
                 top_contexts = []
-                for doc in (docs or [])[: min(10, (request.top_k or 10))]:
+                for doc in (docs or [])[:top_k_limit]:
                     md = getattr(doc, 'metadata', None) or (doc.get('metadata') if isinstance(doc, dict) else {}) or {}
                     top_contexts.append({
                         "id": getattr(doc, 'id', doc.get('id') if isinstance(doc, dict) else None),
@@ -2063,7 +2120,7 @@ async def unified_search_stream_endpoint(
                 rationale = {
                     "plan": [
                         "Gather top-k contexts",
-                        f"Rerank using strategy={getattr(request, 'reranking_strategy', 'flashrank')}",
+                        f"Rerank using strategy={effective_payload.get('reranking_strategy', 'flashrank')}",
                         "Ground claims from sources",
                         "Synthesize final answer",
                     ]
@@ -2080,7 +2137,8 @@ async def unified_search_stream_endpoint(
                 cfg = {}
 
             import os as _os
-            request_provider = request.generation_provider if isinstance(request.generation_provider, str) else None
+            request_provider_raw = effective_payload.get("generation_provider")
+            request_provider = request_provider_raw if isinstance(request_provider_raw, str) else None
             env_provider = _os.getenv("RAG_DEFAULT_LLM_PROVIDER")
             provider_value = request_provider if request_provider is not None else (
                 env_provider if env_provider is not None else cfg.get("RAG_DEFAULT_LLM_PROVIDER")
@@ -2091,7 +2149,8 @@ async def unified_search_stream_endpoint(
                 else "openai"
             )
 
-            model_value = request.generation_model if isinstance(request.generation_model, str) else None
+            model_value_raw = effective_payload.get("generation_model")
+            model_value = model_value_raw if isinstance(model_value_raw, str) else None
             if not model_value:
                 env_model = _os.getenv("RAG_DEFAULT_LLM_MODEL")
                 model_value = env_model if env_model is not None else cfg.get("RAG_DEFAULT_LLM_MODEL")
@@ -2102,9 +2161,9 @@ async def unified_search_stream_endpoint(
             )
 
             max_tokens = 500
-            if request.max_generation_tokens is not None:
+            if effective_payload.get("max_generation_tokens") is not None:
                 try:
-                    max_tokens = int(request.max_generation_tokens)
+                    max_tokens = int(effective_payload.get("max_generation_tokens"))
                 except (TypeError, ValueError):
                     max_tokens = 500
 
@@ -2114,8 +2173,9 @@ async def unified_search_stream_endpoint(
                 "model": model,
                 "max_tokens": max_tokens,
             }
-            if request.generation_prompt:
-                generation_config["prompt_template"] = request.generation_prompt
+            prompt_template = effective_payload.get("generation_prompt")
+            if isinstance(prompt_template, str) and prompt_template:
+                generation_config["prompt_template"] = prompt_template
 
             context = types.SimpleNamespace()
             context.documents = docs
@@ -2126,10 +2186,10 @@ async def unified_search_stream_endpoint(
             # Initialize streaming generator with claims overlay enabled per request
             await generate_streaming_response(
                 context,
-                enable_claims=request.enable_claims,
-                claims_top_k=request.claims_top_k,
-                claims_max=request.claims_max,
-                claims_concurrency=request.claims_concurrency,
+                enable_claims=bool(effective_payload.get("enable_claims", request.enable_claims)),
+                claims_top_k=effective_payload.get("claims_top_k", request.claims_top_k),
+                claims_max=effective_payload.get("claims_max", request.claims_max),
+                claims_concurrency=effective_payload.get("claims_concurrency", request.claims_concurrency),
             )
 
             last_overlay = None
