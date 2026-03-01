@@ -332,9 +332,10 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       }
       await expect(quickIngestDialog).toBeHidden({ timeout: 10_000 })
 
-      await expect(
-        authedPage.getByTestId("onboarding-success-screen")
-      ).toBeVisible({ timeout: 20_000 })
+      await expect(authedPage).toHaveURL(/\/(?:[/?#].*)?$/, {
+        timeout: 20_000,
+      })
+      await openOnboardingSuccessScreen(authedPage)
 
       await authedPage.evaluate(() => {
         try {
