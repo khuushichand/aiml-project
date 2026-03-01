@@ -766,13 +766,13 @@ Notes:
 ## Next Steps
 
 For detailed implementation guidance, see:
-- Development guide: `Docs/Development/Embeddings-Developer-Guide.md`
+- Development guide: `Docs/Code_Documentation/Embeddings-Developer-Guide.md`
 - API reference: `Docs/API-related/Embeddings_API_Documentation.md`
 
 Vector stores (OpenAI-compatible) are covered under:
 - API design overview: `Docs/API-related/API_Design.md` (see Embeddings & Vector Stores)
 
 For specific deployment scenarios, refer to:
-- `Docs/Deployment/single-server.md`
-- `Docs/Deployment/docker-compose.md`
-- `Docs/Deployment/kubernetes.md`
+- `Docs/Deployment/Embeddings-Deployment-Guide.md`
+- `Docs/Deployment/First_Time_Production_Setup.md`
+- `Dockerfiles/README.md`

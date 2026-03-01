@@ -192,10 +192,7 @@ and this project adheres to Some kind of Versioning
 - Locale rollout completion for persona unsaved-draft prompts:
   - Added localized `persona.unsavedState*` prompt copy for remaining non-English sidepanel locales:
     - `ar`, `da`, `fa`, `it`, `ko`, `ml`, `no`, `pt-BR`, `ru`, `sv`, `uk`, `zh-TW`.
-- Added implementation-plan docs for this session’s persona slices:
-  - `Docs/Plans/IMPLEMENTATION_PLAN_persona_unsaved_draft_locale_rollout_stage23_2026_02_22.md`
-  - `Docs/Plans/IMPLEMENTATION_PLAN_persona_memory_namespace_fallback_stage24_2026_02_22.md`
-  - `Docs/Plans/IMPLEMENTATION_PLAN_persona_namespace_legacy_backfill_stage25_2026_02_22.md`
+- Added implementation-plan docs for this session’s persona slices (stage 23 locale rollout, stage 24 namespace fallback, and stage 25 legacy namespace backfill).
 - Watchlists UX IA/onboarding improvements:
   - Aligned user-facing Watchlists terminology for Activity/Reports across tabs, overview cards, and help labels.
   - Added always-visible Watchlists task shortcuts (`Set up feeds`, `Configure monitors`, `Check activity`, `Review articles`, `View reports`) for direct navigation.
@@ -234,8 +231,7 @@ and this project adheres to Some kind of Versioning
   - Added release-gate checklist pass-rate tracking for Watchlists accessibility categories and recorded residual non-critical/manual review items.
   - Confirmed accessibility regression matrix remains green in touched flows with no critical keyboard/SR defects.
 - Watchlists coordinated UX program closeout:
-  - Added cross-stream closeout report with verification summary and owned deferred backlog:
-    - `Docs/Plans/WATCHLISTS_UX_PROGRAM_CLOSEOUT_2026_02_22.md`
+  - Added a cross-stream closeout report with verification summary and owned deferred backlog.
 - Chat rich-text regression coverage additions:
   - Added `st_compat` LaTeX rendering regression test for inline and block math in:
     - `apps/packages/ui/src/utils/__tests__/chat-rich-text.test.ts`

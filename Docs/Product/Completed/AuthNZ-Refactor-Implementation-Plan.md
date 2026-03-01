@@ -2,13 +2,13 @@
 
 This plan coordinates the implementation of the three AuthNZ PRDs:
 
-- Principal-Governance PRD (`Docs/Product/Principal-Governance-PRD.md`)
-- User-Unification PRD (`Docs/Product/User-Unification-PRD.md`)
-- User-Auth-Deps PRD (`Docs/Product/User-Auth-Deps-PRD.md`)
+- Principal-Governance PRD (`Docs/Product/Completed/AuthNZ-Refactor/Principal-Governance-PRD.md`)
+- User-Unification PRD (`Docs/Product/Completed/User-Unification-PRD.md`)
+- User-Auth-Deps PRD (`Docs/Product/Completed/AuthNZ-Refactor/User-Auth-Deps-PRD.md`)
 
 For a concise, stage-oriented tracker of the *remaining* work across these three PRDs (including Resource-Governor alignment), see:
 
-- `Docs/Product/AuthNZ-PRDs_IMPLEMENTATION_PLAN.md`
+- `Docs/Product/Completed/AuthNZ-Refactor/AuthNZ-PRDs_IMPLEMENTATION_PLAN.md`
 
 The stages are designed to be incremental and backwards-compatible. Each stage should result in a compilable, test-passing system with a clear, testable outcome.
 

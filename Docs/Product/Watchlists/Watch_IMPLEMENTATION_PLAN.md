@@ -112,7 +112,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 **Status**: Complete (dedup/seen inspect-reset API + DB support shipped; scheduler controls and broader scale validation tests added; operational limits boundary tests + admin UI surfacing for dedup/seen completed; verification rerun on 2026-02-08: Stage-5 backend slice `40 passed`, SourceSeenDrawer UI tests `14 passed`; AuthNZ usage aggregation sqlite-corruption logging hardened with one-time warning + skip behavior and dedicated tests)
 
 Stage 5 scale target matrix is tracked in:
-- `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_scale_validation_dedup_ui.md` (all 5 stages complete)
+- `Docs/Product/Completed/Watchlists_Subscriptions_Migration_Runbook.md` (all 5 stages complete)
 
 ---
 

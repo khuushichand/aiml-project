@@ -2,7 +2,7 @@
 
 ## Source Audit
 
-Primary audit document: `Docs/UX_AUDIT_FLASHCARDS_2026_02_18.md`  
+Primary audit document: `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_flashcards_hci_index_2026_02_18.md`  
 Audit date: `2026-02-18`  
 Route scope: `/flashcards` (Review, Cards, Import/Export)
 
@@ -27,7 +27,7 @@ Route scope: `/flashcards` (Review, Cards, Import/Export)
 
 ## Post-Audit Remediation Snapshot (2026-02-19)
 
-- Follow-up remediation plan: `Docs/Plans/IMPLEMENTATION_PLAN_flashcards_findings_remediation_2026_02_19.md`
+- Follow-up remediation plan: `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_flashcards_hci_index_2026_02_18.md`
 - Remediation stages completed:
   - Stage 1: source attribution API contract restored (schema + DB projections + endpoint coverage)
   - Stage 2: lapse-rate metric surfaced in Review analytics UI with fallback behavior

@@ -333,7 +333,7 @@ performance:
    ```
    Monitor server logs for `IndexTTS2 adapter initialized` and confirm `stream-index-tts.mp3` plays without artifacts.
 
-Document findings and GPU specs in `Docs/QA/ttsmodule-smoke-tests.md` (or create the file) to keep regressions visible.
+Document findings and GPU specs alongside the audio/TTS e2e suite (for example `tldw_Server_API/tests/e2e/test_audio_stt_tts_e2e.py`) to keep regressions visible.
 
 # Logging
 logging:

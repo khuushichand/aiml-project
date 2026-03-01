@@ -502,7 +502,7 @@ This table serves as a migration checklist to ensure the compatibility shim cont
       - `process_batch_media` as the canonical A/V inline ingestion helper.
       - `process_document_like_item` as the canonical document/email/JSON ingestion helper.
       - `download_url_async` as the shared URL→file helper used by modular JSON/document flows and tests.
-    - A design/overview doc (`Docs/Design/Media_Endpoint_Refactor.md`) now captures the final architecture, legacy-free mode semantics, and the current roles of the `media` package shim and `_legacy_media` compatibility layer.
+    - A design/overview doc (`Docs/Product/Completed/Media_Endpoint_Refactor.md`) now captures the final architecture, legacy-free mode semantics, and the current roles of the `media` package shim and `_legacy_media` compatibility layer.
   - Tests:
     - Full suites (`MediaIngestion_NEW` + `Media`) are exercised under both default and `TLDW_DISABLE_LEGACY_MEDIA=1` modes for CI, ensuring the refactor remains behavior-preserving while `_legacy_media` continues to serve as an optional compatibility layer.
 - Definition of Done (per stage)

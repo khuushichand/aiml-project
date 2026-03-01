@@ -3,7 +3,7 @@
 Status: Finalized  
 Owner: WebUI + Accessibility  
 Date: February 13, 2026  
-Related: `Docs/Product/WebUI/M3_1_Design_Token_A11y_Baseline_2026_02.md`, `Docs/Product/WebUI/M3_Design_System_A11y_Execution_Plan_2026_02.md`, `Docs/Product/WebUI/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`
+Related: `Docs/Product/Completed/WebUI-related/M3_1_Design_Token_A11y_Baseline_2026_02.md`, `Docs/Product/Completed/WebUI-related/M3_Design_System_A11y_Execution_Plan_2026_02.md`, `Docs/Product/Completed/WebUI-related/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`
 
 ## 1) Decision
 
@@ -68,10 +68,10 @@ M3.3 complete when:
 
 M3.3 completion evidence:
 
-- Owned backlog + promotion checklist committed at `Docs/Product/WebUI/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`.
+- Owned backlog + promotion checklist committed at `Docs/Product/Completed/WebUI-related/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`.
 - Non-core theme token remediations landed in `apps/packages/ui/src/themes/presets.ts` with measured ratios recorded in the M4 checklist.
 - Contrast hard-gate scope expanded to all built-in themes in `apps/packages/ui/src/themes/__tests__/contrast-baseline.test.ts`.
-- M4+ stop-ship language added to `Docs/Product/WebUI/M3_Release_Checklist_A11y_Baseline_2026_02.md`.
+- M4+ stop-ship language added to `Docs/Product/Completed/WebUI-related/M3_Release_Checklist_A11y_Baseline_2026_02.md`.
 
 M4 promotion complete when:
 

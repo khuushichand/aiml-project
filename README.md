@@ -147,7 +147,7 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 - Self-hosted by design; no telemetry or data collection.
 - Users own and control their data; see hardening guidance for production.
 - Auth modes: single-user API key or multi-user JWT.
-- Security reporting and hardening docs: `SECURITY.md`, `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.
+- Security reporting and hardening docs: `SECURITY.md`, `Docs/Published/User_Guides/Server/Production_Hardening_Checklist.md`.
 - Outbound URL egress policy blocks SSRF to private networks and disallowed ports for media downloads (audio/video/doc URLs), with test-mode DNS relaxations for hostnames.
 
 ## Highlights
@@ -427,7 +427,7 @@ Run the API and Jobs workers as separate processes (recommended for heavier work
 ```
 Notes:
 - Sets `TLDW_WORKERS_SIDECAR_MODE=true` to keep the API process from starting in-process workers.
-- Default worker list lives in `Docs/Deployment/sidecar_workers_manifest.json` (regen via `python Helper_Scripts/Deployment/generate_sidecar_files.py`).
+- Default worker list is documented in `Docs/Deployment/Sidecar_Workers.md` (regen via `python Helper_Scripts/Deployment/generate_sidecar_files.py`).
 - Customize worker list with `TLDW_SIDECAR_WORKERS=chatbooks,files,data_tables,prompt_studio,privilege_snapshots,audio,media_ingest,evals_abtest` or point to a different manifest with `TLDW_WORKERS_MANIFEST=/path/to/manifest.json`.
 - Logs are written to `.logs/sidecars/` by default.
 - Compose overlay: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.workers.yml up -d --build`.
@@ -651,7 +651,7 @@ scrape_configs:
 ```
 See Docs/Operations/monitoring/README.md for examples that scrape the API and worker orchestrator.
 
-Tip: See multi-user setup and production hardening in Docs/User_Guides/Authentication_Setup.md and Docs/Published/Deployment/First_Time_Production_Setup.md.
+Tip: See multi-user setup and production hardening in Docs/User_Guides/Server/Authentication_Setup.md and Docs/Published/Deployment/First_Time_Production_Setup.md.
 
 </details>
 
@@ -1036,7 +1036,7 @@ Run locally
 **Reference:**
 - `Docs/Documentation.md` - documentation index and developer guide links
 - `Docs/About.md` - project background and philosophy
-- Module deep dives: `Docs/Development/AuthNZ-Developer-Guide.md`, `Docs/Development/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
+- Module deep dives: `Docs/Code_Documentation/AuthNZ-Developer-Guide.md`, `Docs/Code_Documentation/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
 - Packaging and releases: `Docs/Development/PyPI_Publishing.md`
 - Distribution strategy (API + WebUI): `Docs/Development/Packaging_and_Distribution_Strategy.md`
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
@@ -1044,7 +1044,7 @@ Run locally
 - Speech quickstart (STT + TTS): `Docs/User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md`
 - TTS provider onboarding: `Docs/User_Guides/WebUI_Extension/TTS_Getting_Started.md`
 - TTS deep runbooks index: `Docs/User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md`
-- Design notes (WIP features): `Docs/Design/` - e.g., `Docs/Design/Custom_Scrapers_Router.md`
+- Design notes (WIP features): `Docs/Design/` - e.g., `Docs/Design/Audio_Pipeline.md`
 
 ### Resource Governor Config
 
@@ -1061,8 +1061,8 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 ### Chatbook Tools Guide
 
-- Getting started: `Docs/User_Guides/Chatbook_Tools_Getting_Started.md`
-- Product spec (PRD): `Docs/Product/Chatbook-Tools-PRD.md`
+- Getting started: `Docs/User_Guides/WebUI_Extension/Chatbook_Tools_Getting_Started.md`
+- Product spec (PRD): `Docs/Product/Completed/Chatbook-Tools-PRD.md`
 - Related endpoints (also listed above under Key Endpoints):
   - `GET /api/v1/chat/commands` — list slash commands (RBAC-filtered when enabled; returns empty list when disabled)
   - `POST /api/v1/chat/dictionaries/validate` — validate chat dictionaries (schema, regex, templates)
@@ -1077,7 +1077,7 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 - Reverse proxy samples: `Helper_Scripts/Samples/Nginx/`, `Helper_Scripts/Samples/Caddy/`.
 - Monitoring: `Docs/Deployment/Monitoring/` and `Helper_Scripts/Samples/Grafana/`.
 - Prometheus metrics exposed at `/metrics` and `/api/v1/metrics`.
-- Production hardening: `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.
+- Production hardening: `Docs/Published/User_Guides/Server/Production_Hardening_Checklist.md`.
 </details>
 
 ## Monitoring
@@ -1092,7 +1092,7 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 ### PostgreSQL Content Mode
 
 - Content DBs (Media, ChaChaNotes, Workflows) can run on Postgres.
-- See: `Docs/Published/Deployment/Postgres_Content_Mode.md`, `Docs/Published/Deployment/Postgres_Migration_Guide.md`, and `Docs/Published/Deployment/Postgres_Backups.md`.
+- See: `Docs/Published/User_Guides/Server/Multi-User_Postgres_Setup.md`, `Docs/Published/Deployment/Postgres_Migration_Guide.md`, and `Docs/Published/User_Guides/Server/Backups_Using_Litestream.md`.
 
 </details>
 

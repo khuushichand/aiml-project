@@ -2,18 +2,18 @@
 
 This plan tracks the remaining implementation work for the three AuthNZ-related PRDs:
 
-- `Docs/Product/Resource_Governor_PRD.md`
-- `Docs/Product/User-Auth-Deps-PRD.md`
-- `Docs/Product/User-Unification-PRD.md`
+- `Docs/Product/Completed/AuthNZ-Refactor/Resource_Governor_PRD.md`
+- `Docs/Product/Completed/AuthNZ-Refactor/User-Auth-Deps-PRD.md`
+- `Docs/Product/Completed/User-Unification-PRD.md`
 
-It is intentionally incremental and aligned with `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`.
+It is intentionally incremental and aligned with `Docs/Product/Completed/AuthNZ-Refactor-Implementation-Plan.md`.
 
 ---
 
 **Overall Status (v0.1)**: Complete — the stages below are implemented and covered by the referenced tests. Any further work is tracked as post-v0.1 follow-ups in the individual PRDs and the AuthNZ refactor plan.
 
 Post‑v0.1 tracker:
-- `Docs/Product/AuthNZ-PRDs_POST_V0_1_TRACKER.md`
+- `Docs/Product/Completed/AuthNZ-PRDs_POST_V0_1_TRACKER.md`
 
 ## Stage 1: Resource-Governor Legacy Limiters & Ingress Coverage
 
@@ -85,7 +85,7 @@ Post‑v0.1 tracker:
 - No new endpoints introduce:
   - Fresh `require_admin` usages (outside tests/compatibility stubs).
   - New `is_single_user_mode()`-based authorization branches or direct `request.state.user_id` gates.
-- `Docs/Product/User-Auth-Deps-PRD.md` “Remaining adoption checklist” items are either:
+- `Docs/Product/Completed/AuthNZ-Refactor/User-Auth-Deps-PRD.md` “Remaining adoption checklist” items are either:
   - Marked as completed with references to tests and code, or
   - Explicitly deferred to a later version with notes.
 
@@ -122,7 +122,7 @@ Post‑v0.1 tracker:
 - Canonical migrations exist for quota tables in both backends:
   - Migrations create `vk_jwt_counters` / `vk_api_key_counters` with the correct types and constraints for SQLite and Postgres.
   - `_ensure_tables(conn)` in `quotas.py` becomes a thin compatibility wrapper over these migrations (or is removed after at least one stable release), and is no longer the primary schema owner.
-- `Docs/Product/User-Unification-PRD.md` “Recommended Next Steps” section reflects the completed state for this stage, with concrete references to migrations and `AuthnzQuotasRepo`.
+- `Docs/Product/Completed/User-Unification-PRD.md` “Recommended Next Steps” section reflects the completed state for this stage, with concrete references to migrations and `AuthnzQuotasRepo`.
 
 **Tests**:
 - Unit tests for `AuthnzQuotasRepo` covering:

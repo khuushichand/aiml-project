@@ -218,5 +218,5 @@ Recommended practice
 - Registration & AuthNZ configuration: `Docs/User_Guides/Server/Authentication_Setup.md`
 - Multi-User deployment patterns: `Docs/User_Guides/Server/Multi-User_Deployment_Guide.md`
 - Reverse proxy and TLS: `Docs/Deployment/Reverse_Proxy_Examples.md`
-- Postgres/SQLite backends: `Docs/Database-Backends.md`
+- Postgres/SQLite backends: `Docs/Code_Documentation/Database-Backends.md`
 - Metrics and dashboards: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`

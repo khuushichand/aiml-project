@@ -17,9 +17,9 @@ The goal is to reduce special-case handling, make the mental model “always mul
 
 ## Related Documents
 
-- `Docs/Product/Principal-Governance-PRD.md` – principal model (`AuthPrincipal` / `AuthContext`) and AuthNZ guardrails.
-- `Docs/Product/User-Auth-Deps-PRD.md` – unified auth dependencies, claim-first authorization, and FastAPI wiring.
-- `Docs/Product/Resource_Governor_PRD.md` – global, cross-module resource governance (`ResourceGovernor`) used by AuthNZ guardrails.
+- `Docs/Product/Completed/AuthNZ-Refactor/Principal-Governance-PRD.md` – principal model (`AuthPrincipal` / `AuthContext`) and AuthNZ guardrails.
+- `Docs/Product/Completed/AuthNZ-Refactor/User-Auth-Deps-PRD.md` – unified auth dependencies, claim-first authorization, and FastAPI wiring.
+- `Docs/Product/Completed/AuthNZ-Refactor/Resource_Governor_PRD.md` – global, cross-module resource governance (`ResourceGovernor`) used by AuthNZ guardrails.
 
 ---
 
@@ -320,7 +320,7 @@ This section is forward-looking (targeting v1.0 or later). To make “mode” an
   - Tools execute: `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_tools_invariants.py` covers the multi-user API-key path to `/api/v1/tools/execute`, ensuring `principal.api_key_id` and `request.state.api_key_id` remain in sync and that `request.state.auth.principal` mirrors both.
   - Evaluations list: `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_evaluations_invariants.py` adds a JWT happy-path invariant for `/api/v1/evaluations/`, verifying that a user with `evals.read` sees consistent identity between `AuthPrincipal`, `request.state.*`, and `request.state.auth.principal`.
   - Together with the single-user claims tests (`tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`) and claim-first permission tests (`tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py`), these suites form a cross-domain coverage snapshot (media, RAG, tools, evaluations) for principal/state alignment in both multi-user and single-user profiles.
-- Remaining inline SQL touching selected bootstrap paths is intentionally left for later phases; it is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` as out-of-scope for this iteration (e.g., minimal schema backstops in `initialize.py` and API-key bootstrap helpers).
+- Remaining inline SQL touching selected bootstrap paths is intentionally left for later phases; it is documented in `Docs/Product/Completed/AuthNZ-Refactor-Implementation-Plan.md` as out-of-scope for this iteration (e.g., minimal schema backstops in `initialize.py` and API-key bootstrap helpers).
 
 ### Out of Scope (v1)
 
@@ -402,14 +402,14 @@ This section is forward-looking (targeting v1.0 or later). To make “mode” an
   - Some RBAC helpers to use `AuthnzRbacRepo`.
 - Move DDL for API key-related tables into migrations or repositories.
 
-- **Status (v0.1)**: Done — core repos (`AuthnzUsersRepo`, `AuthnzApiKeysRepo`, `AuthnzRbacRepo`, `AuthnzUsageRepo`, and others) back primary AuthNZ flows with SQLite/Postgres tests; remaining repo migrations are explicitly deferred to post-v0.1 iterations (see `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` for the tech-debt list).
+- **Status (v0.1)**: Done — core repos (`AuthnzUsersRepo`, `AuthnzApiKeysRepo`, `AuthnzRbacRepo`, `AuthnzUsageRepo`, and others) back primary AuthNZ flows with SQLite/Postgres tests; remaining repo migrations are explicitly deferred to post-v0.1 iterations (see `Docs/Product/Completed/AuthNZ-Refactor-Implementation-Plan.md` for the tech-debt list).
 
 ### Phase 4: Backend Drift Reduction
 
 - Identify and refactor 2–3 high-impact modules (e.g., `virtual_keys`, `orgs_teams`, parts of `rate_limiter` that are AuthNZ-specific) to use repositories.
 - Remove duplicated Postgres/SQLite branches that are now redundant.
 
-- **Status (v0.1)**: Done — key modules such as `virtual_keys`, `orgs_teams`, and AuthNZ rate-limiter storage use repos; remaining backend drift and mode cleanup is tracked as post-v0.1 tech debt in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` and is addressed incrementally.
+- **Status (v0.1)**: Done — key modules such as `virtual_keys`, `orgs_teams`, and AuthNZ rate-limiter storage use repos; remaining backend drift and mode cleanup is tracked as post-v0.1 tech debt in `Docs/Product/Completed/AuthNZ-Refactor-Implementation-Plan.md` and is addressed incrementally.
 
 ### Repo Coverage vs Inline SQL (AuthNZ v0.1)
 
@@ -419,7 +419,7 @@ As of the current AuthNZ refactor stage (note: “repo-backed” here refers to 
 - **API keys** and **usage/LLM-usage** are partially repo-backed: validation, listing, aggregation, and pruning use `AuthnzApiKeysRepo` / `AuthnzUsageRepo`, but `APIKeyManager` still contains backend-specific inline SQL for some runtime operations (usage logging inserts now go through `AuthnzUsageRepo`).
 - Non-MFA inline SQL that uses backend detection (`hasattr(conn, 'fetch*')`) and touches core tables is explicitly marked as deferred or bootstrap-only in the AuthNZ implementation plan (e.g., Postgres bootstrap DDL in `initialize.py`, runtime API-key flows in `api_key_manager.py`).
 
-For a detailed, per-table view across the core AuthNZ tables (users, api_keys, RBAC, orgs/teams, usage/llm_usage, rate_limits/failed_attempts/account_lockouts, sessions, token_blacklist, MFA, monitoring, registration codes), see the **“Repo Coverage Table (AuthNZ core tables)”** section in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`.
+For a detailed, per-table view across the core AuthNZ tables (users, api_keys, RBAC, orgs/teams, usage/llm_usage, rate_limits/failed_attempts/account_lockouts, sessions, token_blacklist, MFA, monitoring, registration codes), see the **“Repo Coverage Table (AuthNZ core tables)”** section in `Docs/Product/Completed/AuthNZ-Refactor-Implementation-Plan.md`.
 
 ---
 
@@ -570,7 +570,7 @@ Note: “Repository” here means runtime queries/operations use the repository 
 - Failure-path tests for repository methods (uniqueness violations, missing rows) to ensure consistent exception mapping.
 - Existing API-key and RBAC tests pass unchanged.
 
-**Status**: Done (v0.1) — core repos are in use; remaining repo migrations are deferred to the next iteration (see `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`).
+**Status**: Done (v0.1) — core repos are in use; remaining repo migrations are deferred to the next iteration (see `Docs/Product/Completed/AuthNZ-Refactor-Implementation-Plan.md`).
 
 **Notes**:
 - `AuthnzApiKeysRepo` at `tldw_Server_API/app/core/AuthNZ/repos/api_keys_repo.py` now backs all runtime `api_keys` operations with focused methods, including:
@@ -594,7 +594,7 @@ Note: “Repository” here means runtime queries/operations use the repository 
 **Tests**:
 - Regression tests for affected modules under both backends (where supported by current test fixtures).
 
-**Status**: Done (v0.1) — initial repo-backed refactors for `virtual_keys`, `orgs_teams`, AuthNZ rate-limiter storage, API-key management, usage logging, and virtual-key quota counters (via `AuthnzQuotasRepo`) have landed; remaining backend drift and inline SQL is now limited primarily to Postgres bootstrap DDL in `initialize.py`, with further consolidation tracked as deferred follow-up in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` under “Remaining inline SQL / backend detection (tech debt)”.
+**Status**: Done (v0.1) — initial repo-backed refactors for `virtual_keys`, `orgs_teams`, AuthNZ rate-limiter storage, API-key management, usage logging, and virtual-key quota counters (via `AuthnzQuotasRepo`) have landed; remaining backend drift and inline SQL is now limited primarily to Postgres bootstrap DDL in `initialize.py`, with further consolidation tracked as deferred follow-up in `Docs/Product/Completed/AuthNZ-Refactor-Implementation-Plan.md` under “Remaining inline SQL / backend detection (tech debt)”.
 
 ---
 
@@ -617,7 +617,7 @@ Note: “Repository” here means runtime queries/operations use the repository 
   - Enumerate remaining `is_single_user_mode()` callsites in auth-adjacent modules (`tldw_Server_API/app/api/v1/API_Deps/auth_deps.py`, `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py`, `tldw_Server_API/app/core/AuthNZ/User_DB_Handling.py`, `tldw_Server_API/app/main.py`, embeddings/evaluations endpoints, `tldw_Server_API/app/core/PrivilegeMaps/service.py`, MCP/unified endpoints, backpressure and tenant-RPS helpers) and classify each as either coordination/UX (startup banners, WebUI hints, warm-ups) or auth/guardrail (permissions, quotas, embeddings/MCP behavior).
   - Keep coordination/UX branches mode-aware for now (eventually driven by `PROFILE` + feature flags); focus this iteration on auth/guardrail callsites where mode currently influences permissions or quotas.
 - **Principal-first replacements (Stage 4 alignment)**:
-  - For each auth/guardrail callsite, design a principal-based alternative that takes `AuthPrincipal` and/or `AuthContext` together with profile/feature flags (`PROFILE`, `ENABLE_*` flags, and dedicated toggles such as `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE`, `MCP_SINGLE_USER_COMPAT_SHIM`), as outlined under “Stage 4: Claim-First Dependencies & AuthContext Adoption” in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`.
+  - For each auth/guardrail callsite, design a principal-based alternative that takes `AuthPrincipal` and/or `AuthContext` together with profile/feature flags (`PROFILE`, `ENABLE_*` flags, and dedicated toggles such as `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE`, `MCP_SINGLE_USER_COMPAT_SHIM`), as outlined under “Stage 4: Claim-First Dependencies & AuthContext Adoption” in `Docs/Product/Completed/AuthNZ-Refactor-Implementation-Plan.md`.
   - Wire the new path behind an explicit env flag per surface so tests can exercise both legacy (mode-driven) and principal-first behavior before defaults change; keep single-user deployments participating via bootstrapped principal claims instead of `is_single_user_mode()` shortcuts.
 - **Tests and deprecation**:
   - Extend the existing claim-first HTTP and unit test matrix (metrics admin, Resource-Governor, RAG/media permissions, jobs admin, Prompt Studio, embeddings model management) to cover each newly migrated callsite, asserting that single-user profile + bootstrap principal yields the same effective permissions and quotas as today, and that multi-user SQLite/Postgres behavior remains unchanged.

@@ -18,7 +18,7 @@ Only these folders are included on the public site:
 - `Docs/Code_Documentation`
 - `Docs/Deployment` (excluding its nested `Monitoring`)
 - `Docs/Deployment/Monitoring` (published as top-level `Monitoring`)
-- `Docs/Evaluations`
+- `Docs/Evals`
 - `Docs/User_Guides`
 
 The curated content is synced into `Docs/Published/`. Do not manually edit files in `Docs/Published/` - they can be overwritten by the refresh script or CI.

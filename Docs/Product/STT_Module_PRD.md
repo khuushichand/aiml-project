@@ -55,7 +55,7 @@
   - Worker SDK updates: strict worker_id/lease_id enforcement, explicit completion tokens, provider context metadata.
 
 - **Non-Functional Requirements**
-  - Performance: on the reference setup described in `Docs/Product/STT-IMPLEMENTATION_PLAN.md`, target p50 <10s latency for a 5-minute clip on GPU-backed models; target p50 <250ms end-of-speech → partial-result latency for unified WS streaming. Reference setup is: 8-core CPU, optional NVIDIA GPU (Parakeet GPU path), macOS 14 or Ubuntu 22.04, Python 3.11, ffmpeg ≥6.0, av ≥11.0.0, localhost loopback, 10s 16 kHz float32 single-speaker fixture with 250 ms trailing silence.
+  - Performance: on the reference setup described in `Docs/Product/STT_Module_IMPLEMENTATION_PLAN.md`, target p50 <10s latency for a 5-minute clip on GPU-backed models; target p50 <250ms end-of-speech → partial-result latency for unified WS streaming. Reference setup is: 8-core CPU, optional NVIDIA GPU (Parakeet GPU path), macOS 14 or Ubuntu 22.04, Python 3.11, ffmpeg ≥6.0, av ≥11.0.0, localhost loopback, 10s 16 kHz float32 single-speaker fixture with 250 ms trailing silence.
   - Accuracy: allow measurement hooks for WER; prefer baseline comparisons or non-blocking checks over hard per-provider thresholds in unit tests.
   - Scalability: multi-worker queue processing, horizontal scaling with Jobs; avoid single-node bottlenecks.
   - Resilience: fallback from GPU to CPU or alternate provider with clear logging.
@@ -160,7 +160,7 @@
      - **Status**: Implemented. See `Helper_Scripts/voice_latency_harness/run.py`, `Helper_Scripts/voice_latency_harness/README.md`, and sample output `Docs/Product/stt_stage4_voice_latency_harness_sample_20260207.jsonc`.
  5. **M5 - Production Hardening & Release Readiness**: release-report closure, known-issues publication, rollback playbook, and operations/support handoff.
     - **Acceptance**: All four artifacts exist and are cross-linked from the execution tracker; known issues include severity + workaround + owner; rollback includes concrete STT/WS/TTS actions with validation steps.
-    - **Status**: Implemented. See `Docs/Product/STT_Module_Release_Report_20260207.md`, `Docs/Product/STT_Module_Known_Issues_20260207.md`, `Docs/Operations/STT_TTS_Rollback_Guide_20260207.md`, and `Docs/Operations/STT_Module_Ops_Support_Handoff_20260207.md`.
+    - **Status**: Implemented. See `Docs/Product/STT_Module_Release_Report_20260207.md`, `Docs/Product/STT_Module_Known_Issues_20260207.md`, `Docs/Operations/Audio_Streaming_Backpressure_Runbook.md`, and `Docs/Audio_STT_Module.md`.
 
 - **Risks & Mitigations**
   - Provider downtime/unavailability → multi-provider fallbacks, local deterministic mock, error escalation.

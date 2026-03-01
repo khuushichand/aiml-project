@@ -4,7 +4,7 @@ Status: Complete (Initial Draft)
 Owner: WebUI + Product  
 Milestone: M1.1 (February 13-February 17, 2026)  
 Last Updated: February 12, 2026  
-Related: `Docs/Product/WebUI/M1_Navigation_IA_Execution_Plan_2026_02.md`
+Related: `Docs/Product/Completed/WebUI-related/M1_Navigation_IA_Execution_Plan_2026_02.md`
 
 ## Purpose
 

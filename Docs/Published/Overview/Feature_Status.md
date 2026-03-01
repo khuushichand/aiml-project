@@ -12,8 +12,7 @@ Legend
 - LLM usage summary: `GET /api/v1/admin/llm-usage/summary` (group_by=`user|provider|model|operation|day`)
 - LLM top spenders: `GET /api/v1/admin/llm-usage/top-spenders`
 - LLM CSV export: `GET /api/v1/admin/llm-usage/export.csv`
-- Grafana dashboard JSON (LLM cost + tokens): `https://github.com/rmusser01/tldw_server/blob/main/Docs/Deployment/Monitoring/Grafana_LLM_Cost_Top_Providers.json`
-- Grafana dashboard JSON (LLM Daily Spend): `https://github.com/rmusser01/tldw_server/blob/main/Docs/Deployment/Monitoring/Grafana_LLM_Daily_Spend.json`
+- Grafana provisioning + dashboard import guide: `https://github.com/rmusser01/tldw_server/blob/main/Helper_Scripts/Samples/Grafana/README.md`
 - Prometheus alert rules (daily spend thresholds): `https://github.com/rmusser01/tldw_server/blob/main/Helper_Scripts/Samples/Prometheus/alerts.yml`
 
 ## Media Ingestion
@@ -26,7 +25,7 @@ Legend
 | Adaptive/multi-level chunking | Working | Configurable size/overlap | [docs](../API-related/Chunking_Templates_API_Documentation.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/chunking.py) |
 | OCR on PDFs/images | Working | Tesseract baseline; optional dots.ocr/POINTS | [docs](../API-related/OCR_API_Documentation.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/ocr.py) |
 | MediaWiki import | Working | Config via YAML | [docs](../Code_Documentation/Ingestion_Pipeline_MediaWiki.md) · [config](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/Config_Files/mediawiki_import_config.yaml) |
-| Browser extension capture | WIP | Web capture extension | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Content_Collections_PRD.md) |
+| Browser extension capture | WIP | Web capture extension | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Completed/Content_Collections_PRD.md) |
 
 ## Audio (STT/TTS)
 
@@ -117,7 +116,7 @@ Legend
 | Web search (multi-provider) | Working | Google, DDG, Brave, Kagi, Tavily, Searx | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/research.py) |
 | Aggregation/final answer | Working | Structured answer + evidence | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/research.py) |
 | Academic paper search | Working | arXiv, BioRxiv/MedRxiv, PubMed/PMC, Semantic Scholar, OSF | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/paper_search.py) |
-| Web scraping service | Working | Status, jobs, progress, cookies | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Content_Collections_PRD.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/web_scraping.py) |
+| Web scraping service | Working | Status, jobs, progress, cookies | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Completed/Content_Collections_PRD.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/web_scraping.py) |
 
 ## Connectors (External Sources)
 
@@ -125,7 +124,7 @@ Legend
 |---|---|---|---|
 | Google Drive connector | Working | OAuth2, browse/import | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/connectors.py) |
 | Notion connector | Working | OAuth2, nested blocks→Markdown | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/connectors.py) |
-| Connector policy + quotas | Working | Org policy, job quotas | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Content_Collections_PRD.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/connectors.py) |
+| Connector policy + quotas | Working | Org policy, job quotas | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Completed/Content_Collections_PRD.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/connectors.py) |
 
 ## MCP Unified
 
@@ -170,8 +169,8 @@ Legend
 | Watchlists: sources/groups/tags | Working | CRUD + bulk import | [docs](../API-related/Watchlists_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/watchlists.py) |
 | Watchlists: jobs & runs | Working | Schedule, run, run details | [docs](../API-related/Watchlists_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/watchlists.py) |
 | Watchlists: templates & OPML | Working | Template store; OPML import/export | [docs](../API-related/Watchlists_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/watchlists.py) |
-| Watchlists: notifications | Experimental | Email/chatbook delivery | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Watchlist_PRD.md) |
-| Workflows engine & scheduler | WIP | Defs CRUD, runs, scheduler | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Workflows_PRD.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/workflows.py) |
+| Watchlists: notifications | Experimental | Email/chatbook delivery | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Watchlists/Watchlist_PRD.md) |
+| Workflows engine & scheduler | WIP | Defs CRUD, runs, scheduler | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Completed/Workflows_PRD.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/workflows.py) |
 | VLM backends listing | Experimental | `/api/v1/vlm/backends` | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/vlm.py) |
 | Next.js WebUI | WIP | Primary web client (`apps/tldw-frontend`) | [code](https://github.com/rmusser01/tldw_server/tree/main/apps/tldw-frontend/) |
 | Admin UI | WIP | Unified admin dashboard (`admin-ui`) | [code](https://github.com/rmusser01/tldw_server/tree/main/admin-ui/) |

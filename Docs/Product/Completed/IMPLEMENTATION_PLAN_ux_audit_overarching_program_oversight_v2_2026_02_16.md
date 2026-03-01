@@ -5,19 +5,19 @@
 Provide one control plan to oversee implementation sequencing, quality gates, and release readiness for UX Audit v2 remediation plans.
 
 In-scope plan sequence:
-1. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_stage1_route_matrix_baseline_v2.md`
-2. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_settings_pages_v2.md`
-3. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_admin_pages_v2.md`
-4. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_chat_pages_v2.md`
-5. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_audio_speech_pages_v2.md`
-6. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_workspace_playground_pages_v2.md`
-7. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_media_knowledge_pages_v2.md`
-8. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_core_pages_v2.md`
-9. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_ux_audit_interaction_tests_v2.md`
+1. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_stage1_route_matrix_baseline_v2.md`
+2. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_settings_pages_v2.md`
+3. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_admin_pages_v2.md`
+4. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_chat_pages_v2.md`
+5. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_audio_speech_pages_v2.md`
+6. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_workspace_playground_pages_v2.md`
+7. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_media_knowledge_pages_v2.md`
+8. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_core_pages_v2.md`
+9. `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_interaction_tests_v2.md`
 
 Already complete and tracked as closed dependencies:
-- `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_reactmarkdown_defaultprops_warning_remediation_2026_02_16.md`
-- `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Plans/IMPLEMENTATION_PLAN_circuit_breaker_distributed_semantics_admin_endpoint_2026_02_16.md`
+- `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_themes_v2.md`
+- `/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_circuit_breaker_distributed_semantics_admin_endpoint_2026_02_16.md`
 
 ## Oversight Model
 
@@ -561,8 +561,8 @@ Already complete and tracked as closed dependencies:
 
 | Metric | Baseline (Audit v2, 2026-02-14) | Current (Closeout, 2026-02-17) | Evidence |
 |---|---:|---:|---|
-| Severity 4 findings (total) | 6 | 0 open | Baseline: `Docs/UX_AUDIT_REPORT_v2.md` Section 6. Current: no route overlays (`withErrorOverlay: 0`), no wrong-content Stage 2 contracts (`11/11` expected route titles), no template leaks (`templateLeakRoutes: 0`). |
-| Severity 3 findings (total) | 22 | 0 open (in-scope audited surfaces) | Baseline: `Docs/UX_AUDIT_REPORT_v2.md` Section 6. Current: Section 2 audited-nav 404 count `0` and wrong-content count `0` in route matrix/contract artifacts; `maxDepthRoutes: 0`, `timeoutStatus0: 0`, `templateLeakRoutes: 0` in Stage 1 closeout artifact; loading timeout+retry gates pass in Stage 7 (`4 passed`). |
+| Severity 4 findings (total) | 6 | 0 open | Baseline: `Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_stage1_route_matrix_baseline_v2.md` and `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_themes_v2.md`. Current: no route overlays (`withErrorOverlay: 0`), no wrong-content Stage 2 contracts (`11/11` expected route titles), no template leaks (`templateLeakRoutes: 0`). |
+| Severity 3 findings (total) | 22 | 0 open (in-scope audited surfaces) | Baseline: `Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_stage1_route_matrix_baseline_v2.md` and `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_themes_v2.md`. Current: Section 2 audited-nav 404 count `0` and wrong-content count `0` in route matrix/contract artifacts; `maxDepthRoutes: 0`, `timeoutStatus0: 0`, `templateLeakRoutes: 0` in Stage 1 closeout artifact; loading timeout+retry gates pass in Stage 7 (`4 passed`). |
 | Manifest failed routes | 12 | 1 (intentional sentinel 404) | `Docs/Plans/artifacts/stage1_route_smoke_results_2026-02-17_stage5_interaction_closeout.json` (`failed: 1`, route `/nonexistent-page-404-test`). |
 
 - Final artifact set for program closeout:

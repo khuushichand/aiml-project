@@ -3,7 +3,7 @@
 Status: Complete (Evidence Captured February 13, 2026)  
 Owner: QA + WebUI  
 Date: February 13, 2026  
-Execution Plan: `Docs/Product/WebUI/M3_Design_System_A11y_Execution_Plan_2026_02.md`
+Execution Plan: `Docs/Product/Completed/WebUI-related/M3_Design_System_A11y_Execution_Plan_2026_02.md`
 
 ## 1) Purpose
 
@@ -66,7 +66,7 @@ Capture per route:
 
 Store artifacts under:
 
-- `Docs/Product/WebUI/evidence/m3_2_a11y_focus_<date>/`
+- `Docs/Product/Completed/WebUI-related/evidence/m3_2_a11y_focus_2026_02_13/`
 
 ## 8) Execution Evidence (February 13, 2026)
 
@@ -83,7 +83,5 @@ Outcome:
 
 Artifacts:
 
-- `Docs/Product/WebUI/evidence/m3_2_a11y_focus_2026_02_13/README.md`
-- `Docs/Product/WebUI/evidence/m3_2_a11y_focus_2026_02_13/desktop-route-matrix-results.json`
-- `Docs/Product/WebUI/evidence/m3_2_a11y_focus_2026_02_13/mobile-route-matrix-results.json`
-- `Docs/Product/WebUI/evidence/m3_2_a11y_focus_2026_02_13/*.png`
+- `Docs/Product/Completed/WebUI-related/evidence/m3_2_a11y_focus_2026_02_13/desktop-route-matrix-results.json`
+- `Docs/Product/Completed/WebUI-related/evidence/m3_2_a11y_focus_2026_02_13/mobile-route-matrix-results.json`

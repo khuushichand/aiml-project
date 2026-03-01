@@ -120,7 +120,7 @@ Finding IDs: `H9-1` through `H9-2`
   - network and conflict recovery behavior in review/cards component tests
   - timeout-style error classification in taxonomy tests.
 - Added a release/QA checklist for mandatory recovery validation:
-  - `Docs/QA/FLASHCARDS_ERROR_RECOVERY_RELEASE_CHECKLIST_2026_02_18.md`
+  - `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_flashcards_hci_09_error_recovery_2026_02_18.md`
 
 **Validation Completed**:
 - Telemetry state unit tests:

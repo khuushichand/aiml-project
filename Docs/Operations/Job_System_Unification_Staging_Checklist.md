@@ -4,7 +4,7 @@ Audience: Ops + Backend
 Status: Draft
 
 Related
-- PRD: `Docs/Product/Job_System_Unification_PRD.md`
+- PRD: `Docs/Product/Completed/Job_System_Unification_PRD.md`
 - Mapping matrix: `Docs/Product/Job_System_Unification_Mapping_Matrix.md`
 - Jobs module: `Docs/Code_Documentation/Jobs_Module.md`
 

@@ -104,6 +104,6 @@ Last Updated: 2026-02-09
 - Completed scope: `Docs/Product/Completed/Media_Ingestion_Pipeline_Completed_PRD.md`.
 - Ingestion code: `tldw_Server_API/app/core/Ingestion_Media_Processing/`.
 - Database: `tldw_Server_API/app/core/DB_Management/Media_DB_v2.py`.
-- Collections & Watchlists: `Docs/Product/Content_Collections_PRD.md`, `Docs/Product/Watchlist_PRD.md`.
-- Infrastructure: `Docs/Product/Infrastructure_Module_PRD.md`.
-- Related plans: `Docs/Design/Ingest-Plan-1.md`, `Docs/Design/RAG_Plan.md`.
+- Collections & Watchlists: `Docs/Product/Completed/Content_Collections_PRD.md`, `Docs/Product/Watchlists/Watchlist_PRD.md`.
+- Infrastructure: `Docs/Product/Completed/Infrastructure_Module_PRD.md`.
+- Related plans: `Docs/Product/Ingest-Plan-1.md`, `Docs/Design/RAG_Plan.md`.

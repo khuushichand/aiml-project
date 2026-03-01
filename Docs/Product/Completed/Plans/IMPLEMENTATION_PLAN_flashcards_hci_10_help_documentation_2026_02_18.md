@@ -66,7 +66,7 @@ Finding IDs: `H10-1` through `H10-3`
 **Status**: Complete
 
 **Implementation Notes (2026-02-18)**:
-- Added dedicated user guide: `Docs/User_Guides/Flashcards_Study_Guide.md` (study loop, ratings/scheduling, cloze syntax, import/export, troubleshooting).
+- Added dedicated user guide: `Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md` (study loop, ratings/scheduling, cloze syntax, import/export, troubleshooting).
 - Added centralized versioned help URLs + section anchors in `apps/packages/ui/src/components/Flashcards/constants/help-links.ts`.
 - Wired in-app doc links from Study onboarding and Transfer import help surfaces to section-specific anchors.
 - Added flashcards docs-sync checklist item to `.github/pull_request_template.md`.

@@ -26,7 +26,7 @@
 
 ## Post-Completion Remediation (2026-02-19)
 
-- Follow-up plan: `Docs/Plans/IMPLEMENTATION_PLAN_flashcards_findings_remediation_2026_02_19.md` (Stage 4).
+- Follow-up plan: `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_flashcards_hci_index_2026_02_18.md` (Stage 4).
 - APKG import UX now includes large-import confirmation parity with other import modes:
   - APKG large-file/estimated-item preflight confirmation before mutation execution.
   - APKG-specific confirmation summary copy showing file name, file size, and estimated item count.

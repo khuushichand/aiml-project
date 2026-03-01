@@ -386,7 +386,7 @@
     - Blend calibrated scores with existing BM25/embedding pipeline as a rerank stage; weight controlled in config (`RAG_RERANK_WEIGHT`).
 
 ## Repo Process Alignment
-- Add companion design: `Docs/Design/LATTICE-Design.md` detailing architecture, schemas, and flows.
+- Add companion design: `Docs/Product/LATTICE-PRD.md` detailing architecture, schemas, and flows.
 - Add `IMPLEMENTATION_PLAN.md` with staged deliverables, success criteria, and status updates per project guidelines.
 - Note schema code locations:
   - `tldw_Server_API/app/api/v1/schemas/rag_rerank.py`

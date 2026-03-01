@@ -126,7 +126,7 @@ Finding IDs: `3.1` through `3.13`
   - `apps/packages/ui/src/components/Option/WorldBooks/__tests__/WorldBooksManager.entryStage4.test.tsx`
   - validates separator parsing examples, malformed-line diagnostics, bounded concurrency, progress updates, and mixed success/failure summary behavior.
 - Implemented Stage 5 decision and UX clarity:
-  - documented explicit defer decision in `Docs/Plans/DECISION_world_books_entry_reordering_2026_02_18.md`.
+  - documented explicit defer decision in `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_world_books_03_entry_management_2026_02_18.md`.
   - added in-drawer explanatory copy clarifying that priority drives entry ordering.
 - Added Stage 5 regression coverage:
   - `apps/packages/ui/src/components/Option/WorldBooks/__tests__/WorldBooksManager.entryStage5.test.tsx`
