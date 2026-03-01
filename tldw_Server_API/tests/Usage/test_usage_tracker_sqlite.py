@@ -30,7 +30,11 @@ async def _ensure_llm_tables(pool):
                 total_cost_usd DOUBLE PRECISION,
                 currency TEXT,
                 estimated BOOLEAN,
-                request_id TEXT
+                request_id TEXT,
+                remote_ip TEXT,
+                user_agent TEXT,
+                token_name TEXT,
+                conversation_id TEXT
             )
             """
         )
@@ -56,7 +60,11 @@ async def _ensure_llm_tables(pool):
                 total_cost_usd REAL,
                 currency TEXT,
                 estimated INTEGER,
-                request_id TEXT
+                request_id TEXT,
+                remote_ip TEXT,
+                user_agent TEXT,
+                token_name TEXT,
+                conversation_id TEXT
             )
             """
         )
@@ -108,3 +116,146 @@ async def test_usage_tracker_inserts_sqlite(monkeypatch):
     cost = float(row["total_cost_usd"]) if isinstance(row, dict) else float(row[2])
     assert pt == 1000 and ct == 500
     assert cost > 0.0
+
+
+@pytest.mark.asyncio
+async def test_log_llm_usage_persists_router_enrichment(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "ut-key-" + uuid.uuid4().hex)
+    monkeypatch.setenv("PII_REDACT_LOGS", "false")
+    monkeypatch.setenv("USAGE_LOG_DISABLE_META", "false")
+    dburl = f"sqlite:///./Databases/users_test_ut_{uuid.uuid4().hex}.sqlite"
+    monkeypatch.setenv("DATABASE_URL", dburl)
+
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+
+    reset_settings()
+    await reset_db_pool()
+    await reset_session_manager()
+
+    pool = await get_db_pool()
+    await _ensure_llm_tables(pool)
+
+    await log_llm_usage(
+        user_id=1,
+        key_id=1,
+        endpoint="POST:/api/v1/chat/completions",
+        operation="chat",
+        provider="openai",
+        model="gpt-4o-mini",
+        status=200,
+        latency_ms=120,
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+        request_id="req-enrich",
+        remote_ip="127.0.0.1",
+        user_agent="pytest-agent/1.0",
+        token_name="Admin",
+        conversation_id="conv-1",
+    )
+
+    if pool.pool:
+        row = await pool.fetchone(
+            "SELECT remote_ip, user_agent, token_name, conversation_id FROM llm_usage_log WHERE request_id = $1",
+            "req-enrich",
+        )
+    else:
+        row = await pool.fetchone(
+            "SELECT remote_ip, user_agent, token_name, conversation_id FROM llm_usage_log WHERE request_id = ?",
+            "req-enrich",
+        )
+
+    assert row is not None
+    if isinstance(row, dict):
+        assert row["remote_ip"] == "127.0.0.1"
+        assert row["user_agent"] == "pytest-agent/1.0"
+        assert row["token_name"] == "Admin"
+        assert row["conversation_id"] == "conv-1"
+    else:
+        assert row[0] == "127.0.0.1"
+        assert row[1] == "pytest-agent/1.0"
+        assert row[2] == "Admin"
+        assert row[3] == "conv-1"
+
+
+@pytest.mark.asyncio
+async def test_log_llm_usage_derives_token_name_from_key(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "ut-key-" + uuid.uuid4().hex)
+    monkeypatch.setenv("PII_REDACT_LOGS", "false")
+    monkeypatch.setenv("USAGE_LOG_DISABLE_META", "false")
+    dburl = f"sqlite:///./Databases/users_test_ut_{uuid.uuid4().hex}.sqlite"
+    monkeypatch.setenv("DATABASE_URL", dburl)
+
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+
+    reset_settings()
+    await reset_db_pool()
+    await reset_session_manager()
+
+    pool = await get_db_pool()
+    await _ensure_llm_tables(pool)
+
+    if pool.pool:
+        await pool.execute(
+            """
+            INSERT INTO users (id, username, email, password_hash)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            1,
+            "usage-test-user",
+            "usage-test-user@example.com",
+            "hash",
+        )
+    else:
+        await pool.execute(
+            """
+            INSERT OR IGNORE INTO users (id, username, email, password_hash)
+            VALUES (?, ?, ?, ?)
+            """,
+            1,
+            "usage-test-user",
+            "usage-test-user@example.com",
+            "hash",
+        )
+
+    key_hash = "kh-" + uuid.uuid4().hex
+    if pool.pool:
+        await pool.execute("INSERT INTO api_keys (user_id, key_hash, name) VALUES ($1, $2, $3)", 1, key_hash, "DerivedName")
+        key_id = await pool.fetchval("SELECT id FROM api_keys WHERE key_hash = $1", key_hash)
+    else:
+        await pool.execute("INSERT INTO api_keys (user_id, key_hash, name) VALUES (?, ?, ?)", 1, key_hash, "DerivedName")
+        key_id = await pool.fetchval("SELECT id FROM api_keys WHERE key_hash = ?", key_hash)
+    assert key_id is not None
+
+    await log_llm_usage(
+        user_id=1,
+        key_id=int(key_id),
+        endpoint="POST:/api/v1/chat/completions",
+        operation="chat",
+        provider="openai",
+        model="gpt-4o-mini",
+        status=200,
+        latency_ms=90,
+        prompt_tokens=5,
+        completion_tokens=2,
+        total_tokens=7,
+        request_id="req-derive-name",
+    )
+
+    if pool.pool:
+        row = await pool.fetchone("SELECT token_name FROM llm_usage_log WHERE request_id = $1", "req-derive-name")
+    else:
+        row = await pool.fetchone("SELECT token_name FROM llm_usage_log WHERE request_id = ?", "req-derive-name")
+
+    assert row is not None
+    if isinstance(row, dict):
+        assert row["token_name"] == "DerivedName"
+    else:
+        assert row[0] == "DerivedName"
