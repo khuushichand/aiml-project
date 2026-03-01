@@ -20,7 +20,7 @@ from loguru import logger
 from tldw_Server_API.app.core.Claims_Extraction.analyze_types import (
     AdjudicatorAnalyzeCallable,
 )
-from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
+from tldw_Server_API.app.core.RAG.rag_service.types import (
     Document,
     VerificationStatus,
 )
