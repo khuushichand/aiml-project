@@ -42,6 +42,7 @@ import WatchlistsPanel from './components/WatchlistsPanel';
 import { useMonitoringMetricsHistory } from './use-monitoring-metrics-history';
 import { useAlertActions } from './use-alert-actions';
 import { useAlertRules } from './use-alert-rules';
+import { useMonitoringMessages } from './use-monitoring-messages';
 import { useNotificationActions } from './use-notification-actions';
 import { useWatchlistActions } from './use-watchlist-actions';
 import type {
@@ -89,10 +90,7 @@ export default function MonitoringPage() {
   );
   const [systemStatus, setSystemStatus] = useState<SystemStatusItem[]>(DEFAULT_SYSTEM_STATUS);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const successTimerRef = useRef<number | null>(null);
   const alertStorageHydratedRef = useRef(false);
 
   // Notification settings
@@ -131,6 +129,13 @@ export default function MonitoringPage() {
   const handleToggleSeries = (seriesKey: MonitoringMetricSeriesKey) => {
     setSeriesVisibility((prev) => toggleMonitoringSeriesVisibility(prev, seriesKey));
   };
+
+  const {
+    error,
+    setError,
+    success,
+    setSuccess,
+  } = useMonitoringMessages();
 
   const loadData = useCallback(async () => {
     try {
@@ -187,7 +192,7 @@ export default function MonitoringPage() {
     } finally {
       setLoading(false);
     }
-  }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, timeRange]);
+  }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, setError, timeRange]);
 
   const {
     showCreateWatchlist,
@@ -268,31 +273,6 @@ export default function MonitoringPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
-
-  useEffect(() => {
-    if (!success) {
-      if (successTimerRef.current !== null) {
-        window.clearTimeout(successTimerRef.current);
-        successTimerRef.current = null;
-      }
-      return;
-    }
-
-    if (successTimerRef.current !== null) {
-      window.clearTimeout(successTimerRef.current);
-    }
-    successTimerRef.current = window.setTimeout(() => {
-      setSuccess('');
-      successTimerRef.current = null;
-    }, 4000);
-
-    return () => {
-      if (successTimerRef.current !== null) {
-        window.clearTimeout(successTimerRef.current);
-        successTimerRef.current = null;
-      }
-    };
-  }, [success]);
 
   const activeAlerts = alerts.filter((alert) => !alert.acknowledged && !isAlertSnoozed(alert));
 
