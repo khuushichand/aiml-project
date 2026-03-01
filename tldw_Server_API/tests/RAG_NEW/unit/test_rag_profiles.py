@@ -21,6 +21,28 @@ class TestRAGProfiles:
         assert "production" in profiles
         assert "research" in profiles
         assert "cheap" in profiles
+        assert "fast" in profiles
+        assert "balanced" in profiles
+        assert "accuracy" in profiles
+
+    def test_switchable_profile_defaults_match_design_targets(self):
+        fast = get_profile_kwargs("fast")
+        balanced = get_profile_kwargs("balanced")
+        accuracy = get_profile_kwargs("accuracy")
+
+        assert fast["max_generation_tokens"] == 440
+        assert fast["generation_prompt"] == "instruction_tuned"
+        assert fast["enable_query_decomposition"] is False
+
+        assert balanced["max_generation_tokens"] == 1000
+        assert balanced["generation_prompt"] == "multi_hop_compact"
+        assert balanced["enable_query_decomposition"] is True
+        assert balanced["reranking_strategy"] == "hybrid"
+
+        assert accuracy["max_generation_tokens"] == 2200
+        assert accuracy["generation_prompt"] == "expert_synthesis"
+        assert accuracy["enable_query_decomposition"] is True
+        assert accuracy["reranking_strategy"] == "two_tier"
 
     def test_get_profile_kwargs_merges_overrides(self):
 
