@@ -11,7 +11,10 @@
 ---
 
 ### Task 1: Characterize Current App Wiring
+<<<<<<< codex/stability-core-cleanup
 **Status:** Complete
+=======
+>>>>>>> dev
 
 **Files:**
 - Create: `tldw_Server_API/tests/Services/test_main_router_contract.py`
@@ -56,7 +59,10 @@ git commit -m "test(main): lock router and lifecycle contracts before extraction
 ```
 
 ### Task 2: Extract Router Registry
+<<<<<<< codex/stability-core-cleanup
 **Status:** Complete
+=======
+>>>>>>> dev
 
 **Files:**
 - Create: `tldw_Server_API/app/api/v1/router_registry.py`
@@ -105,7 +111,10 @@ git commit -m "refactor(main): extract api router registry"
 ```
 
 ### Task 3: Extract Startup/Shutdown Lifecycle
+<<<<<<< codex/stability-core-cleanup
 **Status:** Complete
+=======
+>>>>>>> dev
 
 **Files:**
 - Create: `tldw_Server_API/app/services/app_lifecycle.py`
@@ -154,7 +163,10 @@ git commit -m "refactor(main): extract app lifecycle wiring"
 ```
 
 ### Task 4: Verify No API Surface Regression
+<<<<<<< codex/stability-core-cleanup
 **Status:** Complete
+=======
+>>>>>>> dev
 
 **Files:**
 - Modify: `tldw_Server_API/tests/Services/test_main_router_contract.py`

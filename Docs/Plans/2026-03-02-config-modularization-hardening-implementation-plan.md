@@ -11,7 +11,10 @@
 ---
 
 ### Task 1: Lock Current Config Precedence
+<<<<<<< codex/stability-core-cleanup
 **Status:** Complete
+=======
+>>>>>>> dev
 
 **Files:**
 - Create: `tldw_Server_API/tests/Config/test_config_precedence_contract.py`
@@ -54,7 +57,10 @@ git commit -m "test(config): add precedence and default safety contracts"
 ```
 
 ### Task 2: Create Modular Config Package
+<<<<<<< codex/stability-core-cleanup
 **Status:** Complete
+=======
+>>>>>>> dev
 
 **Files:**
 - Create: `tldw_Server_API/app/core/config_sections/__init__.py`
@@ -102,7 +108,10 @@ git commit -m "refactor(config): introduce modular config section loaders"
 ```
 
 ### Task 3: Add Backward-Compatible Facade and Migrate Call Sites
+<<<<<<< codex/stability-core-cleanup
 **Status:** Complete
+=======
+>>>>>>> dev
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/config.py`
@@ -145,7 +154,10 @@ git commit -m "refactor(config): add compatibility facade over modular settings"
 ```
 
 ### Task 4: Remove High-Risk Placeholder Defaults and Document Migration
+<<<<<<< codex/stability-core-cleanup
 **Status:** Complete
+=======
+>>>>>>> dev
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/config.py`

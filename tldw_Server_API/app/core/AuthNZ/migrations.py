@@ -824,7 +824,11 @@ def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
                 total_cost_usd REAL,
                 currency TEXT DEFAULT 'USD',
                 estimated INTEGER DEFAULT 0,
-                request_id TEXT
+                request_id TEXT,
+                remote_ip TEXT,
+                user_agent TEXT,
+                token_name TEXT,
+                conversation_id TEXT
             )
             """
         )
@@ -851,6 +855,10 @@ def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
                 currency TEXT DEFAULT 'USD',
                 estimated INTEGER DEFAULT 0,
                 request_id TEXT,
+                remote_ip TEXT,
+                user_agent TEXT,
+                token_name TEXT,
+                conversation_id TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
                 FOREIGN KEY (key_id) REFERENCES api_keys(id) ON DELETE SET NULL
             )
@@ -862,6 +870,8 @@ def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_user ON llm_usage_log(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_provider_model ON llm_usage_log(provider, model)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_op_ts ON llm_usage_log(operation, ts)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_remote_ip_ts ON llm_usage_log(remote_ip, ts)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_token_name_ts ON llm_usage_log(token_name, ts)")
 
     # Daily aggregate table
     if _relax_fk:
@@ -1328,6 +1338,21 @@ def migration_053_create_byok_oauth_state(conn: sqlite3.Connection) -> None:
 
     conn.commit()
     logger.info("Migration 053: Created byok_oauth_state table")
+
+
+def migration_054_add_llm_usage_log_router_analytics_columns(conn: sqlite3.Connection) -> None:
+    """Add router-analytics enrichment columns/indexes to llm_usage_log (SQLite)."""
+    for column in ("remote_ip", "user_agent", "token_name", "conversation_id"):
+        with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
+            conn.execute(f"ALTER TABLE llm_usage_log ADD COLUMN {column} TEXT")
+
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_remote_ip_ts ON llm_usage_log(remote_ip, ts)")
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_token_name_ts ON llm_usage_log(token_name, ts)")
+
+    conn.commit()
+    logger.info("Migration 054: Added llm_usage_log router analytics columns/indexes")
 
 
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
@@ -2752,6 +2777,11 @@ def get_authnz_migrations() -> list[Migration]:
             "Create BYOK OAuth state table",
             migration_053_create_byok_oauth_state,
             rollback_053_drop_byok_oauth_state,
+        ),
+        Migration(
+            54,
+            "Add llm_usage_log router analytics columns and indexes",
+            migration_054_add_llm_usage_log_router_analytics_columns,
         ),
     ]
 

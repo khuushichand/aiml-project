@@ -882,17 +882,27 @@ _CREATE_USAGE_TABLES = [
             total_cost_usd DOUBLE PRECISION,
             currency TEXT DEFAULT 'USD',
             estimated BOOLEAN DEFAULT FALSE,
-            request_id TEXT
+            request_id TEXT,
+            remote_ip TEXT,
+            user_agent TEXT,
+            token_name TEXT,
+            conversation_id TEXT
         )
         """,
         (),
     ),
+    ("ALTER TABLE llm_usage_log ADD COLUMN IF NOT EXISTS remote_ip TEXT", ()),
+    ("ALTER TABLE llm_usage_log ADD COLUMN IF NOT EXISTS user_agent TEXT", ()),
+    ("ALTER TABLE llm_usage_log ADD COLUMN IF NOT EXISTS token_name TEXT", ()),
+    ("ALTER TABLE llm_usage_log ADD COLUMN IF NOT EXISTS conversation_id TEXT", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_ts ON llm_usage_log(ts)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_user ON llm_usage_log(user_id)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_provider_model ON llm_usage_log(provider, model)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_op_ts ON llm_usage_log(operation, ts)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_key_ts ON llm_usage_log(key_id, ts)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_operation ON llm_usage_log(operation)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_remote_ip_ts ON llm_usage_log(remote_ip, ts)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_token_name_ts ON llm_usage_log(token_name, ts)", ()),
     (
         """
         CREATE TABLE IF NOT EXISTS llm_usage_daily (

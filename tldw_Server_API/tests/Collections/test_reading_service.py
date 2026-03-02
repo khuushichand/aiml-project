@@ -1,3 +1,4 @@
+import importlib
 import json
 import pytest
 import shutil
@@ -6,6 +7,7 @@ from urllib.parse import urlencode
 
 from hypothesis import given, settings as hyp_settings, strategies as st
 
+import tldw_Server_API.app.core.Collections.reading_service as reading_service_module
 from tldw_Server_API.app.core.Collections.reading_importers import ReadingImportItem
 from tldw_Server_API.app.core.Collections.reading_service import ReadingService, _contains_html_tag
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
@@ -328,6 +330,116 @@ async def test_reading_save_records_fetch_error(reading_env, monkeypatch):
     assert result.item.title == "https://example.org/bad"
     metadata = json.loads(result.item.metadata_json or "{}")
     assert "fetch_error" in metadata
+
+
+@pytest.mark.asyncio
+async def test_archive_mode_always_creates_archive_artifact(reading_env, monkeypatch):
+    monkeypatch.setenv("READING_ARCHIVE_ON_SAVE_DEFAULT", "0")
+    service = ReadingService(TEST_USER_ID + 8)
+
+    result = await service.save_url(
+        url="https://example.org/archive-always",
+        title_override="Archive Always",
+        content_override="Archive body text",
+        archive_mode="always",
+    )
+
+    assert result.archive_requested is True
+    assert result.archive_output_id is not None
+    metadata = json.loads(result.item.metadata_json or "{}")
+    assert metadata.get("archive_requested") is True
+    assert metadata.get("has_archive_copy") is True
+
+    rows, total = service.collections.list_output_artifacts(
+        type_="reading_archive",
+        limit=10,
+        offset=0,
+    )
+    assert total >= 1
+    assert any(row.id == result.archive_output_id for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_archive_mode_never_overrides_enabled_default(reading_env, monkeypatch):
+    monkeypatch.setenv("READING_ARCHIVE_ON_SAVE_DEFAULT", "1")
+    service = ReadingService(TEST_USER_ID + 9)
+
+    result = await service.save_url(
+        url="https://example.org/archive-never",
+        title_override="Archive Never",
+        content_override="Archive body text",
+        archive_mode="never",
+    )
+
+    assert result.archive_requested is False
+    assert result.archive_output_id is None
+    metadata = json.loads(result.item.metadata_json or "{}")
+    assert metadata.get("archive_requested") is False
+
+    rows, total = service.collections.list_output_artifacts(
+        type_="reading_archive",
+        limit=10,
+        offset=0,
+    )
+    assert total == 0
+    assert rows == []
+
+
+def test_archive_env_values_fallback_on_invalid(monkeypatch):
+    monkeypatch.setenv("READING_ARCHIVE_MAX_BYTES", "not-a-number")
+    monkeypatch.setenv("READING_ARCHIVE_RETENTION_DAYS", "oops")
+    reloaded = importlib.reload(reading_service_module)
+    try:
+        assert reloaded.READING_ARCHIVE_MAX_BYTES == 5 * 1024 * 1024
+        assert reloaded.READING_ARCHIVE_RETENTION_DAYS == 30
+    finally:
+        monkeypatch.setenv("READING_ARCHIVE_MAX_BYTES", str(5 * 1024 * 1024))
+        monkeypatch.setenv("READING_ARCHIVE_RETENTION_DAYS", "30")
+        importlib.reload(reading_service_module)
+
+
+@pytest.mark.asyncio
+async def test_archive_creation_uses_asyncio_to_thread_for_fs_io(reading_env, monkeypatch):
+    service = ReadingService(TEST_USER_ID + 12)
+    calls: list[str] = []
+
+    async def fake_to_thread(func, *args, **kwargs):
+        calls.append(getattr(func, "__name__", repr(func)))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(reading_service_module.asyncio, "to_thread", fake_to_thread)
+
+    result = await service.save_url(
+        url="https://example.org/archive-threaded",
+        title_override="Archive Threaded",
+        content_override="Archive body text",
+        archive_mode="always",
+    )
+
+    assert result.archive_output_id is not None
+    assert any("mkdir" in call for call in calls)
+    assert any("write_text" in call for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_archive_metadata_update_failure_is_reported(reading_env, monkeypatch):
+    service = ReadingService(TEST_USER_ID + 13)
+
+    def fail_update_content_item(*_args, **_kwargs):
+        raise RuntimeError("metadata-db-down")
+
+    monkeypatch.setattr(service.collections, "update_content_item", fail_update_content_item)
+
+    result = await service.save_url(
+        url="https://example.org/archive-metadata-fail",
+        title_override="Archive Metadata Failure",
+        content_override="Archive body text",
+        archive_mode="always",
+    )
+
+    assert result.archive_requested is True
+    assert result.archive_error is not None
+    assert "archive_metadata_update_failed" in result.archive_error
 
 
 @pytest.mark.asyncio
