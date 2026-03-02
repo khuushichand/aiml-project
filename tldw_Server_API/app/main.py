@@ -2236,6 +2236,7 @@ async def lifespan(app: FastAPI):
         import asyncio as _asyncio
         import os as _os
 
+        from tldw_Server_API.app.core.config import legacy_get as _legacy_get
         from tldw_Server_API.app.core.config import settings as _app_settings
         from tldw_Server_API.app.core.DB_Management.DB_Manager import (
             create_evaluations_database as _create_evals_db,
@@ -2958,7 +2959,9 @@ async def lifespan(app: FastAPI):
 
     # Start personalization consolidation service if enabled
     try:
-        _personalization_enabled = bool(_app_settings.get("PERSONALIZATION_ENABLED", True))
+        _personalization_enabled = bool(
+            _legacy_get("PERSONALIZATION_ENABLED", _app_settings.get("PERSONALIZATION_ENABLED", True))
+        )
         _skip_consolidation = _shared_env_flag_enabled("DISABLE_PERSONALIZATION_CONSOLIDATION")
         if not _personalization_enabled or _skip_consolidation:
             logger.info("Personalization consolidation disabled (flag or env)")

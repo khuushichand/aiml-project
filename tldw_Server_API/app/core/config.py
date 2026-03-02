@@ -4834,12 +4834,40 @@ def _config_loader():
 settings = LazySettings(_settings_loader)
 config = settings
 loaded_config_data = LazyConfigData(_config_loader)
+_LEGACY_SENTINEL = object()
 
 
 def load_all_sections_for_test():
     from tldw_Server_API.app.core.config_sections import load_config_sections
 
     return load_config_sections(load_comprehensive_config())
+
+
+def legacy_get(key: str, default: Any = None) -> Any:
+    """Compatibility accessor for legacy call sites during modular config migration."""
+    if not isinstance(key, str) or not key.strip():
+        return default
+
+    for candidate in (key, key.upper(), key.lower()):
+        try:
+            value = settings.get(candidate, _LEGACY_SENTINEL)
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
+            value = _LEGACY_SENTINEL
+        if value is not _LEGACY_SENTINEL:
+            return value
+
+    if "." in key:
+        section, _, field = key.partition(".")
+        section_data = loaded_config_data.get(section, {})
+        if isinstance(section_data, MutableMapping):
+            for candidate in (field, field.lower(), field.upper()):
+                if candidate in section_data:
+                    return section_data[candidate]
+        value = get_config_value(section, field, default=_LEGACY_SENTINEL)
+        if value is not _LEGACY_SENTINEL:
+            return value
+
+    return default
 
 def get_stt_config() -> dict[str, Any]:
     """
