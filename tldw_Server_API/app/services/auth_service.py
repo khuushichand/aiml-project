@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from loguru import logger
+from tldw_Server_API.app.core.deprecations import log_runtime_deprecation
 
 _USER_ROW_FALLBACK_COLUMNS = (
     "id",
@@ -51,6 +52,13 @@ async def _execute_compat(db: Any, query: str, *params: Any) -> Any:
     try:
         return await execute(query, *params)
     except TypeError:
+        log_runtime_deprecation(
+            "auth_db_execute_compat",
+            message=(
+                "Auth DB execute compatibility adapter was used for sqlite-like "
+                "execute(query, tuple(params)) signature."
+            ),
+        )
         # Compatibility for sqlite-like execute(query, tuple(params))
         return await execute(_normalize_sqlite_placeholders(query), tuple(params))
 
@@ -59,6 +67,10 @@ async def _fetchrow_compat(db: Any, query: str, *params: Any) -> Any:
     fetchrow = getattr(db, "fetchrow", None)
     if callable(fetchrow):
         return await fetchrow(query, *params)
+    log_runtime_deprecation(
+        "auth_db_execute_compat",
+        message="Auth DB fetchrow compatibility adapter used execute()+fetchone() path.",
+    )
     cursor = await _execute_compat(db, query, *params)
     return await cursor.fetchone()
 
