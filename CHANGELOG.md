@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.27] 2026-03-02
+
+### Added
+
+- Family Guardrails Wizard rollout across WebUI + extension settings surfaces:
+  - Added dedicated settings route `/settings/family-guardrails` with capability-aware gating and navigation metadata.
+  - Added WebUI page wrapper at `apps/tldw-frontend/pages/settings/family-guardrails.tsx`.
+  - Added extension route module and registry wiring parity:
+    - `apps/tldw-frontend/extension/routes/option-family-guardrails-wizard.tsx`
+    - `apps/tldw-frontend/extension/routes/route-registry.tsx`
+- Family wizard backend contract and persistence surface:
+  - Added family wizard request/response schemas in `tldw_Server_API/app/api/v1/schemas/family_wizard_schemas.py`.
+  - Added family wizard draft/snapshot endpoints in `tldw_Server_API/app/api/v1/endpoints/family_wizard.py`.
+  - Added guardian DB draft/member/relationship/plan persistence support in `tldw_Server_API/app/core/DB_Management/Guardian_DB.py`.
+- Guardian moderation orchestration improvements:
+  - Added queued family plan materialization on guardian acceptance.
+  - Added strictest-wins shared-dependent policy conflict resolution path.
+- Coverage and docs for the new workflow:
+  - Added comprehensive Family Guardrails wizard unit/integration coverage across UI services, route parity, DB, schema, endpoint, and materialization flows.
+  - Added Playwright workflow coverage for family setup, guardian mapping, templates, tracker blockers, and draft resume.
+  - Added user guides:
+    - `Docs/User_Guides/WebUI_Extension/Family_Guardian_Setup.md`
+    - `Docs/User_Guides/WebUI_Extension/Family_Guardrails_Wizard_Guide.md`
+
+### Changed
+
+- Family Guardrails wizard UX simplification and resilience:
+  - Household setup now uses preset-driven onboarding (family/caregiver/institutional templates) as the primary mode selector path.
+  - Wizard copy and validation feedback are mode-aware (`guardian` vs `caregiver`) across setup, mapping, review, and tracker steps.
+  - Single-guardian flows skip relationship mapping and preserve back-navigation symmetry from templates/review.
+  - Large-family workflows now support bulk entry/table interactions with keyboard-assisted selection/removal and status-aware tracker guidance.
+  - Wizard continues now enforce stronger inline step validation, duplicate/collision messaging, and deterministic resume-to-latest-draft behavior.
+- Route capability and parity guardrails now enforce consistent Family Guardrails visibility/registration across shared UI, web, and extension route registries.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed web/extension family wizard route wiring parity regressions and added explicit route-parity tests to prevent drift.
+- Fixed family wizard tracker/review action targeting so blocked dependents route guardians back to the correct mapping context.
+- Fixed targeted route-parity test path resolution to be cwd/worktree agnostic during Vitest runs.
+
 
 ## [0.1.26] 2026-03-01
 
