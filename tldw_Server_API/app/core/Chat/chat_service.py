@@ -2931,6 +2931,7 @@ async def execute_streaming_call(
             await log_llm_usage(
                 user_id=user_id,
                 key_id=api_key_id,
+                request=request,
                 endpoint=(f"{request.method}:{request.url.path}" if request else "POST:/api/v1/chat/completions"),
                 operation="chat",
                 provider=selected_provider,
@@ -2941,6 +2942,7 @@ async def execute_streaming_call(
                 completion_tokens=int(ct_est),
                 total_tokens=total_est,
                 request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
+                conversation_id=(str(final_conversation_id) if final_conversation_id is not None else None),
                 estimated=True,
             )
         except _CHAT_NONCRITICAL_EXCEPTIONS:
@@ -3543,6 +3545,7 @@ async def execute_non_stream_call(
                 await log_llm_usage(
                     user_id=user_id,
                     key_id=api_key_id,
+                    request=request,
                     endpoint=(f"{request.method}:{request.url.path}" if request else "POST:/api/v1/chat/completions"),
                     operation="chat",
                     provider=selected_provider,
@@ -3553,6 +3556,7 @@ async def execute_non_stream_call(
                     completion_tokens=completion_tokens,
                     total_tokens=int((usage.get("total_tokens") or 0) or (prompt_tokens + completion_tokens)),
                     request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
+                    conversation_id=(str(final_conversation_id) if final_conversation_id is not None else None),
                 )
             except _CHAT_NONCRITICAL_EXCEPTIONS:
                 pass
@@ -3577,6 +3581,7 @@ async def execute_non_stream_call(
                 await log_llm_usage(
                     user_id=user_id,
                     key_id=api_key_id,
+                    request=request,
                     endpoint=(f"{request.method}:{request.url.path}" if request else "POST:/api/v1/chat/completions"),
                     operation="chat",
                     provider=selected_provider,
@@ -3587,6 +3592,7 @@ async def execute_non_stream_call(
                     completion_tokens=int(ct_est),
                     total_tokens=int(pt_est + ct_est),
                     request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
+                    conversation_id=(str(final_conversation_id) if final_conversation_id is not None else None),
                     estimated=True,
                 )
             except _CHAT_NONCRITICAL_EXCEPTIONS:

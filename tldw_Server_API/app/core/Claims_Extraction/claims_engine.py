@@ -664,6 +664,26 @@ async def _log_claims_llm_usage(
         endpoint = job_context.endpoint if job_context else None
     except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
         endpoint = None
+    remote_ip = None
+    try:
+        remote_ip = getattr(job_context, "remote_ip", None) if job_context else None
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
+        remote_ip = None
+    user_agent = None
+    try:
+        user_agent = getattr(job_context, "user_agent", None) if job_context else None
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
+        user_agent = None
+    token_name = None
+    try:
+        token_name = getattr(job_context, "token_name", None) if job_context else None
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
+        token_name = None
+    conversation_id = None
+    try:
+        conversation_id = getattr(job_context, "conversation_id", None) if job_context else None
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
+        conversation_id = None
     await log_llm_usage(
         user_id=user_id,
         key_id=api_key_id,
@@ -677,6 +697,10 @@ async def _log_claims_llm_usage(
         completion_tokens=estimate_claims_tokens(response_text),
         total_tokens=None,
         request_id=request_id,
+        remote_ip=remote_ip,
+        user_agent=user_agent,
+        token_name=token_name,
+        conversation_id=conversation_id,
         estimated=estimated,
     )
 

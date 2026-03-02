@@ -2740,6 +2740,7 @@ async def create_embedding_endpoint(
             await log_llm_usage(
                 user_id=user_id,
                 key_id=api_key_id,
+                request=request,
                 endpoint=f"{request.method}:{request.url.path}",
                 operation="embeddings",
                 provider=provider,
