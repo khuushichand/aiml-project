@@ -331,6 +331,59 @@ async def test_reading_save_records_fetch_error(reading_env, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_archive_mode_always_creates_archive_artifact(reading_env, monkeypatch):
+    monkeypatch.setenv("READING_ARCHIVE_ON_SAVE_DEFAULT", "0")
+    service = ReadingService(TEST_USER_ID + 8)
+
+    result = await service.save_url(
+        url="https://example.org/archive-always",
+        title_override="Archive Always",
+        content_override="Archive body text",
+        archive_mode="always",
+    )
+
+    assert result.archive_requested is True
+    assert result.archive_output_id is not None
+    metadata = json.loads(result.item.metadata_json or "{}")
+    assert metadata.get("archive_requested") is True
+    assert metadata.get("has_archive_copy") is True
+
+    rows, total = service.collections.list_output_artifacts(
+        type_="reading_archive",
+        limit=10,
+        offset=0,
+    )
+    assert total >= 1
+    assert any(row.id == result.archive_output_id for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_archive_mode_never_overrides_enabled_default(reading_env, monkeypatch):
+    monkeypatch.setenv("READING_ARCHIVE_ON_SAVE_DEFAULT", "1")
+    service = ReadingService(TEST_USER_ID + 9)
+
+    result = await service.save_url(
+        url="https://example.org/archive-never",
+        title_override="Archive Never",
+        content_override="Archive body text",
+        archive_mode="never",
+    )
+
+    assert result.archive_requested is False
+    assert result.archive_output_id is None
+    metadata = json.loads(result.item.metadata_json or "{}")
+    assert metadata.get("archive_requested") is False
+
+    rows, total = service.collections.list_output_artifacts(
+        type_="reading_archive",
+        limit=10,
+        offset=0,
+    )
+    assert total == 0
+    assert rows == []
+
+
+@pytest.mark.asyncio
 async def test_reading_save_sanitizes_html_content(reading_env, monkeypatch):
     monkeypatch.setenv("TEST_MODE", "0")
 

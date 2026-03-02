@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
+import json
+import os
+import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -14,6 +18,7 @@ from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddi
 from tldw_Server_API.app.core.Collections.reading_importers import ReadingImportItem, normalize_import_items
 from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase, ContentItemRow
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import (
     EgressPolicyError,
     NetworkError,
@@ -29,6 +34,8 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
 from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
 
 READING_DEFAULT_STATUS = "saved"
+READING_ARCHIVE_MAX_BYTES = int(os.getenv("READING_ARCHIVE_MAX_BYTES", str(5 * 1024 * 1024)) or str(5 * 1024 * 1024))
+READING_ARCHIVE_RETENTION_DAYS = int(os.getenv("READING_ARCHIVE_RETENTION_DAYS", "30") or "30")
 
 _READING_SERVICE_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -74,12 +81,31 @@ def _utcnow_iso() -> str:
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
 
 
+def _env_flag_enabled(raw: str | None) -> bool:
+    value = str(raw or "").strip().lower()
+    return value in {"1", "true", "yes", "on", "y"}
+
+
+def _strip_html(raw: str) -> str:
+    return re.sub(r"<[^>]+>", "", raw)
+
+
+def _safe_filename_fragment(raw: str, max_len: int = 64) -> str:
+    text = re.sub(r"[^A-Za-z0-9._-]+", "_", str(raw or "").strip()).strip("._")
+    if not text:
+        text = "reading"
+    return text[:max_len]
+
+
 @dataclass
 class ReadingSaveResult:
     item: ContentItemRow
     media_id: int | None
     media_uuid: str | None
     created: bool
+    archive_requested: bool = False
+    archive_output_id: int | None = None
+    archive_error: str | None = None
 
 
 @dataclass
@@ -325,6 +351,74 @@ class ReadingService:
             "error": error,
         }
 
+    @staticmethod
+    def _archive_default_enabled() -> bool:
+        return _env_flag_enabled(os.getenv("READING_ARCHIVE_ON_SAVE_DEFAULT", "0"))
+
+    @classmethod
+    def _resolve_archive_requested(cls, archive_mode: str | None) -> bool:
+        mode = str(archive_mode or "use_default").strip().lower()
+        if mode == "always":
+            return True
+        if mode == "never":
+            return False
+        return cls._archive_default_enabled()
+
+    @staticmethod
+    def _resolve_archive_retention() -> str | None:
+        try:
+            days = max(0, int(READING_ARCHIVE_RETENTION_DAYS))
+        except (TypeError, ValueError):
+            return None
+        if days <= 0:
+            return None
+        expires = datetime.now(tz=timezone.utc) + timedelta(days=days)
+        return expires.isoformat()
+
+    async def _create_archive_artifact(
+        self,
+        *,
+        item_id: int,
+        title: str,
+        url: str | None,
+        body_text: str,
+        media_item_id: int | None,
+    ) -> tuple[int | None, str | None]:
+        text_value = (body_text or "").strip()
+        if not text_value:
+            return None, "archive_no_content"
+        content = f"# {title}\n\n{url or ''}\n\n{text_value}\n"
+        content_bytes = content.encode("utf-8")
+        if READING_ARCHIVE_MAX_BYTES > 0 and len(content_bytes) > READING_ARCHIVE_MAX_BYTES:
+            return None, "archive_too_large"
+
+        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+        safe_title = _safe_filename_fragment(title, max_len=40)
+        filename = f"reading_archive_{item_id}_{safe_title}_{timestamp}.md"
+        outputs_dir = DatabasePaths.get_user_outputs_dir(self.user_id)
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        path = outputs_dir / filename
+        path.write_text(content, encoding="utf-8")
+
+        metadata = {
+            "item_id": item_id,
+            "url": url,
+            "canonical_url": url,
+            "source": "save_url",
+            "format": "md",
+            "title": title,
+        }
+        output_row = self.collections.create_output_artifact(
+            type_="reading_archive",
+            title=f"{title} (archive {timestamp})",
+            format_="md",
+            storage_path=filename,
+            metadata_json=json.dumps(metadata, ensure_ascii=False),
+            media_item_id=media_item_id,
+            retention_until=self._resolve_archive_retention(),
+        )
+        return int(output_row.id), None
+
     async def save_url(
         self,
         *,
@@ -337,10 +431,12 @@ class ReadingService:
         content_override: str | None = None,
         notes: str | None = None,
         metadata: dict[str, object] | None = None,
+        archive_mode: str = "use_default",
     ) -> ReadingSaveResult:
         """Fetch, dedupe, and persist a reading item."""
         normalized_status = (status or READING_DEFAULT_STATUS).lower()
         tags = [t for t in (tags or []) if t]
+        archive_requested = self._resolve_archive_requested(archive_mode)
         try:
             article = await self._fetch_article(
                 url=url,
@@ -374,11 +470,15 @@ class ReadingService:
         media_id = article.get("media_id")
         media_uuid = article.get("media_uuid")
         content_word_count = word_count(content)
+        fetch_error = article.get("error")
 
         metadata_payload: dict[str, object] = {
             "source": "reading_save",
             "tags": tags,
             "author": article.get("author"),
+            "archive_mode": str(archive_mode or "use_default"),
+            "archive_requested": archive_requested,
+            "last_fetch_error": fetch_error,
         }
         if article.get("media_type"):
             metadata_payload["media_type"] = article.get("media_type")
@@ -394,8 +494,10 @@ class ReadingService:
             metadata_payload["text"] = content
         if content_word_count:
             metadata_payload["reading_time_seconds"] = max(1, int(content_word_count / 200 * 60))
-        if article.get("error"):
-            metadata_payload["fetch_error"] = article.get("error")
+        if fetch_error:
+            metadata_payload["fetch_error"] = fetch_error
+        else:
+            metadata_payload["fetch_error"] = None
         if metadata:
             metadata_payload.update(metadata)
 
@@ -422,7 +524,34 @@ class ReadingService:
             read_at=None,
             tags=tags,
             merge_tags=True,
+            preserve_existing_on_null=True,
         )
+
+        archive_output_id: int | None = None
+        archive_error: str | None = None
+        if archive_requested:
+            archive_text = content or summary or notes or ""
+            if not archive_text and article.get("clean_html"):
+                archive_text = _strip_html(str(article.get("clean_html") or ""))
+            try:
+                archive_output_id, archive_error = await self._create_archive_artifact(
+                    item_id=int(item_row.id),
+                    title=str(item_row.title or title or url),
+                    url=item_row.canonical_url or item_row.url,
+                    body_text=archive_text,
+                    media_item_id=item_row.media_id,
+                )
+            except _READING_SERVICE_NONCRITICAL_EXCEPTIONS as exc:
+                archive_error = f"archive_failed:{exc}"
+            meta_patch: dict[str, object] = {"archive_requested": True}
+            if archive_output_id is not None:
+                meta_patch["has_archive_copy"] = True
+                meta_patch["archive_output_id"] = archive_output_id
+                meta_patch["archive_error"] = None
+            elif archive_error:
+                meta_patch["archive_error"] = archive_error
+            with contextlib.suppress(_READING_SERVICE_NONCRITICAL_EXCEPTIONS):
+                item_row = self.collections.update_content_item(item_row.id, metadata=meta_patch)
 
         if item_row.is_new or item_row.content_changed:
             embedding_metadata = {
@@ -457,6 +586,9 @@ class ReadingService:
             media_id=item_row.media_id,
             media_uuid=media_uuid,
             created=item_row.is_new,
+            archive_requested=archive_requested,
+            archive_output_id=archive_output_id,
+            archive_error=archive_error,
         )
 
     async def _fetch_article(

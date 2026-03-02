@@ -93,6 +93,12 @@ interface ImportExportState {
   exportError: string | null
 }
 
+interface FeatureFlagsState {
+  readingSavedSearchesEnabled: boolean
+  readingNoteLinksEnabled: boolean
+  readingArchiveControlsEnabled: boolean
+}
+
 interface UIState {
   activeTab: CollectionsTab
   itemDetailOpen: boolean
@@ -184,6 +190,12 @@ interface ImportExportActions {
   resetExport: () => void
 }
 
+interface FeatureFlagsActions {
+  setReadingSavedSearchesEnabled: (enabled: boolean) => void
+  setReadingNoteLinksEnabled: (enabled: boolean) => void
+  setReadingArchiveControlsEnabled: (enabled: boolean) => void
+}
+
 interface UIActions {
   setActiveTab: (tab: CollectionsTab) => void
   openItemDetail: (id: string) => void
@@ -208,11 +220,13 @@ export type CollectionsState = ReadingListState &
   HighlightsState &
   TemplatesState &
   ImportExportState &
+  FeatureFlagsState &
   UIState &
   ReadingListActions &
   HighlightsActions &
   TemplatesActions &
   ImportExportActions &
+  FeatureFlagsActions &
   UIActions
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,6 +298,12 @@ const initialImportExportState: ImportExportState = {
   exportError: null
 }
 
+const initialFeatureFlagsState: FeatureFlagsState = {
+  readingSavedSearchesEnabled: true,
+  readingNoteLinksEnabled: true,
+  readingArchiveControlsEnabled: true
+}
+
 const initialUIState: UIState = {
   activeTab: "reading",
   itemDetailOpen: false,
@@ -301,6 +321,7 @@ const initialState = {
   ...initialHighlightsState,
   ...initialTemplatesState,
   ...initialImportExportState,
+  ...initialFeatureFlagsState,
   ...initialUIState
 }
 
@@ -504,6 +525,17 @@ export const useCollectionsStore = createWithEqualityFn<CollectionsState>()((set
       exportInProgress: false,
       exportError: null
     }),
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Feature Flags Actions
+  // ─────────────────────────────────────────────────────────────────────────
+
+  setReadingSavedSearchesEnabled: (readingSavedSearchesEnabled) =>
+    set({ readingSavedSearchesEnabled }),
+  setReadingNoteLinksEnabled: (readingNoteLinksEnabled) =>
+    set({ readingNoteLinksEnabled }),
+  setReadingArchiveControlsEnabled: (readingArchiveControlsEnabled) =>
+    set({ readingArchiveControlsEnabled }),
 
   // ─────────────────────────────────────────────────────────────────────────
   // UI Actions

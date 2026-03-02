@@ -12,6 +12,11 @@ class ReadingSaveRequest(BaseModel):
     title: str | None = Field(default=None, example="Example Article")
     tags: list[str] = Field(default_factory=list, example=["ai", "reading"])
     status: str | None = Field(default="saved", description="saved|reading|read|archived", example="saved")
+    archive_mode: Literal["use_default", "always", "never"] = Field(
+        default="use_default",
+        description="Archive policy override for this save request.",
+        example="always",
+    )
     favorite: bool = False
     summary: str | None = Field(default=None, example="Short summary for quick scan.")
     notes: str | None = Field(default=None, example="Why this matters for the project.")
@@ -39,6 +44,9 @@ class ReadingItem(BaseModel):
     published_at: str | None = None
     status: str | None = Field(default=None, example="saved")
     processing_status: str | None = None
+    archive_requested: bool = False
+    has_archive_copy: bool = False
+    last_fetch_error: str | None = None
     favorite: bool = False
     tags: list[str] = Field(default_factory=list, example=["ai", "reading"])
     created_at: str | None = None
@@ -59,6 +67,55 @@ class ReadingItemsListResponse(BaseModel):
     size: int
     offset: int | None = None
     limit: int | None = None
+
+
+class ReadingSavedSearchCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255, example="Morning")
+    query: dict[str, Any] = Field(default_factory=dict, example={"q": "ai", "status": ["saved"]})
+    sort: str | None = Field(
+        default=None,
+        description="updated_desc|updated_asc|created_desc|created_asc|title_asc|title_desc|relevance",
+    )
+
+
+class ReadingSavedSearchUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    query: dict[str, Any] | None = None
+    sort: str | None = Field(
+        default=None,
+        description="updated_desc|updated_asc|created_desc|created_asc|title_asc|title_desc|relevance",
+    )
+
+
+class ReadingSavedSearchResponse(BaseModel):
+    id: int
+    name: str
+    query: dict[str, Any]
+    sort: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ReadingSavedSearchListResponse(BaseModel):
+    items: list[ReadingSavedSearchResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class ReadingNoteLinkCreateRequest(BaseModel):
+    note_id: str = Field(..., min_length=1, max_length=255, example="8ef2f7ad-2a2f-4442-9adf-23c36dcf0f8d")
+
+
+class ReadingNoteLinkResponse(BaseModel):
+    item_id: int
+    note_id: str
+    created_at: str | None = None
+
+
+class ReadingNoteLinksListResponse(BaseModel):
+    item_id: int
+    links: list[ReadingNoteLinkResponse]
 
 
 class ReadingImportResponse(BaseModel):

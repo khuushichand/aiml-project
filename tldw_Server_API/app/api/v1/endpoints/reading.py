@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover - optional dependency fallback
     bleach = None
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
 from tldw_Server_API.app.api.v1.endpoints.items import bulk_update_items as bulk_update_items_handler
@@ -40,6 +41,13 @@ from tldw_Server_API.app.api.v1.schemas.reading_schemas import (
     ReadingImportResponse,
     ReadingItem,
     ReadingItemDetail,
+    ReadingNoteLinkCreateRequest,
+    ReadingNoteLinkResponse,
+    ReadingNoteLinksListResponse,
+    ReadingSavedSearchCreateRequest,
+    ReadingSavedSearchListResponse,
+    ReadingSavedSearchResponse,
+    ReadingSavedSearchUpdateRequest,
     ReadingItemsListResponse,
     ReadingSaveRequest,
     ReadingSummarizeRequest,
@@ -57,6 +65,12 @@ from tldw_Server_API.app.core.Collections.reading_import_jobs import (
 )
 from tldw_Server_API.app.core.Collections.reading_service import ReadingService
 from tldw_Server_API.app.core.DB_Management.Collections_DB import ContentItemRow
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.feature_flags import (
+    is_collections_reading_archive_controls_enabled,
+    is_collections_reading_note_links_enabled,
+    is_collections_reading_saved_searches_enabled,
+)
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as summarize_analyze
 from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
@@ -162,6 +176,7 @@ def _derive_processing_status(row: ContentItemRow, metadata: dict[str, object]) 
 
 def _to_reading_item(row) -> ReadingItem:
     metadata = _parse_metadata(row)
+    fetch_error = metadata.get("last_fetch_error") or metadata.get("fetch_error")
     return ReadingItem(
         id=int(row.id),
         media_id=row.media_id,
@@ -175,6 +190,9 @@ def _to_reading_item(row) -> ReadingItem:
         published_at=row.published_at,
         status=row.status,
         processing_status=_derive_processing_status(row, metadata),
+        archive_requested=bool(metadata.get("archive_requested", False)),
+        has_archive_copy=bool(metadata.get("has_archive_copy", False)),
+        last_fetch_error=str(fetch_error) if fetch_error else None,
         favorite=bool(row.favorite),
         tags=row.tags,
         created_at=row.created_at,
@@ -191,6 +209,55 @@ def _to_reading_detail(row: ContentItemRow) -> ReadingItemDetail:
         clean_html=metadata.get("clean_html") if metadata else None,
         metadata=metadata,
     )
+
+
+def _to_saved_search_response(row) -> ReadingSavedSearchResponse:
+    query_payload: dict[str, object] = {}
+    raw = getattr(row, "query_json", None)
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                query_payload = parsed
+        except (TypeError, ValueError, json.JSONDecodeError):
+            query_payload = {}
+    return ReadingSavedSearchResponse(
+        id=int(row.id),
+        name=str(row.name),
+        query=query_payload,
+        sort=row.sort,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _to_note_link_response(row) -> ReadingNoteLinkResponse:
+    return ReadingNoteLinkResponse(
+        item_id=int(row.item_id),
+        note_id=str(row.note_id),
+        created_at=row.created_at,
+    )
+
+
+def _ensure_note_exists_or_404(notes_db: CharactersRAGDB, note_id: str) -> None:
+    note_data = notes_db.get_note_by_id(note_id=str(note_id))
+    if not note_data:
+        raise HTTPException(status_code=404, detail="note_not_found")
+
+
+def _ensure_reading_saved_searches_enabled() -> None:
+    if not is_collections_reading_saved_searches_enabled():
+        raise HTTPException(status_code=404, detail="reading_saved_searches_disabled")
+
+
+def _ensure_reading_note_links_enabled() -> None:
+    if not is_collections_reading_note_links_enabled():
+        raise HTTPException(status_code=404, detail="reading_note_links_disabled")
+
+
+def _ensure_reading_archive_controls_enabled() -> None:
+    if not is_collections_reading_archive_controls_enabled():
+        raise HTTPException(status_code=404, detail="reading_archive_controls_disabled")
 
 
 def _select_text_for_action(
@@ -420,6 +487,8 @@ async def save_reading_item(
     ),
     current_user: User = Depends(get_request_user),
 ) -> ReadingItem:
+    if payload.archive_mode != "use_default":
+        _ensure_reading_archive_controls_enabled()
     service = _service_for_user(current_user)
     try:
         result = await service.save_url(
@@ -431,6 +500,7 @@ async def save_reading_item(
             summary_override=payload.summary,
             content_override=payload.content,
             notes=payload.notes,
+            archive_mode=payload.archive_mode,
         )
         return _to_reading_item(result.item)
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
@@ -501,6 +571,178 @@ async def list_reading_items(
         offset=resolved_offset,
         limit=resolved_limit,
     )
+
+
+@router.post(
+    "/saved-searches",
+    response_model=ReadingSavedSearchResponse,
+    status_code=201,
+    summary="Create a reading saved search",
+    dependencies=[Depends(rbac_rate_limit("reading.update"))],
+)
+async def create_reading_saved_search(
+    payload: ReadingSavedSearchCreateRequest,
+    collections_db=Depends(get_collections_db_for_user),
+) -> ReadingSavedSearchResponse:
+    _ensure_reading_saved_searches_enabled()
+    try:
+        row = collections_db.create_saved_search(
+            name=payload.name.strip(),
+            query_json=json.dumps(payload.query or {}, ensure_ascii=False),
+            sort=payload.sort,
+        )
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"reading_saved_search_create_failed: {exc}")
+        raise HTTPException(status_code=400, detail="reading_saved_search_create_failed") from exc
+    return _to_saved_search_response(row)
+
+
+@router.get(
+    "/saved-searches",
+    response_model=ReadingSavedSearchListResponse,
+    summary="List reading saved searches",
+    dependencies=[Depends(rbac_rate_limit("reading.list"))],
+)
+async def list_reading_saved_searches(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    collections_db=Depends(get_collections_db_for_user),
+) -> ReadingSavedSearchListResponse:
+    _ensure_reading_saved_searches_enabled()
+    try:
+        rows, total = collections_db.list_saved_searches(limit=limit, offset=offset)
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"reading_saved_search_list_failed: {exc}")
+        raise HTTPException(status_code=400, detail="reading_saved_search_list_failed") from exc
+    return ReadingSavedSearchListResponse(
+        items=[_to_saved_search_response(row) for row in rows],
+        total=int(total),
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.patch(
+    "/saved-searches/{search_id}",
+    response_model=ReadingSavedSearchResponse,
+    summary="Update a reading saved search",
+    dependencies=[Depends(rbac_rate_limit("reading.update"))],
+)
+async def update_reading_saved_search(
+    search_id: int,
+    payload: ReadingSavedSearchUpdateRequest,
+    collections_db=Depends(get_collections_db_for_user),
+) -> ReadingSavedSearchResponse:
+    _ensure_reading_saved_searches_enabled()
+    patch: dict[str, object] = {}
+    if payload.name is not None:
+        patch["name"] = payload.name.strip()
+    if payload.query is not None:
+        patch["query_json"] = json.dumps(payload.query, ensure_ascii=False)
+    if payload.sort is not None:
+        patch["sort"] = payload.sort
+    try:
+        row = collections_db.update_saved_search(search_id, patch)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="reading_saved_search_not_found") from None
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"reading_saved_search_update_failed: {exc}")
+        raise HTTPException(status_code=400, detail="reading_saved_search_update_failed") from exc
+    return _to_saved_search_response(row)
+
+
+@router.delete(
+    "/saved-searches/{search_id}",
+    response_model=dict[str, bool],
+    summary="Delete a reading saved search",
+    dependencies=[Depends(rbac_rate_limit("reading.update"))],
+)
+async def delete_reading_saved_search(
+    search_id: int,
+    collections_db=Depends(get_collections_db_for_user),
+) -> dict[str, bool]:
+    _ensure_reading_saved_searches_enabled()
+    try:
+        ok = collections_db.delete_saved_search(search_id)
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"reading_saved_search_delete_failed: {exc}")
+        raise HTTPException(status_code=400, detail="reading_saved_search_delete_failed") from exc
+    if not ok:
+        raise HTTPException(status_code=404, detail="reading_saved_search_not_found")
+    return {"ok": True}
+
+
+@router.post(
+    "/items/{item_id}/links/note",
+    response_model=ReadingNoteLinkResponse,
+    summary="Link a note to a reading item",
+    dependencies=[Depends(rbac_rate_limit("reading.update"))],
+)
+async def link_note_to_reading_item(
+    item_id: int,
+    payload: ReadingNoteLinkCreateRequest,
+    notes_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    collections_db=Depends(get_collections_db_for_user),
+) -> ReadingNoteLinkResponse:
+    _ensure_reading_note_links_enabled()
+    _ensure_note_exists_or_404(notes_db, payload.note_id)
+    try:
+        row = collections_db.link_note_to_content_item(item_id=item_id, note_id=payload.note_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"reading_note_link_create_failed: {exc}")
+        raise HTTPException(status_code=400, detail="reading_note_link_create_failed") from exc
+    return _to_note_link_response(row)
+
+
+@router.get(
+    "/items/{item_id}/links",
+    response_model=ReadingNoteLinksListResponse,
+    summary="List note links for a reading item",
+    dependencies=[Depends(rbac_rate_limit("reading.read"))],
+)
+async def list_reading_item_note_links(
+    item_id: int,
+    collections_db=Depends(get_collections_db_for_user),
+) -> ReadingNoteLinksListResponse:
+    _ensure_reading_note_links_enabled()
+    try:
+        links = collections_db.list_note_links_for_content_item(item_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"reading_note_link_list_failed: {exc}")
+        raise HTTPException(status_code=400, detail="reading_note_link_list_failed") from exc
+    return ReadingNoteLinksListResponse(
+        item_id=item_id,
+        links=[_to_note_link_response(row) for row in links],
+    )
+
+
+@router.delete(
+    "/items/{item_id}/links/note/{note_id}",
+    response_model=dict[str, bool],
+    summary="Unlink a note from a reading item",
+    dependencies=[Depends(rbac_rate_limit("reading.update"))],
+)
+async def unlink_note_from_reading_item(
+    item_id: int,
+    note_id: str,
+    collections_db=Depends(get_collections_db_for_user),
+) -> dict[str, bool]:
+    _ensure_reading_note_links_enabled()
+    try:
+        collections_db.get_content_item(item_id)
+        ok = collections_db.unlink_note_from_content_item(item_id=item_id, note_id=note_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"reading_note_link_delete_failed: {exc}")
+        raise HTTPException(status_code=400, detail="reading_note_link_delete_failed") from exc
+    if not ok:
+        raise HTTPException(status_code=404, detail="reading_note_link_not_found")
+    return {"ok": True}
 
 
 @router.post("/items/bulk", response_model=ItemsBulkResponse, summary="Bulk update reading items (alias)")

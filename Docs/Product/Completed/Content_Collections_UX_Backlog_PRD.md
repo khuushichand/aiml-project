@@ -20,6 +20,8 @@ This PRD tracks the remaining UX delivery work for Content Collections. It rolls
 - Provide an output template editor with preview and default assignment inside job settings.
 - Enable bulk item actions (tags, status, favorite, delete, output generation).
 - Prevent notes loss with autosave and a small, consistent dirty indicator.
+- Add reusable Reading saved searches to persist and reapply list filters/sort.
+- Support item-to-note links in Reading while preserving Notes as the only standalone note system.
 
 ## 3. Non-Goals
 
@@ -59,6 +61,16 @@ This PRD tracks the remaining UX delivery work for Content Collections. It rolls
   - `POST /api/v1/items/bulk` with `action` + `item_ids` + payload (tags, status, favorite, delete).
   - `POST /api/v1/reading/items/bulk` as a thin wrapper alias.
 - Bulk output generation should call `POST /api/v1/outputs` with `template_id` + `item_ids` (no new bulk endpoint required).
+- Reading saved searches use:
+  - `POST /api/v1/reading/saved-searches`
+  - `GET /api/v1/reading/saved-searches`
+  - `PATCH /api/v1/reading/saved-searches/{search_id}`
+  - `DELETE /api/v1/reading/saved-searches/{search_id}`
+- Reading item-note links use:
+  - `POST /api/v1/reading/items/{item_id}/links/note`
+  - `GET /api/v1/reading/items/{item_id}/links`
+  - `DELETE /api/v1/reading/items/{item_id}/links/note/{note_id}`
+  - Strict boundary rule: note content lifecycle remains in `/api/v1/notes`; Reading can only link/unlink note IDs after same-user existence checks.
 
 ## 6. Dependencies and Constraints
 
