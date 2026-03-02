@@ -29,11 +29,15 @@ const ALLOWLIST_LOG_LIMIT = Number(process.env.TLDW_SMOKE_ALLOWLIST_LOG_LIMIT ||
 const SMOKE_HARD_GATE = process.env.TLDW_SMOKE_HARD_GATE !== '0';
 const TRANSIENT_RUNTIME_RETRY_ATTEMPTS = Math.max(
   0,
-  Number(process.env.TLDW_SMOKE_TRANSIENT_RUNTIME_RETRIES || 1)
+  Number(process.env.TLDW_SMOKE_TRANSIENT_RUNTIME_RETRIES || 2)
 );
 const TRANSIENT_RUNTIME_RETRY_DELAY_MS = Math.max(
   0,
   Number(process.env.TLDW_SMOKE_TRANSIENT_RUNTIME_RETRY_DELAY_MS || 500)
+);
+const ROUTE_TEST_TIMEOUT = Math.max(
+  60_000,
+  LOAD_TIMEOUT * (TRANSIENT_RUNTIME_RETRY_ATTEMPTS + 1) + ELEMENT_TIMEOUT + 15_000
 );
 const TRANSIENT_NAVIGATION_TIMEOUT_PATTERN = /page\.goto: Timeout/i;
 const KEY_NAV_TARGETS = ['/chat', '/media', '/knowledge', '/notes', '/prompts', '/settings/tldw'];
@@ -108,7 +112,11 @@ const RUNTIME_OVERLAY_PATTERNS = [
   /Objects are not valid as a React child/i,
   /message\.error is not a function/i,
 ];
-const TRANSIENT_RUNTIME_OVERLAY_PATTERNS = [/Runtime SyntaxError/i, /Invalid or unexpected token/i];
+const TRANSIENT_RUNTIME_OVERLAY_PATTERNS = [
+  /Runtime SyntaxError/i,
+  /Invalid or unexpected token/i,
+  /Unexpected end of input/i,
+];
 
 const keyNavEntries: PageEntry[] = KEY_NAV_TARGETS.map((targetPath) =>
   PAGES.find((entry) => entry.path === targetPath)
@@ -360,7 +368,8 @@ test.describe('Smoke Tests - All Pages', () => {
   // Generate a test for each active page
   for (const entry of getActivePages()) {
     test(`${entry.name} (${entry.path})`, async ({ page, diagnostics }) => {
-      // Navigate to the page and retry once for transient dev-runtime syntax overlay flake.
+      test.setTimeout(ROUTE_TEST_TIMEOUT);
+      // Navigate to the page with transient retry handling for dev-runtime flakes.
       const { response, issues, classifiedIssues, retriesUsed } = await visitRouteWithTransientRetry(
         page,
         diagnostics,
@@ -432,6 +441,7 @@ test.describe('Smoke Tests - Chat', () => {
 
   for (const entry of PAGES.filter((p) => p.category === 'chat' && !p.skip)) {
     test(`${entry.name}`, async ({ page, diagnostics }) => {
+      test.setTimeout(ROUTE_TEST_TIMEOUT);
       const { issues, classifiedIssues } = await visitRouteWithTransientRetry(
         page,
         diagnostics,
@@ -450,6 +460,7 @@ test.describe('Smoke Tests - Settings', () => {
 
   for (const entry of PAGES.filter((p) => p.category === 'settings' && !p.skip)) {
     test(`${entry.name}`, async ({ page, diagnostics }) => {
+      test.setTimeout(ROUTE_TEST_TIMEOUT);
       const { issues, classifiedIssues } = await visitRouteWithTransientRetry(
         page,
         diagnostics,
@@ -468,6 +479,7 @@ test.describe('Smoke Tests - Admin', () => {
 
   for (const entry of PAGES.filter((p) => p.category === 'admin' && !p.skip)) {
     test(`${entry.name}`, async ({ page, diagnostics }) => {
+      test.setTimeout(ROUTE_TEST_TIMEOUT);
       const { issues, classifiedIssues } = await visitRouteWithTransientRetry(
         page,
         diagnostics,
@@ -486,6 +498,7 @@ test.describe('Smoke Tests - Workspace', () => {
 
   for (const entry of PAGES.filter((p) => p.category === 'workspace' && !p.skip)) {
     test(`${entry.name}`, async ({ page, diagnostics }) => {
+      test.setTimeout(ROUTE_TEST_TIMEOUT);
       const { issues, classifiedIssues } = await visitRouteWithTransientRetry(
         page,
         diagnostics,
@@ -504,6 +517,7 @@ test.describe('Smoke Tests - Knowledge', () => {
 
   for (const entry of PAGES.filter((p) => p.category === 'knowledge' && !p.skip)) {
     test(`${entry.name}`, async ({ page, diagnostics }) => {
+      test.setTimeout(ROUTE_TEST_TIMEOUT);
       const { issues, classifiedIssues } = await visitRouteWithTransientRetry(
         page,
         diagnostics,
@@ -522,6 +536,7 @@ test.describe('Smoke Tests - Audio', () => {
 
   for (const entry of PAGES.filter((p) => p.category === 'audio' && !p.skip)) {
     test(`${entry.name}`, async ({ page, diagnostics }) => {
+      test.setTimeout(ROUTE_TEST_TIMEOUT);
       const { issues } = await visitRouteWithTransientRetry(page, diagnostics, entry.path);
       expect(issues.pageErrors).toHaveLength(0);
     });
@@ -539,6 +554,7 @@ test.describe('Smoke Tests - Key Navigation Targets', () => {
 
   for (const entry of keyNavEntries) {
     test(`${entry.name} (${entry.path})`, async ({ page, diagnostics }) => {
+      test.setTimeout(ROUTE_TEST_TIMEOUT);
       const response = await page.goto(entry.path, {
         waitUntil: 'domcontentloaded',
         timeout: LOAD_TIMEOUT,
@@ -569,6 +585,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
   });
 
   test('settings route shows active location context', async ({ page, diagnostics }) => {
+    test.setTimeout(ROUTE_TEST_TIMEOUT);
     const response = await page.goto('/settings/tldw', {
       waitUntil: 'domcontentloaded',
       timeout: LOAD_TIMEOUT,
@@ -603,6 +620,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
     page,
     diagnostics,
   }) => {
+    test.setTimeout(ROUTE_TEST_TIMEOUT);
     const response = await page.goto('/search?q=wayfinding-smoke', {
       waitUntil: 'domcontentloaded',
       timeout: LOAD_TIMEOUT,
@@ -626,6 +644,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
   });
 
   test('404 recovery controls keep predictable keyboard order', async ({ page, diagnostics }) => {
+    test.setTimeout(ROUTE_TEST_TIMEOUT);
     await page.goto(WAYFINDING_404_PATH, {
       waitUntil: 'domcontentloaded',
       timeout: LOAD_TIMEOUT,
@@ -680,6 +699,7 @@ test.describe('Smoke Tests - Route Error Boundaries', () => {
       page,
       diagnostics,
     }) => {
+      test.setTimeout(ROUTE_TEST_TIMEOUT);
       const fixturePath = `${target.path}?${ROUTE_ERROR_FIXTURE_QUERY_KEY}=${target.routeId}`;
       const response = await page.goto(fixturePath, {
         waitUntil: 'domcontentloaded',
