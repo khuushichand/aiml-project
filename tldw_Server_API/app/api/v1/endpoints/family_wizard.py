@@ -110,6 +110,7 @@ def create_household_draft(
     user: User = Depends(get_request_user),
     db: GuardianDB = Depends(get_guardian_db_for_user),
 ):
+    """Create a new household wizard draft owned by the authenticated guardian."""
     draft_id = db.create_household_draft(
         owner_user_id=_user_id(user),
         mode=body.mode,
@@ -126,6 +127,7 @@ def get_latest_household_draft(
     user: User = Depends(get_request_user),
     db: GuardianDB = Depends(get_guardian_db_for_user),
 ):
+    """Return the authenticated guardian's most recently updated wizard draft."""
     draft = db.get_latest_household_draft(_user_id(user))
     if not draft:
         raise HTTPException(status_code=404, detail="No household draft found")
@@ -138,6 +140,7 @@ def get_household_draft(
     user: User = Depends(get_request_user),
     db: GuardianDB = Depends(get_guardian_db_for_user),
 ):
+    """Return one owned household wizard draft."""
     draft = _require_owned_draft(db, draft_id, _user_id(user))
     return _household_from_row(draft)
 
@@ -149,6 +152,7 @@ def update_household_draft(
     user: User = Depends(get_request_user),
     db: GuardianDB = Depends(get_guardian_db_for_user),
 ):
+    """Update mutable fields on an owned household wizard draft."""
     _require_owned_draft(db, draft_id, _user_id(user))
     updates = body.model_dump(exclude_unset=True)
     if updates:
@@ -168,6 +172,7 @@ def get_household_draft_snapshot(
     user: User = Depends(get_request_user),
     db: GuardianDB = Depends(get_guardian_db_for_user),
 ):
+    """Return full wizard snapshot (household, members, relationships, plans)."""
     draft = _require_owned_draft(db, draft_id, _user_id(user))
     members = db.list_household_member_drafts(draft_id)
     relationships = db.list_relationship_drafts(draft_id)
@@ -191,6 +196,7 @@ def add_household_member_draft(
     user: User = Depends(get_request_user),
     db: GuardianDB = Depends(get_guardian_db_for_user),
 ):
+    """Create a guardian/dependent member draft under an owned household draft."""
     _require_owned_draft(db, draft_id, _user_id(user))
     member_id = db.add_household_member_draft(
         household_draft_id=draft_id,
@@ -217,6 +223,7 @@ def remove_household_member_draft(
     user: User = Depends(get_request_user),
     db: GuardianDB = Depends(get_guardian_db_for_user),
 ):
+    """Delete one member draft from an owned household draft."""
     _require_owned_draft(db, draft_id, _user_id(user))
     member = db.get_household_member_draft(member_id)
     if not member or member["household_draft_id"] != draft_id:
@@ -236,6 +243,7 @@ def save_relationship_mapping(
     user: User = Depends(get_request_user),
     db: GuardianDB = Depends(get_guardian_db_for_user),
 ):
+    """Persist one dependent mapping and create its runtime relationship."""
     _require_owned_draft(db, draft_id, _user_id(user))
     guardian_member = db.get_household_member_draft(body.guardian_member_draft_id)
     dependent_member = db.get_household_member_draft(body.dependent_member_draft_id)
@@ -253,10 +261,16 @@ def save_relationship_mapping(
             status_code=400,
             detail="Both guardian and dependent must have user_id before mapping",
         )
+    authenticated_user_id = _user_id(user)
+    if guardian_member["user_id"] != authenticated_user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Relationship mapping guardian member must match the authenticated guardian account",
+        )
 
     try:
         relationship = db.create_relationship(
-            guardian_user_id=guardian_member["user_id"],
+            guardian_user_id=authenticated_user_id,
             dependent_user_id=dependent_member["user_id"],
             relationship_type=body.relationship_type,
             dependent_visible=body.dependent_visible,
@@ -293,14 +307,30 @@ def save_guardrail_plan(
     user: User = Depends(get_request_user),
     db: GuardianDB = Depends(get_guardian_db_for_user),
 ):
+    """Queue one guardrail plan draft bound to an owned relationship draft."""
     _require_owned_draft(db, draft_id, _user_id(user))
     relationship_draft = db.get_relationship_draft(body.relationship_draft_id)
     if not relationship_draft or relationship_draft["household_draft_id"] != draft_id:
         raise HTTPException(status_code=404, detail="Relationship draft not found")
+    dependent_member = db.get_household_member_draft(relationship_draft["dependent_member_draft_id"])
+    if not dependent_member or dependent_member["household_draft_id"] != draft_id:
+        raise HTTPException(status_code=404, detail="Dependent member draft not found")
+    dependent_user_id = (dependent_member.get("user_id") or "").strip()
+    if not dependent_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Dependent member draft must include user_id before saving a guardrail plan",
+        )
+    requested_dependent_user_id = body.dependent_user_id.strip()
+    if requested_dependent_user_id != dependent_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Plan dependent_user_id must match the dependent user_id on the relationship draft",
+        )
 
     plan_id = db.create_guardrail_plan_draft(
         household_draft_id=draft_id,
-        dependent_user_id=body.dependent_user_id,
+        dependent_user_id=dependent_user_id,
         relationship_draft_id=body.relationship_draft_id,
         template_id=body.template_id,
         overrides=body.overrides,
@@ -320,18 +350,20 @@ def get_activation_summary(
     user: User = Depends(get_request_user),
     db: GuardianDB = Depends(get_guardian_db_for_user),
 ):
+    """Summarize activation readiness/status for each planned dependent setup."""
     draft = _require_owned_draft(db, draft_id, _user_id(user))
     plans = db.list_guardrail_plan_drafts(draft_id)
+    relationship_status_by_id = {
+        relationship["id"]: relationship["status"]
+        for relationship in db.list_relationship_drafts(draft_id)
+    }
     active_count = sum(1 for plan in plans if plan["status"] == "active")
     pending_count = sum(1 for plan in plans if plan["status"] == "queued")
     failed_count = sum(1 for plan in plans if plan["status"] == "failed")
 
     items: list[ActivationSummaryItem] = []
     for plan in plans:
-        relationship = db.get_relationship_draft(plan["relationship_draft_id"])
-        relationship_status = (
-            relationship["status"] if relationship else "pending"
-        )
+        relationship_status = relationship_status_by_id.get(plan["relationship_draft_id"], "pending")
         message = "Queued until acceptance" if plan["status"] == "queued" else None
         items.append(
             ActivationSummaryItem(
@@ -362,6 +394,7 @@ def resend_pending_invites(
     user: User = Depends(get_request_user),
     db: GuardianDB = Depends(get_guardian_db_for_user),
 ):
+    """Resend invite reminders for pending dependent setups in a household draft."""
     _require_owned_draft(db, draft_id, _user_id(user))
 
     requested_ids: list[str] = []

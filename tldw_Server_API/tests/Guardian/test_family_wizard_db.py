@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from tldw_Server_API.app.core.DB_Management import Guardian_DB as guardian_db_module
 from tldw_Server_API.app.core.DB_Management.Guardian_DB import GuardianDB
 
 
@@ -70,3 +71,38 @@ def test_member_relationship_plan_and_activation_run_crud(guardian_db: GuardianD
     assert len(members) == 2
     assert plans[0]["template_id"] == "default-child-safe"
     assert runs[0]["id"] == run_id
+
+
+def test_loads_json_or_default_logs_parse_warnings(
+    guardian_db: GuardianDB,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft_id = guardian_db.create_household_draft(
+        owner_user_id="u1",
+        mode="family",
+        name="Bad Metadata Home",
+        metadata={"created": True},
+    )
+
+    with guardian_db._lock:
+        conn = guardian_db._connect()
+        try:
+            conn.execute(
+                "UPDATE guardian_household_drafts SET metadata = ? WHERE id = ?",
+                ("{invalid_json", draft_id),
+            )
+        finally:
+            conn.close()
+
+    warning_messages: list[str] = []
+
+    def capture_warning(message: str, *args):
+        rendered = message.format(*args) if args else message
+        warning_messages.append(rendered)
+
+    monkeypatch.setattr(guardian_db_module.logger, "warning", capture_warning)
+
+    draft = guardian_db.get_household_draft(draft_id)
+    assert draft is not None
+    assert draft["metadata"] is None
+    assert warning_messages

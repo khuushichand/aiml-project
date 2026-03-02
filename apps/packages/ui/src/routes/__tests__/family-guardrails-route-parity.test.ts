@@ -4,19 +4,32 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 
 const testFileDirectory = dirname(fileURLToPath(import.meta.url))
+const webRouteRegistryRelativePath = "apps/packages/ui/src/routes/route-registry.tsx"
+const extensionRouteRegistryRelativePath =
+  "apps/tldw-frontend/extension/routes/route-registry.tsx"
 
-const webRouteRegistryPath = resolve(testFileDirectory, "../route-registry.tsx")
+const resolveWorkspaceRoot = (startDirectory: string): string => {
+  let currentDirectory = startDirectory
+  while (true) {
+    const webPath = resolve(currentDirectory, webRouteRegistryRelativePath)
+    const extensionPath = resolve(currentDirectory, extensionRouteRegistryRelativePath)
+    if (existsSync(webPath) && existsSync(extensionPath)) {
+      return currentDirectory
+    }
+    const parentDirectory = dirname(currentDirectory)
+    if (parentDirectory === currentDirectory) {
+      throw new Error("Unable to locate workspace root for family guardrails route parity test")
+    }
+    currentDirectory = parentDirectory
+  }
+}
+
+const workspaceRoot = resolveWorkspaceRoot(testFileDirectory)
+const webRouteRegistryPath = resolve(workspaceRoot, webRouteRegistryRelativePath)
 const extensionRouteRegistryPath = resolve(
-  testFileDirectory,
-  "../../../../../tldw-frontend/extension/routes/route-registry.tsx"
+  workspaceRoot,
+  extensionRouteRegistryRelativePath
 )
-
-if (!existsSync(webRouteRegistryPath)) {
-  throw new Error("Unable to locate web route-registry.tsx for family guardrails parity test")
-}
-if (!existsSync(extensionRouteRegistryPath)) {
-  throw new Error("Unable to locate extension route-registry.tsx for family guardrails parity test")
-}
 
 const webRouteRegistrySource = readFileSync(webRouteRegistryPath, "utf8")
 const extensionRouteRegistrySource = readFileSync(extensionRouteRegistryPath, "utf8")

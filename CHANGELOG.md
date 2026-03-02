@@ -897,7 +897,7 @@ and this project adheres to Some kind of Versioning
 - Soft delete support for notes/character cards
 - Qwen3-STT
 - JSON validation utilities with detailed error positioning (line/column information)
-- [WebUI] Character generation prompt templates for full and single-field generation 
+- [WebUI] Character generation prompt templates for full and single-field generation
 - [WebUI] Flashcard undo functionality with Ctrl/Cmd+Z shortcut
 - [WebUI] Media review selection and focus settings
 - [WebUI] TldwApiClient methods for character export, restore, and bulk world book operations
@@ -932,7 +932,7 @@ and this project adheres to Some kind of Versioning
 - Moved the tldw_Browser_Assistant project and the tldw-frontent folder into the '/apps/' folder, as moving forward they will share the same base.
   - As a result, new frontend!
 - New monorepo development guide, shared UI package scaffold, ambient typings, and testing guide for extension/web UI.
-- Image creation API via files 
+- Image creation API via files
 
 ### Changed
 
@@ -1020,9 +1020,9 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
-- Added tldw-admin react frontend for admin Mgmt of the server. Very much WIP. 
-- Extended feedback system/schema - Added a unified feedback system (explicit/implicit) across chat and search, integrates message IDs into chat history and streaming, 
-- introduced API key KDF/key_id, 
+- Added tldw-admin react frontend for admin Mgmt of the server. Very much WIP.
+- Extended feedback system/schema - Added a unified feedback system (explicit/implicit) across chat and search, integrates message IDs into chat history and streaming,
+- introduced API key KDF/key_id,
 - added admin effective-config endpoint/UI,
 
 ### Changed

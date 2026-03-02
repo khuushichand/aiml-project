@@ -2029,7 +2029,12 @@ class GuardianDB:
             return default
         try:
             return json.loads(raw_value)
-        except _GUARDIAN_NONCRITICAL_EXCEPTIONS:
+        except _GUARDIAN_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(
+                "Guardian DB JSON parse failed; using default fallback. value_preview={} error={}",
+                str(raw_value)[:120],
+                exc,
+            )
             return default
 
     def create_household_draft(

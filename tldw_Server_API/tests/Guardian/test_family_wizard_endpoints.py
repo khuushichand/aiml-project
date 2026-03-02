@@ -15,6 +15,7 @@ def client(tmp_path) -> TestClient:
     app = FastAPI()
     app.include_router(family_wizard_router, prefix="/api/v1/guardian")
     db = GuardianDB(str(tmp_path / "family_wizard_endpoints.db"))
+    app.state.guardian_db = db
 
     async def override_user() -> User:
         return User(
@@ -220,3 +221,142 @@ def test_get_household_snapshot_endpoint_returns_members_relationships_and_plans
     assert len(snapshot["relationships"]) == 1
     assert len(snapshot["plans"]) == 1
     assert snapshot["plans"][0]["dependent_user_id"] == "alex-kid"
+
+
+def test_relationship_mapping_requires_authenticated_guardian_member(
+    client: TestClient,
+) -> None:
+    draft_res = client.post(
+        "/api/v1/guardian/wizard/drafts",
+        json={"name": "AuthZ Home", "mode": "family"},
+    )
+    assert draft_res.status_code == 201, draft_res.text
+    draft_id = draft_res.json()["id"]
+
+    non_auth_guardian_member = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members",
+        json={"role": "guardian", "display_name": "Other Guardian", "user_id": "guardian-2"},
+    )
+    dependent_member = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members",
+        json={"role": "dependent", "display_name": "Child", "user_id": "child-1"},
+    )
+    assert non_auth_guardian_member.status_code == 201, non_auth_guardian_member.text
+    assert dependent_member.status_code == 201, dependent_member.text
+
+    relationship_res = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/relationships",
+        json={
+            "guardian_member_draft_id": non_auth_guardian_member.json()["id"],
+            "dependent_member_draft_id": dependent_member.json()["id"],
+            "relationship_type": "parent",
+            "dependent_visible": True,
+        },
+    )
+    assert relationship_res.status_code == 403, relationship_res.text
+    assert "authenticated guardian" in relationship_res.json()["detail"].lower()
+
+
+def test_save_guardrail_plan_rejects_dependent_user_id_mismatch(
+    client: TestClient,
+) -> None:
+    draft_res = client.post(
+        "/api/v1/guardian/wizard/drafts",
+        json={"name": "Plan Mismatch Home", "mode": "family"},
+    )
+    assert draft_res.status_code == 201, draft_res.text
+    draft_id = draft_res.json()["id"]
+
+    guardian_member = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members",
+        json={"role": "guardian", "display_name": "Guardian", "user_id": "guardian-1"},
+    )
+    dependent_member = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members",
+        json={"role": "dependent", "display_name": "Child", "user_id": "child-1"},
+    )
+    assert guardian_member.status_code == 201, guardian_member.text
+    assert dependent_member.status_code == 201, dependent_member.text
+
+    relationship_res = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/relationships",
+        json={
+            "guardian_member_draft_id": guardian_member.json()["id"],
+            "dependent_member_draft_id": dependent_member.json()["id"],
+            "relationship_type": "parent",
+            "dependent_visible": True,
+        },
+    )
+    assert relationship_res.status_code == 201, relationship_res.text
+    relationship_id = relationship_res.json()["id"]
+
+    plan_res = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/plans",
+        json={
+            "dependent_user_id": "child-2",
+            "relationship_draft_id": relationship_id,
+            "template_id": "default-child-safe",
+            "overrides": {"action": "warn"},
+        },
+    )
+    assert plan_res.status_code == 400, plan_res.text
+    assert "must match" in plan_res.json()["detail"].lower()
+
+
+def test_activation_summary_uses_bulk_relationship_lookup(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft_res = client.post(
+        "/api/v1/guardian/wizard/drafts",
+        json={"name": "Summary Home", "mode": "family"},
+    )
+    assert draft_res.status_code == 201, draft_res.text
+    draft_id = draft_res.json()["id"]
+
+    guardian_member = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members",
+        json={"role": "guardian", "display_name": "Guardian", "user_id": "guardian-1"},
+    )
+    dependent_member = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members",
+        json={"role": "dependent", "display_name": "Child", "user_id": "child-1"},
+    )
+    assert guardian_member.status_code == 201, guardian_member.text
+    assert dependent_member.status_code == 201, dependent_member.text
+
+    relationship_res = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/relationships",
+        json={
+            "guardian_member_draft_id": guardian_member.json()["id"],
+            "dependent_member_draft_id": dependent_member.json()["id"],
+            "relationship_type": "parent",
+            "dependent_visible": True,
+        },
+    )
+    assert relationship_res.status_code == 201, relationship_res.text
+    relationship_id = relationship_res.json()["id"]
+
+    plan_res = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/plans",
+        json={
+            "dependent_user_id": "child-1",
+            "relationship_draft_id": relationship_id,
+            "template_id": "default-child-safe",
+            "overrides": {"action": "warn"},
+        },
+    )
+    assert plan_res.status_code == 201, plan_res.text
+
+    db = client.app.state.guardian_db
+
+    def fail_if_called(_relationship_draft_id: str):
+        raise AssertionError("get_relationship_draft should not be called in activation summary loop")
+
+    monkeypatch.setattr(db, "get_relationship_draft", fail_if_called)
+
+    summary_res = client.get(f"/api/v1/guardian/wizard/drafts/{draft_id}/activation-summary")
+    assert summary_res.status_code == 200, summary_res.text
+    payload = summary_res.json()
+    assert payload["pending_count"] == 1
+    assert payload["items"][0]["relationship_status"] == "pending"

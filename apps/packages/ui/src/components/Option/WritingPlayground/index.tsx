@@ -6250,13 +6250,57 @@ export const WritingPlayground = () => {
                                       "option:writingPlayground.promptChunksEmpty",
                                       "No chunks yet."
                                     )}
-                                  </span>
-                                ) : null}
-                              </div>
-                            )
-                        }
-                      ]}
-                    />
+                                  </Paragraph>
+                                ) : (
+                                  <div className="flex flex-col gap-2">
+                                    <div className="max-h-48 overflow-y-auto rounded-md border border-border bg-surface px-3 py-2">
+                                      <div className="flex flex-col gap-2">
+                                        {promptChunkData.chunks.map((chunk, index) => (
+                                          <div
+                                            key={chunk.key}
+                                            className="flex items-start gap-2 text-xs">
+                                            <Tag
+                                              color={
+                                                chunk.type === "placeholder"
+                                                  ? "blue"
+                                                  : "default"
+                                              }>
+                                              {chunk.type === "placeholder"
+                                                ? t(
+                                                    "option:writingPlayground.chunkPlaceholder",
+                                                    "Placeholder"
+                                                  )
+                                                : t(
+                                                    "option:writingPlayground.chunkText",
+                                                    "Text"
+                                                  )}
+                                            </Tag>
+                                            <span className="text-text-muted">
+                                              {index + 1}.
+                                            </span>
+                                            <span className="whitespace-pre-wrap text-text">
+                                              {chunk.label}
+                                            </span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    {promptChunkData.truncated ? (
+                                      <span className="text-xs text-text-muted">
+                                        {t(
+                                          "option:writingPlayground.promptChunksTruncated",
+                                          "Showing first {{count}} chunks.",
+                                          { count: promptChunkData.chunks.length }
+                                        )}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                )
+                            }
+                          ]}
+                        />
+                      </div>
+                    ) : null}
                   </div>
                 )
               ) : (

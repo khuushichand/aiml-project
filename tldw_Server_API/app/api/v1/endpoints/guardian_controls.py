@@ -25,7 +25,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.guardian_deps import get_guardian_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.guardian_deps import (
+    get_guardian_db_for_user,
+    get_guardian_db_for_user_id,
+)
 from tldw_Server_API.app.api.v1.schemas.guardian_schemas import (
     DetailResponse,
     DissolveRequest,
@@ -176,8 +179,11 @@ def accept_relationship(
     ok = db.accept_relationship(relationship_id)
     if not ok:
         raise HTTPException(status_code=400, detail="Cannot accept (may already be active or dissolved)")
+    materialization_db = db
+    if rel.guardian_user_id != _user_id(user):
+        materialization_db = get_guardian_db_for_user_id(rel.guardian_user_id)
     materialization_result = materialize_pending_plans_for_relationship(
-        db=db,
+        db=materialization_db,
         relationship_id=relationship_id,
         actor_user_id=_user_id(user),
     )

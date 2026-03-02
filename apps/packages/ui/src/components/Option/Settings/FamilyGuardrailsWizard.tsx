@@ -16,6 +16,7 @@ import {
   Typography,
   message
 } from "antd"
+import type { InputRef } from "antd"
 import { DeleteOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons"
 
 import {
@@ -160,13 +161,6 @@ const MIN_DEPENDENTS = 1
 const MAX_DEPENDENTS = 12
 const LARGE_HOUSEHOLD_TABLE_THRESHOLD = 4
 const BULK_ENTRY_PLACEHOLDER = "One per line: Display Name | user_id | email(optional)"
-const INLINE_VALIDATION_ERROR_MESSAGES = new Set([
-  "Complete required guardian fields before continuing.",
-  "Complete required dependent fields before continuing.",
-  "Guardian user IDs must be unique before continuing.",
-  "Dependent user IDs must be unique and cannot match guardian user IDs.",
-  "Dependent user IDs must be unique and cannot match caregiver user IDs."
-])
 
 const isEditableTarget = (target: EventTarget | null): boolean => {
   if (!(target instanceof HTMLElement)) return false
@@ -442,6 +436,31 @@ export function FamilyGuardrailsWizard({
   const [overridesByDependentKey, setOverridesByDependentKey] = useState<Record<string, OverrideInput>>({})
   const [templateReviewTargetUserId, setTemplateReviewTargetUserId] = useState<string | null>(null)
   const [mappingFixTargetUserId, setMappingFixTargetUserId] = useState<string | null>(null)
+  const memberFieldInputRefs = React.useRef<Record<string, HTMLInputElement | null>>({})
+
+  const setMemberFieldInputRef = React.useCallback(
+    (
+      role: "guardian" | "dependent",
+      memberKey: string,
+      field: MemberFieldKey,
+      instance: InputRef | null
+    ) => {
+      memberFieldInputRefs.current[`${role}:${memberKey}:${field}`] = instance?.input ?? null
+    },
+    []
+  )
+
+  const focusRequiredMemberField = React.useCallback(
+    (role: "guardian" | "dependent", memberKey: string, field: MemberFieldKey) => {
+      const target = memberFieldInputRefs.current[`${role}:${memberKey}:${field}`]
+      if (!target) return
+      if (typeof target.scrollIntoView === "function") {
+        target.scrollIntoView({ block: "center", behavior: "smooth" })
+      }
+      target.focus()
+    },
+    []
+  )
 
   const guardianOptions = useMemo(
     () =>
@@ -782,8 +801,9 @@ export function FamilyGuardrailsWizard({
         const snapshot = await getHouseholdDraftSnapshot(latestDraft.id)
         if (cancelled) return
         applySnapshot(snapshot)
-      } catch (_error) {
+      } catch (error) {
         // Keep wizard usable for first-time setup when resume data is unavailable.
+        console.error("Failed to load latest family wizard draft:", error)
       }
     }
 
@@ -1024,26 +1044,11 @@ export function FamilyGuardrailsWizard({
 
       if (currentStep === 0) {
         if (!householdName.trim()) {
-          throw new Error("Household name is required")
+          message.error("Household name is required")
+          return
         }
         setCurrentStep(1)
         return
-      }
-
-      const focusRequiredMemberField = (
-        role: "guardian" | "dependent",
-        memberKey: string,
-        field: MemberFieldKey
-      ) => {
-        if (typeof document === "undefined") return
-        const target = document.querySelector<HTMLInputElement>(
-          `input[data-guardrails-role="${role}"][data-member-key="${memberKey}"][data-member-field="${field}"]`
-        )
-        if (!target) return
-        if (typeof target.scrollIntoView === "function") {
-          target.scrollIntoView({ block: "center", behavior: "smooth" })
-        }
-        target.focus()
       }
 
       let nextGuardians = guardians
@@ -1053,7 +1058,8 @@ export function FamilyGuardrailsWizard({
         if (guardianEntryMode === "bulk" && guardianBulkInput.trim()) {
           const parsedGuardians = parseBulkMembers(guardianBulkInput, "guardian")
           if (!parsedGuardians.length) {
-            throw new Error("Enter at least one guardian bulk entry before continuing.")
+            message.error("Enter at least one guardian bulk entry before continuing.")
+            return
           }
           nextGuardians = parsedGuardians
           setGuardians(parsedGuardians)
@@ -1067,12 +1073,12 @@ export function FamilyGuardrailsWizard({
         const firstIncomplete = findFirstIncompleteMemberField(nextGuardians)
         if (firstIncomplete) {
           focusRequiredMemberField("guardian", firstIncomplete.memberKey, firstIncomplete.field)
-          throw new Error("Complete required guardian fields before continuing.")
+          return
         }
         const duplicateGuardian = findFirstDuplicateUserId(nextGuardians)
         if (duplicateGuardian) {
           focusRequiredMemberField("guardian", duplicateGuardian.memberKey, "userId")
-          throw new Error("Guardian user IDs must be unique before continuing.")
+          return
         }
       }
 
@@ -1080,7 +1086,8 @@ export function FamilyGuardrailsWizard({
         if (dependentEntryMode === "bulk" && dependentBulkInput.trim()) {
           const parsedDependents = parseBulkMembers(dependentBulkInput, "dependent")
           if (!parsedDependents.length) {
-            throw new Error("Enter at least one dependent bulk entry before continuing.")
+            message.error("Enter at least one dependent bulk entry before continuing.")
+            return
           }
           nextDependents = parsedDependents
           setDependents(parsedDependents)
@@ -1096,7 +1103,7 @@ export function FamilyGuardrailsWizard({
         const firstIncomplete = findFirstIncompleteMemberField(nextDependents)
         if (firstIncomplete) {
           focusRequiredMemberField("dependent", firstIncomplete.memberKey, firstIncomplete.field)
-          throw new Error("Complete required dependent fields before continuing.")
+          return
         }
         const guardianUserIds = new Set(
           nextGuardians
@@ -1106,10 +1113,7 @@ export function FamilyGuardrailsWizard({
         const duplicateDependent = findFirstDuplicateUserId(nextDependents, guardianUserIds)
         if (duplicateDependent) {
           focusRequiredMemberField("dependent", duplicateDependent.memberKey, "userId")
-          const guardianRoleLabelLower = mode === "institutional" ? "caregiver" : "guardian"
-          throw new Error(
-            `Dependent user IDs must be unique and cannot match ${guardianRoleLabelLower} user IDs.`
-          )
+          return
         }
       }
 
@@ -1162,10 +1166,7 @@ export function FamilyGuardrailsWizard({
         message.success("Family guardrails wizard setup saved.")
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unable to continue wizard"
-      if (!INLINE_VALIDATION_ERROR_MESSAGES.has(errorMessage)) {
-        message.error(errorMessage)
-      }
+      message.error(error instanceof Error ? error.message : "Unable to continue wizard")
     } finally {
       setSubmitting(false)
     }
@@ -1481,6 +1482,9 @@ export function FamilyGuardrailsWizard({
                       <Space orientation="vertical" style={{ width: "100%" }}>
                         <Text type="secondary">{`${guardianEntityLabel} ${index + 1} display name`}</Text>
                         <Input
+                          ref={(instance: InputRef | null) =>
+                            setMemberFieldInputRef("guardian", guardian.key, "displayName", instance)
+                          }
                           value={guardian.displayName}
                           onChange={(event) =>
                             setGuardians((prev) =>
@@ -1501,6 +1505,9 @@ export function FamilyGuardrailsWizard({
                         ) : null}
                         <Text type="secondary">{`${guardianEntityLabel} ${index + 1} user ID`}</Text>
                         <Input
+                          ref={(instance: InputRef | null) =>
+                            setMemberFieldInputRef("guardian", guardian.key, "userId", instance)
+                          }
                           value={guardian.userId}
                           onChange={(event) =>
                             setGuardians((prev) =>
@@ -1691,6 +1698,9 @@ export function FamilyGuardrailsWizard({
                       dataIndex: "displayName",
                       render: (_value: string, dependent: MemberInput, index: number) => (
                         <Input
+                          ref={(instance: InputRef | null) =>
+                            setMemberFieldInputRef("dependent", dependent.key, "displayName", instance)
+                          }
                           value={dependent.displayName}
                           onChange={(event) =>
                             updateDependentMember(dependent.key, { displayName: event.target.value })
@@ -1717,6 +1727,9 @@ export function FamilyGuardrailsWizard({
                           dependentGuardianCollisionUserIds.has(normalizedDependentUserId)
                         return (
                           <Input
+                            ref={(instance: InputRef | null) =>
+                              setMemberFieldInputRef("dependent", dependent.key, "userId", instance)
+                            }
                             value={dependent.userId}
                             onChange={(event) =>
                               updateDependentMember(dependent.key, { userId: event.target.value })
@@ -1793,6 +1806,9 @@ export function FamilyGuardrailsWizard({
                       <Space orientation="vertical" style={{ width: "100%" }}>
                         <Text type="secondary">{`Dependent ${index + 1} display name`}</Text>
                         <Input
+                          ref={(instance: InputRef | null) =>
+                            setMemberFieldInputRef("dependent", dependent.key, "displayName", instance)
+                          }
                           value={dependent.displayName}
                           onChange={(event) =>
                             updateDependentMember(dependent.key, { displayName: event.target.value })
@@ -1809,6 +1825,9 @@ export function FamilyGuardrailsWizard({
                         ) : null}
                         <Text type="secondary">{`Dependent ${index + 1} user ID`}</Text>
                         <Input
+                          ref={(instance: InputRef | null) =>
+                            setMemberFieldInputRef("dependent", dependent.key, "userId", instance)
+                          }
                           value={dependent.userId}
                           onChange={(event) =>
                             updateDependentMember(dependent.key, { userId: event.target.value })
