@@ -176,6 +176,47 @@ def test_saved_search_endpoints_crud(reading_app):
         assert r.json()["total"] == 0
 
 
+def test_saved_search_rejects_unsupported_query_key(reading_app):
+    async def override_user():
+        return User(id=911, username="saved-search-invalid-query", email=None, is_active=True)
+
+    reading_app.dependency_overrides[get_request_user] = override_user
+
+    with TestClient(reading_app) as client:
+        r = client.post(
+            "/api/v1/reading/saved-searches",
+            json={"name": "Invalid Query", "query": {"unknown_filter": "x"}},
+        )
+        assert r.status_code == 422, r.text
+
+
+def test_saved_search_rejects_blank_name_values(reading_app):
+    async def override_user():
+        return User(id=912, username="saved-search-blank-name", email=None, is_active=True)
+
+    reading_app.dependency_overrides[get_request_user] = override_user
+
+    with TestClient(reading_app) as client:
+        r = client.post(
+            "/api/v1/reading/saved-searches",
+            json={"name": "   ", "query": {"q": "ai"}},
+        )
+        assert r.status_code == 422, r.text
+
+        create = client.post(
+            "/api/v1/reading/saved-searches",
+            json={"name": "Keep Name", "query": {"q": "ai"}},
+        )
+        assert create.status_code == 201, create.text
+        search_id = create.json()["id"]
+
+        r = client.patch(
+            f"/api/v1/reading/saved-searches/{search_id}",
+            json={"name": "   "},
+        )
+        assert r.status_code == 422, r.text
+
+
 def test_saved_search_endpoints_disabled_by_feature_flag(reading_app, monkeypatch):
     monkeypatch.setenv("COLLECTIONS_READING_SAVED_SEARCHES_ENABLED", "0")
 

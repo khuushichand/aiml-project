@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import inspect
 import json
 import os
@@ -33,9 +32,25 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
 )
 from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
 
+
+def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid integer for {name}: {raw!r}; using default={default}")
+        return default
+    if minimum is not None and value < minimum:
+        logger.warning(f"Out-of-range integer for {name}: {value}; minimum={minimum}; using default={default}")
+        return default
+    return value
+
+
 READING_DEFAULT_STATUS = "saved"
-READING_ARCHIVE_MAX_BYTES = int(os.getenv("READING_ARCHIVE_MAX_BYTES", str(5 * 1024 * 1024)) or str(5 * 1024 * 1024))
-READING_ARCHIVE_RETENTION_DAYS = int(os.getenv("READING_ARCHIVE_RETENTION_DAYS", "30") or "30")
+READING_ARCHIVE_MAX_BYTES = _env_int("READING_ARCHIVE_MAX_BYTES", 5 * 1024 * 1024, minimum=0)
+READING_ARCHIVE_RETENTION_DAYS = _env_int("READING_ARCHIVE_RETENTION_DAYS", 30, minimum=0)
 
 _READING_SERVICE_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -396,9 +411,9 @@ class ReadingService:
         safe_title = _safe_filename_fragment(title, max_len=40)
         filename = f"reading_archive_{item_id}_{safe_title}_{timestamp}.md"
         outputs_dir = DatabasePaths.get_user_outputs_dir(self.user_id)
-        outputs_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(outputs_dir.mkdir, parents=True, exist_ok=True)
         path = outputs_dir / filename
-        path.write_text(content, encoding="utf-8")
+        await asyncio.to_thread(path.write_text, content, encoding="utf-8")
 
         metadata = {
             "item_id": item_id,
@@ -550,8 +565,12 @@ class ReadingService:
                 meta_patch["archive_error"] = None
             elif archive_error:
                 meta_patch["archive_error"] = archive_error
-            with contextlib.suppress(_READING_SERVICE_NONCRITICAL_EXCEPTIONS):
+            try:
                 item_row = self.collections.update_content_item(item_row.id, metadata=meta_patch)
+            except _READING_SERVICE_NONCRITICAL_EXCEPTIONS as exc:
+                update_error = f"archive_metadata_update_failed:{exc}"
+                logger.warning(f"reading_archive_metadata_update_failed item_id={item_row.id}: {exc}")
+                archive_error = f"{archive_error};{update_error}" if archive_error else update_error
 
         if item_row.is_new or item_row.content_changed:
             embedding_metadata = {

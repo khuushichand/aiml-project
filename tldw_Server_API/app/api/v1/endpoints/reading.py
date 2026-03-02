@@ -64,7 +64,11 @@ from tldw_Server_API.app.core.Collections.reading_import_jobs import (
     stage_reading_import_file,
 )
 from tldw_Server_API.app.core.Collections.reading_service import ReadingService
-from tldw_Server_API.app.core.DB_Management.Collections_DB import ContentItemRow
+from tldw_Server_API.app.core.DB_Management.Collections_DB import (
+    ContentItemNoteLinkRow,
+    ContentItemRow,
+    SavedSearchRow,
+)
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.feature_flags import (
     is_collections_reading_archive_controls_enabled,
@@ -211,7 +215,7 @@ def _to_reading_detail(row: ContentItemRow) -> ReadingItemDetail:
     )
 
 
-def _to_saved_search_response(row) -> ReadingSavedSearchResponse:
+def _to_saved_search_response(row: SavedSearchRow) -> ReadingSavedSearchResponse:
     query_payload: dict[str, object] = {}
     raw = getattr(row, "query_json", None)
     if raw:
@@ -231,7 +235,7 @@ def _to_saved_search_response(row) -> ReadingSavedSearchResponse:
     )
 
 
-def _to_note_link_response(row) -> ReadingNoteLinkResponse:
+def _to_note_link_response(row: ContentItemNoteLinkRow) -> ReadingNoteLinkResponse:
     return ReadingNoteLinkResponse(
         item_id=int(row.item_id),
         note_id=str(row.note_id),
@@ -587,7 +591,7 @@ async def create_reading_saved_search(
     _ensure_reading_saved_searches_enabled()
     try:
         row = collections_db.create_saved_search(
-            name=payload.name.strip(),
+            name=payload.name,
             query_json=json.dumps(payload.query or {}, ensure_ascii=False),
             sort=payload.sort,
         )
@@ -636,7 +640,7 @@ async def update_reading_saved_search(
     _ensure_reading_saved_searches_enabled()
     patch: dict[str, object] = {}
     if payload.name is not None:
-        patch["name"] = payload.name.strip()
+        patch["name"] = payload.name
     if payload.query is not None:
         patch["query_json"] = json.dumps(payload.query, ensure_ascii=False)
     if payload.sort is not None:

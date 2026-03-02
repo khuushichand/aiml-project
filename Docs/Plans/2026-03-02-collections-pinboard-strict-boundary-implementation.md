@@ -487,23 +487,23 @@ Expected: PASS.
 
 ```bash
 git add Docs/Product/Completed/Content_Collections_UX_Backlog_PRD.md
-git add tldw_Server_API/app/api/v1/schemas/reading_schemas.py
-git add tldw_Server_API/app/api/v1/endpoints/reading.py
-git add tldw_Server_API/app/core/Collections/reading_service.py
-git add tldw_Server_API/app/core/DB_Management/Collections_DB.py
-git add tldw_Server_API/tests/Collections/test_reading_api.py
-git add tldw_Server_API/tests/Collections/test_reading_service.py
-git add tldw_Server_API/tests/Collections/test_reading_saved_searches_db.py
-git add tldw_Server_API/tests/Collections/test_reading_note_links_db.py
-git add apps/packages/ui/src/types/collections.ts
-git add apps/packages/ui/src/services/tldw/TldwApiClient.ts
-git add apps/packages/ui/src/services/tldw/__tests__/reading-saved-searches.test.ts
-git add apps/packages/ui/src/store/collections.tsx
-git add apps/packages/ui/src/components/Option/Collections/ReadingList/AddUrlModal.tsx
-git add apps/packages/ui/src/components/Option/Collections/ReadingList/ReadingItemsList.tsx
-git add apps/packages/ui/src/components/Option/Collections/ReadingList/SavedSearchesMenu.tsx
-git add apps/packages/ui/src/components/Option/Collections/ReadingList/__tests__/saved-searches-menu.test.tsx
-git add apps/packages/ui/src/components/Option/Collections/ReadingList/ReadingItemDetail.tsx
-git add apps/packages/ui/src/components/Option/Collections/ReadingList/__tests__/reading-item-detail-note-links.test.tsx
+git add tldw_Server_API/app/api/v1/schemas/reading_schemas.py \
+  tldw_Server_API/app/api/v1/endpoints/reading.py \
+  tldw_Server_API/app/core/Collections/reading_service.py \
+  tldw_Server_API/app/core/DB_Management/Collections_DB.py \
+  tldw_Server_API/tests/Collections/test_reading_api.py \
+  tldw_Server_API/tests/Collections/test_reading_service.py \
+  tldw_Server_API/tests/Collections/test_reading_saved_searches_db.py \
+  tldw_Server_API/tests/Collections/test_reading_note_links_db.py
+git add apps/packages/ui/src/types/collections.ts \
+  apps/packages/ui/src/services/tldw/TldwApiClient.ts \
+  apps/packages/ui/src/services/tldw/__tests__/reading-saved-searches.test.ts \
+  apps/packages/ui/src/store/collections.tsx \
+  apps/packages/ui/src/components/Option/Collections/ReadingList/AddUrlModal.tsx \
+  apps/packages/ui/src/components/Option/Collections/ReadingList/ReadingItemsList.tsx \
+  apps/packages/ui/src/components/Option/Collections/ReadingList/SavedSearchesMenu.tsx \
+  apps/packages/ui/src/components/Option/Collections/ReadingList/__tests__/saved-searches-menu.test.tsx \
+  apps/packages/ui/src/components/Option/Collections/ReadingList/ReadingItemDetail.tsx \
+  apps/packages/ui/src/components/Option/Collections/ReadingList/__tests__/reading-item-detail-note-links.test.tsx
 git commit -m "feat(collections): deliver pinboard utility parity with strict notes boundary"
 ```

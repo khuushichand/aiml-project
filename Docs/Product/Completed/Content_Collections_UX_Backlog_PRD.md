@@ -93,6 +93,10 @@ This PRD tracks the remaining UX delivery work for Content Collections. It rolls
 - Bulk actions show progress and per-item results; errors are visible.
 - Bulk output generation prompts for template selection and returns a generated output artifact or a clear failure state.
 - Template editor supports preview and default assignment in job settings.
+- Reading saved searches support authenticated CRUD (`POST/GET/PATCH/DELETE /api/v1/reading/saved-searches`) and can reapply persisted filters/sort in UI state.
+- Reading saved searches reject invalid payloads with clear 4xx responses (unsupported query keys, blank names, malformed filters) while keeping valid filters stable.
+- Reading item-note links support authenticated create/list/delete (`POST/GET/DELETE /api/v1/reading/items/{item_id}/links...`) only when the referenced note exists for the same user.
+- Reading item-note links return predictable edge-case behavior for missing items/notes and cross-user note IDs; note content ownership/lifecycle remains exclusively under `/api/v1/notes`.
 
 ## 8. Test Plan
 
@@ -102,6 +106,10 @@ This PRD tracks the remaining UX delivery work for Content Collections. It rolls
 - Bulk actions: mixed-success scenarios; undo flow when supported.
 - Bulk output generation: template selection, output creation success, output creation failures.
 - Notes: dirty indicator and autosave behavior across navigation.
+- Reading saved searches: CRUD success paths, duplicate-name handling, and 4xx validation coverage for unsupported query keys/blank names.
+- Reading saved searches: authn/authz checks and response-code assertions for create/list/update/delete under feature-flag enabled/disabled states.
+- Reading item-note links: create/list/delete lifecycle tests, same-user existence checks, and missing/foreign note handling.
+- Reading item-note links: authn/authz and edge-case regression checks for non-existent item IDs, repeated unlink operations, and concurrent link attempts.
 
 ## 9. Open Questions
 

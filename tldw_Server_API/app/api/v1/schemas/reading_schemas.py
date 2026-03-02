@@ -6,6 +6,96 @@ from pydantic import BaseModel, HttpUrl, validator
 
 from tldw_Server_API.app.api.v1.schemas._compat import Field
 
+_READING_SAVED_SEARCH_ALLOWED_QUERY_KEYS = {
+    "q",
+    "status",
+    "tags",
+    "favorite",
+    "domain",
+    "date_from",
+    "date_to",
+    "sort",
+}
+_READING_SAVED_SEARCH_ALLOWED_STATUSES = {"saved", "reading", "read", "archived"}
+_READING_SAVED_SEARCH_ALLOWED_SORTS = {
+    "updated_desc",
+    "updated_asc",
+    "created_desc",
+    "created_asc",
+    "title_asc",
+    "title_desc",
+    "relevance",
+}
+
+
+def _normalize_nonempty_string(value: Any, *, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name}_must_be_string")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name}_must_not_be_blank")
+    return normalized
+
+
+def _normalize_saved_search_sort(value: Any) -> str:
+    normalized = _normalize_nonempty_string(value, field_name="sort").lower()
+    if normalized not in _READING_SAVED_SEARCH_ALLOWED_SORTS:
+        raise ValueError("sort_invalid")
+    return normalized
+
+
+def _normalize_saved_search_query(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("query_must_be_object")
+
+    normalized: dict[str, Any] = {}
+    for key, raw in value.items():
+        if key not in _READING_SAVED_SEARCH_ALLOWED_QUERY_KEYS:
+            raise ValueError(f"unsupported_query_key:{key}")
+        if key in {"q", "domain", "date_from", "date_to"}:
+            normalized[key] = _normalize_nonempty_string(raw, field_name=key)
+            continue
+        if key == "favorite":
+            if not isinstance(raw, bool):
+                raise ValueError("favorite_must_be_boolean")
+            normalized[key] = raw
+            continue
+        if key == "status":
+            if isinstance(raw, str):
+                status = raw.strip().lower()
+                if status not in _READING_SAVED_SEARCH_ALLOWED_STATUSES:
+                    raise ValueError("status_invalid")
+                normalized[key] = status
+                continue
+            if isinstance(raw, list):
+                statuses = []
+                for entry in raw:
+                    if not isinstance(entry, str):
+                        raise ValueError("status_values_must_be_strings")
+                    status = entry.strip().lower()
+                    if status not in _READING_SAVED_SEARCH_ALLOWED_STATUSES:
+                        raise ValueError("status_invalid")
+                    statuses.append(status)
+                if not statuses:
+                    raise ValueError("status_values_must_not_be_empty")
+                normalized[key] = statuses
+                continue
+            raise ValueError("status_must_be_string_or_list")
+        if key == "tags":
+            if not isinstance(raw, list):
+                raise ValueError("tags_must_be_list")
+            tags = []
+            for entry in raw:
+                tags.append(_normalize_nonempty_string(entry, field_name="tag"))
+            normalized[key] = tags
+            continue
+        if key == "sort":
+            normalized[key] = _normalize_saved_search_sort(raw)
+            continue
+    return normalized
+
 
 class ReadingSaveRequest(BaseModel):
     url: HttpUrl = Field(example="https://example.com/article")
@@ -77,6 +167,20 @@ class ReadingSavedSearchCreateRequest(BaseModel):
         description="updated_desc|updated_asc|created_desc|created_asc|title_asc|title_desc|relevance",
     )
 
+    @validator("name")
+    def _normalize_name(cls, value: str) -> str:
+        return _normalize_nonempty_string(value, field_name="name")
+
+    @validator("query", pre=True)
+    def _normalize_query(cls, value: Any) -> dict[str, Any]:
+        return _normalize_saved_search_query(value)
+
+    @validator("sort")
+    def _normalize_sort(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_saved_search_sort(value)
+
 
 class ReadingSavedSearchUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
@@ -85,6 +189,24 @@ class ReadingSavedSearchUpdateRequest(BaseModel):
         default=None,
         description="updated_desc|updated_asc|created_desc|created_asc|title_asc|title_desc|relevance",
     )
+
+    @validator("name")
+    def _normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_nonempty_string(value, field_name="name")
+
+    @validator("query", pre=True)
+    def _normalize_query(cls, value: Any) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        return _normalize_saved_search_query(value)
+
+    @validator("sort")
+    def _normalize_sort(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_saved_search_sort(value)
 
 
 class ReadingSavedSearchResponse(BaseModel):
