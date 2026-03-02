@@ -90,7 +90,7 @@ jobs:
           PY
       - name: Upload server log (single-user)
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: server-log-single-${{ matrix.os }}-py${{ matrix.python-version }}
           path: server-single.log
@@ -131,7 +131,7 @@ jobs:
           PY
       - name: Upload server log (multi-user)
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: server-log-multi-${{ matrix.os }}-py${{ matrix.python-version }}
           path: server-multi.log
