@@ -80,14 +80,14 @@ jobs:
 
       - name: Upload test results (SQLite)
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: jobs-sqlite-results
           path: test-results-jobs-sqlite.xml
 
       - name: Upload coverage (SQLite)
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: jobs-sqlite-coverage
           path: coverage.xml
@@ -199,14 +199,14 @@ jobs:
 
       - name: Upload test results (Postgres)
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: jobs-postgres-results
           path: test-results-jobs-postgres.xml
 
       - name: Upload coverage (Postgres)
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: jobs-postgres-coverage
           path: coverage.xml
