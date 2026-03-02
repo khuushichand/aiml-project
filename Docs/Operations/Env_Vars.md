@@ -552,7 +552,7 @@ Quick start (local dev):
 - Many subsystems also support file-based configuration under `Config_Files/` and module-specific YAML files (e.g., TTS provider config). Environment variables always take precedence when present.
 
 ## TTS Placeholder Handling (2026-03-02)
-- Legacy placeholder literals in `[TTS-Settings]` are now treated as unset during config load: empty string, `FIXME`, `TODO`, `TBD`, `CHANGE_ME`, `CHANGE-ME`, `PLACEHOLDER`, `NONE`, `NULL`, `N/A`, `NA`.
+- Legacy placeholder literals in `[TTS-Settings]` are now treated as unset during config load: empty string, `FIXME`, `TODO`, `TBD`, `CHANGE_ME`, `PLACEHOLDER`, `NONE`, `NULL`, `N/A`, `NA`.
 - When placeholders are encountered, safe defaults are applied:
   - `default_google_tts_model`: `en-US`
   - `default_google_tts_voice`: `en-US-Neural2-A`

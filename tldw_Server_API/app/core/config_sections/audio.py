@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from typing import Mapping
 
+from .types import ConfigParserLike
+
 
 @dataclass(frozen=True)
 class AudioConfig:
@@ -12,7 +14,10 @@ class AudioConfig:
     local_tts_device: str
 
 
-def load_audio_config(config_parser, env: Mapping[str, str] | None = None) -> AudioConfig:
+def load_audio_config(
+    config_parser: ConfigParserLike,
+    env: Mapping[str, str] | None = None,
+) -> AudioConfig:
     env_map: Mapping[str, str] = env if env is not None else os.environ
 
     default_tts_provider = str(

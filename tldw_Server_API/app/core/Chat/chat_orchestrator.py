@@ -1044,11 +1044,6 @@ def _chat_sync_impl(
 
         # Temperature and other LLM params
         temperature_float = normalize_temperature(temperature, default=0.7)
-        try:
-            if temperature is not None:
-                float(temperature)
-        except (TypeError, ValueError):
-            logging.warning(f"Invalid temperature '{temperature}', using 0.7.")
 
         logging.debug("Debug - Chat Function - Final LLM Payload (structure, image data truncated):")
         for i, msg_p in enumerate(llm_messages_payload):
@@ -1539,11 +1534,6 @@ async def achat(
         llm_messages_payload.append({"role": "user", "content": current_user_content_parts})
 
         temperature_float = normalize_temperature(temperature, default=0.7)
-        try:
-            if temperature is not None:
-                float(temperature)
-        except (TypeError, ValueError):
-            logging.warning(f"Invalid temperature '{temperature}', using 0.7.")
 
         logging.debug("Debug - Async Chat Function - Final LLM Payload prepared")
 

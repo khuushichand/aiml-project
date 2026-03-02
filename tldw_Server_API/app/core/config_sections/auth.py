@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from typing import Mapping
 
+from .types import ConfigParserLike
+
 
 @dataclass(frozen=True)
 class AuthConfig:
@@ -11,7 +13,10 @@ class AuthConfig:
     single_user_fixed_id: int
 
 
-def load_auth_config(config_parser, env: Mapping[str, str] | None = None) -> AuthConfig:
+def load_auth_config(
+    config_parser: ConfigParserLike,
+    env: Mapping[str, str] | None = None,
+) -> AuthConfig:
     env_map: Mapping[str, str] = env if env is not None else os.environ
 
     mode = (env_map.get("AUTH_MODE") or "").strip().lower()

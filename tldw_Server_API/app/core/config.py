@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.testing import (
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamaCppConfig
+    from tldw_Server_API.app.core.config_sections import ConfigSections
 
 _CONFIG_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -4869,7 +4870,7 @@ loaded_config_data = LazyConfigData(_config_loader)
 _LEGACY_SENTINEL = object()
 
 
-def load_all_sections_for_test():
+def load_all_sections_for_test() -> "ConfigSections":
     from tldw_Server_API.app.core.config_sections import load_config_sections
 
     return load_config_sections(load_comprehensive_config())

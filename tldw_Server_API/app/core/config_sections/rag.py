@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from typing import Mapping
 
+from .types import ConfigParserLike
+
 
 @dataclass(frozen=True)
 class RAGConfig:
@@ -12,7 +14,10 @@ class RAGConfig:
     default_llm_model: str
 
 
-def load_rag_config(config_parser, env: Mapping[str, str] | None = None) -> RAGConfig:
+def load_rag_config(
+    config_parser: ConfigParserLike,
+    env: Mapping[str, str] | None = None,
+) -> RAGConfig:
     env_map: Mapping[str, str] = env if env is not None else os.environ
 
     vector_store_type = str(

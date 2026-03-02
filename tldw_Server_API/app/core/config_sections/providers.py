@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from typing import Mapping
 
+from .types import ConfigParserLike
+
 
 @dataclass(frozen=True)
 class ProvidersConfig:
@@ -11,7 +13,10 @@ class ProvidersConfig:
     default_provider: str
 
 
-def load_providers_config(config_parser, env: Mapping[str, str] | None = None) -> ProvidersConfig:
+def load_providers_config(
+    config_parser: ConfigParserLike,
+    env: Mapping[str, str] | None = None,
+) -> ProvidersConfig:
     env_map: Mapping[str, str] = env if env is not None else os.environ
 
     default_api = str(

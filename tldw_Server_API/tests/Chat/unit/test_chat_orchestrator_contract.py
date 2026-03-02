@@ -83,3 +83,59 @@ def test_stream_execution_maps_provider_errors_to_chat_error_shape():
     err = map_stream_error(RuntimeError("provider exploded"))
     assert "message" in err
     assert "code" in err
+
+
+def test_execute_stream_sync_wrapper_closes_underlying_iterator_on_early_close():
+    from tldw_Server_API.app.core.Chat.orchestrator.stream_execution import execute_stream
+
+    class _SyncClosableStream:
+        def __init__(self) -> None:
+            self._closed = False
+            self._emitted = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self._emitted:
+                raise StopIteration
+            self._emitted = True
+            return {"delta": "x"}
+
+        def close(self) -> None:
+            self._closed = True
+
+    stream = _SyncClosableStream()
+    wrapped = execute_stream(stream)
+    assert next(wrapped)["delta"] == "x"
+    wrapped.close()
+    assert stream._closed is True  # nosec B101
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_async_wrapper_closes_underlying_iterator_on_early_close():
+    from tldw_Server_API.app.core.Chat.orchestrator.stream_execution import execute_stream
+
+    class _AsyncClosableStream:
+        def __init__(self) -> None:
+            self._closed = False
+            self._emitted = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._emitted:
+                raise StopAsyncIteration
+            self._emitted = True
+            return {"delta": "x"}
+
+        async def aclose(self) -> None:
+            self._closed = True
+
+    stream = _AsyncClosableStream()
+    wrapped = execute_stream(stream)
+    first = await anext(wrapped)
+    assert first["delta"] == "x"
+    await wrapped.aclose()
+    assert stream._closed is True  # nosec B101
