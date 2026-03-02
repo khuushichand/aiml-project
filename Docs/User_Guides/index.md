@@ -35,6 +35,7 @@ This section is organized by product surface so you can quickly find the right d
 - [RAG Production Configuration](Server/RAG_Production_Configuration_Guide.md)
 - [RAG Evals Playbook](Server/RAG_Evals_Playbook.md)
 - [Evaluations User Guide](Server/Evaluations_User_Guide.md)
+- [Benchmark Creation and Runs (API + WebUI/Extension)](Server/Benchmark_Creation_API_WebUI_Extension_Guide.md)
 - [Evaluations Deployment Guide](Server/Evaluations_Deployment_Guide.md)
 - [Evaluations End User Guide](Server/Evaluations_End_User_Guide.md)
 - [Evaluations Production Deployment](Server/Evaluations_Production_Deployment_Guide.md)
