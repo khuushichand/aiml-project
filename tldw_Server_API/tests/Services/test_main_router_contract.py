@@ -54,3 +54,8 @@ def test_router_registry_idempotent_registration() -> None:
         if getattr(route, "path", "").startswith("/api/v1")
     }
     assert route_signatures == {("/api/v1/health", ("GET",))}
+
+
+@pytest.mark.integration
+def test_minimal_app_uses_router_registry(client_user_only) -> None:
+    assert hasattr(client_user_only.app.state, "_tldw_router_registry")

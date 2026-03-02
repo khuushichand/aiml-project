@@ -33,6 +33,7 @@ from starlette.staticfiles import StaticFiles
 from tldw_Server_API.app.core.startup_logging import (
     startup_api_key_log_value as _startup_api_key_log_value,
 )
+from tldw_Server_API.app.api.v1.router_registry import include_router_idempotent
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled as _shared_env_flag_enabled,
 )
@@ -5155,16 +5156,16 @@ if _ULTRA_MINIMAL_APP:
     logger.info("ULTRA_MINIMAL_APP enabled: using control-plane health routes only.")
 elif _MINIMAL_TEST_APP:
     # Minimal set for paper_search tests
-    app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
-    app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
+    include_router_idempotent(app, research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
+    include_router_idempotent(app, paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
     # Include lightweight chat/character routes needed by tests
-    app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat")
-    app.include_router(conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
-    app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
-    app.include_router(
-        character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"]
+    include_router_idempotent(app, chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    include_router_idempotent(app, conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
+    include_router_idempotent(app, character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    include_router_idempotent(
+        app, character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"]
     )
-    app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    include_router_idempotent(app, character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
     # Include audio endpoints (REST + WebSocket) only when enabled by route policy.
     # In pytest + MINIMAL_TEST_APP, default to skipping audio router imports unless
     # explicitly requested. This avoids importing heavy optional transcriber deps
