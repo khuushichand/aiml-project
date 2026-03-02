@@ -112,6 +112,25 @@ export interface ActivationSummary {
   items: ActivationSummaryItem[]
 }
 
+export interface ResendPendingInvitesBody {
+  dependent_user_ids: string[]
+}
+
+export interface ResendPendingInvitesResponse {
+  household_draft_id: string
+  resent_count: number
+  skipped_count: number
+  resent_user_ids: string[]
+  skipped_user_ids: string[]
+}
+
+export interface HouseholdDraftSnapshot {
+  household: HouseholdDraft
+  members: HouseholdMemberDraft[]
+  relationships: RelationshipDraft[]
+  plans: GuardrailPlanDraft[]
+}
+
 export async function createHouseholdDraft(
   body: CreateHouseholdDraftBody
 ): Promise<HouseholdDraft> {
@@ -125,6 +144,28 @@ export async function createHouseholdDraft(
 export async function getHouseholdDraft(draftId: string): Promise<HouseholdDraft> {
   return bgRequest<HouseholdDraft>({
     path: toAllowedPath(`/api/v1/guardian/wizard/drafts/${encodeURIComponent(draftId)}`),
+    method: "GET"
+  })
+}
+
+export async function getLatestHouseholdDraft(): Promise<HouseholdDraft | null> {
+  try {
+    return await bgRequest<HouseholdDraft>({
+      path: toAllowedPath("/api/v1/guardian/wizard/drafts/latest"),
+      method: "GET"
+    })
+  } catch (error) {
+    const status = (error as { status?: number } | null)?.status
+    if (status === 404) return null
+    throw error
+  }
+}
+
+export async function getHouseholdDraftSnapshot(
+  draftId: string
+): Promise<HouseholdDraftSnapshot> {
+  return bgRequest<HouseholdDraftSnapshot>({
+    path: toAllowedPath(`/api/v1/guardian/wizard/drafts/${encodeURIComponent(draftId)}/snapshot`),
     method: "GET"
   })
 }
@@ -193,5 +234,18 @@ export async function getActivationSummary(
       `/api/v1/guardian/wizard/drafts/${encodeURIComponent(draftId)}/activation-summary`
     ),
     method: "GET"
+  })
+}
+
+export async function resendPendingInvites(
+  draftId: string,
+  body: ResendPendingInvitesBody
+): Promise<ResendPendingInvitesResponse> {
+  return bgRequest<ResendPendingInvitesResponse>({
+    path: toAllowedPath(
+      `/api/v1/guardian/wizard/drafts/${encodeURIComponent(draftId)}/invites/resend`
+    ),
+    method: "POST",
+    body
   })
 }

@@ -5,7 +5,10 @@ import {
   isSettingsAnnouncementBadgeActive
 } from "../settings-nav"
 import type { ServerCapabilities } from "@/services/tldw/server-capabilities"
-import { GUARDIAN_SETTINGS_PATH } from "@/routes/route-capabilities"
+import {
+  FAMILY_WIZARD_SETTINGS_PATH,
+  GUARDIAN_SETTINGS_PATH
+} from "@/routes/route-capabilities"
 
 vi.mock("@/routes/route-registry", () => {
   const MockIcon = () => null
@@ -23,13 +26,24 @@ vi.mock("@/routes/route-registry", () => {
       },
       {
         kind: "options",
+        path: "/settings/family-guardrails",
+        nav: {
+          group: "server",
+          labelToken: "settings:familyGuardrailsWizardNav",
+          icon: MockIcon,
+          beta: true,
+          order: 2
+        }
+      },
+      {
+        kind: "options",
         path: "/settings/guardian",
         nav: {
           group: "server",
           labelToken: "settings:guardianNav",
           icon: MockIcon,
           beta: true,
-          order: 2
+          order: 3
         }
       },
       {
@@ -40,7 +54,7 @@ vi.mock("@/routes/route-registry", () => {
           labelToken: "settings:evaluationsSettings.title",
           icon: MockIcon,
           beta: true,
-          order: 3
+          order: 4
         }
       },
       {
@@ -80,6 +94,31 @@ describe("settings nav guardian gating", () => {
   it("includes guardian route by default when capabilities are not resolved", () => {
     const paths = flattenPaths(undefined)
     expect(paths).toContain(GUARDIAN_SETTINGS_PATH)
+  })
+
+  it("includes family wizard route by default when capabilities are not resolved", () => {
+    const paths = flattenPaths(undefined)
+    expect(paths).toContain(FAMILY_WIZARD_SETTINGS_PATH)
+  })
+
+  it("hides family wizard route when guardian capability is unavailable", () => {
+    const paths = flattenPaths(
+      makeCapabilities({
+        hasGuardian: false,
+        hasSelfMonitoring: true
+      })
+    )
+    expect(paths).not.toContain(FAMILY_WIZARD_SETTINGS_PATH)
+  })
+
+  it("keeps family wizard route when guardian exists without self-monitoring", () => {
+    const paths = flattenPaths(
+      makeCapabilities({
+        hasGuardian: true,
+        hasSelfMonitoring: false
+      })
+    )
+    expect(paths).toContain(FAMILY_WIZARD_SETTINGS_PATH)
   })
 
   it("hides guardian route when capabilities resolve to unavailable", () => {

@@ -12,10 +12,13 @@ from tldw_Server_API.app.api.v1.schemas.family_wizard_schemas import (
     GuardrailPlanDraftCreate,
     GuardrailPlanDraftResponse,
     HouseholdDraftCreate,
+    HouseholdDraftSnapshotResponse,
     HouseholdDraftResponse,
     HouseholdDraftUpdate,
     HouseholdMemberDraftCreate,
     HouseholdMemberDraftResponse,
+    ResendPendingInvitesRequest,
+    ResendPendingInvitesResponse,
     RelationshipDraftCreate,
     RelationshipDraftResponse,
 )
@@ -118,6 +121,17 @@ def create_household_draft(
     return _household_from_row(draft)
 
 
+@router.get("/wizard/drafts/latest", response_model=HouseholdDraftResponse)
+def get_latest_household_draft(
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    draft = db.get_latest_household_draft(_user_id(user))
+    if not draft:
+        raise HTTPException(status_code=404, detail="No household draft found")
+    return _household_from_row(draft)
+
+
 @router.get("/wizard/drafts/{draft_id}", response_model=HouseholdDraftResponse)
 def get_household_draft(
     draft_id: str,
@@ -143,6 +157,27 @@ def update_household_draft(
     if not draft:
         raise HTTPException(status_code=404, detail="Household draft not found")
     return _household_from_row(draft)
+
+
+@router.get(
+    "/wizard/drafts/{draft_id}/snapshot",
+    response_model=HouseholdDraftSnapshotResponse,
+)
+def get_household_draft_snapshot(
+    draft_id: str,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    draft = _require_owned_draft(db, draft_id, _user_id(user))
+    members = db.list_household_member_drafts(draft_id)
+    relationships = db.list_relationship_drafts(draft_id)
+    plans = db.list_guardrail_plan_drafts(draft_id)
+    return HouseholdDraftSnapshotResponse(
+        household=_household_from_row(draft),
+        members=[_member_from_row(row) for row in members],
+        relationships=[_relationship_from_row(row) for row in relationships],
+        plans=[_plan_from_row(row) for row in plans],
+    )
 
 
 @router.post(
@@ -314,4 +349,89 @@ def get_activation_summary(
         pending_count=pending_count,
         failed_count=failed_count,
         items=items,
+    )
+
+
+@router.post(
+    "/wizard/drafts/{draft_id}/invites/resend",
+    response_model=ResendPendingInvitesResponse,
+)
+def resend_pending_invites(
+    draft_id: str,
+    body: ResendPendingInvitesRequest,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    _require_owned_draft(db, draft_id, _user_id(user))
+
+    requested_ids: list[str] = []
+    seen: set[str] = set()
+    for raw_user_id in body.dependent_user_ids:
+        user_id = raw_user_id.strip()
+        if not user_id or user_id in seen:
+            continue
+        seen.add(user_id)
+        requested_ids.append(user_id)
+
+    if not requested_ids:
+        return ResendPendingInvitesResponse(
+            household_draft_id=draft_id,
+            resent_count=0,
+            skipped_count=0,
+            resent_user_ids=[],
+            skipped_user_ids=[],
+        )
+
+    members = db.list_household_member_drafts(draft_id)
+    member_by_dependent_user_id = {
+        member["user_id"]: member
+        for member in members
+        if member["role"] == "dependent" and member.get("user_id")
+    }
+
+    relationships_by_dependent_member = {
+        relationship["dependent_member_draft_id"]: relationship
+        for relationship in db.list_relationship_drafts(draft_id)
+    }
+    plans_by_dependent_user_id = {
+        plan["dependent_user_id"]: plan
+        for plan in db.list_guardrail_plan_drafts(draft_id)
+    }
+
+    resent_user_ids: list[str] = []
+    skipped_user_ids: list[str] = []
+
+    for dependent_user_id in requested_ids:
+        member = member_by_dependent_user_id.get(dependent_user_id)
+        if not member:
+            skipped_user_ids.append(dependent_user_id)
+            continue
+        if not member.get("invite_required", True):
+            skipped_user_ids.append(dependent_user_id)
+            continue
+
+        relationship = relationships_by_dependent_member.get(member["id"])
+        plan = plans_by_dependent_user_id.get(dependent_user_id)
+        relationship_status = relationship["status"] if relationship else "pending"
+        plan_status = plan["status"] if plan else "queued"
+        is_pending = relationship_status == "pending" or plan_status == "queued"
+        if not is_pending:
+            skipped_user_ids.append(dependent_user_id)
+            continue
+
+        touched = db.mark_household_member_invite_resent(member["id"])
+        if not touched:
+            skipped_user_ids.append(dependent_user_id)
+            continue
+        resent_user_ids.append(dependent_user_id)
+
+    if resent_user_ids:
+        db.update_household_draft(draft_id, status="invites_pending")
+
+    return ResendPendingInvitesResponse(
+        household_draft_id=draft_id,
+        resent_count=len(resent_user_ids),
+        skipped_count=len(skipped_user_ids),
+        resent_user_ids=resent_user_ids,
+        skipped_user_ids=skipped_user_ids,
     )

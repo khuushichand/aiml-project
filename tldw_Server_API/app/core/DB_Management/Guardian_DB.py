@@ -2087,6 +2087,32 @@ class GuardianDB:
             finally:
                 conn.close()
 
+    def get_latest_household_draft(self, owner_user_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """SELECT * FROM guardian_household_drafts
+                       WHERE owner_user_id = ?
+                       ORDER BY updated_at DESC, created_at DESC
+                       LIMIT 1""",
+                    (str(owner_user_id),),
+                ).fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row["id"],
+                    "owner_user_id": row["owner_user_id"],
+                    "name": row["name"],
+                    "mode": row["mode"],
+                    "status": row["status"],
+                    "metadata": self._loads_json_or_default(row["metadata"], None),
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            finally:
+                conn.close()
+
     def update_household_draft(self, draft_id: str, **fields: Any) -> bool:
         allowed_fields = {"name", "mode", "status", "metadata"}
         updates: list[str] = []
@@ -2221,6 +2247,41 @@ class GuardianDB:
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                 }
+            finally:
+                conn.close()
+
+    def mark_household_member_invite_resent(self, member_id: str) -> bool:
+        now = _utcnow_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT metadata FROM guardian_household_member_drafts WHERE id = ?",
+                    (member_id,),
+                ).fetchone()
+                if not row:
+                    return False
+
+                metadata = self._loads_json_or_default(row["metadata"], {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                prior_count = metadata.get("invite_resend_count", 0)
+                try:
+                    resend_count = int(prior_count)
+                except (TypeError, ValueError):
+                    resend_count = 0
+                metadata["invite_resend_count"] = max(0, resend_count) + 1
+                metadata["invite_last_resent_at"] = now
+
+                result = conn.execute(
+                    """UPDATE guardian_household_member_drafts
+                       SET invite_status = 'pending',
+                           metadata = ?,
+                           updated_at = ?
+                       WHERE id = ?""",
+                    (json.dumps(metadata), now, member_id),
+                )
+                return (result.rowcount or 0) > 0
             finally:
                 conn.close()
 

@@ -177,9 +177,8 @@ const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
 const OptionWritingPlayground = lazy(() => import("./option-writing-playground"))
 const OptionModerationPlayground = lazy(() => import("./option-moderation-playground"))
-const OptionFamilyGuardrailsWizard = createSettingsRoute(
-  () => import("~/components/Option/Settings/FamilyGuardrailsWizard"),
-  "FamilyGuardrailsWizard"
+const OptionFamilyGuardrailsWizard = lazy(
+  () => import("./option-family-guardrails-wizard")
 )
 const OptionGuardianSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/GuardianSettings"),

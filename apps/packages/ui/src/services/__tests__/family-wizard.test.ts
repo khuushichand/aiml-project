@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
   createHouseholdDraft,
+  getHouseholdDraftSnapshot,
+  getLatestHouseholdDraft,
   getActivationSummary,
+  resendPendingInvites,
   saveGuardrailPlanDraft,
   saveRelationshipDraft
 } from "../family-wizard"
@@ -77,6 +80,38 @@ describe("family wizard service", () => {
     expect(bgRequestMock).toHaveBeenCalledWith({
       path: "/api/v1/guardian/wizard/drafts/draft-1/activation-summary",
       method: "GET"
+    })
+  })
+
+  it("calls latest draft endpoint", async () => {
+    await getLatestHouseholdDraft()
+
+    expect(bgRequestMock).toHaveBeenCalledWith({
+      path: "/api/v1/guardian/wizard/drafts/latest",
+      method: "GET"
+    })
+  })
+
+  it("calls draft snapshot endpoint", async () => {
+    await getHouseholdDraftSnapshot("draft-1")
+
+    expect(bgRequestMock).toHaveBeenCalledWith({
+      path: "/api/v1/guardian/wizard/drafts/draft-1/snapshot",
+      method: "GET"
+    })
+  })
+
+  it("calls resend pending invites endpoint", async () => {
+    await resendPendingInvites("draft-1", {
+      dependent_user_ids: ["child-1", "child-2"]
+    })
+
+    expect(bgRequestMock).toHaveBeenCalledWith({
+      path: "/api/v1/guardian/wizard/drafts/draft-1/invites/resend",
+      method: "POST",
+      body: {
+        dependent_user_ids: ["child-1", "child-2"]
+      }
     })
   })
 })

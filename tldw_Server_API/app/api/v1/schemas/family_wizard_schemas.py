@@ -43,6 +43,13 @@ class HouseholdDraftResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class HouseholdDraftSnapshotResponse(BaseModel):
+    household: HouseholdDraftResponse
+    members: list["HouseholdMemberDraftResponse"] = Field(default_factory=list)
+    relationships: list["RelationshipDraftResponse"] = Field(default_factory=list)
+    plans: list["GuardrailPlanDraftResponse"] = Field(default_factory=list)
+
+
 class HouseholdMemberDraftCreate(BaseModel):
     role: WizardMemberRole
     display_name: str = Field(..., min_length=1, max_length=120)
@@ -123,3 +130,15 @@ class ActivationSummaryResponse(BaseModel):
     pending_count: int = Field(..., ge=0)
     failed_count: int = Field(..., ge=0)
     items: list[ActivationSummaryItem] = Field(default_factory=list)
+
+
+class ResendPendingInvitesRequest(BaseModel):
+    dependent_user_ids: list[str] = Field(default_factory=list)
+
+
+class ResendPendingInvitesResponse(BaseModel):
+    household_draft_id: str
+    resent_count: int = Field(..., ge=0)
+    skipped_count: int = Field(..., ge=0)
+    resent_user_ids: list[str] = Field(default_factory=list)
+    skipped_user_ids: list[str] = Field(default_factory=list)
