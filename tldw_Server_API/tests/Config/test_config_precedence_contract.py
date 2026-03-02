@@ -43,3 +43,55 @@ def test_section_loaders_return_typed_models():
     assert hasattr(sections, "rag")  # nosec B101
     assert hasattr(sections, "audio")  # nosec B101
     assert hasattr(sections, "providers")  # nosec B101
+
+
+def test_tts_defaults_are_valid_values_not_placeholders(monkeypatch):
+    class FakeConfig:
+        def __init__(self, values):
+            self._values = values
+
+        def get(self, section, key, fallback=None):
+            return self._values.get((section, key), fallback)
+
+        def getboolean(self, section, key, fallback=False):  # noqa: ARG002
+            value = self._values.get((section, key))
+            if value is None:
+                return fallback
+            if isinstance(value, bool):
+                return value
+            return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+        def getint(self, section, key, fallback=0):  # noqa: ARG002
+            value = self._values.get((section, key))
+            if value is None:
+                return fallback
+            return int(value)
+
+        def getfloat(self, section, key, fallback=0.0):  # noqa: ARG002
+            value = self._values.get((section, key))
+            if value is None:
+                return fallback
+            return float(value)
+
+        def has_section(self, section):  # noqa: ARG002
+            return False
+
+        def __contains__(self, section):  # noqa: ARG002
+            return False
+
+        def __getitem__(self, section):  # noqa: ARG002
+            return {}
+
+    def _fake_loader():
+        return FakeConfig({})
+
+    _fake_loader.cache_clear = lambda: None
+    monkeypatch.setattr(config, "load_comprehensive_config", _fake_loader)
+
+    cfg = config.load_and_log_configs()
+    tts = cfg["tts_settings"]
+
+    assert tts["default_eleven_tts_model"] != "FIXME"  # nosec B101
+    assert tts["default_eleven_tts_voice"] != "FIXME"  # nosec B101
+    assert tts["default_google_tts_model"] != "FIXME"  # nosec B101
+    assert tts["default_google_tts_voice"] != "FIXME"  # nosec B101

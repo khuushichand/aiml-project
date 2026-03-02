@@ -3764,10 +3764,28 @@ def load_and_log_configs():
             diarization_config['max_memory_mb'] = _get_int('Diarization', 'max_memory_mb', diarization_config.get('max_memory_mb', 2048))
 
         # TTS Settings
-        # FIXME
-        local_tts_device = config_parser_object.get('TTS-Settings', 'local_tts_device', fallback='cpu')
-        default_tts_provider = config_parser_object.get('TTS-Settings', 'default_tts_provider', fallback='openai')
-        tts_voice = config_parser_object.get('TTS-Settings', 'default_tts_voice', fallback='shimmer')
+        _tts_placeholder_literals = {
+            "",
+            "FIXME",
+            "TODO",
+            "TBD",
+            "CHANGE_ME",
+            "CHANGE-ME",
+            "PLACEHOLDER",
+            "NONE",
+            "NULL",
+            "N/A",
+            "NA",
+        }
+
+        def _get_tts_setting(option: str, fallback: str) -> str:
+            raw = config_parser_object.get('TTS-Settings', option, fallback=fallback)
+            value = str(raw).strip()
+            return fallback if value.upper() in _tts_placeholder_literals else value
+
+        local_tts_device = _get_tts_setting('local_tts_device', 'cpu')
+        default_tts_provider = _get_tts_setting('default_tts_provider', 'openai')
+        tts_voice = _get_tts_setting('default_tts_voice', 'shimmer')
         tts_history_enabled = _env_or_cfg_bool("TTS_HISTORY_ENABLED", "TTS-Settings", "tts_history_enabled", True)
         tts_history_store_text = _env_or_cfg_bool("TTS_HISTORY_STORE_TEXT", "TTS-Settings", "tts_history_store_text", True)
         tts_history_store_failed = _env_or_cfg_bool("TTS_HISTORY_STORE_FAILED", "TTS-Settings", "tts_history_store_failed", True)
@@ -3781,26 +3799,24 @@ def load_and_log_configs():
             24,
         )
         # Open AI TTS
-        default_openai_tts_model = config_parser_object.get('TTS-Settings', 'default_openai_tts_model', fallback='tts-1-hd')
-        default_openai_tts_voice = config_parser_object.get('TTS-Settings', 'default_openai_tts_voice', fallback='shimmer')
-        default_openai_tts_speed = config_parser_object.get('TTS-Settings', 'default_openai_tts_speed', fallback='1')
-        default_openai_tts_output_format = config_parser_object.get('TTS-Settings', 'default_openai_tts_output_format', fallback='mp3')
+        default_openai_tts_model = _get_tts_setting('default_openai_tts_model', 'tts-1-hd')
+        default_openai_tts_voice = _get_tts_setting('default_openai_tts_voice', 'shimmer')
+        default_openai_tts_speed = _get_tts_setting('default_openai_tts_speed', '1')
+        default_openai_tts_output_format = _get_tts_setting('default_openai_tts_output_format', 'mp3')
         config_parser_object.get('TTS-Settings', 'default_openai_tts_streaming', fallback='False')
         # Google TTS
-        # FIXME - FIX THESE DEFAULTS
-        default_google_tts_model = config_parser_object.get('TTS-Settings', 'default_google_tts_model', fallback='en')
-        default_google_tts_voice = config_parser_object.get('TTS-Settings', 'default_google_tts_voice', fallback='en')
-        default_google_tts_speed = config_parser_object.get('TTS-Settings', 'default_google_tts_speed', fallback='1')
+        default_google_tts_model = _get_tts_setting('default_google_tts_model', 'en-US')
+        default_google_tts_voice = _get_tts_setting('default_google_tts_voice', 'en-US-Neural2-A')
+        default_google_tts_speed = _get_tts_setting('default_google_tts_speed', '1')
         # ElevenLabs TTS
-        default_eleven_tts_model = config_parser_object.get('TTS-Settings', 'default_eleven_tts_model', fallback='FIXME')
-        default_eleven_tts_voice = config_parser_object.get('TTS-Settings', 'default_eleven_tts_voice', fallback='FIXME')
-        default_eleven_tts_language_code = config_parser_object.get('TTS-Settings', 'default_eleven_tts_language_code', fallback='FIXME')
-        default_eleven_tts_voice_stability = config_parser_object.get('TTS-Settings', 'default_eleven_tts_voice_stability', fallback='FIXME')
-        default_eleven_tts_voice_similiarity_boost = config_parser_object.get('TTS-Settings', 'default_eleven_tts_voice_similiarity_boost', fallback='FIXME')
-        default_eleven_tts_voice_style = config_parser_object.get('TTS-Settings', 'default_eleven_tts_voice_style', fallback='FIXME')
-        default_eleven_tts_voice_use_speaker_boost = config_parser_object.get('TTS-Settings', 'default_eleven_tts_voice_use_speaker_boost', fallback='FIXME')
-        default_eleven_tts_output_format = config_parser_object.get('TTS-Settings', 'default_eleven_tts_output_format',
-                                                      fallback='mp3_44100_192')
+        default_eleven_tts_model = _get_tts_setting('default_eleven_tts_model', 'eleven_monolingual_v1')
+        default_eleven_tts_voice = _get_tts_setting('default_eleven_tts_voice', 'pNInz6obpgDQGcFmaJgB')
+        default_eleven_tts_language_code = _get_tts_setting('default_eleven_tts_language_code', 'en')
+        default_eleven_tts_voice_stability = _get_tts_setting('default_eleven_tts_voice_stability', '0.5')
+        default_eleven_tts_voice_similiarity_boost = _get_tts_setting('default_eleven_tts_voice_similiarity_boost', '0.75')
+        default_eleven_tts_voice_style = _get_tts_setting('default_eleven_tts_voice_style', '0.0')
+        default_eleven_tts_voice_use_speaker_boost = _get_tts_setting('default_eleven_tts_voice_use_speaker_boost', 'true')
+        default_eleven_tts_output_format = _get_tts_setting('default_eleven_tts_output_format', 'mp3_44100_128')
         # AllTalk TTS
         alltalk_api_ip = config_parser_object.get('TTS-Settings', 'alltalk_api_ip', fallback='http://127.0.0.1:7851/v1/audio/speech')
         default_alltalk_tts_model = config_parser_object.get('TTS-Settings', 'default_alltalk_tts_model', fallback='alltalk_model')
