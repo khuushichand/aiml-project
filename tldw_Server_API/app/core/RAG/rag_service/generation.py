@@ -13,9 +13,12 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Optional, Protocol, Union, cast
 
 from loguru import logger
+
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 from .types import Document
 
@@ -136,9 +139,43 @@ Your question: {question}
 
 Let me explain:"""
 
+    @staticmethod
+    @lru_cache(maxsize=64)
+    def _load_rag_prompt_cached(name: str) -> Optional[str]:
+        """Load prompt snippets from rag.prompts.* with a small process cache."""
+        try:
+            prompt_text = load_prompt("rag", name)
+        except Exception as exc:  # noqa: BLE001 - prompt loading must remain best-effort
+            logger.debug(f"Prompt loader failed for rag prompt '{name}': {exc}")
+            return None
+        if isinstance(prompt_text, str) and prompt_text.strip():
+            return prompt_text.strip()
+        return None
+
+    @classmethod
+    async def warm_template_async(cls, name: str) -> None:
+        """Preload a template off the event loop for async request paths."""
+        if not isinstance(name, str):
+            return
+        normalized_name = name.strip()
+        if not normalized_name:
+            return
+        try:
+            await asyncio.to_thread(cls._load_rag_prompt_cached, normalized_name)
+        except Exception as exc:  # noqa: BLE001 - warmup remains best-effort
+            logger.debug(
+                "Prompt warmup failed for rag prompt '{}': {}",
+                normalized_name,
+                exc,
+            )
+
     @classmethod
     def get_template(cls, name: str) -> str:
         """Get a template by name."""
+        external = cls._load_rag_prompt_cached(name)
+        if external is not None:
+            return external
+
         templates = {
             "default": cls.DEFAULT,
             "detailed": cls.DETAILED,
@@ -502,6 +539,10 @@ async def generate_response(context: Any, **kwargs) -> Any:
     # Override with kwargs
     config_dict.update(kwargs)
 
+    prompt_name = config_dict.get("prompt_template", "default")
+    if isinstance(prompt_name, str):
+        await PromptTemplates.warm_template_async(prompt_name)
+
     # Create generator
     generator = create_generator(config_dict)
 
@@ -557,6 +598,7 @@ class AnswerGenerator:
             prompt_template=(prompt_template or "default"),
             system_prompt=self.system_prompt,
         )
+        await PromptTemplates.warm_template_async(gcfg.prompt_template)
         gen = LLMGenerator(gcfg)
 
         # Create a tiny context holder compatible with BaseGenerator expectations
@@ -580,6 +622,10 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
 
     # Override with kwargs
     config_dict.update(kwargs)
+
+    prompt_name = config_dict.get("prompt_template", "default")
+    if isinstance(prompt_name, str):
+        await PromptTemplates.warm_template_async(prompt_name)
 
     # Create generator
     generator = create_generator(config_dict)

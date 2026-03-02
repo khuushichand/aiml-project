@@ -243,7 +243,12 @@ and this project adheres to Some kind of Versioning
 - Writing Playground UI interaction behavior:
   - Moved template/theme/chat-mode and context controls from the Generation inspector view into Planning for clearer IA separation.
   - Added compact-mode shell grid overrides plus `data-testid` layout markers to improve narrow-layout behavior and regression observability.
-  - Improved inspector keyboard interaction to support Arrow/Home/End traversal with active-tab focus movement.
+- Improved inspector keyboard interaction to support Arrow/Home/End traversal with active-tab focus movement.
+- RAG streaming/profile parity hardening (PR #796 follow-up):
+  - Streamed agentic retrieval now resolves strategy and retrieval/generation knobs from profile-aware `effective_payload` defaults instead of raw request-only fields.
+  - Async generation paths now warm RAG prompt templates via event-loop-safe thread offload before generator instantiation.
+  - Two-tier reranker runtime degradation now logs the underlying exception prior to profile degradation fallback (`two_tier` -> `hybrid`).
+  - Added/updated regression coverage for stream parity and prompt-loader warmup behavior, including typed test signatures/docstrings in touched RAG test modules.
 
 ### Removed
 - No removals in this session.

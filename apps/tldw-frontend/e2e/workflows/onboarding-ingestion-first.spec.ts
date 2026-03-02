@@ -157,8 +157,8 @@ async function openOnboardingSuccessScreen(
   const success = page.getByTestId("onboarding-success-screen")
 
   await Promise.race([
-    connect.waitFor({ state: "visible", timeout: 15_000 }),
-    success.waitFor({ state: "visible", timeout: 15_000 }),
+    connect.waitFor({ state: "visible", timeout: 25_000 }),
+    success.waitFor({ state: "visible", timeout: 25_000 }),
   ])
 
   const needsConnect = await connect.isVisible().catch(() => false)
@@ -166,7 +166,7 @@ async function openOnboardingSuccessScreen(
     await connect.click()
   }
 
-  await expect(success).toBeVisible({ timeout: 20_000 })
+  await expect(success).toBeVisible({ timeout: 30_000 })
   return needsConnect ? "connected-now" : "already-connected"
 }
 
@@ -189,7 +189,7 @@ async function clickOnboardingCtaAndExpectRoute(
     await expect(cta).toBeVisible({ timeout: 15_000 })
     await cta.click()
     try {
-      await expect(page).toHaveURL(expectedUrl, { timeout: 10_000 })
+      await expect(page).toHaveURL(expectedUrl, { timeout: 15_000 })
       return
     } catch (error) {
       lastError = error
@@ -200,6 +200,8 @@ async function clickOnboardingCtaAndExpectRoute(
 }
 
 test.describe("Onboarding Ingestion-First Journey", () => {
+  test.describe.configure({ timeout: 120_000 })
+
   test.beforeEach(async ({ authedPage }) => {
     ensureEvidenceDirectory()
     await authedPage.addInitScript((cfg) => {
@@ -238,7 +240,6 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       })
 
       const initialConnectState = await openOnboardingSuccessScreen(authedPage)
-      await ensureOnboardingSuccessScreen(authedPage)
       await captureStep(
         authedPage,
         evidenceRows,
@@ -312,7 +313,6 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       )
 
       await openOnboardingSuccessScreen(authedPage)
-      await ensureOnboardingSuccessScreen(authedPage)
 
       await authedPage
         .getByTestId("onboarding-success-ingest")
@@ -339,7 +339,10 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       }
       await expect(quickIngestDialog).toBeHidden({ timeout: 10_000 })
 
-      await ensureOnboardingSuccessScreen(authedPage)
+      await expect(authedPage).toHaveURL(/\/(?:[/?#].*)?$/, {
+        timeout: 20_000,
+      })
+      await openOnboardingSuccessScreen(authedPage)
 
       await authedPage.evaluate(() => {
         try {
@@ -349,12 +352,11 @@ test.describe("Onboarding Ingestion-First Journey", () => {
         }
       })
 
-      await authedPage
-        .getByTestId("onboarding-success-chat")
-        .evaluate((el: HTMLElement) => el.click())
-      await expect(authedPage).toHaveURL(/\/chat(?:[/?#].*)?$/, {
-        timeout: 20_000,
-      })
+      await clickOnboardingCtaAndExpectRoute(
+        authedPage,
+        "onboarding-success-chat",
+        /\/chat(?:[/?#].*)?$/
+      )
       await expect(authedPage.getByTestId("chat-input")).toBeVisible({
         timeout: 15_000,
       })

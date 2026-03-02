@@ -12,6 +12,9 @@ Current built-in profiles:
                       and model/retrieval experiments.
     - "cheap"       : Cost- and latency-optimized configuration with most
                       expensive extras disabled.
+    - "fast"        : Latency-first profile for short, direct answers.
+    - "balanced"    : Practical quality/latency tradeoff for most usage.
+    - "accuracy"    : Quality-first profile with stronger retrieval/synthesis.
 
 Profiles are intentionally conservative: they override only a subset of
 pipeline parameters and rely on function-level defaults for everything else.
@@ -22,7 +25,14 @@ from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
-ProfileName = Literal["production", "research", "cheap"]
+ProfileName = Literal[
+    "production",
+    "research",
+    "cheap",
+    "fast",
+    "balanced",
+    "accuracy",
+]
 
 
 @dataclass(frozen=True)
@@ -181,6 +191,67 @@ _PROFILES: dict[ProfileName, RAGProfile] = {
             "enable_observability": False,
             "enable_performance_analysis": False,
             "track_cost": False,
+        },
+    ),
+    "fast": RAGProfile(
+        name="fast",
+        description=(
+            "Latency-first profile using compact instruction-style prompting "
+            "with lightweight retrieval and no decomposition."
+        ),
+        defaults={
+            "generation_prompt": "instruction_tuned",
+            "enable_query_decomposition": False,
+            "enable_reranking": True,
+            "reranking_strategy": "flashrank",
+            "top_k": 6,
+            "max_generation_tokens": 440,
+            "enable_structured_response": False,
+            "enable_multi_turn_synthesis": False,
+            "require_hard_citations": False,
+            "enable_claims": False,
+        },
+    ),
+    "balanced": RAGProfile(
+        name="balanced",
+        description=(
+            "Balanced quality/latency profile with compact multi-hop guidance "
+            "and hybrid reranking."
+        ),
+        defaults={
+            "generation_prompt": "multi_hop_compact",
+            "enable_query_decomposition": True,
+            "max_subqueries": 3,
+            "subquery_time_budget_sec": 2.5,
+            "enable_reranking": True,
+            "reranking_strategy": "hybrid",
+            "top_k": 10,
+            "max_generation_tokens": 1000,
+            "enable_structured_response": True,
+            "require_hard_citations": False,
+            "enable_claims": False,
+        },
+    ),
+    "accuracy": RAGProfile(
+        name="accuracy",
+        description=(
+            "Quality-first profile emphasizing decomposition depth, stronger "
+            "reranking, and expert synthesis prompting."
+        ),
+        defaults={
+            "generation_prompt": "expert_synthesis",
+            "enable_query_decomposition": True,
+            "max_subqueries": 5,
+            "subquery_time_budget_sec": 6.0,
+            "enable_reranking": True,
+            "reranking_strategy": "two_tier",
+            "top_k": 16,
+            "rerank_top_k": 16,
+            "max_generation_tokens": 2200,
+            "enable_structured_response": True,
+            "require_hard_citations": True,
+            "enable_numeric_fidelity": True,
+            "enable_claims": True,
         },
     ),
 }

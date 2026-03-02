@@ -518,9 +518,11 @@ describe('MonitoringPage', () => {
       expect(screen.getByTestId(`system-status-card-${key}`)).toBeTruthy();
     });
 
-    const apiResponse = screen.getByTestId('system-status-response-api').textContent || '';
-    expect(apiResponse).toContain('Response:');
-    expect(apiResponse).toContain('ms');
+    await waitFor(() => {
+      const apiResponse = screen.getByTestId('system-status-response-api').textContent || '';
+      expect(apiResponse).toContain('Response:');
+      expect(apiResponse).toContain('ms');
+    });
   });
 
   it('falls back to metrics for subsystem status when endpoint checks fail', async () => {

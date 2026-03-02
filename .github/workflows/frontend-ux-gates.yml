@@ -34,12 +34,14 @@ jobs:
       TLDW_API_KEY: smoke-ci-key-12345
       TLDW_WEB_URL: http://localhost:8080
       TLDW_WEB_AUTOSTART: 'true'
-      TLDW_WEB_CMD: bun run dev -- -p 8080
+      TLDW_WEB_CMD: 'env NEXT_DISABLE_MEM_OVERRIDE=1 NODE_OPTIONS=--max-old-space-size=5120 bun run dev -- --webpack -p 8080'
       TLDW_ONBOARDING_EVIDENCE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -138,12 +140,14 @@ jobs:
       TLDW_API_KEY: smoke-ci-key-12345
       TLDW_WEB_URL: http://localhost:8080
       TLDW_WEB_AUTOSTART: 'true'
-      TLDW_WEB_CMD: bun run dev -- -p 8080
+      TLDW_WEB_CMD: 'env NEXT_DISABLE_MEM_OVERRIDE=1 NODE_OPTIONS=--max-old-space-size=5120 bun run dev -- --webpack -p 8080'
       TLDW_SMOKE_HARD_GATE: '1'
 
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

@@ -45,7 +45,7 @@ jobs:
     env:
       PYTHONPATH: .
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-      TEST_MODE: "true"
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       DISABLE_HEAVY_STARTUP: "1"
       MINIMAL_TEST_APP: "1"
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: "0"
@@ -60,6 +60,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Node.js (LTS)
         uses: actions/setup-node@v4
@@ -78,6 +80,11 @@ jobs:
       - name: Install Playwright Chromium
         working-directory: apps/extension
         run: bunx playwright install --with-deps chromium
+
+      - name: Install FFmpeg and PortAudio (Linux)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
 
       - name: Setup Python and server dependencies
         uses: ./.github/actions/setup-python-deps
