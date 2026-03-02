@@ -4835,6 +4835,12 @@ settings = LazySettings(_settings_loader)
 config = settings
 loaded_config_data = LazyConfigData(_config_loader)
 
+
+def load_all_sections_for_test():
+    from tldw_Server_API.app.core.config_sections import load_config_sections
+
+    return load_config_sections(load_comprehensive_config())
+
 def get_stt_config() -> dict[str, Any]:
     """
     Return the `[STT-Settings]` section as a plain dict.

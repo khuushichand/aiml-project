@@ -35,3 +35,11 @@ def test_env_overrides_config_file_for_redis_host(tmp_path, monkeypatch):
 def test_missing_tts_defaults_never_emit_fixme_literal():
     settings = load_settings_for_test()
     assert "FIXME" not in str(settings.get("TTS_CONFIG", {}))  # nosec B101
+
+
+def test_section_loaders_return_typed_models():
+    sections = config.load_all_sections_for_test()
+    assert hasattr(sections, "auth")  # nosec B101
+    assert hasattr(sections, "rag")  # nosec B101
+    assert hasattr(sections, "audio")  # nosec B101
+    assert hasattr(sections, "providers")  # nosec B101

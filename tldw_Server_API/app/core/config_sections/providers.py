@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from typing import Mapping
+
+
+@dataclass(frozen=True)
+class ProvidersConfig:
+    default_api: str
+    default_provider: str
+
+
+def load_providers_config(config_parser, env: Mapping[str, str] | None = None) -> ProvidersConfig:
+    env_map: Mapping[str, str] = env if env is not None else os.environ
+
+    default_api = str(
+        env_map.get("DEFAULT_API")
+        or config_parser.get("API", "default_api", fallback="openai")
+    ).strip() or "openai"
+
+    default_provider = str(
+        env_map.get("DEFAULT_PROVIDER")
+        or config_parser.get("API", "default_provider", fallback=default_api)
+    ).strip() or default_api
+
+    return ProvidersConfig(default_api=default_api, default_provider=default_provider)
