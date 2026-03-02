@@ -31,13 +31,21 @@ const TRANSIENT_RUNTIME_RETRY_ATTEMPTS = Math.max(
   0,
   Number(process.env.TLDW_SMOKE_TRANSIENT_RUNTIME_RETRIES || 2)
 );
+const TRANSIENT_NAVIGATION_RETRY_ATTEMPTS = Math.max(
+  0,
+  Number(process.env.TLDW_SMOKE_TRANSIENT_NAVIGATION_RETRIES || 1)
+);
+const MAX_TRANSIENT_RETRY_ATTEMPTS = Math.max(
+  TRANSIENT_RUNTIME_RETRY_ATTEMPTS,
+  TRANSIENT_NAVIGATION_RETRY_ATTEMPTS
+);
 const TRANSIENT_RUNTIME_RETRY_DELAY_MS = Math.max(
   0,
   Number(process.env.TLDW_SMOKE_TRANSIENT_RUNTIME_RETRY_DELAY_MS || 500)
 );
 const ROUTE_TEST_TIMEOUT = Math.max(
   60_000,
-  LOAD_TIMEOUT * (TRANSIENT_RUNTIME_RETRY_ATTEMPTS + 1) + ELEMENT_TIMEOUT + 15_000
+  LOAD_TIMEOUT * (MAX_TRANSIENT_RETRY_ATTEMPTS + 1) + ELEMENT_TIMEOUT + 15_000
 );
 const TRANSIENT_NAVIGATION_TIMEOUT_PATTERN = /page\.goto: Timeout/i;
 const KEY_NAV_TARGETS = ['/chat', '/media', '/knowledge', '/notes', '/prompts', '/settings/tldw'];
@@ -258,7 +266,7 @@ async function visitRouteWithTransientRetry(
     unexpectedRequestFailures: [],
   };
 
-  for (let attempt = 0; attempt <= TRANSIENT_RUNTIME_RETRY_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRY_ATTEMPTS; attempt += 1) {
     resetDiagnostics(diagnostics);
     try {
       response = await page.goto(routePath, {
@@ -270,14 +278,14 @@ async function visitRouteWithTransientRetry(
       const errorMessage = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
       const isNavigationTimeout = TRANSIENT_NAVIGATION_TIMEOUT_PATTERN.test(errorMessage);
       const shouldRetryNavigationTimeout =
-        isNavigationTimeout && attempt < TRANSIENT_RUNTIME_RETRY_ATTEMPTS;
+        isNavigationTimeout && attempt < TRANSIENT_NAVIGATION_RETRY_ATTEMPTS;
       if (!shouldRetryNavigationTimeout) {
         throw error;
       }
 
       retriesUsed = attempt + 1;
       console.warn(
-        `[smoke-transient-navigation-retry] ${routePath} retry ${retriesUsed}/${TRANSIENT_RUNTIME_RETRY_ATTEMPTS} after navigation timeout`
+        `[smoke-transient-navigation-retry] ${routePath} retry ${retriesUsed}/${TRANSIENT_NAVIGATION_RETRY_ATTEMPTS} after navigation timeout`
       );
       if (TRANSIENT_RUNTIME_RETRY_DELAY_MS > 0) {
         await page.waitForTimeout(TRANSIENT_RUNTIME_RETRY_DELAY_MS);
@@ -352,7 +360,7 @@ async function assertNoRuntimeOverlay(
 }
 
 test.describe('Smoke Tests - All Pages', () => {
-  test.describe.configure({ mode: 'parallel' });
+  test.describe.configure({ mode: 'parallel', retries: 0 });
 
   test.beforeEach(async ({ page }) => {
     await seedAuth(page);
