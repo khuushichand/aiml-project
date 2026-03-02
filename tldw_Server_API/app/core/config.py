@@ -313,13 +313,13 @@ MAGIC_FILE_PATH: Optional[str] = os.getenv("MAGIC_FILE_PATH", None) # e.g., "/ap
 global_default_chunk_language = "en"
 
 
-# FIXME - TTS Config
+# TTS-related legacy defaults (placeholder-free; real secrets come from env/config files)
 APP_CONFIG = {
-    "OPENAI_API_KEY": "sk-...",
+    "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", ""),
     "KOKORO_ONNX_MODEL_PATH_DEFAULT": "models/kokoro/onnx/model.onnx",
     "KOKORO_ONNX_VOICES_JSON_DEFAULT": "models/kokoro/voices",
     "KOKORO_DEVICE_DEFAULT": "cpu", # or "cuda"
-    "ELEVENLABS_API_KEY": "el-...",
+    "ELEVENLABS_API_KEY": os.getenv("ELEVENLABS_API_KEY", ""),
     "local_kokoro_default_onnx": { # Specific overrides for this backend_id
         "KOKORO_DEVICE": "cuda:0"
     },
@@ -2652,6 +2652,22 @@ def should_allow_cors_credentials() -> bool:
     return value
 
 
+@lru_cache(maxsize=1)
+def is_production_environment() -> bool:
+    """Return True when runtime environment should use production safety guards."""
+    if is_truthy(os.getenv("tldw_production")):
+        return True
+
+    for env_key in ("ENV", "APP_ENV", "TLDW_ENV", "ENVIRONMENT"):
+        raw_value = os.getenv(env_key)
+        if raw_value is None:
+            continue
+        normalized = str(raw_value).strip().lower()
+        if normalized in {"prod", "production"}:
+            return True
+    return False
+
+
 def _resolve_disable_cors_value_and_source() -> tuple[bool, str]:
     env_value = os.getenv("DISABLE_CORS")
     if env_value is not None:
@@ -4924,6 +4940,7 @@ def refresh_config_cache() -> None:
     _route_toggle_policy.cache_clear()
     should_disable_cors.cache_clear()
     should_allow_cors_credentials.cache_clear()
+    is_production_environment.cache_clear()
 
 
 def clear_config_cache() -> None:

@@ -4479,8 +4479,21 @@ def _resolve_cors_origins_or_raise(allowed_origins: list[str] | None) -> list[st
     raise RuntimeError(message)
 
 
-def _validate_cors_configuration_or_raise(origins: list[str], *, allow_credentials: bool) -> None:
+def _validate_cors_configuration_or_raise(
+    origins: list[str],
+    *,
+    allow_credentials: bool,
+    enforce_explicit_origins: bool = False,
+) -> None:
     """Reject invalid CORS combinations at startup."""
+    if enforce_explicit_origins and "*" in origins:
+        message = (
+            "Invalid CORS configuration: ALLOWED_ORIGINS cannot include '*' in production. "
+            "Configure explicit origins instead."
+        )
+        logger.critical(message)
+        raise RuntimeError(message)
+
     if allow_credentials and "*" in origins:
         message = (
             "Invalid CORS configuration: ALLOWED_ORIGINS cannot include '*' "
@@ -4784,6 +4797,7 @@ async def _display_startup_info_and_warm():
 from tldw_Server_API.app.core.config import (
     ALLOWED_ORIGINS,
     API_V1_PREFIX,
+    is_production_environment,
     route_enabled,
     should_allow_cors_credentials,
     should_disable_cors,
@@ -4795,7 +4809,11 @@ if should_disable_cors():
 else:
     origins = _resolve_cors_origins_or_raise(ALLOWED_ORIGINS)
     _cors_allow_credentials = should_allow_cors_credentials()
-    _validate_cors_configuration_or_raise(origins, allow_credentials=_cors_allow_credentials)
+    _validate_cors_configuration_or_raise(
+        origins,
+        allow_credentials=_cors_allow_credentials,
+        enforce_explicit_origins=is_production_environment(),
+    )
     _cors_allow_all_origins = "*" in origins
     _cors_allowed_openapi_origins = {str(o).rstrip("/") for o in origins if isinstance(o, str)}
     # # -- If you have any global middleware, add it here --
