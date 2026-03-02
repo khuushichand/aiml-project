@@ -29,7 +29,7 @@ import {
 import { useTranslation } from "react-i18next"
 import { useCollectionsStore } from "@/store/collections"
 import { useTldwApiClient } from "@/hooks/useTldwApiClient"
-import type { Highlight, HighlightColor, ReadingStatus } from "@/types/collections"
+import type { Highlight, HighlightColor, ReadingNoteLink, ReadingStatus } from "@/types/collections"
 import { TagSelector } from "../common/TagSelector"
 import { HighlightCard } from "../Highlights/HighlightCard"
 
@@ -49,9 +49,11 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   const currentItem = useCollectionsStore((s) => s.currentItem)
   const currentItemLoading = useCollectionsStore((s) => s.currentItemLoading)
   const itemDetailOpen = useCollectionsStore((s) => s.itemDetailOpen)
+  const readingNoteLinksEnabled = useCollectionsStore((s) => s.readingNoteLinksEnabled)
 
   const setCurrentItem = useCollectionsStore((s) => s.setCurrentItem)
   const setCurrentItemLoading = useCollectionsStore((s) => s.setCurrentItemLoading)
+  const setReadingNoteLinksEnabled = useCollectionsStore((s) => s.setReadingNoteLinksEnabled)
   const closeItemDetail = useCollectionsStore((s) => s.closeItemDetail)
   const updateItemInList = useCollectionsStore((s) => s.updateItemInList)
   const removeItem = useCollectionsStore((s) => s.removeItem)
@@ -82,6 +84,11 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   const [selectedNote, setSelectedNote] = useState("")
   const [selectedColor, setSelectedColor] = useState<HighlightColor>("yellow")
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null)
+  const [linkedNotes, setLinkedNotes] = useState<ReadingNoteLink[]>([])
+  const [linkedNotesLoading, setLinkedNotesLoading] = useState(false)
+  const [linkNoteId, setLinkNoteId] = useState("")
+  const [linkingNote, setLinkingNote] = useState(false)
+  const [unlinkingNoteId, setUnlinkingNoteId] = useState<string | null>(null)
   const [notesDirty, setNotesDirty] = useState(false)
   const [notesSaving, setNotesSaving] = useState(false)
   const [notesSaveState, setNotesSaveState] = useState<"idle" | "dirty" | "saving" | "saved" | "error">("idle")
@@ -141,6 +148,32 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   useEffect(() => {
     fetchItemHighlights()
   }, [fetchItemHighlights])
+
+  const fetchLinkedNotes = useCallback(async () => {
+    if (!selectedItemId || !itemDetailOpen || !readingNoteLinksEnabled) {
+      setLinkedNotes([])
+      return
+    }
+    setLinkedNotesLoading(true)
+    try {
+      const links = await api.listReadingItemNoteLinks(selectedItemId)
+      setLinkedNotes(links)
+    } catch (error: any) {
+      const errorMsg = error?.message || "Failed to load linked notes"
+      if (errorMsg.includes("reading_note_links_disabled")) {
+        setReadingNoteLinksEnabled(false)
+        setLinkedNotes([])
+      } else {
+        message.error(errorMsg)
+      }
+    } finally {
+      setLinkedNotesLoading(false)
+    }
+  }, [api, itemDetailOpen, readingNoteLinksEnabled, selectedItemId, setReadingNoteLinksEnabled])
+
+  useEffect(() => {
+    void fetchLinkedNotes()
+  }, [fetchLinkedNotes])
 
   useEffect(() => {
     if (highlightEditorOpen && editingHighlight?.item_id) {
@@ -454,6 +487,62 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       setEditingNotes(false)
     }
   }, [saveNotes])
+
+  const handleLinkNote = useCallback(async () => {
+    if (!currentItem) return
+    const noteId = linkNoteId.trim()
+    if (!noteId) {
+      message.warning(t("collections:reading.linkedNotes.noteIdRequired", "Enter a note ID"))
+      return
+    }
+    setLinkingNote(true)
+    try {
+      await api.linkReadingItemToNote(currentItem.id, noteId)
+      setLinkNoteId("")
+      await fetchLinkedNotes()
+      message.success(t("collections:reading.linkedNotes.linked", "Note linked"))
+    } catch (error: any) {
+      const errorMsg = error?.message || "Failed to link note"
+      if (errorMsg.includes("reading_note_links_disabled")) {
+        setReadingNoteLinksEnabled(false)
+        setLinkedNotes([])
+      } else {
+        message.error(errorMsg)
+      }
+    } finally {
+      setLinkingNote(false)
+    }
+  }, [
+    api,
+    currentItem,
+    fetchLinkedNotes,
+    linkNoteId,
+    setReadingNoteLinksEnabled,
+    t
+  ])
+
+  const handleUnlinkNote = useCallback(
+    async (noteId: string) => {
+      if (!currentItem) return
+      setUnlinkingNoteId(noteId)
+      try {
+        await api.unlinkReadingItemNote(currentItem.id, noteId)
+        setLinkedNotes((prev) => prev.filter((link) => link.note_id !== noteId))
+        message.success(t("collections:reading.linkedNotes.unlinked", "Note unlinked"))
+      } catch (error: any) {
+        const errorMsg = error?.message || "Failed to unlink note"
+        if (errorMsg.includes("reading_note_links_disabled")) {
+          setReadingNoteLinksEnabled(false)
+          setLinkedNotes([])
+        } else {
+          message.error(errorMsg)
+        }
+      } finally {
+        setUnlinkingNoteId(null)
+      }
+    },
+    [api, currentItem, setReadingNoteLinksEnabled, t]
+  )
 
   const handleSummarize = useCallback(async () => {
     if (!currentItem) return
@@ -847,6 +936,60 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
                   : t("collections:reading.addNotes", "Add Notes")}
               </Button>
             </>
+          )}
+
+          {readingNoteLinksEnabled && (
+            <div className="rounded-lg border border-border p-4">
+              <h4 className="mb-2 text-sm font-medium text-text">
+                {t("collections:reading.linkedNotes.title", "Linked Notes")}
+              </h4>
+              <div className="mb-3 flex items-center gap-2">
+                <Input
+                  value={linkNoteId}
+                  onChange={(e) => setLinkNoteId(e.target.value)}
+                  placeholder={t(
+                    "collections:reading.linkedNotes.placeholder",
+                    "Enter note ID to link"
+                  )}
+                  onPressEnter={() => void handleLinkNote()}
+                />
+                <Button
+                  type="primary"
+                  onClick={() => void handleLinkNote()}
+                  loading={linkingNote}
+                >
+                  {t("collections:reading.linkedNotes.link", "Link")}
+                </Button>
+              </div>
+
+              {linkedNotesLoading ? (
+                <div className="flex items-center justify-center py-2">
+                  <Spin size="small" />
+                </div>
+              ) : linkedNotes.length === 0 ? (
+                <p className="text-sm text-text-muted">
+                  {t("collections:reading.linkedNotes.empty", "No linked notes")}
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {linkedNotes.map((link) => (
+                    <div
+                      key={link.note_id}
+                      className="flex items-center justify-between gap-2 rounded border border-border px-3 py-2"
+                    >
+                      <span className="text-sm text-text">{link.note_id}</span>
+                      <Button
+                        size="small"
+                        onClick={() => void handleUnlinkNote(link.note_id)}
+                        loading={unlinkingNoteId === link.note_id}
+                      >
+                        {t("collections:reading.linkedNotes.unlink", "Unlink")}
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )

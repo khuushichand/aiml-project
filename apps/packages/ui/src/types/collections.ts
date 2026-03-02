@@ -22,6 +22,9 @@ export interface ReadingItem {
   published_at?: string
   status?: ReadingStatus
   processing_status?: string
+  archive_requested?: boolean
+  has_archive_copy?: boolean
+  last_fetch_error?: string
   favorite: boolean
   tags: string[]
   created_at?: string
@@ -57,6 +60,7 @@ export interface AddReadingItemRequest {
   tags?: string[]
   notes?: string
   status?: ReadingStatus
+  archive_mode?: "use_default" | "always" | "never"
   favorite?: boolean
   summary?: string
   content?: string
@@ -120,6 +124,40 @@ export interface ReadingListResponse {
   size: number
   offset?: number
   limit?: number
+}
+
+export interface ReadingSavedSearch {
+  id: string
+  name: string
+  query: Record<string, unknown>
+  sort?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface CreateReadingSavedSearchRequest {
+  name: string
+  query: Record<string, unknown>
+  sort?: string
+}
+
+export interface UpdateReadingSavedSearchRequest {
+  name?: string
+  query?: Record<string, unknown>
+  sort?: string
+}
+
+export interface ReadingSavedSearchListResponse {
+  items: ReadingSavedSearch[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface ReadingNoteLink {
+  item_id: string
+  note_id: string
+  created_at?: string
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

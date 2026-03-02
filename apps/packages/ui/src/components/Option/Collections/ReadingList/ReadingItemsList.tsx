@@ -20,10 +20,11 @@ import { useTranslation } from "react-i18next"
 import { useTldwApiClient } from "@/hooks/useTldwApiClient"
 import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { useCollectionsStore } from "@/store/collections"
-import type { ReadingStatus } from "@/types/collections"
+import type { ReadingSavedSearch, ReadingStatus } from "@/types/collections"
 import { normalizeBulkTags, getBulkFailureLines } from "./bulkActions"
 import { ReadingItemCard } from "./ReadingItemCard"
 import { ReadingItemDetail } from "./ReadingItemDetail"
+import { SavedSearchesMenu } from "./SavedSearchesMenu"
 
 const STATUS_OPTIONS: { value: ReadingStatus | "all"; label: string }[] = [
   { value: "all", label: "All" },
@@ -75,6 +76,7 @@ export const ReadingItemsList: React.FC = () => {
   const availableTags = useCollectionsStore((s) => s.availableTags)
   const itemDetailOpen = useCollectionsStore((s) => s.itemDetailOpen)
   const addUrlModalOpen = useCollectionsStore((s) => s.addUrlModalOpen)
+  const readingSavedSearchesEnabled = useCollectionsStore((s) => s.readingSavedSearchesEnabled)
   const deleteConfirmOpen = useCollectionsStore((s) => s.deleteConfirmOpen)
   const deleteTargetId = useCollectionsStore((s) => s.deleteTargetId)
   const deleteTargetType = useCollectionsStore((s) => s.deleteTargetType)
@@ -94,6 +96,7 @@ export const ReadingItemsList: React.FC = () => {
   const setSortOrder = useCollectionsStore((s) => s.setSortOrder)
   const openAddUrlModal = useCollectionsStore((s) => s.openAddUrlModal)
   const resetFilters = useCollectionsStore((s) => s.resetFilters)
+  const setReadingSavedSearchesEnabled = useCollectionsStore((s) => s.setReadingSavedSearchesEnabled)
   const closeDeleteConfirm = useCollectionsStore((s) => s.closeDeleteConfirm)
   const removeItem = useCollectionsStore((s) => s.removeItem)
   const setAvailableTags = useCollectionsStore((s) => s.setAvailableTags)
@@ -111,6 +114,8 @@ export const ReadingItemsList: React.FC = () => {
   const [outputTemplates, setOutputTemplates] = useState<Array<{ label: string; value: string }>>([])
   const [outputTemplatesLoading, setOutputTemplatesLoading] = useState(false)
   const [outputGenerating, setOutputGenerating] = useState(false)
+  const [savedSearchesLoading, setSavedSearchesLoading] = useState(false)
+  const [savedSearches, setSavedSearches] = useState<ReadingSavedSearch[]>([])
 
   const selectedCount = selectedItemIds.length
   const allPageSelected = items.length > 0 && selectedCount === items.length
@@ -123,6 +128,154 @@ export const ReadingItemsList: React.FC = () => {
     if (sortBy === "title") return `title_${direction}`
     return undefined
   }, [sortBy, sortOrder])
+
+  const applySavedSearch = useCallback(
+    (search: { name: string; query: Record<string, unknown>; sort?: string }) => {
+      const query = search.query || {}
+      const statusRaw = query.status
+      let nextStatus: ReadingStatus | "all" = "all"
+      if (typeof statusRaw === "string") {
+        nextStatus = statusRaw as ReadingStatus
+      } else if (Array.isArray(statusRaw) && typeof statusRaw[0] === "string") {
+        nextStatus = statusRaw[0] as ReadingStatus
+      }
+      if (!["saved", "reading", "read", "archived", "all"].includes(nextStatus)) {
+        nextStatus = "all"
+      }
+
+      const tagsRaw = query.tags
+      const nextTags = Array.isArray(tagsRaw)
+        ? tagsRaw.map((tag) => String(tag).trim()).filter(Boolean)
+        : []
+      const favoriteRaw = query.favorite
+      const domainRaw = query.domain
+      const qRaw = query.q
+      const dateFromRaw = query.date_from
+      const dateToRaw = query.date_to
+      const resolvedSort = search.sort || (typeof query.sort === "string" ? query.sort : undefined)
+
+      setItemsSearch(typeof qRaw === "string" ? qRaw : "")
+      setFilterStatus(nextStatus)
+      setFilterFavorite(typeof favoriteRaw === "boolean" ? favoriteRaw : null)
+      setFilterTags(nextTags)
+      setFilterDomain(typeof domainRaw === "string" ? domainRaw : "")
+      setFilterDateRange(
+        typeof dateFromRaw === "string" ? dateFromRaw : null,
+        typeof dateToRaw === "string" ? dateToRaw : null
+      )
+      if (resolvedSort === "updated_desc") {
+        setSortBy("updated_at")
+        setSortOrder("desc")
+      } else if (resolvedSort === "updated_asc") {
+        setSortBy("updated_at")
+        setSortOrder("asc")
+      } else if (resolvedSort === "created_desc") {
+        setSortBy("created_at")
+        setSortOrder("desc")
+      } else if (resolvedSort === "created_asc") {
+        setSortBy("created_at")
+        setSortOrder("asc")
+      } else if (resolvedSort === "title_desc") {
+        setSortBy("title")
+        setSortOrder("desc")
+      } else if (resolvedSort === "title_asc") {
+        setSortBy("title")
+        setSortOrder("asc")
+      } else if (resolvedSort === "relevance") {
+        setSortBy("relevance")
+        setSortOrder("desc")
+      }
+      message.success(
+        t("collections:reading.savedSearchApplied", "Applied saved search: {{name}}", {
+          name: search.name
+        })
+      )
+    },
+    [
+      setFilterDateRange,
+      setFilterDomain,
+      setFilterFavorite,
+      setFilterStatus,
+      setFilterTags,
+      setItemsSearch,
+      setSortBy,
+      setSortOrder,
+      t
+    ]
+  )
+
+  const fetchSavedSearches = useCallback(async () => {
+    if (!readingSavedSearchesEnabled) return
+    setSavedSearchesLoading(true)
+    try {
+      const response = await api.listReadingSavedSearches({ limit: 100, offset: 0 })
+      setSavedSearches(response.items || [])
+    } catch (error: any) {
+      const errorMsg = error?.message || "Failed to load saved searches"
+      if (errorMsg.includes("reading_saved_searches_disabled")) {
+        setReadingSavedSearchesEnabled(false)
+        setSavedSearches([])
+      } else {
+        message.error(errorMsg)
+      }
+    } finally {
+      setSavedSearchesLoading(false)
+    }
+  }, [api, readingSavedSearchesEnabled, setReadingSavedSearchesEnabled])
+
+  const createSavedSearchFromCurrent = useCallback(async () => {
+    if (!readingSavedSearchesEnabled) return
+    const query: Record<string, unknown> = {}
+    if (itemsSearch.trim()) query.q = itemsSearch.trim()
+    if (filterStatus !== "all") query.status = [filterStatus]
+    if (typeof filterFavorite === "boolean") query.favorite = filterFavorite
+    if (filterTags.length > 0) query.tags = filterTags
+    if (filterDomain.trim()) query.domain = filterDomain.trim()
+    if (filterDateFrom) query.date_from = filterDateFrom
+    if (filterDateTo) query.date_to = filterDateTo
+    const sort = buildSortParam()
+    if (sort) query.sort = sort
+
+    const defaultName = itemsSearch.trim()
+      ? t("collections:reading.savedSearchNamed", "Search: {{query}}", { query: itemsSearch.trim() })
+      : t("collections:reading.savedSearchDefaultName", "Saved Search")
+
+    try {
+      const created = await api.createReadingSavedSearch({
+        name: defaultName,
+        query,
+        sort
+      })
+      setSavedSearches((prev) => {
+        const deduped = prev.filter((entry) => entry.id !== created.id)
+        return [created, ...deduped]
+      })
+      message.success(
+        t("collections:reading.savedSearchCreated", "Saved current filters")
+      )
+    } catch (error: any) {
+      const errorMsg = error?.message || "Failed to save search"
+      if (errorMsg.includes("reading_saved_searches_disabled")) {
+        setReadingSavedSearchesEnabled(false)
+        setSavedSearches([])
+      } else {
+        message.error(errorMsg)
+      }
+    }
+  }, [
+    api,
+    buildSortParam,
+    filterDateFrom,
+    filterDateTo,
+    filterDomain,
+    filterFavorite,
+    filterStatus,
+    filterTags,
+    itemsSearch,
+    readingSavedSearchesEnabled,
+    setReadingSavedSearchesEnabled,
+    t
+  ])
 
   // Fetch items
   const fetchItems = useCallback(async () => {
@@ -176,6 +329,10 @@ export const ReadingItemsList: React.FC = () => {
   useEffect(() => {
     fetchItems()
   }, [fetchItems])
+
+  useEffect(() => {
+    void fetchSavedSearches()
+  }, [fetchSavedSearches])
 
   // Keep selection limited to the current page list.
   useEffect(() => {
@@ -837,6 +994,15 @@ export const ReadingItemsList: React.FC = () => {
           </Button>
         )}
       </div>
+
+      {readingSavedSearchesEnabled && (
+        <SavedSearchesMenu
+          searches={savedSearches}
+          loading={savedSearchesLoading}
+          onApply={applySavedSearch}
+          onCreateFromCurrent={() => void createSavedSearchFromCurrent()}
+        />
+      )}
 
       {/* Bulk action controls */}
       {selectionMode && (

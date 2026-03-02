@@ -22,12 +22,17 @@ import {
 } from "@/services/tldw/data-tables"
 import type { DataTableColumn } from "@/types/data-tables"
 import type {
+  CreateReadingSavedSearchRequest,
   CreateReadingDigestScheduleRequest,
   ImportSource,
+  ReadingNoteLink,
+  ReadingSavedSearch,
+  ReadingSavedSearchListResponse,
   ReadingDigestSchedule,
   ReadingImportJobResponse,
   ReadingImportJobStatus,
   ReadingImportJobsListResponse,
+  UpdateReadingSavedSearchRequest,
   UpdateReadingDigestScheduleRequest
 } from "@/types/collections"
 
@@ -5751,6 +5756,132 @@ export class TldwApiClient {
     const qs = query.toString()
     const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}${qs ? `?${qs}` : ""}` as const
     await bgRequest<void>({ path, method: "DELETE" })
+  }
+
+  async createReadingSavedSearch(
+    data: CreateReadingSavedSearchRequest
+  ): Promise<ReadingSavedSearch> {
+    const row = await bgRequest<any>({
+      path: "/api/v1/reading/saved-searches",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data
+    })
+    return {
+      id: String(row?.id ?? ""),
+      name: String(row?.name ?? ""),
+      query:
+        row?.query && typeof row.query === "object" && !Array.isArray(row.query)
+          ? row.query
+          : {},
+      sort: row?.sort ?? undefined,
+      created_at: row?.created_at ?? undefined,
+      updated_at: row?.updated_at ?? undefined
+    }
+  }
+
+  async listReadingSavedSearches(
+    params?: { limit?: number; offset?: number }
+  ): Promise<ReadingSavedSearchListResponse> {
+    const query = new URLSearchParams()
+    if (typeof params?.limit === "number" && Number.isFinite(params.limit)) {
+      query.set("limit", String(Math.max(1, Math.floor(params.limit))))
+    }
+    if (typeof params?.offset === "number" && Number.isFinite(params.offset)) {
+      query.set("offset", String(Math.max(0, Math.floor(params.offset))))
+    }
+    const qs = query.toString()
+    const path = `/api/v1/reading/saved-searches${qs ? `?${qs}` : ""}` as const
+    const data = await bgRequest<any>({ path, method: "GET" })
+    const items: ReadingSavedSearch[] = Array.isArray(data?.items)
+      ? data.items.map((row: any) => ({
+          id: String(row?.id ?? ""),
+          name: String(row?.name ?? ""),
+          query:
+            row?.query && typeof row.query === "object" && !Array.isArray(row.query)
+              ? row.query
+              : {},
+          sort: row?.sort ?? undefined,
+          created_at: row?.created_at ?? undefined,
+          updated_at: row?.updated_at ?? undefined
+        }))
+      : []
+    return {
+      items,
+      total: Number.isFinite(data?.total) ? Number(data.total) : items.length,
+      limit:
+        Number.isFinite(data?.limit) && Number(data.limit) > 0
+          ? Number(data.limit)
+          : params?.limit ?? 50,
+      offset:
+        Number.isFinite(data?.offset) && Number(data.offset) >= 0
+          ? Number(data.offset)
+          : params?.offset ?? 0
+    }
+  }
+
+  async updateReadingSavedSearch(
+    searchId: string,
+    data: UpdateReadingSavedSearchRequest
+  ): Promise<ReadingSavedSearch> {
+    const path = `/api/v1/reading/saved-searches/${encodeURIComponent(searchId)}` as const
+    const row = await bgRequest<any>({
+      path,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: data
+    })
+    return {
+      id: String(row?.id ?? ""),
+      name: String(row?.name ?? ""),
+      query:
+        row?.query && typeof row.query === "object" && !Array.isArray(row.query)
+          ? row.query
+          : {},
+      sort: row?.sort ?? undefined,
+      created_at: row?.created_at ?? undefined,
+      updated_at: row?.updated_at ?? undefined
+    }
+  }
+
+  async deleteReadingSavedSearch(searchId: string): Promise<{ ok: boolean }> {
+    const path = `/api/v1/reading/saved-searches/${encodeURIComponent(searchId)}` as const
+    const response = await bgRequest<{ ok?: boolean }>({ path, method: "DELETE" })
+    return { ok: Boolean(response?.ok) }
+  }
+
+  async linkReadingItemToNote(itemId: string, noteId: string): Promise<ReadingNoteLink> {
+    const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/links/note` as const
+    const row = await bgRequest<any>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: { note_id: noteId }
+    })
+    return {
+      item_id: String(row?.item_id ?? itemId),
+      note_id: String(row?.note_id ?? noteId),
+      created_at: row?.created_at ?? undefined
+    }
+  }
+
+  async listReadingItemNoteLinks(itemId: string): Promise<ReadingNoteLink[]> {
+    const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/links` as const
+    const data = await bgRequest<any>({ path, method: "GET" })
+    if (!Array.isArray(data?.links)) {
+      return []
+    }
+    return data.links.map((row: any) => ({
+      item_id: String(row?.item_id ?? itemId),
+      note_id: String(row?.note_id ?? ""),
+      created_at: row?.created_at ?? undefined
+    }))
+  }
+
+  async unlinkReadingItemNote(itemId: string, noteId: string): Promise<{ ok: boolean }> {
+    const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/links/note/${encodeURIComponent(noteId)}` as const
+    const response = await bgRequest<{ ok?: boolean }>({ path, method: "DELETE" })
+    return { ok: Boolean(response?.ok) }
   }
 
   async summarizeReadingItem(
