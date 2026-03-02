@@ -18,6 +18,19 @@ def test_startup_shutdown_contract_is_reentrant() -> None:
 
 
 @pytest.mark.integration
+def test_lifecycle_hooks_called_in_order() -> None:
+    from tldw_Server_API.app.main import app
+
+    if hasattr(app.state, "_tldw_lifecycle_events"):
+        delattr(app.state, "_tldw_lifecycle_events")
+
+    with TestClient(app):
+        assert getattr(app.state, "_tldw_lifecycle_events", [])[-1:] == ["startup"]
+
+    assert getattr(app.state, "_tldw_lifecycle_events", [])[-2:] == ["startup", "shutdown"]
+
+
+@pytest.mark.integration
 def test_lifespan_exposes_openapi_after_startup(client_user_only) -> None:
     response = client_user_only.get("/openapi.json")
     assert response.status_code == 200

@@ -34,6 +34,10 @@ from tldw_Server_API.app.core.startup_logging import (
     startup_api_key_log_value as _startup_api_key_log_value,
 )
 from tldw_Server_API.app.api.v1.router_registry import include_router_idempotent
+from tldw_Server_API.app.services.app_lifecycle import (
+    mark_lifecycle_shutdown,
+    mark_lifecycle_startup,
+)
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled as _shared_env_flag_enabled,
 )
@@ -1347,7 +1351,7 @@ async def lifespan(app: FastAPI):
     # Ensure in-process restarts (common in tests) reset readiness and job acquisition gates.
     # In production, the process typically exits after shutdown; in tests we reuse the app object.
     try:
-        READINESS_STATE["ready"] = True
+        mark_lifecycle_startup(app, READINESS_STATE)
         from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
 
         _JM.set_acquire_gate(False)
@@ -3322,7 +3326,7 @@ async def lifespan(app: FastAPI):
 
     # Flip readiness early and gate new job acquisitions for graceful shutdown
     try:
-        READINESS_STATE["ready"] = False
+        mark_lifecycle_shutdown(app, READINESS_STATE)
         from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
 
         _JM.set_acquire_gate(True)
