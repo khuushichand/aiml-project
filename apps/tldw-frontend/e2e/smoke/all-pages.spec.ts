@@ -24,6 +24,10 @@ import { PAGES, PageEntry, getActivePages, PAGE_COUNT, ACTIVE_PAGE_COUNT } from 
 // Test configuration
 const LOAD_TIMEOUT = 30_000; // 30s max for page load
 const ELEMENT_TIMEOUT = 15_000; // 15s max for element visibility
+const NETWORK_IDLE_TIMEOUT = Math.max(
+  1_000,
+  Number(process.env.TLDW_SMOKE_NETWORK_IDLE_TIMEOUT_MS || 8_000)
+);
 const VERBOSE_CONSOLE = process.env.TLDW_SMOKE_VERBOSE_CONSOLE === '1';
 const ALLOWLIST_LOG_LIMIT = Number(process.env.TLDW_SMOKE_ALLOWLIST_LOG_LIMIT || 10);
 const SMOKE_HARD_GATE = process.env.TLDW_SMOKE_HARD_GATE !== '0';
@@ -273,7 +277,7 @@ async function visitRouteWithTransientRetry(
         waitUntil: 'domcontentloaded',
         timeout: LOAD_TIMEOUT,
       });
-      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+      await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
     } catch (error) {
       const errorMessage = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
       const isNavigationTimeout = TRANSIENT_NAVIGATION_TIMEOUT_PATTERN.test(errorMessage);
@@ -567,7 +571,7 @@ test.describe('Smoke Tests - Key Navigation Targets', () => {
         waitUntil: 'domcontentloaded',
         timeout: LOAD_TIMEOUT,
       });
-      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+      await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
 
       const issues = getCriticalIssues(diagnostics);
       const classifiedIssues = classifySmokeIssues(entry.path, issues);
@@ -598,7 +602,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
       waitUntil: 'domcontentloaded',
       timeout: LOAD_TIMEOUT,
     });
-    await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+    await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
 
     const status = response?.status() ?? 0;
     test.skip(
@@ -639,7 +643,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
     await page.waitForURL(/\/knowledge\?q=wayfinding-smoke/, {
       timeout: LOAD_TIMEOUT,
     });
-    await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+    await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
 
     const issues = getCriticalIssues(diagnostics);
     const classifiedIssues = classifySmokeIssues('/knowledge', issues);
@@ -657,7 +661,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
       waitUntil: 'domcontentloaded',
       timeout: LOAD_TIMEOUT,
     });
-    await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+    await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
 
     const hasWayfindingPanel = (await page.getByTestId('not-found-recovery-panel').count()) > 0;
     test.skip(
@@ -719,7 +723,7 @@ test.describe('Smoke Tests - Route Error Boundaries', () => {
         `Route boundary fixture unavailable for ${target.path} in this runtime (status: ${status})`
       );
 
-      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+      await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
       await expect(page.getByTestId('error-boundary')).toBeVisible();
       await expect(page.getByTestId(`route-error-boundary-${target.routeId}`)).toBeVisible();
       await expect(page.getByTestId('route-error-retry')).toBeVisible();
