@@ -35,6 +35,7 @@ const TRANSIENT_RUNTIME_RETRY_DELAY_MS = Math.max(
   0,
   Number(process.env.TLDW_SMOKE_TRANSIENT_RUNTIME_RETRY_DELAY_MS || 500)
 );
+const TRANSIENT_NAVIGATION_TIMEOUT_PATTERN = /page\.goto: Timeout/i;
 const KEY_NAV_TARGETS = ['/chat', '/media', '/knowledge', '/notes', '/prompts', '/settings/tldw'];
 const WAYFINDING_404_PATH = '/__wayfinding-missing-route__';
 const ROUTE_ERROR_FIXTURE_QUERY_KEY = '__forceRouteError';
@@ -251,11 +252,30 @@ async function visitRouteWithTransientRetry(
 
   for (let attempt = 0; attempt <= TRANSIENT_RUNTIME_RETRY_ATTEMPTS; attempt += 1) {
     resetDiagnostics(diagnostics);
-    response = await page.goto(routePath, {
-      waitUntil: 'domcontentloaded',
-      timeout: LOAD_TIMEOUT,
-    });
-    await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+    try {
+      response = await page.goto(routePath, {
+        waitUntil: 'domcontentloaded',
+        timeout: LOAD_TIMEOUT,
+      });
+      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+    } catch (error) {
+      const errorMessage = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      const isNavigationTimeout = TRANSIENT_NAVIGATION_TIMEOUT_PATTERN.test(errorMessage);
+      const shouldRetryNavigationTimeout =
+        isNavigationTimeout && attempt < TRANSIENT_RUNTIME_RETRY_ATTEMPTS;
+      if (!shouldRetryNavigationTimeout) {
+        throw error;
+      }
+
+      retriesUsed = attempt + 1;
+      console.warn(
+        `[smoke-transient-navigation-retry] ${routePath} retry ${retriesUsed}/${TRANSIENT_RUNTIME_RETRY_ATTEMPTS} after navigation timeout`
+      );
+      if (TRANSIENT_RUNTIME_RETRY_DELAY_MS > 0) {
+        await page.waitForTimeout(TRANSIENT_RUNTIME_RETRY_DELAY_MS);
+      }
+      continue;
+    }
 
     issues = getCriticalIssues(diagnostics);
     classifiedIssues = classifySmokeIssues(routePath, issues);
