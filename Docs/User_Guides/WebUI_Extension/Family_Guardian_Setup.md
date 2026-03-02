@@ -4,6 +4,16 @@ This guide is for parents or guardians who want to run tldw_server at home with 
 
 > **Looking for the full walkthrough?** If you're starting from scratch, begin with [Household_Multi_User_Walkthrough.md](../WebUI_Extension/Household_Multi_User_Walkthrough.md) which covers installation, account creation, and verification end-to-end. This guide focuses on **guardrails and parental controls** to apply after setup.
 
+> **Wizard-first setup (recommended for most families):** Use [Family_Guardrails_Wizard_Guide.md](./Family_Guardrails_Wizard_Guide.md) for the guided flow in `Settings -> Family Guardrails Wizard` (WebUI and extension options).
+
+## Prefer Wizard-First Setup
+
+If you are onboarding a family now, start with the Family Guardrails Wizard first, then return to this guide for advanced hardening:
+
+1. Run the wizard to create guardian/dependent mappings and template-based plans.
+2. Confirm dependent acceptance in the wizard tracker.
+3. Use this guide to apply additional server-level controls (registration, virtual keys, rate limits, BYOK restrictions).
+
 ## What You'll Set Up
 
 - Multi-user accounts (one per person)

@@ -10,18 +10,27 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Guardian_DB import GuardianDB
 
 
-def get_guardian_db_for_user(user: User = Depends(get_request_user)) -> GuardianDB:
-    """Return a GuardianDB instance bound to the current user's DB path."""
+def _coerce_storage_user_id(raw_user_id: object) -> int:
     try:
-        uid = int(user.id)
+        return int(raw_user_id)
     except Exception:
         import hashlib
         # Deterministic non-crypto ID derivation for non-integer test/single-user IDs.
         # `usedforsecurity=False` keeps behavior while making intent explicit.
         try:
-            digest = hashlib.sha1(str(user.id).encode("utf-8"), usedforsecurity=False).digest()
+            digest = hashlib.sha1(str(raw_user_id).encode("utf-8"), usedforsecurity=False).digest()
         except TypeError:  # pragma: no cover - compatibility fallback
-            digest = hashlib.sha1(str(user.id).encode("utf-8")).digest()  # nosec B324
-        uid = int.from_bytes(digest[:4], byteorder="big", signed=False)
+            digest = hashlib.sha1(str(raw_user_id).encode("utf-8")).digest()  # nosec B324
+        return int.from_bytes(digest[:4], byteorder="big", signed=False)
+
+
+def get_guardian_db_for_user_id(user_id: object) -> GuardianDB:
+    """Return a GuardianDB instance bound to the provided user ID."""
+    uid = _coerce_storage_user_id(user_id)
     db_path = DatabasePaths.get_guardian_db_path(uid)
     return GuardianDB(str(db_path))
+
+
+def get_guardian_db_for_user(user: User = Depends(get_request_user)) -> GuardianDB:
+    """Return a GuardianDB instance bound to the current user's DB path."""
+    return get_guardian_db_for_user_id(user.id)

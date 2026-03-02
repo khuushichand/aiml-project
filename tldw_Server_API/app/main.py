@@ -5414,8 +5414,10 @@ elif _MINIMAL_TEST_APP:
     # Guardian controls (parental/supervised account controls)
     try:
         from tldw_Server_API.app.api.v1.endpoints.guardian_controls import router as guardian_controls_router
+        from tldw_Server_API.app.api.v1.endpoints.family_wizard import router as family_wizard_router
 
         app.include_router(guardian_controls_router, prefix=f"{API_V1_PREFIX}/guardian", tags=["guardian"])
+        app.include_router(family_wizard_router, prefix=f"{API_V1_PREFIX}/guardian", tags=["guardian"])
     except _IMPORT_EXCEPTIONS as _guard_min_err:
         logger.debug(f"Skipping guardian controls router in minimal test app: {_guard_min_err}")
     # Self-monitoring (awareness notifications, crisis resources)
@@ -6183,11 +6185,19 @@ else:
     )
     try:
         from tldw_Server_API.app.api.v1.endpoints.guardian_controls import router as guardian_controls_router_full
+        from tldw_Server_API.app.api.v1.endpoints.family_wizard import router as family_wizard_router_full
         from tldw_Server_API.app.api.v1.endpoints.self_monitoring import router as self_monitoring_router_full
 
         _include_if_enabled(
             "guardian",
             guardian_controls_router_full,
+            prefix=f"{API_V1_PREFIX}/guardian",
+            tags=["guardian"],
+            default_stable=False,
+        )
+        _include_if_enabled(
+            "guardian",
+            family_wizard_router_full,
             prefix=f"{API_V1_PREFIX}/guardian",
             tags=["guardian"],
             default_stable=False,

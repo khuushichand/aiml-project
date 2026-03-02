@@ -177,6 +177,13 @@ const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
 const OptionWritingPlayground = lazy(() => import("./option-writing-playground"))
 const OptionModerationPlayground = lazy(() => import("./option-moderation-playground"))
+const OptionFamilyGuardrailsWizard = lazy(
+  () => import("./option-family-guardrails-wizard")
+)
+const OptionGuardianSettings = createSettingsRoute(
+  () => import("~/components/Option/Settings/GuardianSettings"),
+  "GuardianSettings"
+)
 const OptionWorkspacePlayground = lazy(
   () => import("./option-workspace-playground")
 )
@@ -500,6 +507,30 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "option:moderationPlayground.nav",
       icon: ShieldCheck,
       order: 12
+    }
+  },
+  {
+    kind: "options",
+    path: "/settings/family-guardrails",
+    element: <OptionFamilyGuardrailsWizard />,
+    nav: {
+      group: "server",
+      labelToken: "settings:familyGuardrailsWizardNav",
+      icon: ShieldCheck,
+      order: 8,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/settings/guardian",
+    element: <OptionGuardianSettings />,
+    nav: {
+      group: "server",
+      labelToken: "settings:guardianNav",
+      icon: ShieldCheck,
+      order: 9,
+      beta: true
     }
   },
   { kind: "options", path: "/chatbooks", element: <OptionChatbooksPlayground /> },

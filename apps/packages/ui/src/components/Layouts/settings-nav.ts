@@ -28,6 +28,7 @@ type NavItemWithOrder = SettingsNavItem & { order: number }
 const SETTINGS_ROUTE_PREFIX = "/settings"
 
 const SETTINGS_BETA_BADGE_WINDOWS: Record<string, string> = {
+  "/settings/family-guardrails": "2026-12-31",
   "/settings/guardian": "2026-12-31",
   "/settings/prompt-studio": "2026-09-30"
 }

@@ -1,0 +1,470 @@
+"""
+Family Guardrails Wizard API endpoints.
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from tldw_Server_API.app.api.v1.API_Deps.guardian_deps import get_guardian_db_for_user
+from tldw_Server_API.app.api.v1.schemas.family_wizard_schemas import (
+    ActivationSummaryItem,
+    ActivationSummaryResponse,
+    GuardrailPlanDraftCreate,
+    GuardrailPlanDraftResponse,
+    HouseholdDraftCreate,
+    HouseholdDraftSnapshotResponse,
+    HouseholdDraftResponse,
+    HouseholdDraftUpdate,
+    HouseholdMemberDraftCreate,
+    HouseholdMemberDraftResponse,
+    ResendPendingInvitesRequest,
+    ResendPendingInvitesResponse,
+    RelationshipDraftCreate,
+    RelationshipDraftResponse,
+)
+from tldw_Server_API.app.api.v1.schemas.guardian_schemas import DetailResponse
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.Guardian_DB import GuardianDB
+
+router = APIRouter()
+
+
+def _user_id(user: User) -> str:
+    return str(user.id)
+
+
+def _household_from_row(row: dict) -> HouseholdDraftResponse:
+    return HouseholdDraftResponse(
+        id=row["id"],
+        owner_user_id=row["owner_user_id"],
+        name=row["name"],
+        mode=row["mode"],
+        status=row["status"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _member_from_row(row: dict) -> HouseholdMemberDraftResponse:
+    return HouseholdMemberDraftResponse(
+        id=row["id"],
+        household_draft_id=row["household_draft_id"],
+        role=row["role"],
+        display_name=row["display_name"],
+        user_id=row["user_id"],
+        email=row["email"],
+        invite_required=bool(row["invite_required"]),
+        metadata=row.get("metadata") or {},
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _relationship_from_row(row: dict) -> RelationshipDraftResponse:
+    return RelationshipDraftResponse(
+        id=row["id"],
+        household_draft_id=row["household_draft_id"],
+        guardian_member_draft_id=row["guardian_member_draft_id"],
+        dependent_member_draft_id=row["dependent_member_draft_id"],
+        relationship_type=row["relationship_type"],
+        dependent_visible=bool(row["dependent_visible"]),
+        status=row["status"],
+        relationship_id=row.get("relationship_id"),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _plan_from_row(row: dict) -> GuardrailPlanDraftResponse:
+    return GuardrailPlanDraftResponse(
+        id=row["id"],
+        household_draft_id=row["household_draft_id"],
+        dependent_user_id=row["dependent_user_id"],
+        relationship_draft_id=row["relationship_draft_id"],
+        template_id=row["template_id"],
+        overrides=row.get("overrides") or {},
+        status=row["status"],
+        materialized_policy_id=row.get("materialized_policy_id"),
+        failure_reason=row.get("failure_reason"),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _require_owned_draft(db: GuardianDB, draft_id: str, user_id: str) -> dict:
+    draft = db.get_household_draft(draft_id)
+    if not draft:
+        raise HTTPException(status_code=404, detail="Household draft not found")
+    if draft["owner_user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this household draft")
+    return draft
+
+
+@router.post(
+    "/wizard/drafts",
+    response_model=HouseholdDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_household_draft(
+    body: HouseholdDraftCreate,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Create a new household wizard draft owned by the authenticated guardian."""
+    draft_id = db.create_household_draft(
+        owner_user_id=_user_id(user),
+        mode=body.mode,
+        name=body.name,
+    )
+    draft = db.get_household_draft(draft_id)
+    if not draft:
+        raise HTTPException(status_code=500, detail="Failed to create household draft")
+    return _household_from_row(draft)
+
+
+@router.get("/wizard/drafts/latest", response_model=HouseholdDraftResponse)
+def get_latest_household_draft(
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Return the authenticated guardian's most recently updated wizard draft."""
+    draft = db.get_latest_household_draft(_user_id(user))
+    if not draft:
+        raise HTTPException(status_code=404, detail="No household draft found")
+    return _household_from_row(draft)
+
+
+@router.get("/wizard/drafts/{draft_id}", response_model=HouseholdDraftResponse)
+def get_household_draft(
+    draft_id: str,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Return one owned household wizard draft."""
+    draft = _require_owned_draft(db, draft_id, _user_id(user))
+    return _household_from_row(draft)
+
+
+@router.patch("/wizard/drafts/{draft_id}", response_model=HouseholdDraftResponse)
+def update_household_draft(
+    draft_id: str,
+    body: HouseholdDraftUpdate,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Update mutable fields on an owned household wizard draft."""
+    _require_owned_draft(db, draft_id, _user_id(user))
+    updates = body.model_dump(exclude_unset=True)
+    if updates:
+        db.update_household_draft(draft_id, **updates)
+    draft = db.get_household_draft(draft_id)
+    if not draft:
+        raise HTTPException(status_code=404, detail="Household draft not found")
+    return _household_from_row(draft)
+
+
+@router.get(
+    "/wizard/drafts/{draft_id}/snapshot",
+    response_model=HouseholdDraftSnapshotResponse,
+)
+def get_household_draft_snapshot(
+    draft_id: str,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Return full wizard snapshot (household, members, relationships, plans)."""
+    draft = _require_owned_draft(db, draft_id, _user_id(user))
+    members = db.list_household_member_drafts(draft_id)
+    relationships = db.list_relationship_drafts(draft_id)
+    plans = db.list_guardrail_plan_drafts(draft_id)
+    return HouseholdDraftSnapshotResponse(
+        household=_household_from_row(draft),
+        members=[_member_from_row(row) for row in members],
+        relationships=[_relationship_from_row(row) for row in relationships],
+        plans=[_plan_from_row(row) for row in plans],
+    )
+
+
+@router.post(
+    "/wizard/drafts/{draft_id}/members",
+    response_model=HouseholdMemberDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_household_member_draft(
+    draft_id: str,
+    body: HouseholdMemberDraftCreate,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Create a guardian/dependent member draft under an owned household draft."""
+    _require_owned_draft(db, draft_id, _user_id(user))
+    member_id = db.add_household_member_draft(
+        household_draft_id=draft_id,
+        role=body.role,
+        display_name=body.display_name,
+        user_id=body.user_id,
+        email=body.email,
+        invite_required=body.invite_required,
+        metadata=body.metadata,
+    )
+    member = db.get_household_member_draft(member_id)
+    if not member:
+        raise HTTPException(status_code=500, detail="Failed to create member draft")
+    return _member_from_row(member)
+
+
+@router.delete(
+    "/wizard/drafts/{draft_id}/members/{member_id}",
+    response_model=DetailResponse,
+)
+def remove_household_member_draft(
+    draft_id: str,
+    member_id: str,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Delete one member draft from an owned household draft."""
+    _require_owned_draft(db, draft_id, _user_id(user))
+    member = db.get_household_member_draft(member_id)
+    if not member or member["household_draft_id"] != draft_id:
+        raise HTTPException(status_code=404, detail="Member draft not found")
+    db.remove_household_member_draft(member_id)
+    return DetailResponse(detail="Member draft removed")
+
+
+@router.post(
+    "/wizard/drafts/{draft_id}/relationships",
+    response_model=RelationshipDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def save_relationship_mapping(
+    draft_id: str,
+    body: RelationshipDraftCreate,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Persist one dependent mapping and create its runtime relationship."""
+    _require_owned_draft(db, draft_id, _user_id(user))
+    guardian_member = db.get_household_member_draft(body.guardian_member_draft_id)
+    dependent_member = db.get_household_member_draft(body.dependent_member_draft_id)
+
+    if not guardian_member or guardian_member["household_draft_id"] != draft_id:
+        raise HTTPException(status_code=404, detail="Guardian member draft not found")
+    if not dependent_member or dependent_member["household_draft_id"] != draft_id:
+        raise HTTPException(status_code=404, detail="Dependent member draft not found")
+    if guardian_member["role"] != "guardian":
+        raise HTTPException(status_code=400, detail="Guardian member draft must have guardian role")
+    if dependent_member["role"] != "dependent":
+        raise HTTPException(status_code=400, detail="Dependent member draft must have dependent role")
+    if not guardian_member["user_id"] or not dependent_member["user_id"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Both guardian and dependent must have user_id before mapping",
+        )
+    authenticated_user_id = _user_id(user)
+    if guardian_member["user_id"] != authenticated_user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Relationship mapping guardian member must match the authenticated guardian account",
+        )
+
+    try:
+        relationship = db.create_relationship(
+            guardian_user_id=authenticated_user_id,
+            dependent_user_id=dependent_member["user_id"],
+            relationship_type=body.relationship_type,
+            dependent_visible=body.dependent_visible,
+        )
+        relationship_draft_id = db.create_relationship_draft(
+            household_draft_id=draft_id,
+            guardian_member_draft_id=body.guardian_member_draft_id,
+            dependent_member_draft_id=body.dependent_member_draft_id,
+            relationship_type=body.relationship_type,
+            dependent_visible=body.dependent_visible,
+        )
+        db.link_relationship_draft(
+            relationship_draft_id=relationship_draft_id,
+            relationship_id=relationship.id,
+            status=relationship.status,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    relationship_draft = db.get_relationship_draft(relationship_draft_id)
+    if not relationship_draft:
+        raise HTTPException(status_code=500, detail="Failed to save relationship mapping")
+    return _relationship_from_row(relationship_draft)
+
+
+@router.post(
+    "/wizard/drafts/{draft_id}/plans",
+    response_model=GuardrailPlanDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def save_guardrail_plan(
+    draft_id: str,
+    body: GuardrailPlanDraftCreate,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Queue one guardrail plan draft bound to an owned relationship draft."""
+    _require_owned_draft(db, draft_id, _user_id(user))
+    relationship_draft = db.get_relationship_draft(body.relationship_draft_id)
+    if not relationship_draft or relationship_draft["household_draft_id"] != draft_id:
+        raise HTTPException(status_code=404, detail="Relationship draft not found")
+    dependent_member = db.get_household_member_draft(relationship_draft["dependent_member_draft_id"])
+    if not dependent_member or dependent_member["household_draft_id"] != draft_id:
+        raise HTTPException(status_code=404, detail="Dependent member draft not found")
+    dependent_user_id = (dependent_member.get("user_id") or "").strip()
+    if not dependent_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Dependent member draft must include user_id before saving a guardrail plan",
+        )
+    requested_dependent_user_id = body.dependent_user_id.strip()
+    if requested_dependent_user_id != dependent_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Plan dependent_user_id must match the dependent user_id on the relationship draft",
+        )
+
+    plan_id = db.create_guardrail_plan_draft(
+        household_draft_id=draft_id,
+        dependent_user_id=dependent_user_id,
+        relationship_draft_id=body.relationship_draft_id,
+        template_id=body.template_id,
+        overrides=body.overrides,
+    )
+    plan = db.get_guardrail_plan_draft(plan_id)
+    if not plan:
+        raise HTTPException(status_code=500, detail="Failed to save guardrail plan")
+    return _plan_from_row(plan)
+
+
+@router.get(
+    "/wizard/drafts/{draft_id}/activation-summary",
+    response_model=ActivationSummaryResponse,
+)
+def get_activation_summary(
+    draft_id: str,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Summarize activation readiness/status for each planned dependent setup."""
+    draft = _require_owned_draft(db, draft_id, _user_id(user))
+    plans = db.list_guardrail_plan_drafts(draft_id)
+    relationship_status_by_id = {
+        relationship["id"]: relationship["status"]
+        for relationship in db.list_relationship_drafts(draft_id)
+    }
+    active_count = sum(1 for plan in plans if plan["status"] == "active")
+    pending_count = sum(1 for plan in plans if plan["status"] == "queued")
+    failed_count = sum(1 for plan in plans if plan["status"] == "failed")
+
+    items: list[ActivationSummaryItem] = []
+    for plan in plans:
+        relationship_status = relationship_status_by_id.get(plan["relationship_draft_id"], "pending")
+        message = "Queued until acceptance" if plan["status"] == "queued" else None
+        items.append(
+            ActivationSummaryItem(
+                dependent_user_id=plan["dependent_user_id"],
+                relationship_status=relationship_status,
+                plan_status=plan["status"],
+                message=message,
+            )
+        )
+
+    return ActivationSummaryResponse(
+        household_draft_id=draft_id,
+        status=draft["status"],
+        active_count=active_count,
+        pending_count=pending_count,
+        failed_count=failed_count,
+        items=items,
+    )
+
+
+@router.post(
+    "/wizard/drafts/{draft_id}/invites/resend",
+    response_model=ResendPendingInvitesResponse,
+)
+def resend_pending_invites(
+    draft_id: str,
+    body: ResendPendingInvitesRequest,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Resend invite reminders for pending dependent setups in a household draft."""
+    _require_owned_draft(db, draft_id, _user_id(user))
+
+    requested_ids: list[str] = []
+    seen: set[str] = set()
+    for raw_user_id in body.dependent_user_ids:
+        user_id = raw_user_id.strip()
+        if not user_id or user_id in seen:
+            continue
+        seen.add(user_id)
+        requested_ids.append(user_id)
+
+    if not requested_ids:
+        return ResendPendingInvitesResponse(
+            household_draft_id=draft_id,
+            resent_count=0,
+            skipped_count=0,
+            resent_user_ids=[],
+            skipped_user_ids=[],
+        )
+
+    members = db.list_household_member_drafts(draft_id)
+    member_by_dependent_user_id = {
+        member["user_id"]: member
+        for member in members
+        if member["role"] == "dependent" and member.get("user_id")
+    }
+
+    relationships_by_dependent_member = {
+        relationship["dependent_member_draft_id"]: relationship
+        for relationship in db.list_relationship_drafts(draft_id)
+    }
+    plans_by_dependent_user_id = {
+        plan["dependent_user_id"]: plan
+        for plan in db.list_guardrail_plan_drafts(draft_id)
+    }
+
+    resent_user_ids: list[str] = []
+    skipped_user_ids: list[str] = []
+
+    for dependent_user_id in requested_ids:
+        member = member_by_dependent_user_id.get(dependent_user_id)
+        if not member:
+            skipped_user_ids.append(dependent_user_id)
+            continue
+        if not member.get("invite_required", True):
+            skipped_user_ids.append(dependent_user_id)
+            continue
+
+        relationship = relationships_by_dependent_member.get(member["id"])
+        plan = plans_by_dependent_user_id.get(dependent_user_id)
+        relationship_status = relationship["status"] if relationship else "pending"
+        plan_status = plan["status"] if plan else "queued"
+        is_pending = relationship_status == "pending" or plan_status == "queued"
+        if not is_pending:
+            skipped_user_ids.append(dependent_user_id)
+            continue
+
+        touched = db.mark_household_member_invite_resent(member["id"])
+        if not touched:
+            skipped_user_ids.append(dependent_user_id)
+            continue
+        resent_user_ids.append(dependent_user_id)
+
+    if resent_user_ids:
+        db.update_household_draft(draft_id, status="invites_pending")
+
+    return ResendPendingInvitesResponse(
+        household_draft_id=draft_id,
+        resent_count=len(resent_user_ids),
+        skipped_count=len(skipped_user_ids),
+        resent_user_ids=resent_user_ids,
+        skipped_user_ids=skipped_user_ids,
+    )
