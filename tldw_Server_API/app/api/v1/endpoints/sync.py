@@ -689,44 +689,7 @@ class ServerSyncProcessor:
 
         # --- Execute SQL (Sync) ---
         try:
-            # --- Manual FTS Update (Server Side - Sync) ---
-            # FIXME: FTS update logic is disabled for now. Uncomment and adjust as needed.
-            # Check if FTS needs update *before* main execution if possible, to execute together
-            # fts_update_needed = (operation in ['create', 'update']
-            #                       and entity in ['Media', 'Keywords']
-            #                       and any(k in payload for k in ['title', 'content', 'keyword']))
-            #
-            # if fts_update_needed:
-            #     # Try executing main SQL, then FTS update
-            #     logger.debug(f"[{self.user_id}] Executing Server SQL (Sync) [Pre-FTS]: {sql} | Params: {params_tuple}")
-            #     cursor.execute(sql, params_tuple) # Execute main first
-            #     sql_executed_in_fts_block = True # Mark as executed
-            #
-            #     # Check optimistic lock *after* main execution
-            #     if not force_apply and operation in ['update', 'delete'] and optimistic_lock_sql and cursor.rowcount == 0:
-            #          logger.warning(f"[{self.user_id}] Optimistic lock failed applying client change (Sync)...")
-            #          raise ConflictError(f"Optimistic lock failed applying client change.", entity=entity, identifier=uuid)
-            #     elif not force_apply and operation in ['update', 'delete'] and optimistic_lock_sql :
-            #          logger.debug(f"[{self.user_id}] Optimistic lock successful applying client change (Sync). Rowcount {cursor.rowcount}.")
-            #
-            #
-            #     # If main update successful, update FTS
-            #     self._update_fts_manually_sync(cursor, entity, payload, uuid) # Call sync helper
-            #
-            # else:
-            #     # If no FTS needed, execute main SQL normally
-            #      logger.debug(f"[{self.user_id}] Executing Server SQL (Sync): {sql} | Params: {params_tuple}")
-            #      cursor.execute(sql, params_tuple)
-            #      # Optimistic Lock Check
-            #      if not force_apply and operation in ['update', 'delete'] and optimistic_lock_sql:
-            #           if cursor.rowcount == 0:
-            #                logger.warning(f"[{self.user_id}] Optimistic lock failed applying client change (Sync)...")
-            #                raise ConflictError(f"Optimistic lock failed applying client change.", entity=entity, identifier=uuid)
-            #           else:
-            #                logger.debug(f"[{self.user_id}] Optimistic lock successful applying client change (Sync). Rowcount {cursor.rowcount}.")
-
-            # --- TEMP: Always execute main SQL outside of FTS check for now ---
-            logger.debug(f"[{self.user_id}] Executing Server SQL (Sync) (FTS Disabled): {sql} | Params: {params_tuple}")
+            logger.debug(f"[{self.user_id}] Executing Server SQL (Sync): {sql} | Params: {params_tuple}")
             cursor.execute(sql, params_tuple)
             # Optimistic Lock Check
             if not force_apply and operation in ['update', 'delete'] and optimistic_lock_sql:
@@ -735,7 +698,18 @@ class ServerSyncProcessor:
                     raise ConflictError("Optimistic lock failed applying client change.", entity=entity, identifier=uuid)
                 else:
                     logger.debug(f"[{self.user_id}] Optimistic lock successful applying client change (Sync). Rowcount {cursor.rowcount}.")
-            # --- END TEMP ---
+
+            # Keep FTS index synchronized for sync-path Media/Keywords writes.
+            conn = getattr(cursor, "connection", None)
+            if conn is None:
+                raise DatabaseError("Sync write completed but cursor has no connection for FTS refresh.")
+            self.db.sync_refresh_fts_for_entity(
+                conn,
+                entity=entity,
+                entity_uuid=uuid,
+                operation=operation,
+                payload=payload,
+            )
 
         except sqlite3.IntegrityError as ie:
             logger.error(f"[{self.user_id}] Integrity error applying client change (Sync) for {entity} {uuid}: {ie}", exc_info=True)
