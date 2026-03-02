@@ -24,7 +24,6 @@ def _config_value_factory(mapping: dict[str, str]):
 
     return _fake_get_config_value
 
-
 def test_search_agent_defaults_apply_when_request_fields_omitted(monkeypatch):
     for env_key in (
         "SEARCH_QUERY_CLASSIFICATION",
@@ -100,7 +99,6 @@ def test_search_agent_defaults_apply_when_request_fields_omitted(monkeypatch):
     assert kwargs["research_max_iterations_balanced"] == 7
     assert kwargs["research_max_iterations_quality"] == 15
 
-
 def test_search_agent_defaults_do_not_override_explicit_request_values(monkeypatch):
     monkeypatch.setattr(
         rag_ep,
@@ -171,7 +169,6 @@ def test_search_agent_defaults_do_not_override_explicit_request_values(monkeypat
     assert kwargs["research_max_iterations_balanced"] == 2
     assert kwargs["research_max_iterations_quality"] == 3
 
-
 def test_search_agent_env_overrides_config_defaults(monkeypatch):
     monkeypatch.setattr(
         rag_ep,
@@ -205,7 +202,6 @@ def test_search_agent_env_overrides_config_defaults(monkeypatch):
     assert kwargs["discussion_platforms"] == ["stackoverflow", "hackernews"]
     assert kwargs["enable_suggestions"] is True
 
-
 def test_build_kwargs_uses_authenticated_numeric_user_id_for_storage_paths():
     request = UnifiedRAGRequest(query="normalize authenticated user id")
     current_user = SimpleNamespace(id=1, id_int=1, username="single_user")
@@ -221,7 +217,6 @@ def test_build_kwargs_uses_authenticated_numeric_user_id_for_storage_paths():
     assert kwargs["user_id"] == "1"
     assert kwargs["feedback_user_id"] == "1"
 
-
 def test_resolve_implicit_feedback_user_id_maps_single_user_alias_without_user(monkeypatch):
     monkeypatch.setattr(
         rag_ep.DatabasePaths,
@@ -232,7 +227,6 @@ def test_resolve_implicit_feedback_user_id_maps_single_user_alias_without_user(m
     resolved = rag_ep._resolve_implicit_feedback_user_id("single_user", None)
 
     assert resolved == "7"
-
 
 def test_batch_round2_defaults_apply_when_fields_omitted(monkeypatch):
     for env_key in (
@@ -268,3 +262,51 @@ def test_batch_round2_defaults_apply_when_fields_omitted(monkeypatch):
     assert payload["enable_structured_response"] is True
     assert payload["enable_image_search"] is False
     assert payload["enable_video_search"] is True
+
+def test_rag_profile_applies_defaults_when_fields_omitted():
+    request = UnifiedRAGRequest(query="profile apply", rag_profile="fast")
+    kwargs = rag_ep._build_unified_pipeline_kwargs(
+        request=request,
+        db_paths=_EMPTY_DB_PATHS,
+        media_db=None,  # type: ignore[arg-type]
+        chacha_db=None,  # type: ignore[arg-type]
+        current_user=None,
+    )
+
+    assert kwargs["generation_prompt"] == "instruction_tuned"
+    assert kwargs["max_generation_tokens"] == 440
+
+
+def test_explicit_request_fields_override_profile_defaults():
+    request = UnifiedRAGRequest(
+        query="profile override",
+        rag_profile="accuracy",
+        max_generation_tokens=700,
+        generation_prompt="concise",
+    )
+    kwargs = rag_ep._build_unified_pipeline_kwargs(
+        request=request,
+        db_paths=_EMPTY_DB_PATHS,
+        media_db=None,  # type: ignore[arg-type]
+        chacha_db=None,  # type: ignore[arg-type]
+        current_user=None,
+    )
+
+    assert kwargs["max_generation_tokens"] == 700
+    assert kwargs["generation_prompt"] == "concise"
+    assert kwargs["reranking_strategy"] == "two_tier"
+
+
+def test_profile_defaults_override_search_agent_defaults_when_request_omits_field(monkeypatch):
+    monkeypatch.setenv("SEARCH_STRUCTURED_RESPONSE", "false")
+
+    request = UnifiedRAGRequest(query="precedence", rag_profile="balanced")
+    kwargs = rag_ep._build_unified_pipeline_kwargs(
+        request=request,
+        db_paths=_EMPTY_DB_PATHS,
+        media_db=None,  # type: ignore[arg-type]
+        chacha_db=None,  # type: ignore[arg-type]
+        current_user=None,
+    )
+
+    assert kwargs["enable_structured_response"] is True

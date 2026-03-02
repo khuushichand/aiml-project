@@ -28,6 +28,7 @@ The main RAG endpoint with complete feature access.
 
   // ========== DATA SOURCES ==========
   "sources": ["media_db", "notes", "characters", "chats"],  // Default: ["media_db"]
+  "rag_profile": "balanced",  // Optional: "fast" | "balanced" | "accuracy"
 
   // ========== SEARCH CONFIGURATION ==========
   "search_mode": "hybrid",  // "fts" | "vector" | "hybrid"
@@ -95,7 +96,7 @@ The main RAG endpoint with complete feature access.
   "strict_extractive": false,              // Assemble answer only from retrieved spans (no free-form generation)
   "generation_model": "gpt-4o",     // Model name
   "generation_prompt": "string (optional)",
-  "max_generation_tokens": 500,
+  "max_generation_tokens": 500,     // Range: 50-4000
   // Abstention & multi-turn synthesis (optional)
   "enable_abstention": false,
   "abstention_behavior": "continue",  // "continue" | "ask" | "decline"
@@ -170,6 +171,13 @@ The main RAG endpoint with complete feature access.
   "track_cost": false
 }
 ```
+
+Profile precedence is strict and deterministic:
+
+1. Explicit request fields
+2. `rag_profile` defaults
+3. Search-Agent env/config defaults
+4. Schema defaults
 
 #### Response Schema
 

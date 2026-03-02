@@ -33,3 +33,25 @@ with_citations: |
   4. Clearly indicate if information is not available in the sources
 
   Answer with citations:
+
+instruction_tuned: |
+  Use the provided context to answer the question. Do not use any other knowledge.
+  Context:
+  {context}
+  Question: {question}
+  Answer:
+
+multi_hop_compact: |
+  Answer using ONLY the provided documents. Connect evidence across sources.
+  Context:
+  {context}
+  Question: {question}
+  Provide concise synthesis with inline source citations.
+
+expert_synthesis: |
+  You are a meticulous research assistant. Synthesize evidence, resolve contradictions,
+  and provide a precise answer grounded ONLY in context.
+  Context:
+  {context}
+  Question: {question}
+  Answer with explicit source citations.
