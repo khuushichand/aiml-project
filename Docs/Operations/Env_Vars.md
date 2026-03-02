@@ -551,6 +551,19 @@ Quick start (local dev):
 ## Notes
 - Many subsystems also support file-based configuration under `Config_Files/` and module-specific YAML files (e.g., TTS provider config). Environment variables always take precedence when present.
 
+## TTS Placeholder Handling (2026-03-02)
+- Legacy placeholder literals in `[TTS-Settings]` are now treated as unset during config load: empty string, `FIXME`, `TODO`, `TBD`, `CHANGE_ME`, `PLACEHOLDER`, `NONE`, `NULL`, `N/A`, `NA`.
+- When placeholders are encountered, safe defaults are applied:
+  - `default_google_tts_model`: `en-US`
+  - `default_google_tts_voice`: `en-US-Neural2-A`
+  - `default_eleven_tts_model`: `eleven_monolingual_v1`
+  - `default_eleven_tts_voice`: `pNInz6obpgDQGcFmaJgB`
+  - `default_eleven_tts_language_code`: `en`
+  - `default_eleven_tts_voice_stability`: `0.5`
+  - `default_eleven_tts_voice_similiarity_boost`: `0.75`
+  - `default_eleven_tts_voice_style`: `0.0`
+  - `default_eleven_tts_voice_use_speaker_boost`: `true`
+
 ## Telemetry & Observability
 
 - OpenTelemetry service identity

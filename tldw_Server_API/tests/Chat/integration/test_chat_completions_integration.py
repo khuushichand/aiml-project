@@ -878,3 +878,40 @@ def test_chat_integration_bad_request_missing_messages_standalone(
     errors = response.json().get("detail")
     assert isinstance(errors, list)
     assert any("messages" in e.get("loc", []) and "field required" in e.get("msg", "").lower() for e in errors)
+
+
+@pytest.mark.integration
+@patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "sk-test"}, clear=False)
+@patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
+def test_chat_completions_response_shape_unchanged(
+    mock_chat_api_call_shim, client, valid_auth_token, mock_db_dependencies_for_integration
+):
+    mock_chat_api_call_shim.return_value = {
+        "id": "chatcmpl-test-shape",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "shape-ok"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    request_body = {
+        "api_provider": "openai",
+        "model": "gpt-4o-mini",
+        "messages": [msg.model_dump(exclude_none=True) for msg in INTEGRATION_MESSAGES_NO_SYS_SCHEMA],
+        "stream": False,
+    }
+    response = client.post_with_csrf(
+        "/api/v1/chat/completions",
+        json=request_body,
+        headers={"Authorization": valid_auth_token},
+    )
+    assert response.status_code == status.HTTP_200_OK, response.text
+    body = response.json()
+    assert "choices" in body
+    assert "model" in body

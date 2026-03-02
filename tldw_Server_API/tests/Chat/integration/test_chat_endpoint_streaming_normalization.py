@@ -212,6 +212,65 @@ def test_endpoint_streaming_normalizes_multiline_event_and_data_frames():
 
 
 @pytest.mark.unit
+def test_endpoint_streaming_emits_single_terminal_done_frame():
+    db, db_path = _make_test_db()
+    try:
+        _app: Any = app
+        _app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+
+        with _make_test_client(db) as client:
+            chunk = {"choices": [{"delta": {"content": "Hello"}}]}
+
+            def upstream_stream():
+                yield f"data: {json.dumps(chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+                yield "data: [DONE]\n\n"
+
+            with (
+                patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False),
+                patch(
+                    "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call",
+                    return_value=upstream_stream(),
+                ),
+            ):
+                body = {
+                    "api_provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": True,
+                }
+                r = _post_with_csrf(
+                    client,
+                    "/api/v1/chat/completions",
+                    json=body,
+                    headers=_auth_headers(client),
+                )
+                assert r.status_code == 200
+                assert "text/event-stream" in r.headers.get("content-type", "").lower()
+
+                non_empty = [ln.strip() for ln in r.text.splitlines() if ln.strip()]
+                done_lines = [ln for ln in non_empty if ln.lower() == "data: [done]"]
+                assert len(done_lines) == 1
+                assert non_empty[-1].lower() == "data: [done]"
+
+    finally:
+        try:
+            os.unlink(db_path)
+            if os.path.exists(db_path + "-wal"):
+                os.unlink(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"):
+                os.unlink(db_path + "-shm")
+        except Exception:
+            _ = None
+
+        _app = app  # type: ignore[assignment]
+        try:
+            getattr(_app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
+        except Exception:
+            _ = None
+
+
+@pytest.mark.unit
 def test_endpoint_streaming_emits_tool_results_event_before_stream_end():
     db, db_path = _make_test_db()
     try:

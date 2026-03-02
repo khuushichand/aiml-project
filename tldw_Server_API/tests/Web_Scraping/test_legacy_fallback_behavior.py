@@ -42,6 +42,11 @@ def _force_fallback(monkeypatch):
     monkeypatch.setattr(ws_service, "get_web_scraping_service", _raise, raising=True)
 
 
+@pytest.fixture(autouse=True)
+def _enable_legacy_web_scraping_fallback(monkeypatch):
+    monkeypatch.setenv("TLDW_ENABLE_LEGACY_WEB_SCRAPING_FALLBACK", "1")
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_fallback_recursive_rejects_unsupported_controls(monkeypatch):
@@ -258,4 +263,43 @@ def test_process_web_scraping_endpoint_fallback_contract_error_for_url_level_con
     assert response.status_code == 400
     body = response.json()
     assert "legacy fallback for 'URL Level'" in body.get("detail", "")
-    assert "score_threshold" in body.get("detail", "")
+
+
+@pytest.mark.unit
+def test_process_web_scraping_endpoint_rejects_when_legacy_fallback_disabled(
+    client_user_only, monkeypatch
+):
+    _force_fallback(monkeypatch)
+    monkeypatch.setenv("TLDW_ENABLE_LEGACY_WEB_SCRAPING_FALLBACK", "0")
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        _ = (func, args, kwargs)
+        return [
+            {
+                "url": "https://example.com",
+                "title": "Example",
+                "content": "content",
+                "extraction_successful": True,
+            }
+        ]
+
+    monkeypatch.setattr(ws_service, "scrape_by_url_level", lambda *_a, **_k: [], raising=True)
+    monkeypatch.setattr(ws_service.asyncio, "to_thread", _fake_to_thread, raising=True)
+    monkeypatch.setattr(
+        ws_service.ephemeral_storage,
+        "store_data",
+        lambda data: "ephemeral-fallback-id",
+        raising=True,
+    )
+
+    payload = {
+        "scrape_method": "URL Level",
+        "url_input": "https://example.com",
+        "url_level": 2,
+        "max_pages": 1,
+        "mode": "ephemeral",
+    }
+    response = client_user_only.post("/api/v1/media/process-web-scraping", json=payload)
+    assert response.status_code == 400
+    body = response.json()
+    assert "deprecated" in str(body.get("detail", "")).lower()

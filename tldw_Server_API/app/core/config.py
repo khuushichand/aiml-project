@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.testing import (
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamaCppConfig
+    from tldw_Server_API.app.core.config_sections import ConfigSections
 
 _CONFIG_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -313,13 +314,13 @@ MAGIC_FILE_PATH: Optional[str] = os.getenv("MAGIC_FILE_PATH", None) # e.g., "/ap
 global_default_chunk_language = "en"
 
 
-# FIXME - TTS Config
+# TTS-related legacy defaults (placeholder-free; real secrets come from env/config files)
 APP_CONFIG = {
-    "OPENAI_API_KEY": "sk-...",
+    "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", ""),
     "KOKORO_ONNX_MODEL_PATH_DEFAULT": "models/kokoro/onnx/model.onnx",
     "KOKORO_ONNX_VOICES_JSON_DEFAULT": "models/kokoro/voices",
     "KOKORO_DEVICE_DEFAULT": "cpu", # or "cuda"
-    "ELEVENLABS_API_KEY": "el-...",
+    "ELEVENLABS_API_KEY": os.getenv("ELEVENLABS_API_KEY", ""),
     "local_kokoro_default_onnx": { # Specific overrides for this backend_id
         "KOKORO_DEVICE": "cuda:0"
     },
@@ -2652,6 +2653,22 @@ def should_allow_cors_credentials() -> bool:
     return value
 
 
+@lru_cache(maxsize=1)
+def is_production_environment() -> bool:
+    """Return True when runtime environment should use production safety guards."""
+    if is_truthy(os.getenv("tldw_production")):
+        return True
+
+    for env_key in ("ENV", "APP_ENV", "TLDW_ENV", "ENVIRONMENT"):
+        raw_value = os.getenv(env_key)
+        if raw_value is None:
+            continue
+        normalized = str(raw_value).strip().lower()
+        if normalized in {"prod", "production"}:
+            return True
+    return False
+
+
 def _resolve_disable_cors_value_and_source() -> tuple[bool, str]:
     env_value = os.getenv("DISABLE_CORS")
     if env_value is not None:
@@ -3764,10 +3781,28 @@ def load_and_log_configs():
             diarization_config['max_memory_mb'] = _get_int('Diarization', 'max_memory_mb', diarization_config.get('max_memory_mb', 2048))
 
         # TTS Settings
-        # FIXME
-        local_tts_device = config_parser_object.get('TTS-Settings', 'local_tts_device', fallback='cpu')
-        default_tts_provider = config_parser_object.get('TTS-Settings', 'default_tts_provider', fallback='openai')
-        tts_voice = config_parser_object.get('TTS-Settings', 'default_tts_voice', fallback='shimmer')
+        _tts_placeholder_literals = {
+            "",
+            "FIXME",
+            "TODO",
+            "TBD",
+            "CHANGE_ME",
+            "CHANGE-ME",
+            "PLACEHOLDER",
+            "NONE",
+            "NULL",
+            "N/A",
+            "NA",
+        }
+
+        def _get_tts_setting(option: str, fallback: str) -> str:
+            raw = config_parser_object.get('TTS-Settings', option, fallback=fallback)
+            value = str(raw).strip()
+            return fallback if value.upper() in _tts_placeholder_literals else value
+
+        local_tts_device = _get_tts_setting('local_tts_device', 'cpu')
+        default_tts_provider = _get_tts_setting('default_tts_provider', 'openai')
+        tts_voice = _get_tts_setting('default_tts_voice', 'shimmer')
         tts_history_enabled = _env_or_cfg_bool("TTS_HISTORY_ENABLED", "TTS-Settings", "tts_history_enabled", True)
         tts_history_store_text = _env_or_cfg_bool("TTS_HISTORY_STORE_TEXT", "TTS-Settings", "tts_history_store_text", True)
         tts_history_store_failed = _env_or_cfg_bool("TTS_HISTORY_STORE_FAILED", "TTS-Settings", "tts_history_store_failed", True)
@@ -3781,26 +3816,24 @@ def load_and_log_configs():
             24,
         )
         # Open AI TTS
-        default_openai_tts_model = config_parser_object.get('TTS-Settings', 'default_openai_tts_model', fallback='tts-1-hd')
-        default_openai_tts_voice = config_parser_object.get('TTS-Settings', 'default_openai_tts_voice', fallback='shimmer')
-        default_openai_tts_speed = config_parser_object.get('TTS-Settings', 'default_openai_tts_speed', fallback='1')
-        default_openai_tts_output_format = config_parser_object.get('TTS-Settings', 'default_openai_tts_output_format', fallback='mp3')
+        default_openai_tts_model = _get_tts_setting('default_openai_tts_model', 'tts-1-hd')
+        default_openai_tts_voice = _get_tts_setting('default_openai_tts_voice', 'shimmer')
+        default_openai_tts_speed = _get_tts_setting('default_openai_tts_speed', '1')
+        default_openai_tts_output_format = _get_tts_setting('default_openai_tts_output_format', 'mp3')
         config_parser_object.get('TTS-Settings', 'default_openai_tts_streaming', fallback='False')
         # Google TTS
-        # FIXME - FIX THESE DEFAULTS
-        default_google_tts_model = config_parser_object.get('TTS-Settings', 'default_google_tts_model', fallback='en')
-        default_google_tts_voice = config_parser_object.get('TTS-Settings', 'default_google_tts_voice', fallback='en')
-        default_google_tts_speed = config_parser_object.get('TTS-Settings', 'default_google_tts_speed', fallback='1')
+        default_google_tts_model = _get_tts_setting('default_google_tts_model', 'en-US')
+        default_google_tts_voice = _get_tts_setting('default_google_tts_voice', 'en-US-Neural2-A')
+        default_google_tts_speed = _get_tts_setting('default_google_tts_speed', '1')
         # ElevenLabs TTS
-        default_eleven_tts_model = config_parser_object.get('TTS-Settings', 'default_eleven_tts_model', fallback='FIXME')
-        default_eleven_tts_voice = config_parser_object.get('TTS-Settings', 'default_eleven_tts_voice', fallback='FIXME')
-        default_eleven_tts_language_code = config_parser_object.get('TTS-Settings', 'default_eleven_tts_language_code', fallback='FIXME')
-        default_eleven_tts_voice_stability = config_parser_object.get('TTS-Settings', 'default_eleven_tts_voice_stability', fallback='FIXME')
-        default_eleven_tts_voice_similiarity_boost = config_parser_object.get('TTS-Settings', 'default_eleven_tts_voice_similiarity_boost', fallback='FIXME')
-        default_eleven_tts_voice_style = config_parser_object.get('TTS-Settings', 'default_eleven_tts_voice_style', fallback='FIXME')
-        default_eleven_tts_voice_use_speaker_boost = config_parser_object.get('TTS-Settings', 'default_eleven_tts_voice_use_speaker_boost', fallback='FIXME')
-        default_eleven_tts_output_format = config_parser_object.get('TTS-Settings', 'default_eleven_tts_output_format',
-                                                      fallback='mp3_44100_192')
+        default_eleven_tts_model = _get_tts_setting('default_eleven_tts_model', 'eleven_monolingual_v1')
+        default_eleven_tts_voice = _get_tts_setting('default_eleven_tts_voice', 'pNInz6obpgDQGcFmaJgB')
+        default_eleven_tts_language_code = _get_tts_setting('default_eleven_tts_language_code', 'en')
+        default_eleven_tts_voice_stability = _get_tts_setting('default_eleven_tts_voice_stability', '0.5')
+        default_eleven_tts_voice_similiarity_boost = _get_tts_setting('default_eleven_tts_voice_similiarity_boost', '0.75')
+        default_eleven_tts_voice_style = _get_tts_setting('default_eleven_tts_voice_style', '0.0')
+        default_eleven_tts_voice_use_speaker_boost = _get_tts_setting('default_eleven_tts_voice_use_speaker_boost', 'true')
+        default_eleven_tts_output_format = _get_tts_setting('default_eleven_tts_output_format', 'mp3_44100_128')
         # AllTalk TTS
         alltalk_api_ip = config_parser_object.get('TTS-Settings', 'alltalk_api_ip', fallback='http://127.0.0.1:7851/v1/audio/speech')
         default_alltalk_tts_model = config_parser_object.get('TTS-Settings', 'default_alltalk_tts_model', fallback='alltalk_model')
@@ -4834,6 +4867,40 @@ def _config_loader():
 settings = LazySettings(_settings_loader)
 config = settings
 loaded_config_data = LazyConfigData(_config_loader)
+_LEGACY_SENTINEL = object()
+
+
+def load_all_sections_for_test() -> "ConfigSections":
+    from tldw_Server_API.app.core.config_sections import load_config_sections
+
+    return load_config_sections(load_comprehensive_config())
+
+
+def legacy_get(key: str, default: Any = None) -> Any:
+    """Compatibility accessor for legacy call sites during modular config migration."""
+    if not isinstance(key, str) or not key.strip():
+        return default
+
+    for candidate in (key, key.upper(), key.lower()):
+        try:
+            value = settings.get(candidate, _LEGACY_SENTINEL)
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
+            value = _LEGACY_SENTINEL
+        if value is not _LEGACY_SENTINEL:
+            return value
+
+    if "." in key:
+        section, _, field = key.partition(".")
+        section_data = loaded_config_data.get(section, {})
+        if isinstance(section_data, MutableMapping):
+            for candidate in (field, field.lower(), field.upper()):
+                if candidate in section_data:
+                    return section_data[candidate]
+        value = get_config_value(section, field, default=_LEGACY_SENTINEL)
+        if value is not _LEGACY_SENTINEL:
+            return value
+
+    return default
 
 def get_stt_config() -> dict[str, Any]:
     """
@@ -4874,6 +4941,7 @@ def refresh_config_cache() -> None:
     _route_toggle_policy.cache_clear()
     should_disable_cors.cache_clear()
     should_allow_cors_credentials.cache_clear()
+    is_production_environment.cache_clear()
 
 
 def clear_config_cache() -> None:

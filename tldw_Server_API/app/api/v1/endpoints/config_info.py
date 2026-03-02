@@ -106,11 +106,10 @@ def load_safe_config() -> dict:
 
     # Feature flags / capabilities (safe to expose)
     try:
-        _settings = config_mod.settings
         caps = {
-            "personalization": bool(_settings.get("PERSONALIZATION_ENABLED", True))
+            "personalization": bool(config_mod.legacy_get("PERSONALIZATION_ENABLED", True))
             and bool(config_mod.route_enabled("personalization", default_stable=False)),
-            "persona": bool(_settings.get("PERSONA_ENABLED", True))
+            "persona": bool(config_mod.legacy_get("PERSONA_ENABLED", True))
             and bool(config_mod.route_enabled("persona", default_stable=True)),
         }
         # expose both for backward-compat and forward-looking UI

@@ -12375,6 +12375,73 @@ class MediaDatabase:
                 raise
             return
 
+    def sync_refresh_fts_for_entity(
+        self,
+        conn,
+        *,
+        entity: str,
+        entity_uuid: str,
+        operation: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Refresh FTS state for sync-applied Media/Keywords mutations inside a transaction."""
+        payload = payload or {}
+
+        if entity == "Media":
+            row = self._fetchone_with_connection(
+                conn,
+                "SELECT id, title, content, deleted FROM Media WHERE uuid = ?",
+                (entity_uuid,),
+            )
+            if not row:
+                logging.warning(
+                    "sync_refresh_fts_for_entity: Media row not found for uuid={} operation={}",
+                    entity_uuid,
+                    operation,
+                )
+                return
+
+            media_id = int(row["id"])
+            if operation == "delete" or bool(row.get("deleted", 0)):
+                self._delete_fts_media(conn, media_id)
+                return
+
+            if operation in {"create", "update"}:
+                if operation == "update" and not any(k in payload for k in ("title", "content", "deleted")):
+                    return
+                self._update_fts_media(
+                    conn,
+                    media_id,
+                    str(row.get("title") or ""),
+                    row.get("content"),
+                )
+            return
+
+        if entity == "Keywords":
+            row = self._fetchone_with_connection(
+                conn,
+                "SELECT id, keyword, deleted FROM Keywords WHERE uuid = ?",
+                (entity_uuid,),
+            )
+            if not row:
+                logging.warning(
+                    "sync_refresh_fts_for_entity: Keyword row not found for uuid={} operation={}",
+                    entity_uuid,
+                    operation,
+                )
+                return
+
+            keyword_id = int(row["id"])
+            if operation == "delete" or bool(row.get("deleted", 0)):
+                self._delete_fts_keyword(conn, keyword_id)
+                return
+
+            if operation in {"create", "update"}:
+                if operation == "update" and not any(k in payload for k in ("keyword", "deleted")):
+                    return
+                self._update_fts_keyword(conn, keyword_id, str(row.get("keyword") or ""))
+            return
+
         # In Media_DB_v2.py (within the Database class)
 
         # Add 'media_ids_filter' to the method signature
