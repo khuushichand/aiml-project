@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import APIRouter, FastAPI
 
 
 @pytest.mark.unit
@@ -31,3 +32,25 @@ def test_openapi_contains_core_tags(client_user_only) -> None:
     expected_tags = {"chat", "audio", "media", "rag-unified"}
     missing_tags = sorted(expected_tags - tags)
     assert not missing_tags, f"Missing expected tags: {missing_tags}"
+
+
+@pytest.mark.unit
+def test_router_registry_idempotent_registration() -> None:
+    from tldw_Server_API.app.api.v1.router_registry import include_router_idempotent
+
+    app = FastAPI()
+    test_router = APIRouter()
+
+    @test_router.get("/health")
+    def _health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    include_router_idempotent(app, test_router, prefix="/api/v1", tags=["health"])
+    include_router_idempotent(app, test_router, prefix="/api/v1", tags=["health"])
+
+    route_signatures = {
+        (route.path, tuple(sorted(getattr(route, "methods", set()))))
+        for route in app.routes
+        if getattr(route, "path", "").startswith("/api/v1")
+    }
+    assert route_signatures == {("/api/v1/health", ("GET",))}
