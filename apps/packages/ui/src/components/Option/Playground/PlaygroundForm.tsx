@@ -166,6 +166,7 @@ import {
   usePersistenceMode,
   useSlashCommands,
   useMessageCollapse,
+  useDeferredComposerInput,
   useMcpToolsControl,
   type CollapsedRange,
   type ModelSortMode
@@ -227,6 +228,7 @@ import {
   computeResponseDiffPreview,
   type CompareResponseDiff
 } from "./compare-response-diff"
+import { createComposerPerfTracker } from "@/utils/perf/composer-perf"
 
 type Props = {
   droppedFiles: File[]
@@ -1447,6 +1449,41 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       image: ""
     }
   })
+  const { deferredInput: deferredComposerInput } = useDeferredComposerInput(
+    form.values.message || ""
+  )
+  const composerPerfTrackerRef = React.useRef(
+    createComposerPerfTracker({
+      enabled: Boolean((globalThis as any).__TLDW_CHAT_PERF__)
+    })
+  )
+  const markComposerPerf = React.useCallback((label: string) => {
+    return composerPerfTrackerRef.current.start(label)
+  }, [])
+  const measureComposerPerf = React.useCallback(
+    <T,>(label: string, fn: () => T): T => {
+      const end = markComposerPerf(label)
+      try {
+        return fn()
+      } finally {
+        end()
+      }
+    },
+    [markComposerPerf]
+  )
+
+  React.useEffect(() => {
+    const tracker = composerPerfTrackerRef.current
+    if (!tracker.isEnabled() || typeof window === "undefined") {
+      return
+    }
+    ;(window as any).__TLDW_CHAT_PERF_SNAPSHOT__ = () => tracker.snapshot()
+    ;(window as any).__TLDW_CHAT_PERF_CLEAR__ = () => tracker.clear()
+    return () => {
+      delete (window as any).__TLDW_CHAT_PERF_SNAPSHOT__
+      delete (window as any).__TLDW_CHAT_PERF_CLEAR__
+    }
+  }, [])
 
   const setFieldValueRef = React.useRef(form.setFieldValue)
   React.useEffect(() => {
@@ -1684,20 +1721,23 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   )
   const modelRecommendations = React.useMemo(
     () =>
-      buildModelRecommendations({
-        draftText: String(form.values.message || ""),
-        selectedModel,
-        modelCapabilities,
-        webSearch,
-        jsonMode: Boolean(currentChatModelSettings.jsonMode),
-        hasImageAttachment: Boolean(form.values.image),
-        tokenBudgetRiskLevel: tokenBudgetRisk.level,
-        sessionInsights
-      }),
+      measureComposerPerf("derive:model-recommendations", () =>
+        buildModelRecommendations({
+          draftText: deferredComposerInput,
+          selectedModel,
+          modelCapabilities,
+          webSearch,
+          jsonMode: Boolean(currentChatModelSettings.jsonMode),
+          hasImageAttachment: Boolean(form.values.image),
+          tokenBudgetRiskLevel: tokenBudgetRisk.level,
+          sessionInsights
+        })
+      ),
     [
       currentChatModelSettings.jsonMode,
+      deferredComposerInput,
       form.values.image,
-      form.values.message,
+      measureComposerPerf,
       modelCapabilities,
       selectedModel,
       sessionInsights,
@@ -2713,16 +2753,28 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   const handleTextareaChange = React.useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      if (isMessageCollapsed) return
-      form.getInputProps("message").onChange(e)
-      if (tabMentionsEnabled && textareaRef.current) {
-        handleTextChange(
-          e.target.value,
-          textareaRef.current.selectionStart || 0
-        )
+      const endPerf = markComposerPerf("input:textarea-change")
+      try {
+        if (isMessageCollapsed) return
+        form.getInputProps("message").onChange(e)
+        if (tabMentionsEnabled && textareaRef.current) {
+          handleTextChange(
+            e.target.value,
+            textareaRef.current.selectionStart || 0
+          )
+        }
+      } finally {
+        endPerf()
       }
     },
-    [isMessageCollapsed, form, tabMentionsEnabled, textareaRef, handleTextChange]
+    [
+      isMessageCollapsed,
+      form,
+      tabMentionsEnabled,
+      textareaRef,
+      handleTextChange,
+      markComposerPerf
+    ]
   )
 
   const handleTextareaSelect = React.useCallback(() => {
