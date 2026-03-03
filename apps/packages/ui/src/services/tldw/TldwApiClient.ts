@@ -2526,11 +2526,23 @@ export class TldwApiClient {
     params?: {
       page?: number
       results_per_page?: number
+      limit?: number
+      offset?: number
       include_keywords?: boolean
     },
     options?: { signal?: AbortSignal }
   ): Promise<any> {
-    const query = this.buildQuery(params as Record<string, any>)
+    const limit = params?.limit ?? params?.results_per_page
+    const offset = params?.offset ?? (
+      params?.page != null && limit != null
+        ? Math.max(0, (params.page - 1) * limit)
+        : undefined
+    )
+    const query = this.buildQuery({
+      limit,
+      offset,
+      include_keywords: params?.include_keywords
+    } as Record<string, any>)
     return await bgRequest<any>({
       path: `/api/v1/notes/${query}`,
       method: "GET",
@@ -2539,8 +2551,17 @@ export class TldwApiClient {
   }
 
   async searchNotes(query: string): Promise<any> {
-    // OpenAPI uses trailing slash for this path
-    return await bgRequest<any>({ path: '/api/v1/notes/search/', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query } })
+    const normalized = query.trim()
+    if (!normalized) {
+      return await this.listNotes()
+    }
+    const queryString = this.buildQuery({
+      query: normalized
+    })
+    return await bgRequest<any>({
+      path: `/api/v1/notes/search/${queryString}`,
+      method: "GET"
+    })
   }
   // Prompts Methods
   async getPrompts(): Promise<any> {
