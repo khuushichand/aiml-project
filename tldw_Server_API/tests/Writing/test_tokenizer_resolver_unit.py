@@ -1,4 +1,5 @@
 import configparser
+from pathlib import Path
 
 import pytest
 
@@ -551,3 +552,31 @@ def test_coerce_int_rejects_non_integral_float():
 
     assert resolver._coerce_int(12.5) is None
     assert resolver._coerce_int(12.0) == 12
+
+
+def test_mlx_candidate_paths_blocks_parent_traversal(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    monkeypatch.setenv("MLX_MODEL_DIR", "/tmp/mlx-models")
+
+    assert resolver._mlx_candidate_paths("../outside") == []
+
+
+def test_mlx_candidate_paths_resolves_relative_model_within_root(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    model_root = Path("/tmp/mlx-models")
+    monkeypatch.setenv("MLX_MODEL_DIR", str(model_root))
+
+    candidates = resolver._mlx_candidate_paths("family/model")
+
+    expected = [(model_root.resolve(strict=False) / "family/model").resolve(strict=False)]
+    assert candidates == expected
+
+
+def test_mlx_candidate_paths_rejects_absolute_path_outside_root(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    monkeypatch.setenv("MLX_MODEL_DIR", "/tmp/mlx-models")
+
+    assert resolver._mlx_candidate_paths("/etc/passwd") == []

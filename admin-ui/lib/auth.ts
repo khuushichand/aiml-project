@@ -2,16 +2,12 @@
 
 import { buildApiUrl } from './api-config';
 
-// In-memory storage for single-user API key with sessionStorage fallback for same-session refreshes.
+// In-memory storage for single-user API key (not persisted to web storage).
 let inMemoryApiKey: string | null = null;
-const API_KEY_STORAGE_KEY = 'x_api_key';
 const AUTH_CHANGE_EVENT = 'tldw-admin-auth-change';
 
 const clearApiKeyStorage = (): void => {
   inMemoryApiKey = null;
-  if (typeof sessionStorage !== 'undefined') {
-    sessionStorage.removeItem(API_KEY_STORAGE_KEY);
-  }
 };
 
 const clearJwtStorage = (): void => {
@@ -65,15 +61,6 @@ export function isSingleUserMode(): boolean {
 export function getApiKey(): string | null {
   if (typeof window === 'undefined') return null;
   if (inMemoryApiKey) return inMemoryApiKey;
-  try {
-    const stored = sessionStorage.getItem(API_KEY_STORAGE_KEY);
-    if (stored) {
-      inMemoryApiKey = stored;
-      return stored;
-    }
-  } catch (error) {
-    console.warn('Failed to read API key from sessionStorage:', error);
-  }
   return null;
 }
 
@@ -83,11 +70,6 @@ export function getApiKey(): string | null {
 export function setApiKey(key: string): void {
   if (typeof window !== 'undefined') {
     inMemoryApiKey = key;
-    try {
-      sessionStorage.setItem(API_KEY_STORAGE_KEY, key);
-    } catch (error) {
-      console.warn('Failed to persist API key to sessionStorage:', error);
-    }
     emitAuthChange();
   }
 }

@@ -235,7 +235,11 @@ const toAttachmentMarkdown = (
   url: string,
   contentType?: string | null
 ) => {
-  const escapedName = fileName.replace(/\[/g, '\\[').replace(/\]/g, '\\]')
+  const escapedName = String(fileName || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
+    .replace(/\r?\n/g, ' ')
   const isImage =
     (contentType || '').startsWith('image/') ||
     /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(fileName)

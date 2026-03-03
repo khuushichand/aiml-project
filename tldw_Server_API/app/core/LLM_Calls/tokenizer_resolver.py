@@ -1446,28 +1446,46 @@ def _get_active_mlx_tokenizer(model: str) -> tuple[Any, str] | None:
         return None
 
 
+def _trusted_mlx_model_root() -> Path:
+    model_root = os.getenv("MLX_MODEL_DIR", "").strip()
+    root = Path(model_root).expanduser() if model_root else Path.cwd()
+    return root.resolve(strict=False)
+
+
+def _normalize_mlx_model_path(model: str) -> Path | None:
+    raw = str(model or "").strip()
+    if not raw:
+        return None
+
+    raw_path = Path(raw).expanduser()
+    if raw_path.is_absolute():
+        return raw_path.resolve(strict=False)
+
+    normalized = Path(os.path.normpath(raw))
+    if str(normalized) in ("", "."):
+        return None
+    if any(part in ("", ".", "..") for part in normalized.parts):
+        return None
+    return normalized
+
+
 def _mlx_candidate_paths(model: str) -> list[Path]:
-    normalized = str(model or "").strip()
-    if not normalized:
+    trusted_root = _trusted_mlx_model_root()
+    normalized = _normalize_mlx_model_path(model)
+    if normalized is None:
         return []
 
-    candidates: list[Path] = []
-    raw_path = Path(normalized).expanduser()
-    candidates.append(raw_path)
+    if normalized.is_absolute():
+        candidate = normalized
+    else:
+        candidate = (trusted_root / normalized).resolve(strict=False)
 
-    model_root = os.getenv("MLX_MODEL_DIR", "").strip()
-    if model_root and not raw_path.is_absolute():
-        candidates.append(Path(model_root).expanduser() / normalized)
+    try:
+        candidate.relative_to(trusted_root)
+    except ValueError:
+        return []
 
-    unique: list[Path] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        key = str(candidate)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(candidate)
-    return unique
+    return [candidate]
 
 
 @lru_cache(maxsize=32)
@@ -1487,7 +1505,10 @@ def _load_mlx_artifact_tokenizer(model: str) -> Any:
             resolved = candidate.expanduser()
             if not resolved.exists() or not resolved.is_dir():
                 continue
-            return AutoTokenizer.from_pretrained(str(resolved), local_files_only=True)
+            return AutoTokenizer.from_pretrained(
+                str(resolved),
+                local_files_only=True,
+            )  # nosec B615
         except Exception as exc:
             last_error = exc
             continue

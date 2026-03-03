@@ -9,23 +9,23 @@ describe('auth API key storage', () => {
     vi.resetModules();
   });
 
-  it('persists API key in sessionStorage when setApiKey is called', async () => {
+  it('stores API key only in memory when setApiKey is called', async () => {
     const auth = await import('./auth');
     auth.setApiKey('test-api-key');
 
-    expect(sessionStorage.getItem('x_api_key')).toBe('test-api-key');
+    expect(sessionStorage.getItem('x_api_key')).toBeNull();
     expect(auth.getApiKey()).toBe('test-api-key');
   });
 
-  it('loads API key from sessionStorage after module reload', async () => {
+  it('does not persist API key after module reload', async () => {
     const firstLoad = await import('./auth');
-    firstLoad.setApiKey('persisted-api-key');
+    firstLoad.setApiKey('ephemeral-api-key');
 
     vi.resetModules();
     const secondLoad = await import('./auth');
 
-    expect(secondLoad.getApiKey()).toBe('persisted-api-key');
-    expect(secondLoad.hasStoredAuth()).toBe(true);
+    expect(secondLoad.getApiKey()).toBeNull();
+    expect(secondLoad.hasStoredAuth()).toBe(false);
   });
 
   it('clears existing API key when password login succeeds', async () => {
@@ -89,6 +89,7 @@ describe('auth API key storage', () => {
     expect(ok).toBe(true);
     expect(auth.getJWTToken()).toBeNull();
     expect(localStorage.getItem('access_token')).toBeNull();
-    expect(sessionStorage.getItem('x_api_key')).toBe('fresh-api-key');
+    expect(auth.getApiKey()).toBe('fresh-api-key');
+    expect(sessionStorage.getItem('x_api_key')).toBeNull();
   });
 });
