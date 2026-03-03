@@ -1811,6 +1811,47 @@ def _normalize_filter_values(values: Optional[list[str]]) -> Optional[set[str]]:
     return normalized or None
 
 
+_IMAGE_MODEL_HINTS = (
+    "image",
+    "dall-e",
+    "dalle",
+    "flux",
+    "stable-diffusion",
+    "sdxl",
+    "midjourney",
+    "recraft",
+    "pixart",
+    "playground",
+    "kolors",
+    "imagen",
+)
+_VIDEO_MODEL_HINTS = (
+    "video",
+    "veo",
+    "sora",
+    "kling",
+    "hunyuan-video",
+)
+_AUDIO_MODEL_HINTS = (
+    "whisper",
+    "transcribe",
+    "asr",
+    "tts",
+    "speech",
+    "audio",
+    "voice",
+)
+_NON_CHAT_MODEL_HINTS = (
+    "rerank",
+    "moderation",
+    "safety",
+)
+
+
+def _contains_any_hint(value: str, hints: tuple[str, ...]) -> bool:
+    return any(hint in value for hint in hints)
+
+
 def _infer_model_type(model_info: dict[str, Any]) -> str:
     declared = model_info.get("type")
     if declared:
@@ -1821,6 +1862,20 @@ def _infer_model_type(model_info: dict[str, Any]) -> str:
     caps = model_info.get("capabilities")
     if isinstance(caps, dict) and caps.get("embedding"):
         return "embedding"
+    if isinstance(caps, dict) and (
+        caps.get("image_generation") or caps.get("image_output")
+    ):
+        return "image"
+    if _contains_any_hint(name, _IMAGE_MODEL_HINTS):
+        return "image"
+    if isinstance(caps, dict) and caps.get("video_generation"):
+        return "video"
+    if _contains_any_hint(name, _VIDEO_MODEL_HINTS):
+        return "video"
+    if _contains_any_hint(name, _AUDIO_MODEL_HINTS):
+        return "audio"
+    if _contains_any_hint(name, _NON_CHAT_MODEL_HINTS):
+        return "other"
     return "chat"
 
 

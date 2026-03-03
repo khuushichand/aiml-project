@@ -39,6 +39,7 @@ import {
 } from "@/routes/route-paths"
 import { useSetting } from "@/hooks/useSetting"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
+import { useStoreMessageOption } from "@/store/option"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
@@ -88,12 +89,23 @@ const OptionLayoutEffects = () => {
   const isLayoutEffectsOwner = useLayoutEffectsOwner()
   useStorageMigrations(isLayoutEffectsOwner)
   const location = useLocation()
+  const { historyId, serverChatId } = useStoreMessageOption((state) => ({
+    historyId: state.historyId,
+    serverChatId: state.serverChatId
+  }))
 
   React.useEffect(() => {
     if (!isLayoutEffectsOwner) return
     const path = `${location.pathname}${location.search}${location.hash}`
-    setSettingsReturnTo(path)
-  }, [isLayoutEffectsOwner, location.pathname, location.search, location.hash])
+    setSettingsReturnTo(path, { historyId, serverChatId })
+  }, [
+    historyId,
+    isLayoutEffectsOwner,
+    location.hash,
+    location.pathname,
+    location.search,
+    serverChatId
+  ])
 
   return null
 }

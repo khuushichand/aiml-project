@@ -8,6 +8,7 @@ import { webUIResumeLastChat } from "@/services/app"
 import {
   formatToChatHistory,
   formatToMessage,
+  getHistoryByServerChatId,
   getPromptById,
   getRecentChatFromWebUI
 } from "@/db/dexie/helpers"
@@ -38,6 +39,10 @@ import {
   collectThreadSearchMatches,
   getWrappedMatchIndex
 } from "./playground-thread-search"
+import {
+  SETTINGS_HISTORY_ID_PARAM,
+  SETTINGS_SERVER_CHAT_ID_PARAM
+} from "@/utils/settings-return"
 export const Playground = () => {
   const drop = React.useRef<HTMLDivElement>(null)
   const artifactsTriggerRef = React.useRef<HTMLButtonElement>(null)
@@ -349,6 +354,83 @@ export const Playground = () => {
       )
     }
   )
+
+  const settingsReturnContext = React.useMemo(() => {
+    if (typeof window === "undefined") {
+      return { historyId: null as string | null, serverChatId: null as string | null }
+    }
+    const params = new URLSearchParams(window.location.search)
+    const historyId = params.get(SETTINGS_HISTORY_ID_PARAM)?.trim() || null
+    const serverChatId =
+      params.get(SETTINGS_SERVER_CHAT_ID_PARAM)?.trim() || null
+    return { historyId, serverChatId }
+  }, [])
+
+  const returnHistoryIdFromSettings = settingsReturnContext.historyId
+  const returnServerChatIdFromSettings = settingsReturnContext.serverChatId
+
+  React.useEffect(() => {
+    if (!playgroundReady) return
+    if (!returnHistoryIdFromSettings && !returnServerChatIdFromSettings) return
+
+    let cancelled = false
+
+    const restoreFromSettingsReturnTarget = async () => {
+      if (
+        returnHistoryIdFromSettings &&
+        returnHistoryIdFromSettings !== historyId
+      ) {
+        await loadLocalConversation(returnHistoryIdFromSettings)
+      } else if (
+        !returnHistoryIdFromSettings &&
+        returnServerChatIdFromSettings &&
+        returnServerChatIdFromSettings !== serverChatId
+      ) {
+        const existingHistory = await getHistoryByServerChatId(
+          returnServerChatIdFromSettings
+        )
+        const fallbackHistoryId =
+          existingHistory?.id && existingHistory.id.trim().length > 0
+            ? existingHistory.id
+            : null
+        if (fallbackHistoryId) {
+          await loadLocalConversation(fallbackHistoryId)
+        }
+      }
+
+      if (cancelled) return
+
+      if (
+        returnServerChatIdFromSettings &&
+        returnServerChatIdFromSettings !== serverChatId
+      ) {
+        setServerChatId(returnServerChatIdFromSettings)
+      }
+
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href)
+        url.searchParams.delete(SETTINGS_HISTORY_ID_PARAM)
+        url.searchParams.delete(SETTINGS_SERVER_CHAT_ID_PARAM)
+        const nextQuery = url.searchParams.toString()
+        const nextPath = `${url.pathname}${nextQuery ? `?${nextQuery}` : ""}${url.hash}`
+        window.history.replaceState(window.history.state, "", nextPath)
+      }
+    }
+
+    void restoreFromSettingsReturnTarget()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    historyId,
+    loadLocalConversation,
+    playgroundReady,
+    returnHistoryIdFromSettings,
+    returnServerChatIdFromSettings,
+    serverChatId,
+    setServerChatId
+  ])
 
   const pendingTimelineActionRef = React.useRef<TimelineActionDetail | null>(null)
   const threadSearchMatches = React.useMemo(

@@ -139,4 +139,52 @@ describe("TldwModelsService caching", () => {
     expect(mocks.getModels).toHaveBeenCalledTimes(1)
     expect(models[0]?.id).toBe("deepseek/deepseek-r1")
   })
+
+  it("keeps image-generation models out of chat models", async () => {
+    mocks.getModels.mockResolvedValue([
+      {
+        id: "openai/gpt-4o-mini",
+        name: "openai/gpt-4o-mini",
+        provider: "openrouter"
+      },
+      {
+        id: "black-forest-labs/flux.1-schnell",
+        name: "black-forest-labs/flux.1-schnell",
+        provider: "openrouter"
+      }
+    ])
+
+    const { TldwModelsService } = await importService()
+    const service = new TldwModelsService()
+
+    const chatModels = await service.getChatModels(true)
+    const chatIds = chatModels.map((m) => m.id)
+
+    expect(chatIds).toContain("openai/gpt-4o-mini")
+    expect(chatIds).not.toContain("black-forest-labs/flux.1-schnell")
+  })
+
+  it("includes image-generation models in image models", async () => {
+    mocks.getModels.mockResolvedValue([
+      {
+        id: "openai/gpt-4o-mini",
+        name: "openai/gpt-4o-mini",
+        provider: "openrouter"
+      },
+      {
+        id: "black-forest-labs/flux.1-schnell",
+        name: "black-forest-labs/flux.1-schnell",
+        provider: "openrouter"
+      }
+    ])
+
+    const { TldwModelsService } = await importService()
+    const service = new TldwModelsService()
+
+    const imageModels = await service.getImageModels(true)
+    const imageIds = imageModels.map((m) => m.id)
+
+    expect(imageIds).toContain("black-forest-labs/flux.1-schnell")
+    expect(imageIds).not.toContain("openai/gpt-4o-mini")
+  })
 })

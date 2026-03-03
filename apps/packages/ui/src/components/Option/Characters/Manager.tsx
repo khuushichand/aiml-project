@@ -3469,6 +3469,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       }),
     [importQueueItemsById, importablePreviewItems]
   )
+  const importPreviewHasSuccessfulCompletion =
+    importQueueSummary.complete && importQueueSummary.success > 0
 
   const importCharacterFile = React.useCallback(
     async (
@@ -8410,43 +8412,69 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         })}
         open={importPreviewOpen}
         onCancel={resetImportPreview}
-        footer={[
-          <Button
-            key="cancel"
-            disabled={importPreviewProcessing}
-            onClick={resetImportPreview}>
-            {t("common:cancel", { defaultValue: "Cancel" })}
-          </Button>,
-          retryableFailedPreviewItems.length > 0 ? (
-            <Button
-              key="retry-failed"
-              disabled={importPreviewProcessing}
-              onClick={() => {
-                void handleRetryFailedImportPreview()
-              }}>
-              {t("settings:manageCharacters.import.retryFailed", {
-                defaultValue: "Retry failed"
-              })}
-            </Button>
-          ) : null,
-          <Button
-            key="confirm"
-            type="primary"
-            loading={importPreviewProcessing || importing}
-            disabled={
-              importablePreviewItems.length === 0 ||
-              importPreviewLoading ||
-              importPreviewProcessing ||
-              importQueueSummary.complete
-            }
-            onClick={() => {
-              void handleConfirmImportPreview()
-            }}>
-            {t("settings:manageCharacters.import.confirmPreview", {
-              defaultValue: "Confirm import"
-            })}
-          </Button>
-        ]}
+        destroyOnHidden
+        footer={
+          importPreviewHasSuccessfulCompletion
+            ? [
+                retryableFailedPreviewItems.length > 0 ? (
+                  <Button
+                    key="retry-failed"
+                    disabled={importPreviewProcessing}
+                    onClick={() => {
+                      void handleRetryFailedImportPreview()
+                    }}>
+                    {t("settings:manageCharacters.import.retryFailed", {
+                      defaultValue: "Retry failed"
+                    })}
+                  </Button>
+                ) : null,
+                <Button
+                  key="ok"
+                  type="primary"
+                  onClick={resetImportPreview}>
+                  {t("settings:manageCharacters.import.dismissOk", {
+                    defaultValue: "OK"
+                  })}
+                </Button>
+              ].filter(Boolean)
+            : [
+                <Button
+                  key="cancel"
+                  disabled={importPreviewProcessing}
+                  onClick={resetImportPreview}>
+                  {t("common:cancel", { defaultValue: "Cancel" })}
+                </Button>,
+                retryableFailedPreviewItems.length > 0 ? (
+                  <Button
+                    key="retry-failed"
+                    disabled={importPreviewProcessing}
+                    onClick={() => {
+                      void handleRetryFailedImportPreview()
+                    }}>
+                    {t("settings:manageCharacters.import.retryFailed", {
+                      defaultValue: "Retry failed"
+                    })}
+                  </Button>
+                ) : null,
+                <Button
+                  key="confirm"
+                  type="primary"
+                  loading={importPreviewProcessing || importing}
+                  disabled={
+                    importablePreviewItems.length === 0 ||
+                    importPreviewLoading ||
+                    importPreviewProcessing ||
+                    importQueueSummary.complete
+                  }
+                  onClick={() => {
+                    void handleConfirmImportPreview()
+                  }}>
+                  {t("settings:manageCharacters.import.confirmPreview", {
+                    defaultValue: "Confirm import"
+                  })}
+                </Button>
+              ].filter(Boolean)
+        }
         rootClassName="characters-motion-modal">
         {importPreviewLoading ? (
           <Skeleton active paragraph={{ rows: 3 }} />

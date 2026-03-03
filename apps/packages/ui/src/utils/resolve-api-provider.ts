@@ -128,15 +128,29 @@ export const resolveApiProviderForModel = async ({
   const explicit = normalizeProvider(explicitProvider)
   if (explicit) return explicit
 
-  const normalizedModelId = normalizeModelId(modelId)
+  const rawModelId = String(modelId || "").trim()
+  const normalizedModelId = normalizeModelId(rawModelId)
+  const isTldwScopedModel = /^tldw:/i.test(rawModelId)
+
+  // For models selected from the server catalog (`tldw:`), trust the
+  // catalog provider first. This avoids misrouting OpenRouter namespaced
+  // IDs like "anthropic/..." to Anthropic directly.
+  if (isTldwScopedModel) {
+    const catalogProvider = await inferProviderFromServerModelCatalog(
+      normalizedModelId
+    )
+    if (catalogProvider) return catalogProvider
+  }
 
   const inlineProvider = inferInlineProvider(normalizedModelId)
   if (inlineProvider) return inlineProvider
 
-  const catalogProvider = await inferProviderFromServerModelCatalog(
-    normalizedModelId
-  )
-  if (catalogProvider) return catalogProvider
+  if (!isTldwScopedModel) {
+    const catalogProvider = await inferProviderFromServerModelCatalog(
+      normalizedModelId
+    )
+    if (catalogProvider) return catalogProvider
+  }
 
   const hint = normalizeProvider(providerHint)
   if (hint) return hint
