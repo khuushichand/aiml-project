@@ -76,7 +76,7 @@ const noop = () => {}
  * - Settings tab: All RAG settings organized in collapsible sections
  * - Context tab: Manage attached tabs, files, and pinned results
  */
-export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
+const KnowledgePanelBase: React.FC<KnowledgePanelProps> = ({
   onInsert,
   onAsk,
   isConnected = true,
@@ -503,3 +503,6 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     </div>
   )
 }
+
+export const KnowledgePanel = React.memo(KnowledgePanelBase)
+KnowledgePanel.displayName = "KnowledgePanel"

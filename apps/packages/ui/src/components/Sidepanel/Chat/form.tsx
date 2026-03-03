@@ -70,6 +70,7 @@ import { isFirefoxTarget } from "@/config/platform"
 import { useDraftPersistence } from "@/hooks/useDraftPersistence"
 import { useSlashCommands, type SlashCommandItem } from "@/hooks/useSlashCommands"
 import { useTabMentions, type TabInfo } from "~/hooks/useTabMentions"
+import { useDeferredComposerInput } from "@/hooks/playground"
 import { KnowledgePanel } from "@/components/Knowledge"
 import { QueuedMessagesBanner } from "@/components/Sidepanel/Chat/QueuedMessagesBanner"
 import { ConnectionStatusIndicator } from "@/components/Sidepanel/Chat/ConnectionStatusIndicator"
@@ -267,8 +268,16 @@ export const SidepanelForm = ({
       image: ""
     }
   })
+  const { deferredInput: deferredComposerInput } = useDeferredComposerInput(
+    form.values.message || ""
+  )
   const messageInputProps = form.getInputProps("message")
   const [knowledgeMentionActive, setKnowledgeMentionActive] = React.useState(false)
+  const [knowledgePanelOpen, setKnowledgePanelOpen] = React.useState(false)
+  const imageValueRef = React.useRef(form.values.image)
+  React.useEffect(() => {
+    imageValueRef.current = form.values.image
+  }, [form.values.image])
   const [contextFiles, setContextFiles] = React.useState<UploadedFile[]>([])
   const [mentionActiveIndex, setMentionActiveIndex] = React.useState(0)
   const {
@@ -1408,6 +1417,10 @@ export const SidepanelForm = ({
     setContextFiles([])
     setKnowledgeMentionActive(false)
   }
+  const sendCurrentFormMessageRef = React.useRef(sendCurrentFormMessage)
+  React.useEffect(() => {
+    sendCurrentFormMessageRef.current = sendCurrentFormMessage
+  }, [sendCurrentFormMessage])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (showMentionMenu) {
@@ -1548,6 +1561,39 @@ export const SidepanelForm = ({
   const handleWebSearchToggle = React.useCallback(() => {
     setWebSearch(!webSearch)
   }, [setWebSearch, webSearch])
+
+  const handleKnowledgeInsert = React.useCallback(
+    (text: string) => {
+      const current = textareaRef.current?.value || ""
+      const next = current ? `${current}\n\n${text}` : text
+      form.setFieldValue("message", next)
+      textareaRef.current?.focus()
+    },
+    [form.setFieldValue, textareaRef]
+  )
+
+  const handleKnowledgeAsk = React.useCallback(
+    async (text: string, options?: { ignorePinnedResults?: boolean }) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+      form.setFieldValue("message", text)
+      if (!isConnectionReady) {
+        addQueuedMessage({
+          message: trimmed,
+          image: imageValueRef.current
+        })
+        form.reset()
+        return
+      }
+      await sendCurrentFormMessageRef.current(trimmed, "", options)
+    },
+    [
+      addQueuedMessage,
+      form.reset,
+      form.setFieldValue,
+      isConnectionReady
+    ]
+  )
 
   const startBrowserDictation = React.useCallback(() => {
     resetTranscript()
@@ -2121,29 +2167,11 @@ export const SidepanelForm = ({
                     {/* Knowledge Search: search KB, insert snippets, ask directly */}
                     {isProMode && (
                       <KnowledgePanel
-                        onInsert={(text) => {
-                          const current = form.values.message || ""
-                          const next = current ? `${current}\n\n${text}` : text
-                          form.setFieldValue("message", next)
-                          // Focus textarea for quick edits
-                          textareaRef.current?.focus()
-                        }}
-                        onAsk={async (text, options) => {
-                          // Set message and submit immediately
-                          const trimmed = text.trim()
-                          if (!trimmed) return
-                          form.setFieldValue("message", text)
-                          if (!isConnectionReady) {
-                            addQueuedMessage({
-                              message: trimmed,
-                              image: form.values.image
-                            })
-                            form.reset()
-                            return
-                          }
-                          await sendCurrentFormMessage(trimmed, "", options)
-                        }}
-                        currentMessage={form.values.message}
+                        onInsert={handleKnowledgeInsert}
+                        onAsk={handleKnowledgeAsk}
+                        open={knowledgePanelOpen}
+                        onOpenChange={setKnowledgePanelOpen}
+                        currentMessage={knowledgePanelOpen ? deferredComposerInput : ""}
                         showAttachedContext
                         attachedTabs={selectedDocuments}
                         availableTabs={availableTabs}

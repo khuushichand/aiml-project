@@ -2857,6 +2857,33 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     await reloadTabs()
   }, [reloadTabs])
 
+  const handleKnowledgeInsert = React.useCallback(
+    (text: string) => {
+      const current = textareaRef.current?.value || ""
+      const next = current ? `${current}\n\n${text}` : text
+      setMessageValue(next, { collapseLarge: true })
+      textAreaFocus()
+    },
+    [setMessageValue, textAreaFocus, textareaRef]
+  )
+  const submitFormRef = React.useRef<
+    (options?: { ignorePinnedResults?: boolean }) => void
+  >(() => undefined)
+
+  const handleKnowledgeAsk = React.useCallback(
+    (text: string, options?: { ignorePinnedResults?: boolean }) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+      setMessageValue(trimmed, { collapseLarge: true })
+      queueMicrotask(() =>
+        submitFormRef.current({
+          ignorePinnedResults: options?.ignorePinnedResults
+        })
+      )
+    },
+    [setMessageValue]
+  )
+
   // Match sidepanel textarea sizing: Pro mode gets more space
   const textareaMaxHeight = isProMode ? 160 : 120
   useDynamicTextareaSize(textareaRef, messageDisplayValue, textareaMaxHeight)
@@ -3334,6 +3361,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       })
     })()
   }
+  React.useEffect(() => {
+    submitFormRef.current = submitForm
+  }, [submitForm])
 
   const submitFormFromQueued = (message: string, image: string) => {
     if (!isConnectionReady) {
@@ -7399,20 +7429,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                               )}
                             </div>
                             <KnowledgePanel
-                              onInsert={(text) => {
-                                const current = form.values.message || ""
-                                const next = current ? `${current}\n\n${text}` : text
-                                setMessageValue(next, { collapseLarge: true })
-                                textAreaFocus()
-                              }}
-                              onAsk={(text, options) => {
-                                const trimmed = text.trim()
-                                if (!trimmed) return
-                                form.setFieldValue("message", trimmed)
-                                queueMicrotask(() =>
-                                  submitForm({ ignorePinnedResults: options?.ignorePinnedResults })
-                                )
-                              }}
+                              onInsert={handleKnowledgeInsert}
+                              onAsk={handleKnowledgeAsk}
                               isConnected={isConnectionReady}
                               open={contextToolsOpen}
                               onOpenChange={(nextOpen) => setContextToolsOpen(nextOpen)}
@@ -7421,7 +7439,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                               autoFocus
                               showToggle={false}
                               variant="embedded"
-                              currentMessage={form.values.message}
+                              currentMessage={contextToolsOpen ? deferredComposerInput : ""}
                               showAttachedContext
                               attachedImage={form.values.image}
                               attachedTabs={selectedDocuments}
