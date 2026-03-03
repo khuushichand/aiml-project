@@ -107,3 +107,49 @@ async def test_service_emits_audit_event_on_external_server_update(tmp_path, mon
 
     assert calls
     assert calls[0]["action"] == "mcp_hub.external_server.create"
+
+
+@pytest.mark.asyncio
+async def test_create_external_server_raises_conflict_without_allow_existing(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.services.mcp_hub_service import McpHubConflictError, McpHubService
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("BYOK_ENCRYPTION_KEY", _b64_key(b"k"))
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    svc = McpHubService(repo=repo)
+
+    await svc.create_external_server(
+        server_id="docs",
+        name="Docs",
+        transport="stdio",
+        config={"cmd": "npx"},
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        actor_id=1,
+    )
+
+    with pytest.raises(McpHubConflictError):
+        await svc.create_external_server(
+            server_id="docs",
+            name="Docs Updated",
+            transport="stdio",
+            config={"cmd": "npx"},
+            owner_scope_type="global",
+            owner_scope_id=None,
+            enabled=True,
+            actor_id=1,
+        )

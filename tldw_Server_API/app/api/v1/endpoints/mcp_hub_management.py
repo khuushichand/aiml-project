@@ -22,14 +22,17 @@ from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
-from tldw_Server_API.app.services.mcp_hub_service import McpHubService
+from tldw_Server_API.app.core.exceptions import BadRequestError, ResourceNotFoundError
+from tldw_Server_API.app.services.mcp_hub_service import McpHubConflictError, McpHubService
 
 router = APIRouter(prefix="/mcp/hub", tags=["mcp-hub"])
 
 _MCP_HUB_ADMIN_PERMISSIONS = frozenset({SYSTEM_CONFIGURE, "*"})
+_VALID_SCOPE_TYPES = frozenset({"global", "org", "team", "user"})
 
 
 async def get_mcp_hub_service() -> McpHubService:
+    """Resolve MCP Hub service with storage bootstrap checks."""
     pool = await get_db_pool()
     repo = McpHubRepo(pool)
     await repo.ensure_tables()
@@ -37,6 +40,7 @@ async def get_mcp_hub_service() -> McpHubService:
 
 
 def _load_json_object(raw: Any) -> dict[str, Any]:
+    """Parse JSON-like values into a dict, returning empty dict on decode failures."""
     if isinstance(raw, dict):
         return raw
     if not raw:
@@ -53,6 +57,7 @@ def _load_json_object(raw: Any) -> dict[str, Any]:
 
 
 def _is_mutation_allowed(principal: AuthPrincipal) -> bool:
+    """Return True when the principal is allowed to mutate MCP Hub configuration."""
     roles = {
         str(role).strip().lower()
         for role in (principal.roles or [])
@@ -70,9 +75,107 @@ def _is_mutation_allowed(principal: AuthPrincipal) -> bool:
 
 
 def _require_mutation_permission(principal: AuthPrincipal) -> None:
+    """Require mutation permission for MCP Hub write operations."""
     if _is_mutation_allowed(principal):
         return
     raise HTTPException(status_code=403, detail=f"{SYSTEM_CONFIGURE} permission required")
+
+
+def _collect_scope_ids(values: list[int] | None, active_id: int | None) -> list[int]:
+    out: set[int] = set()
+    for raw in values or []:
+        try:
+            out.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if active_id is not None:
+        try:
+            out.add(int(active_id))
+        except (TypeError, ValueError):
+            pass
+    return sorted(out)
+
+
+def _resolve_visible_scope_filters(
+    *,
+    principal: AuthPrincipal,
+    owner_scope_type: str | None,
+    owner_scope_id: int | None,
+) -> list[tuple[str | None, int | None]]:
+    """
+    Resolve list query filters constrained to scopes visible to the authenticated principal.
+
+    Returns one or more `(scope_type, scope_id)` filters. A `scope_type` of `None` means
+    unrestricted query (admin-like contexts only).
+    """
+    scope_type = owner_scope_type.strip().lower() if owner_scope_type else None
+    if scope_type is not None and scope_type not in _VALID_SCOPE_TYPES:
+        raise HTTPException(status_code=422, detail="Invalid owner_scope_type")
+
+    if _is_mutation_allowed(principal):
+        if scope_type is None:
+            if owner_scope_id is not None:
+                raise HTTPException(status_code=422, detail="owner_scope_id requires owner_scope_type")
+            return [(None, None)]
+        if scope_type == "global":
+            if owner_scope_id is not None:
+                raise HTTPException(status_code=422, detail="global scope cannot include owner_scope_id")
+            return [("global", None)]
+        if owner_scope_id is None:
+            raise HTTPException(status_code=422, detail=f"{scope_type} scope requires owner_scope_id")
+        return [(scope_type, int(owner_scope_id))]
+
+    user_id = int(principal.user_id) if principal.user_id is not None else None
+    org_ids = _collect_scope_ids(principal.org_ids, principal.active_org_id)
+    team_ids = _collect_scope_ids(principal.team_ids, principal.active_team_id)
+
+    if scope_type is None:
+        if owner_scope_id is not None:
+            raise HTTPException(status_code=422, detail="owner_scope_id requires owner_scope_type")
+        filters: list[tuple[str | None, int | None]] = [("global", None)]
+        if user_id is not None:
+            filters.append(("user", user_id))
+        filters.extend(("org", org_id) for org_id in org_ids)
+        filters.extend(("team", team_id) for team_id in team_ids)
+        return filters
+
+    if scope_type == "global":
+        if owner_scope_id is not None:
+            raise HTTPException(status_code=422, detail="global scope cannot include owner_scope_id")
+        return [("global", None)]
+
+    if scope_type == "user":
+        target_user_id = int(owner_scope_id) if owner_scope_id is not None else user_id
+        if target_user_id is None or user_id is None or target_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Forbidden scope filter")
+        return [("user", user_id)]
+
+    if scope_type == "org":
+        if owner_scope_id is None:
+            return [("org", org_id) for org_id in org_ids]
+        if int(owner_scope_id) not in set(org_ids):
+            raise HTTPException(status_code=403, detail="Forbidden scope filter")
+        return [("org", int(owner_scope_id))]
+
+    if scope_type == "team":
+        if owner_scope_id is None:
+            return [("team", team_id) for team_id in team_ids]
+        if int(owner_scope_id) not in set(team_ids):
+            raise HTTPException(status_code=403, detail="Forbidden scope filter")
+        return [("team", int(owner_scope_id))]
+
+    raise HTTPException(status_code=422, detail="Invalid owner_scope_type")
+
+
+def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate row dictionaries by `id` while preserving final-write wins semantics."""
+    deduped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        row_id = str(row.get("id") or "")
+        if not row_id:
+            continue
+        deduped[row_id] = row
+    return list(deduped.values())
 
 
 def _profile_row_to_response(row: dict[str, Any]) -> ACPProfileResponse:
@@ -113,13 +216,24 @@ def _external_row_to_response(row: dict[str, Any]) -> ExternalServerResponse:
 async def list_acp_profiles(
     owner_scope_type: str | None = None,
     owner_scope_id: int | None = None,
-    _principal: AuthPrincipal = Depends(get_auth_principal),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> list[ACPProfileResponse]:
-    rows = await svc.list_acp_profiles(
+    """List ACP profiles visible to the current principal with scope-constrained filtering."""
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
         owner_scope_type=owner_scope_type,
         owner_scope_id=owner_scope_id,
     )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_acp_profiles(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
     return [_profile_row_to_response(row) for row in rows]
 
 
@@ -129,6 +243,7 @@ async def create_acp_profile(
     principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> ACPProfileResponse:
+    """Create a new ACP profile within the provided owner scope."""
     _require_mutation_permission(principal)
     row = await svc.create_acp_profile(
         name=payload.name,
@@ -149,6 +264,7 @@ async def update_acp_profile(
     principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> ACPProfileResponse:
+    """Update an existing ACP profile by id."""
     _require_mutation_permission(principal)
     row = await svc.update_acp_profile(
         profile_id,
@@ -171,6 +287,7 @@ async def delete_acp_profile(
     principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> MCPHubDeleteResponse:
+    """Delete an ACP profile by id."""
     _require_mutation_permission(principal)
     deleted = await svc.delete_acp_profile(profile_id, actor_id=principal.user_id)
     if not deleted:
@@ -182,13 +299,24 @@ async def delete_acp_profile(
 async def list_external_servers(
     owner_scope_type: str | None = None,
     owner_scope_id: int | None = None,
-    _principal: AuthPrincipal = Depends(get_auth_principal),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> list[ExternalServerResponse]:
-    rows = await svc.list_external_servers(
+    """List external MCP servers visible to the current principal with scope-constrained filtering."""
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
         owner_scope_type=owner_scope_type,
         owner_scope_id=owner_scope_id,
     )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_external_servers(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
     return [_external_row_to_response(row) for row in rows]
 
 
@@ -198,17 +326,22 @@ async def create_external_server(
     principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> ExternalServerResponse:
+    """Create a new external MCP server definition."""
     _require_mutation_permission(principal)
-    row = await svc.create_external_server(
-        server_id=payload.server_id,
-        name=payload.name,
-        transport=payload.transport,
-        config=payload.config,
-        owner_scope_type=payload.owner_scope_type,
-        owner_scope_id=payload.owner_scope_id,
-        enabled=payload.enabled,
-        actor_id=principal.user_id,
-    )
+    try:
+        row = await svc.create_external_server(
+            server_id=payload.server_id,
+            name=payload.name,
+            transport=payload.transport,
+            config=payload.config,
+            owner_scope_type=payload.owner_scope_type,
+            owner_scope_id=payload.owner_scope_id,
+            enabled=payload.enabled,
+            actor_id=principal.user_id,
+            allow_existing=False,
+        )
+    except McpHubConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _external_row_to_response(row)
 
 
@@ -219,20 +352,21 @@ async def update_external_server(
     principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> ExternalServerResponse:
+    """Update an existing external MCP server definition."""
     _require_mutation_permission(principal)
-    existing = await svc.repo.get_external_server(server_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="External server not found")
-    row = await svc.create_external_server(
-        server_id=server_id,
-        name=payload.name if payload.name is not None else str(existing.get("name") or ""),
-        transport=payload.transport if payload.transport is not None else str(existing.get("transport") or ""),
-        config=payload.config if payload.config is not None else _load_json_object(existing.get("config_json")),
-        owner_scope_type=payload.owner_scope_type if payload.owner_scope_type is not None else str(existing.get("owner_scope_type") or "global"),
-        owner_scope_id=payload.owner_scope_id if payload.owner_scope_id is not None else existing.get("owner_scope_id"),
-        enabled=payload.enabled if payload.enabled is not None else bool(existing.get("enabled")),
-        actor_id=principal.user_id,
-    )
+    try:
+        row = await svc.update_external_server(
+            server_id,
+            name=payload.name,
+            transport=payload.transport,
+            config=payload.config,
+            owner_scope_type=payload.owner_scope_type,
+            owner_scope_id=payload.owner_scope_id,
+            enabled=payload.enabled,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _external_row_to_response(row)
 
 
@@ -242,6 +376,7 @@ async def delete_external_server(
     principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> MCPHubDeleteResponse:
+    """Delete an external MCP server definition by id."""
     _require_mutation_permission(principal)
     deleted = await svc.delete_external_server(server_id, actor_id=principal.user_id)
     if not deleted:
@@ -256,6 +391,7 @@ async def set_external_secret(
     principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> ExternalSecretSetResponse:
+    """Set or rotate an external MCP server secret using encrypted-at-rest storage."""
     _require_mutation_permission(principal)
     try:
         out = await svc.set_external_server_secret(
@@ -263,9 +399,8 @@ async def set_external_secret(
             secret_value=payload.secret,
             actor_id=principal.user_id,
         )
-    except ValueError as exc:
-        detail = str(exc) or "Invalid secret payload"
-        if "not found" in detail.lower():
-            raise HTTPException(status_code=404, detail=detail) from exc
-        raise HTTPException(status_code=400, detail=detail) from exc
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ExternalSecretSetResponse(**out)

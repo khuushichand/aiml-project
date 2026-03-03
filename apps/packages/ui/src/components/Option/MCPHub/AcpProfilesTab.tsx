@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Button, Card, Empty, List, Space, Tag, Typography } from "antd"
+import { Alert, Button, Card, Empty, List, Space, Tag, Typography } from "antd"
 
 import { createAcpProfile, listAcpProfiles, type McpHubProfile } from "@/services/tldw/mcp-hub"
 
@@ -9,15 +9,18 @@ export const AcpProfilesTab = () => {
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState("")
   const [saving, setSaving] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const canSave = useMemo(() => name.trim().length > 0 && !saving, [name, saving])
 
   const loadProfiles = async () => {
     setLoading(true)
+    setErrorMessage(null)
     try {
       const rows = await listAcpProfiles()
       setProfiles(Array.isArray(rows) ? rows : [])
     } catch {
       setProfiles([])
+      setErrorMessage("Failed to load ACP profiles.")
     } finally {
       setLoading(false)
     }
@@ -30,6 +33,7 @@ export const AcpProfilesTab = () => {
   const handleCreate = async () => {
     if (!canSave) return
     setSaving(true)
+    setErrorMessage(null)
     try {
       await createAcpProfile({
         name: name.trim(),
@@ -39,6 +43,8 @@ export const AcpProfilesTab = () => {
       setCreateOpen(false)
       setName("")
       await loadProfiles()
+    } catch {
+      setErrorMessage("Failed to create ACP profile.")
     } finally {
       setSaving(false)
     }
@@ -49,6 +55,7 @@ export const AcpProfilesTab = () => {
       <Typography.Text type="secondary">
         ACP profiles define reusable MCP execution defaults.
       </Typography.Text>
+      {errorMessage ? <Alert type="error" title={errorMessage} showIcon /> : null}
 
       <Space>
         <Button type="primary" onClick={() => setCreateOpen(true)}>

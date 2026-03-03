@@ -14,6 +14,7 @@ export const ExternalServersTab = () => {
   const [secretValue, setSecretValue] = useState("")
   const [saving, setSaving] = useState(false)
   const [configured, setConfigured] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const canSave = useMemo(
     () => activeServerId.trim().length > 0 && secretValue.trim().length > 0 && !saving,
@@ -24,6 +25,7 @@ export const ExternalServersTab = () => {
     let cancelled = false
     const load = async () => {
       setLoading(true)
+      setErrorMessage(null)
       try {
         const rows = await listExternalServers()
         if (!cancelled) {
@@ -33,7 +35,10 @@ export const ExternalServersTab = () => {
           }
         }
       } catch {
-        if (!cancelled) setServers([])
+        if (!cancelled) {
+          setServers([])
+          setErrorMessage("Failed to load external servers.")
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -47,10 +52,13 @@ export const ExternalServersTab = () => {
   const handleSaveSecret = async () => {
     if (!canSave) return
     setSaving(true)
+    setErrorMessage(null)
     try {
       await setExternalServerSecret(activeServerId, secretValue)
       setSecretValue("")
       setConfigured(true)
+    } catch {
+      setErrorMessage("Failed to save external server secret.")
     } finally {
       setSaving(false)
     }
@@ -61,6 +69,7 @@ export const ExternalServersTab = () => {
       <Typography.Text type="secondary">
         External MCP servers are configured here. Secrets are write-only after save.
       </Typography.Text>
+      {errorMessage ? <Alert type="error" title={errorMessage} showIcon /> : null}
 
       {servers.length > 0 ? (
         <Space>
@@ -95,7 +104,7 @@ export const ExternalServersTab = () => {
         </Button>
       </Space>
 
-      {configured ? <Alert type="success" message="Secret configured" showIcon /> : null}
+      {configured ? <Alert type="success" title="Secret configured" showIcon /> : null}
 
       <List
         bordered

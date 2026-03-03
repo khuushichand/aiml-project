@@ -14,6 +14,10 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventCategory,
     AuditEventType,
 )
+from tldw_Server_API.app.core.exceptions import (
+    BadRequestError,
+    ResourceNotFoundError,
+)
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     build_secret_payload,
@@ -63,6 +67,10 @@ async def emit_mcp_hub_audit(
         await svc.flush(raise_on_failure=False)
     except Exception as exc:
         logger.warning("MCP hub audit emission failed for action={}: {}", action, exc)
+
+
+class McpHubConflictError(BadRequestError):
+    """Raised when creating an MCP Hub resource would overwrite an existing one."""
 
 
 class McpHubService:
@@ -172,8 +180,12 @@ class McpHubService:
         owner_scope_id: int | None,
         enabled: bool,
         actor_id: int | None,
+        allow_existing: bool = False,
     ) -> dict[str, Any]:
+        """Create an external server definition, optionally allowing idempotent update behavior."""
         previous = await self.repo.get_external_server(server_id)
+        if previous is not None and not allow_existing:
+            raise McpHubConflictError(f"External server already exists: {server_id}")
         row = await self.repo.upsert_external_server(
             server_id=server_id,
             name=name,
@@ -203,6 +215,49 @@ class McpHubService:
             )
         )
         return row
+
+    async def update_external_server(
+        self,
+        server_id: str,
+        *,
+        name: str | None = None,
+        transport: str | None = None,
+        config: dict[str, Any] | None = None,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+        enabled: bool | None = None,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        """Update an existing external server definition."""
+        existing = await self.repo.get_external_server(server_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_external_server", identifier=server_id)
+        existing_config: dict[str, Any] = {}
+        raw_config = existing.get("config_json")
+        if isinstance(raw_config, dict):
+            existing_config = dict(raw_config)
+        elif isinstance(raw_config, str) and raw_config.strip():
+            try:
+                parsed = json.loads(raw_config)
+                if isinstance(parsed, dict):
+                    existing_config = parsed
+            except (TypeError, ValueError):
+                existing_config = {}
+        return await self.create_external_server(
+            server_id=server_id,
+            name=name if name is not None else str(existing.get("name") or ""),
+            transport=transport if transport is not None else str(existing.get("transport") or ""),
+            config=config if config is not None else existing_config,
+            owner_scope_type=(
+                owner_scope_type
+                if owner_scope_type is not None
+                else str(existing.get("owner_scope_type") or "global")
+            ),
+            owner_scope_id=owner_scope_id if owner_scope_id is not None else existing.get("owner_scope_id"),
+            enabled=enabled if enabled is not None else bool(existing.get("enabled")),
+            actor_id=actor_id,
+            allow_existing=True,
+        )
 
     async def list_external_servers(
         self,
@@ -238,11 +293,11 @@ class McpHubService:
     ) -> dict[str, Any]:
         server = await self.repo.get_external_server(server_id)
         if not server:
-            raise ValueError("External server not found")
+            raise ResourceNotFoundError("mcp_external_server", identifier=server_id)
 
         secret = (secret_value or "").strip()
         if not secret:
-            raise ValueError("Secret value is required")
+            raise BadRequestError("Secret value is required")
 
         secret_payload = build_secret_payload(secret)
         envelope = encrypt_byok_payload(secret_payload)

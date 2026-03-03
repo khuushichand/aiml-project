@@ -91,10 +91,6 @@ class McpHubRepo:
             return {}
 
     @staticmethod
-    def _normalize_datetime_for_postgres(dt: datetime) -> datetime:
-        return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
-
-    @staticmethod
     def _normalize_acp_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
         if row is None:
             return None
@@ -124,11 +120,7 @@ class McpHubRepo:
     ) -> dict[str, Any]:
         scope_type = _normalize_scope_type(owner_scope_type)
         now = datetime.now(timezone.utc)
-        ts = (
-            self._normalize_datetime_for_postgres(now)
-            if getattr(self.db_pool, "pool", None) is not None
-            else now.isoformat()
-        )
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         active_value: bool | int = is_active if getattr(self.db_pool, "pool", None) is not None else int(is_active)
         await self.db_pool.execute(
             """
@@ -244,11 +236,7 @@ class McpHubRepo:
         next_profile_json = profile_json if profile_json is not None else str(existing["profile_json"])
         next_active = _to_bool(is_active) if is_active is not None else _to_bool(existing.get("is_active"))
         now = datetime.now(timezone.utc)
-        ts = (
-            self._normalize_datetime_for_postgres(now)
-            if getattr(self.db_pool, "pool", None) is not None
-            else now.isoformat()
-        )
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         active_value: bool | int = next_active if getattr(self.db_pool, "pool", None) is not None else int(next_active)
 
         await self.db_pool.execute(
@@ -300,11 +288,7 @@ class McpHubRepo:
     ) -> dict[str, Any]:
         scope_type = _normalize_scope_type(owner_scope_type)
         now = datetime.now(timezone.utc)
-        ts = (
-            self._normalize_datetime_for_postgres(now)
-            if getattr(self.db_pool, "pool", None) is not None
-            else now.isoformat()
-        )
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         enabled_value: bool | int = enabled if getattr(self.db_pool, "pool", None) is not None else int(enabled)
         await self.db_pool.execute(
             """
@@ -427,11 +411,7 @@ class McpHubRepo:
         actor_id: int | None,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
-        ts = (
-            self._normalize_datetime_for_postgres(now)
-            if getattr(self.db_pool, "pool", None) is not None
-            else now.isoformat()
-        )
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         await self.db_pool.execute(
             """
             INSERT INTO mcp_external_server_secrets (

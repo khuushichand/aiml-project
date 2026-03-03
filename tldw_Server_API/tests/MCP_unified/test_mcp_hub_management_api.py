@@ -11,6 +11,7 @@ from starlette.requests import Request
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.endpoints import mcp_hub_management
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.exceptions import BadRequestError, ResourceNotFoundError
 
 
 def _make_principal(
@@ -96,3 +97,41 @@ async def test_set_external_secret_returns_masked_only() -> None:
     payload = resp.json()
     assert payload["secret_configured"] is True
     assert "abc123secret" not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_set_external_secret_not_found_maps_to_404() -> None:
+    class _MissingService(_FakeService):
+        async def set_external_server_secret(self, *, server_id: str, secret_value: str, actor_id: int | None):
+            raise ResourceNotFoundError("mcp_external_server", identifier=server_id)
+
+    app = _build_app(
+        principal=_make_principal(roles=["admin"], permissions=[]),
+        fail_with_401=False,
+    )
+    app.dependency_overrides[mcp_hub_management.get_mcp_hub_service] = lambda: _MissingService()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/external-servers/docs/secret",
+            json={"secret": "abc123secret"},
+        )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_set_external_secret_bad_request_maps_to_400() -> None:
+    class _BadPayloadService(_FakeService):
+        async def set_external_server_secret(self, *, server_id: str, secret_value: str, actor_id: int | None):
+            raise BadRequestError("Secret value is required")
+
+    app = _build_app(
+        principal=_make_principal(roles=["admin"], permissions=[]),
+        fail_with_401=False,
+    )
+    app.dependency_overrides[mcp_hub_management.get_mcp_hub_service] = lambda: _BadPayloadService()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/external-servers/docs/secret",
+            json={"secret": "abc123secret"},
+        )
+    assert resp.status_code == 400

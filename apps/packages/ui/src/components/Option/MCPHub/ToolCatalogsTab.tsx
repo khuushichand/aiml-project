@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Card, Empty, List, Space, Typography } from "antd"
+import { Alert, Card, Empty, List, Space, Typography } from "antd"
 
 import {
   fetchMcpToolCatalogs,
@@ -19,11 +19,13 @@ export const ToolCatalogsTab = () => {
   const [scope, setScope] = useState<CatalogScope>("global")
   const [catalogs, setCatalogs] = useState<McpToolCatalog[]>([])
   const [loading, setLoading] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     const load = async () => {
       setLoading(true)
+      setErrorMessage(null)
       try {
         const discovered = await fetchMcpToolCatalogsViaDiscovery(scope)
         if (!cancelled && discovered.length > 0) {
@@ -37,6 +39,7 @@ export const ToolCatalogsTab = () => {
       } catch {
         if (!cancelled) {
           setCatalogs([])
+          setErrorMessage("Failed to load tool catalogs.")
         }
       } finally {
         if (!cancelled) {
@@ -55,6 +58,7 @@ export const ToolCatalogsTab = () => {
       <Typography.Text type="secondary">
         Tool catalogs control which MCP tools are exposed by scope.
       </Typography.Text>
+      {errorMessage ? <Alert type="error" title={errorMessage} showIcon /> : null}
 
       <Space>
         <label htmlFor="mcp-catalog-scope">Scope</label>
