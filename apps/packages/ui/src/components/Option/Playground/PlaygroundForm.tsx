@@ -9161,25 +9161,31 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           )}
         </div>
       </Modal>
-      <CurrentChatModelSettings
-        open={openModelSettings}
-        setOpen={setOpenModelSettings}
-        isOCREnabled={useOCR}
-      />
-      <ActorPopout open={openActorSettings} setOpen={setOpenActorSettings} />
-      <DocumentGeneratorDrawer
-        open={documentGeneratorOpen}
-        onClose={() => {
-          setDocumentGeneratorOpen(false)
-          setDocumentGeneratorSeed({})
-        }}
-        conversationId={
-          documentGeneratorSeed?.conversationId ?? serverChatId ?? null
-        }
-        defaultModel={selectedModel || null}
-        seedMessage={documentGeneratorSeed?.message ?? null}
-        seedMessageId={documentGeneratorSeed?.messageId ?? null}
-      />
+      {openModelSettings && (
+        <CurrentChatModelSettings
+          open={openModelSettings}
+          setOpen={setOpenModelSettings}
+          isOCREnabled={useOCR}
+        />
+      )}
+      {openActorSettings && (
+        <ActorPopout open={openActorSettings} setOpen={setOpenActorSettings} />
+      )}
+      {documentGeneratorOpen && (
+        <DocumentGeneratorDrawer
+          open={documentGeneratorOpen}
+          onClose={() => {
+            setDocumentGeneratorOpen(false)
+            setDocumentGeneratorSeed({})
+          }}
+          conversationId={
+            documentGeneratorSeed?.conversationId ?? serverChatId ?? null
+          }
+          defaultModel={selectedModel || null}
+          seedMessage={documentGeneratorSeed?.message ?? null}
+          seedMessageId={documentGeneratorSeed?.messageId ?? null}
+        />
+      )}
       {voiceChatEnabled && voiceChat.state !== "idle" && (
         <VoiceChatIndicator
           state={voiceChat.state}
@@ -9187,14 +9193,16 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           onStop={handleVoiceChatToggle}
         />
       )}
-      <VoiceModeSelector
-        open={voiceModeSelectorOpen}
-        onClose={() => setVoiceModeSelectorOpen(false)}
-        onSelectDictation={handleDictationToggle}
-        onSelectConversation={handleVoiceChatToggle}
-        dictationAvailable={speechAvailable}
-        conversationAvailable={voiceChatAvailable}
-      />
+      {voiceModeSelectorOpen && (
+        <VoiceModeSelector
+          open={voiceModeSelectorOpen}
+          onClose={() => setVoiceModeSelectorOpen(false)}
+          onSelectDictation={handleDictationToggle}
+          onSelectConversation={handleVoiceChatToggle}
+          dictationAvailable={speechAvailable}
+          conversationAvailable={voiceChatAvailable}
+        />
+      )}
     </div>
   )
 }

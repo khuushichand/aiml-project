@@ -2866,36 +2866,43 @@ export const SidepanelForm = ({
           </div>
         </div>
       </div>
-      {/* Modal/Drawer for current conversation settings */}
-      <CurrentChatModelSettings
-        open={openModelSettings}
-        setOpen={setOpenModelSettings}
-        isOCREnabled={useOCR}
-      />
-      <ActorPopout open={openActorSettings} setOpen={setOpenActorSettings} />
-      <DocumentGeneratorDrawer
-        open={documentGeneratorOpen}
-        onClose={() => {
-          setDocumentGeneratorOpen(false)
-          setDocumentGeneratorSeed({})
-        }}
-        conversationId={
-          documentGeneratorSeed?.conversationId ?? serverChatId ?? null
-        }
-        defaultModel={selectedModel || null}
-        seedMessage={documentGeneratorSeed?.message ?? null}
-        seedMessageId={documentGeneratorSeed?.messageId ?? null}
-      />
-      {/* Quick ingest modal */}
-      <QuickIngestModal
-        open={ingestOpen}
-        autoProcessQueued={autoProcessQueuedIngest}
-        onClose={() => {
-          setIngestOpen(false)
-          setAutoProcessQueuedIngest(false)
-          requestAnimationFrame(() => quickIngestBtnRef.current?.focus())
-        }}
-      />
+      {/* Mount heavy overlays only when open to avoid keystroke-time rerenders. */}
+      {openModelSettings && (
+        <CurrentChatModelSettings
+          open={openModelSettings}
+          setOpen={setOpenModelSettings}
+          isOCREnabled={useOCR}
+        />
+      )}
+      {openActorSettings && (
+        <ActorPopout open={openActorSettings} setOpen={setOpenActorSettings} />
+      )}
+      {documentGeneratorOpen && (
+        <DocumentGeneratorDrawer
+          open={documentGeneratorOpen}
+          onClose={() => {
+            setDocumentGeneratorOpen(false)
+            setDocumentGeneratorSeed({})
+          }}
+          conversationId={
+            documentGeneratorSeed?.conversationId ?? serverChatId ?? null
+          }
+          defaultModel={selectedModel || null}
+          seedMessage={documentGeneratorSeed?.message ?? null}
+          seedMessageId={documentGeneratorSeed?.messageId ?? null}
+        />
+      )}
+      {ingestOpen && (
+        <QuickIngestModal
+          open={ingestOpen}
+          autoProcessQueued={autoProcessQueuedIngest}
+          onClose={() => {
+            setIngestOpen(false)
+            setAutoProcessQueuedIngest(false)
+            requestAnimationFrame(() => quickIngestBtnRef.current?.focus())
+          }}
+        />
+      )}
     </div>
   )
 }
