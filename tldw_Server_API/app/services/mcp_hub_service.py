@@ -261,9 +261,10 @@ class McpHubService:
                 metadata={"key_hint": stored.get("key_hint")},
             )
         )
+        secret_configured = bool(stored)
         return {
             "server_id": server_id,
-            "secret_configured": True,
+            "secret_configured": secret_configured,
             "key_hint": stored.get("key_hint"),
             "updated_at": stored.get("updated_at"),
         }

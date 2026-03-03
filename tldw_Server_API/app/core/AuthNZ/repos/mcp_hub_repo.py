@@ -81,12 +81,13 @@ class McpHubRepo:
             return dict(row)
         try:
             return dict(row)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"McpHubRepo._row_to_dict direct cast failed: {exc}")
         try:
             keys = row.keys()
             return {key: row[key] for key in keys}
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"McpHubRepo._row_to_dict key extraction failed: {exc}")
             return {}
 
     @staticmethod
@@ -187,26 +188,29 @@ class McpHubRepo:
         owner_scope_type: str | None = None,
         owner_scope_id: int | None = None,
     ) -> list[dict[str, Any]]:
-        clauses: list[str] = []
-        params: list[Any] = []
-
-        if owner_scope_type is not None:
-            clauses.append("owner_scope_type = ?")
-            params.append(_normalize_scope_type(owner_scope_type))
-        if owner_scope_id is not None:
-            clauses.append("owner_scope_id = ?")
-            params.append(int(owner_scope_id))
-
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        normalized_scope_type = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not None
+            else None
+        )
+        normalized_scope_id = (
+            int(owner_scope_id) if owner_scope_id is not None else None
+        )
         rows = await self.db_pool.fetchall(
-            f"""
+            """
             SELECT id, name, description, owner_scope_type, owner_scope_id, profile_json, is_active,
                    created_by, updated_by, created_at, updated_at
             FROM mcp_acp_profiles
-            {where}
+            WHERE (? IS NULL OR owner_scope_type = ?)
+              AND (? IS NULL OR owner_scope_id = ?)
             ORDER BY name, id
             """,
-            tuple(params),
+            (
+                normalized_scope_type,
+                normalized_scope_type,
+                normalized_scope_id,
+                normalized_scope_id,
+            ),
         )
         return [
             self._normalize_acp_row(self._row_to_dict(row)) or {}
@@ -365,19 +369,16 @@ class McpHubRepo:
         owner_scope_type: str | None = None,
         owner_scope_id: int | None = None,
     ) -> list[dict[str, Any]]:
-        clauses: list[str] = []
-        params: list[Any] = []
-
-        if owner_scope_type is not None:
-            clauses.append("s.owner_scope_type = ?")
-            params.append(_normalize_scope_type(owner_scope_type))
-        if owner_scope_id is not None:
-            clauses.append("s.owner_scope_id = ?")
-            params.append(int(owner_scope_id))
-
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        normalized_scope_type = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not None
+            else None
+        )
+        normalized_scope_id = (
+            int(owner_scope_id) if owner_scope_id is not None else None
+        )
         rows = await self.db_pool.fetchall(
-            f"""
+            """
             SELECT s.id,
                    s.name,
                    s.enabled,
@@ -393,10 +394,16 @@ class McpHubRepo:
                    sec.key_hint
             FROM mcp_external_servers s
             LEFT JOIN mcp_external_server_secrets sec ON sec.server_id = s.id
-            {where}
+            WHERE (? IS NULL OR s.owner_scope_type = ?)
+              AND (? IS NULL OR s.owner_scope_id = ?)
             ORDER BY s.name, s.id
             """,
-            tuple(params),
+            (
+                normalized_scope_type,
+                normalized_scope_type,
+                normalized_scope_id,
+                normalized_scope_id,
+            ),
         )
         return [
             self._normalize_external_row(self._row_to_dict(row)) or {}
