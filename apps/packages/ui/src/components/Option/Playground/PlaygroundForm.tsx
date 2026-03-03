@@ -2883,6 +2883,18 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     },
     [setMessageValue]
   )
+  const handleKnowledgePanelOpenChange = React.useCallback(
+    (nextOpen: boolean) => {
+      setContextToolsOpen(nextOpen)
+    },
+    []
+  )
+  const handleKnowledgeRemoveImage = React.useCallback(() => {
+    form.setFieldValue("image", "")
+  }, [form.setFieldValue])
+  const handleKnowledgeAddFile = React.useCallback(() => {
+    fileInputRef.current?.click()
+  }, [])
 
   // Match sidepanel textarea sizing: Pro mode gets more space
   const textareaMaxHeight = isProMode ? 160 : 120
@@ -7433,7 +7445,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                               onAsk={handleKnowledgeAsk}
                               isConnected={isConnectionReady}
                               open={contextToolsOpen}
-                              onOpenChange={(nextOpen) => setContextToolsOpen(nextOpen)}
+                              onOpenChange={handleKnowledgePanelOpenChange}
                               openTab={knowledgePanelTab}
                               openTabRequestId={knowledgePanelTabRequestId}
                               autoFocus
@@ -7445,12 +7457,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                               attachedTabs={selectedDocuments}
                               availableTabs={availableTabs}
                               attachedFiles={uploadedFiles}
-                              onRemoveImage={() => form.setFieldValue("image", "")}
+                              onRemoveImage={handleKnowledgeRemoveImage}
                               onRemoveTab={removeDocument}
                               onAddTab={addDocument}
                               onClearTabs={clearSelectedDocuments}
                               onRefreshTabs={reloadTabs}
-                              onAddFile={() => fileInputRef.current?.click()}
+                              onAddFile={handleKnowledgeAddFile}
                               onRemoveFile={removeUploadedFile}
                               onClearFiles={clearUploadedFiles}
                               fileRetrievalEnabled={fileRetrievalEnabled}

@@ -1594,6 +1594,21 @@ export const SidepanelForm = ({
       isConnectionReady
     ]
   )
+  const handleKnowledgePanelOpenChange = React.useCallback(
+    (nextOpen: boolean) => {
+      setKnowledgePanelOpen(nextOpen)
+    },
+    []
+  )
+  const handleKnowledgeAddFile = React.useCallback(() => {
+    contextFileInputRef.current?.click()
+  }, [])
+  const handleKnowledgeRemoveFile = React.useCallback((fileId: string) => {
+    setContextFiles((prev) => prev.filter((item) => item.id !== fileId))
+  }, [])
+  const handleKnowledgeClearFiles = React.useCallback(() => {
+    setContextFiles([])
+  }, [])
 
   const startBrowserDictation = React.useCallback(() => {
     resetTranscript()
@@ -2170,7 +2185,7 @@ export const SidepanelForm = ({
                         onInsert={handleKnowledgeInsert}
                         onAsk={handleKnowledgeAsk}
                         open={knowledgePanelOpen}
-                        onOpenChange={setKnowledgePanelOpen}
+                        onOpenChange={handleKnowledgePanelOpenChange}
                         currentMessage={knowledgePanelOpen ? deferredComposerInput : ""}
                         showAttachedContext
                         attachedTabs={selectedDocuments}
@@ -2180,13 +2195,9 @@ export const SidepanelForm = ({
                         onRemoveTab={removeDocument}
                         onClearTabs={clearSelectedDocuments}
                         onRefreshTabs={reloadTabs}
-                        onAddFile={() => contextFileInputRef.current?.click()}
-                        onRemoveFile={(fileId) =>
-                          setContextFiles((prev) =>
-                            prev.filter((item) => item.id !== fileId)
-                          )
-                        }
-                        onClearFiles={() => setContextFiles([])}
+                        onAddFile={handleKnowledgeAddFile}
+                        onRemoveFile={handleKnowledgeRemoveFile}
+                        onClearFiles={handleKnowledgeClearFiles}
                       />
                     )}
                     {/* Queued messages banner - shown above input area */}
