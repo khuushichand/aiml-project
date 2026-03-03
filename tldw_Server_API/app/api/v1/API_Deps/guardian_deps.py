@@ -16,11 +16,8 @@ def _coerce_storage_user_id(raw_user_id: object) -> int:
     except Exception:
         import hashlib
         # Deterministic non-crypto ID derivation for non-integer test/single-user IDs.
-        # `usedforsecurity=False` keeps behavior while making intent explicit.
-        try:
-            digest = hashlib.sha1(str(raw_user_id).encode("utf-8"), usedforsecurity=False).digest()
-        except TypeError:  # pragma: no cover - compatibility fallback
-            digest = hashlib.sha1(str(raw_user_id).encode("utf-8")).digest()  # nosec B324
+        # Use SHA-256 to avoid weak-hash false positives.
+        digest = hashlib.sha256(str(raw_user_id).encode("utf-8")).digest()
         return int.from_bytes(digest[:4], byteorder="big", signed=False)
 
 

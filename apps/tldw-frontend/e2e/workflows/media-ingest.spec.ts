@@ -387,7 +387,7 @@ test.describe("Media Ingestion Workflow", () => {
             "tldwConfig",
             JSON.stringify({
               serverUrl: cfg.serverUrl,
-              // lgtm[js/clear-text-storage-sensitive-data] synthetic CI key only
+              // lgtm[js/clear-text-storage-of-sensitive-data] synthetic CI key only
               apiKey: cfg.apiKey,
               authMode: "single-user"
             })
@@ -559,7 +559,7 @@ test.describe("Media Ingestion Workflow", () => {
             "tldwConfig",
             JSON.stringify({
               serverUrl: cfg.serverUrl,
-              // lgtm[js/clear-text-storage-sensitive-data] synthetic CI key only
+              // lgtm[js/clear-text-storage-of-sensitive-data] synthetic CI key only
               apiKey: cfg.apiKey,
               authMode: "single-user"
             })

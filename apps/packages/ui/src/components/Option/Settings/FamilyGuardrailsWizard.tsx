@@ -149,8 +149,27 @@ const STATUS_COLOR: Record<string, string> = {
   revoked: "default"
 }
 
+let memberSuffixCounter = 0
+
+const secureMemberSuffix = (): string => {
+  try {
+    if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function") {
+      return globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 12)
+    }
+    if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.getRandomValues === "function") {
+      const bytes = new Uint8Array(6)
+      globalThis.crypto.getRandomValues(bytes)
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+    }
+  } catch {
+    // Fall through to deterministic fallback.
+  }
+  memberSuffixCounter += 1
+  return `${Date.now().toString(36)}-${memberSuffixCounter.toString(36)}`
+}
+
 const newMember = (prefix: string): MemberInput => ({
-  key: `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+  key: `${prefix}-${secureMemberSuffix()}`,
   displayName: "",
   userId: "",
   email: ""

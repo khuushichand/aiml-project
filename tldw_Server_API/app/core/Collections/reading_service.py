@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import re
+from html.parser import HTMLParser
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -102,7 +103,31 @@ def _env_flag_enabled(raw: str | None) -> bool:
 
 
 def _strip_html(raw: str) -> str:
-    return re.sub(r"<[^>]+>", "", raw)
+    class _Stripper(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self._parts: list[str] = []
+            self._ignore_depth = 0
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:  # noqa: ARG002
+            if tag.lower() in {"script", "style"}:
+                self._ignore_depth += 1
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag.lower() in {"script", "style"} and self._ignore_depth > 0:
+                self._ignore_depth -= 1
+
+        def handle_data(self, data: str) -> None:
+            if self._ignore_depth == 0:
+                self._parts.append(data)
+
+        def text(self) -> str:
+            return "".join(self._parts)
+
+    parser = _Stripper()
+    parser.feed(str(raw or ""))
+    parser.close()
+    return parser.text()
 
 
 def _safe_filename_fragment(raw: str, max_len: int = 64) -> str:
