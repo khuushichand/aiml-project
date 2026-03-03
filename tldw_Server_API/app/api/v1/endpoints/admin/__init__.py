@@ -42,6 +42,7 @@ from . import admin_settings as admin_settings_endpoints
 from . import admin_system as admin_system_endpoints
 from . import admin_tools as admin_tools_endpoints
 from . import admin_usage as admin_usage_endpoints
+from . import admin_router_analytics as admin_router_analytics_endpoints
 from . import admin_acp_agents as admin_acp_agents_endpoints
 from . import admin_events_stream as admin_events_stream_endpoints
 from . import admin_user as admin_user_endpoints
@@ -117,6 +118,7 @@ router.include_router(admin_data_ops_endpoints.router)
 router.include_router(admin_ops_endpoints.router)
 router.include_router(admin_system_endpoints.router)
 router.include_router(admin_usage_endpoints.router)
+router.include_router(admin_router_analytics_endpoints.router)
 router.include_router(admin_budgets_endpoints.router)
 router.include_router(admin_user_endpoints.router)
 router.include_router(admin_api_keys_endpoints.router)

@@ -28,7 +28,7 @@ def _sqlite_pool_label(db_pool: DatabasePool) -> str:
     try:
         text = str(raw).strip()
         return text or "unknown"
-    except Exception:
+    except (TypeError, ValueError):
         return "unknown"
 
 
@@ -449,6 +449,10 @@ class AuthnzUsageRepo:
         currency: str = "USD",
         estimated: bool = False,
         request_id: str | None = None,
+        remote_ip: str | None = None,
+        user_agent: str | None = None,
+        token_name: str | None = None,
+        conversation_id: str | None = None,
     ) -> None:
         """
         Insert a single row into ``llm_usage_log``.
@@ -457,39 +461,99 @@ class AuthnzUsageRepo:
         do not embed backend-specific SQL.
         """
         try:
-            await self.db_pool.execute(
-                """
-                INSERT INTO llm_usage_log (
-                    ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms,
-                    prompt_tokens, completion_tokens, total_tokens,
-                    prompt_cost_usd, completion_cost_usd, total_cost_usd, currency, estimated, request_id
-                ) VALUES (
-                    CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?
+            try:
+                await self.db_pool.execute(
+                    """
+                    INSERT INTO llm_usage_log (
+                        ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms,
+                        prompt_tokens, completion_tokens, total_tokens,
+                        prompt_cost_usd, completion_cost_usd, total_cost_usd, currency, estimated, request_id,
+                        remote_ip, user_agent, token_name, conversation_id
+                    ) VALUES (
+                        CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?
+                    )
+                    """,
+                    user_id,
+                    key_id,
+                    endpoint,
+                    operation,
+                    provider,
+                    model,
+                    int(status),
+                    int(latency_ms),
+                    int(prompt_tokens),
+                    int(completion_tokens),
+                    int(total_tokens),
+                    float(prompt_cost_usd),
+                    float(completion_cost_usd),
+                    float(total_cost_usd),
+                    currency,
+                    bool(estimated),
+                    request_id,
+                    remote_ip,
+                    user_agent,
+                    token_name,
+                    conversation_id,
                 )
-                """,
-                user_id,
-                key_id,
-                endpoint,
-                operation,
-                provider,
-                model,
-                int(status),
-                int(latency_ms),
-                int(prompt_tokens),
-                int(completion_tokens),
-                int(total_tokens),
-                float(prompt_cost_usd),
-                float(completion_cost_usd),
-                float(total_cost_usd),
-                currency,
-                bool(estimated),
-                request_id,
-            )
+            except Exception:
+                # Backward-compatible fallback for pre-054 schemas.
+                await self.db_pool.execute(
+                    """
+                    INSERT INTO llm_usage_log (
+                        ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms,
+                        prompt_tokens, completion_tokens, total_tokens,
+                        prompt_cost_usd, completion_cost_usd, total_cost_usd, currency, estimated, request_id
+                    ) VALUES (
+                        CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    user_id,
+                    key_id,
+                    endpoint,
+                    operation,
+                    provider,
+                    model,
+                    int(status),
+                    int(latency_ms),
+                    int(prompt_tokens),
+                    int(completion_tokens),
+                    int(total_tokens),
+                    float(prompt_cost_usd),
+                    float(completion_cost_usd),
+                    float(total_cost_usd),
+                    currency,
+                    bool(estimated),
+                    request_id,
+                )
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzUsageRepo.insert_llm_usage_log failed: {exc}")
             raise
+
+    async def get_api_key_name(self, *, key_id: int) -> str | None:
+        """Fetch api_keys.name for a key id."""
+        try:
+            if self._is_postgres_backend():
+                val = await self.db_pool.fetchval(
+                    "SELECT name FROM api_keys WHERE id = $1",
+                    int(key_id),
+                )
+            else:
+                val = await self.db_pool.fetchval(
+                    "SELECT name FROM api_keys WHERE id = ?",
+                    int(key_id),
+                )
+            if val is None:
+                return None
+            text = str(val).strip()
+            return text or None
+        except Exception as exc:
+            logger.debug(f"AuthnzUsageRepo.get_api_key_name skipped/failed: {exc}")
+            return None
 
     async def aggregate_usage_daily_for_day(self, *, day: date | None = None) -> None:
         """

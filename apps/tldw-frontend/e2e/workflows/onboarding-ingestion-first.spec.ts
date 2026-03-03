@@ -170,6 +170,13 @@ async function openOnboardingSuccessScreen(
   return needsConnect ? "connected-now" : "already-connected"
 }
 
+async function ensureOnboardingSuccessScreen(page: Page): Promise<void> {
+  const success = page.getByTestId("onboarding-success-screen")
+  const isVisible = await success.isVisible().catch(() => false)
+  if (isVisible) return
+  await openOnboardingSuccessScreen(page)
+}
+
 async function clickOnboardingCtaAndExpectRoute(
   page: Page,
   ctaTestId: string,

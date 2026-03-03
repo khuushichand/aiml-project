@@ -42,6 +42,19 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     perform_chat_api_call,
     perform_chat_api_call_async,
 )
+from tldw_Server_API.app.core.Chat.orchestrator.provider_resolution import (
+    resolve_provider,
+)
+from tldw_Server_API.app.core.Chat.orchestrator.request_validation import (
+    normalize_selected_parts,
+    normalize_temperature,
+)
+from tldw_Server_API.app.core.Chat.orchestrator.error_mapping import (
+    map_stream_error,
+)
+from tldw_Server_API.app.core.Chat.orchestrator.stream_execution import (
+    execute_stream,
+)
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.exceptions import (
     NetworkError,
@@ -380,7 +393,8 @@ def chat_api_call(
         ChatAPIError: For other unexpected API-related errors.
         HTTP client errors from upstream provider handlers (status errors or network failures).
     """
-    endpoint_lower = api_endpoint.lower()
+    resolved_endpoint = resolve_provider(model=model, provider=api_endpoint)
+    endpoint_lower = resolved_endpoint.lower()
     logging.info(f"Chat API Call - Routing to endpoint: {endpoint_lower}")
     log_counter("chat_api_call_attempt", labels={"api_endpoint": endpoint_lower})
     start_time = time.time()
@@ -390,7 +404,7 @@ def chat_api_call(
     )
 
     call_kwargs = {
-        "api_endpoint": api_endpoint,
+        "api_endpoint": resolved_endpoint,
         "messages_payload": messages_payload,
         "api_key": api_key,
         "temp": temp,
@@ -456,6 +470,8 @@ def chat_api_call(
              logging.debug("Debug - Chat API Call - Response: Streaming Generator")
         else:
              logging.debug(f"Debug - Chat API Call - Response Type: {type(response)}")
+        if streaming:
+            return execute_stream(response)
         return response
 
     # --- Exception Mapping (copied from your original, ensure it's still relevant) ---
@@ -515,8 +531,12 @@ def chat_api_call(
             raise ChatAPIError(provider=endpoint_lower,
                                message=f"Unexpected error (Status {status_code}). {sanitized_error}",
                                status_code=status_code) from e
+        mapped_error = map_stream_error(e)
         if _is_network_exception(e):
-            logging.error(f"Network error connecting to {endpoint_lower}: {e}", exc_info=False)
+            logging.error(
+                f"Network error connecting to {endpoint_lower}: {mapped_error['message']}",
+                exc_info=False,
+            )
             raise ChatProviderError(provider=endpoint_lower, message="Network error. Please check your connection.", status_code=504) from e
         logging.exception(
             f"Unexpected internal error in chat_api_call for {endpoint_lower}: {e}")
@@ -560,14 +580,15 @@ async def chat_api_call_async(
 
     Returns either a regular dict (non-stream) or an async iterator (streaming).
     """
-    endpoint_lower = api_endpoint.lower()
+    resolved_endpoint = resolve_provider(model=model, provider=api_endpoint)
+    endpoint_lower = resolved_endpoint.lower()
     log_legacy_once(
         "chat_orchestrator.chat_api_call_async",
         "chat_orchestrator.chat_api_call_async is deprecated; use chat_service.perform_chat_api_call_async instead.",
     )
 
     call_kwargs = {
-        "api_endpoint": api_endpoint,
+        "api_endpoint": resolved_endpoint,
         "messages_payload": messages_payload,
         "api_key": api_key,
         "temp": temp,
@@ -599,10 +620,18 @@ async def chat_api_call_async(
     }
 
     try:
-        return await perform_chat_api_call_async(**call_kwargs)
+        response = await perform_chat_api_call_async(**call_kwargs)
+        if streaming:
+            return execute_stream(response)
+        return response
     except Exception as e:
+        mapped_error = map_stream_error(e)
         if _is_network_exception(e):
-            raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504) from e
+            raise ChatProviderError(
+                provider=endpoint_lower,
+                message=f"Network error: {mapped_error['message']}",
+                status_code=504,
+            ) from e
         if isinstance(
             e,
             (
@@ -616,7 +645,10 @@ async def chat_api_call_async(
         ):
             raise
         # Surface as provider error for unexpected conditions
-        raise ChatProviderError(provider=endpoint_lower, message=f"Unexpected error: {e}") from e
+        raise ChatProviderError(
+            provider=endpoint_lower,
+            message=f"Unexpected error: {mapped_error['message']}",
+        ) from e
 
 
 # Default timeout for synchronous coroutine execution (5 minutes)
@@ -836,8 +868,7 @@ def _chat_sync_impl(
         logging.info(f"Debug - Chat Function - History length: {len(history)}, Image History Mode: {image_history_mode}")
 
         # Ensure selected_parts is a list
-        if not isinstance(selected_parts, (list, tuple)):
-            selected_parts = [selected_parts] if selected_parts else []
+        selected_parts = normalize_selected_parts(selected_parts)
 
         # Parse slash-commands before dictionary processing
         injected_command_system_text: Optional[str] = None
@@ -1012,11 +1043,7 @@ def _chat_sync_impl(
         llm_messages_payload.append({"role": "user", "content": current_user_content_parts})
 
         # Temperature and other LLM params
-        temperature_float = 0.7
-        try:
-            temperature_float = float(temperature) if temperature is not None else 0.7
-        except ValueError:
-            logging.warning(f"Invalid temperature '{temperature}', using 0.7.")
+        temperature_float = normalize_temperature(temperature, default=0.7)
 
         logging.debug("Debug - Chat Function - Final LLM Payload (structure, image data truncated):")
         for i, msg_p in enumerate(llm_messages_payload):
@@ -1348,8 +1375,7 @@ async def achat(
         logging.info(f"Debug - Chat Function (async) - Input Text: '{message}', Image provided: {'Yes' if current_image_input else 'No'}")
         logging.info(f"Debug - Chat Function (async) - History length: {len(history)}, Image History Mode: {image_history_mode}")
 
-        if not isinstance(selected_parts, (list, tuple)):
-            selected_parts = [selected_parts] if selected_parts else []
+        selected_parts = normalize_selected_parts(selected_parts)
 
         injected_command_system_text: Optional[str] = None
         # Initialize command variables for safe access later (instead of using unsafe locals() checks)
@@ -1507,11 +1533,7 @@ async def achat(
 
         llm_messages_payload.append({"role": "user", "content": current_user_content_parts})
 
-        temperature_float = 0.7
-        try:
-            temperature_float = float(temperature) if temperature is not None else 0.7
-        except ValueError:
-            logging.warning(f"Invalid temperature '{temperature}', using 0.7.")
+        temperature_float = normalize_temperature(temperature, default=0.7)
 
         logging.debug("Debug - Async Chat Function - Final LLM Payload prepared")
 

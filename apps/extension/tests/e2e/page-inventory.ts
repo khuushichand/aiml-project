@@ -31,6 +31,8 @@ export const EXTENSION_ROUTES: ExtensionRouteEntry[] = [
   { kind: "options", path: "/settings/health", name: "Health Settings" },
   { kind: "options", path: "/settings/prompt-studio", name: "Prompt Studio Settings" },
   { kind: "options", path: "/settings/knowledge", name: "Knowledge Settings" },
+  { kind: "options", path: "/settings/family-guardrails", name: "Family Guardrails Wizard" },
+  { kind: "options", path: "/settings/guardian", name: "Guardian Settings" },
   { kind: "options", path: "/settings/chatbooks", name: "Chatbooks Settings" },
   { kind: "options", path: "/settings/characters", name: "Characters Settings" },
   { kind: "options", path: "/settings/world-books", name: "World Books Settings" },

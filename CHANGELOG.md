@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.27] 2026-03-02
+
+### Added
+
+- Family Guardrails Wizard rollout across WebUI + extension settings surfaces:
+  - Added dedicated settings route `/settings/family-guardrails` with capability-aware gating and navigation metadata.
+  - Added WebUI page wrapper at `apps/tldw-frontend/pages/settings/family-guardrails.tsx`.
+  - Added extension route module and registry wiring parity:
+    - `apps/tldw-frontend/extension/routes/option-family-guardrails-wizard.tsx`
+    - `apps/tldw-frontend/extension/routes/route-registry.tsx`
+- Family wizard backend contract and persistence surface:
+  - Added family wizard request/response schemas in `tldw_Server_API/app/api/v1/schemas/family_wizard_schemas.py`.
+  - Added family wizard draft/snapshot endpoints in `tldw_Server_API/app/api/v1/endpoints/family_wizard.py`.
+  - Added guardian DB draft/member/relationship/plan persistence support in `tldw_Server_API/app/core/DB_Management/Guardian_DB.py`.
+- Guardian moderation orchestration improvements:
+  - Added queued family plan materialization on guardian acceptance.
+  - Added strictest-wins shared-dependent policy conflict resolution path.
+- Coverage and docs for the new workflow:
+  - Added comprehensive Family Guardrails wizard unit/integration coverage across UI services, route parity, DB, schema, endpoint, and materialization flows.
+  - Added Playwright workflow coverage for family setup, guardian mapping, templates, tracker blockers, and draft resume.
+  - Added user guides:
+    - `Docs/User_Guides/WebUI_Extension/Family_Guardian_Setup.md`
+    - `Docs/User_Guides/WebUI_Extension/Family_Guardrails_Wizard_Guide.md`
+
+### Changed
+
+- Family Guardrails wizard UX simplification and resilience:
+  - Household setup now uses preset-driven onboarding (family/caregiver/institutional templates) as the primary mode selector path.
+  - Wizard copy and validation feedback are mode-aware (`guardian` vs `caregiver`) across setup, mapping, review, and tracker steps.
+  - Single-guardian flows skip relationship mapping and preserve back-navigation symmetry from templates/review.
+  - Large-family workflows now support bulk entry/table interactions with keyboard-assisted selection/removal and status-aware tracker guidance.
+  - Wizard continues now enforce stronger inline step validation, duplicate/collision messaging, and deterministic resume-to-latest-draft behavior.
+- Route capability and parity guardrails now enforce consistent Family Guardrails visibility/registration across shared UI, web, and extension route registries.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed web/extension family wizard route wiring parity regressions and added explicit route-parity tests to prevent drift.
+- Fixed family wizard tracker/review action targeting so blocked dependents route guardians back to the correct mapping context.
+- Fixed targeted route-parity test path resolution to be cwd/worktree agnostic during Vitest runs.
+
 
 ## [0.1.27] 2026-03-03
 
@@ -898,7 +942,7 @@ and this project adheres to Some kind of Versioning
 - Soft delete support for notes/character cards
 - Qwen3-STT
 - JSON validation utilities with detailed error positioning (line/column information)
-- [WebUI] Character generation prompt templates for full and single-field generation 
+- [WebUI] Character generation prompt templates for full and single-field generation
 - [WebUI] Flashcard undo functionality with Ctrl/Cmd+Z shortcut
 - [WebUI] Media review selection and focus settings
 - [WebUI] TldwApiClient methods for character export, restore, and bulk world book operations
@@ -933,7 +977,7 @@ and this project adheres to Some kind of Versioning
 - Moved the tldw_Browser_Assistant project and the tldw-frontent folder into the '/apps/' folder, as moving forward they will share the same base.
   - As a result, new frontend!
 - New monorepo development guide, shared UI package scaffold, ambient typings, and testing guide for extension/web UI.
-- Image creation API via files 
+- Image creation API via files
 
 ### Changed
 
@@ -1021,9 +1065,9 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
-- Added tldw-admin react frontend for admin Mgmt of the server. Very much WIP. 
-- Extended feedback system/schema - Added a unified feedback system (explicit/implicit) across chat and search, integrates message IDs into chat history and streaming, 
-- introduced API key KDF/key_id, 
+- Added tldw-admin react frontend for admin Mgmt of the server. Very much WIP.
+- Extended feedback system/schema - Added a unified feedback system (explicit/implicit) across chat and search, integrates message IDs into chat history and streaming,
+- introduced API key KDF/key_id,
 - added admin effective-config endpoint/UI,
 
 ### Changed

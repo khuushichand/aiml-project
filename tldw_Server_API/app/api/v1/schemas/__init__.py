@@ -1,3 +1,3 @@
-from . import reminders_schemas
+from . import family_wizard_schemas, reminders_schemas
 
-__all__ = ["reminders_schemas"]
+__all__ = ["family_wizard_schemas", "reminders_schemas"]

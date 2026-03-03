@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react"
-import { Button, Form, Input, Modal, message } from "antd"
+import { Button, Form, Input, Modal, Select, message } from "antd"
 import { Link, Plus } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useCollectionsStore } from "@/store/collections"
@@ -17,6 +17,7 @@ interface FormValues {
   title?: string
   tags?: string[]
   notes?: string
+  archive_mode?: "use_default" | "always" | "never"
 }
 
 const isValidUrl = (url: string): boolean => {
@@ -36,6 +37,8 @@ export const AddUrlModal: React.FC<AddUrlModalProps> = ({ onSuccess }) => {
   const addUrlModalOpen = useCollectionsStore((s) => s.addUrlModalOpen)
   const closeAddUrlModal = useCollectionsStore((s) => s.closeAddUrlModal)
   const addItem = useCollectionsStore((s) => s.addItem)
+  const readingArchiveControlsEnabled = useCollectionsStore((s) => s.readingArchiveControlsEnabled)
+  const setReadingArchiveControlsEnabled = useCollectionsStore((s) => s.setReadingArchiveControlsEnabled)
 
   const [loading, setLoading] = useState(false)
   const [tags, setTags] = useState<string[]>([])
@@ -49,7 +52,11 @@ export const AddUrlModal: React.FC<AddUrlModalProps> = ({ onSuccess }) => {
         url: values.url,
         title: values.title,
         tags,
-        notes: values.notes
+        notes: values.notes,
+        archive_mode:
+          readingArchiveControlsEnabled && values.archive_mode
+            ? values.archive_mode
+            : undefined
       })
 
       addItem({
@@ -81,11 +88,24 @@ export const AddUrlModal: React.FC<AddUrlModalProps> = ({ onSuccess }) => {
         return
       }
       const msg = error instanceof Error ? error.message : "Failed to add article"
+      if (msg.includes("reading_archive_controls_disabled")) {
+        setReadingArchiveControlsEnabled(false)
+      }
       message.error(msg)
     } finally {
       setLoading(false)
     }
-  }, [api, form, tags, addItem, closeAddUrlModal, onSuccess, t])
+  }, [
+    api,
+    form,
+    tags,
+    addItem,
+    closeAddUrlModal,
+    onSuccess,
+    readingArchiveControlsEnabled,
+    setReadingArchiveControlsEnabled,
+    t
+  ])
 
   const handleCancel = useCallback(() => {
     form.resetFields()
@@ -121,6 +141,7 @@ export const AddUrlModal: React.FC<AddUrlModalProps> = ({ onSuccess }) => {
         form={form}
         layout="vertical"
         className="mt-4"
+        initialValues={{ archive_mode: "use_default" }}
         onFinish={handleSubmit}
       >
         <Form.Item
@@ -186,6 +207,34 @@ export const AddUrlModal: React.FC<AddUrlModalProps> = ({ onSuccess }) => {
             )}
           />
         </Form.Item>
+
+        {readingArchiveControlsEnabled && (
+          <Form.Item
+            name="archive_mode"
+            label={t("collections:reading.archiveModeLabel", "Archive Mode")}
+            extra={t(
+              "collections:reading.archiveModeHint",
+              "Choose whether to create an archive copy when saving."
+            )}
+          >
+            <Select
+              options={[
+                {
+                  value: "use_default",
+                  label: t("collections:reading.archiveMode.default", "Use server default")
+                },
+                {
+                  value: "always",
+                  label: t("collections:reading.archiveMode.always", "Always archive")
+                },
+                {
+                  value: "never",
+                  label: t("collections:reading.archiveMode.never", "Never archive")
+                }
+              ]}
+            />
+          </Form.Item>
+        )}
       </Form>
     </Modal>
   )

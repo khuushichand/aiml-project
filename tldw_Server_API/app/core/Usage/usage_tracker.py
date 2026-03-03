@@ -8,14 +8,18 @@ Integrates with AuthNZ DatabasePool for both SQLite and Postgres.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import os
 import time
 from datetime import date, datetime, timezone
 from sqlite3 import Error as SQLiteError
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Metrics import increment_counter
@@ -157,6 +161,70 @@ def _enabled() -> bool:
         return True
 
 
+def _derive_request_remote_ip(request: Any, settings: Any) -> str | None:
+    try:
+        resolved = resolve_client_ip(request, settings)
+        if resolved:
+            text = str(resolved).strip()
+            return text or None
+    except Exception:
+        resolved = None
+    try:
+        peer = getattr(getattr(request, "client", None), "host", None)
+        if peer:
+            text = str(peer).strip()
+            return text or None
+    except Exception:
+        peer = None
+    return None
+
+
+def _derive_request_user_agent(request: Any) -> str | None:
+    try:
+        headers = getattr(request, "headers", None)
+        if headers is None:
+            return None
+        ua = headers.get("user-agent") or headers.get("User-Agent")
+        if ua is None:
+            return None
+        text = str(ua).strip()
+        return text or None
+    except Exception:
+        return None
+
+
+def _apply_pii_settings_to_meta(
+    *,
+    remote_ip: str | None,
+    user_agent: str | None,
+    settings: Any,
+) -> tuple[str | None, str | None]:
+    if bool(getattr(settings, "USAGE_LOG_DISABLE_META", False)):
+        return None, None
+    if not bool(getattr(settings, "PII_REDACT_LOGS", False)):
+        return remote_ip, user_agent
+
+    ip_out: str | None
+    salt = getattr(settings, "API_KEY_PEPPER", None) or getattr(settings, "JWT_SECRET_KEY", None)
+    if remote_ip:
+        if salt:
+            try:
+                digest = hmac.new(
+                    str(salt).encode("utf-8"),
+                    str(remote_ip).encode("utf-8"),
+                    hashlib.sha256,
+                ).hexdigest()
+                ip_out = f"hash:{digest[:16]}"
+            except Exception:
+                ip_out = "redacted"
+        else:
+            ip_out = "redacted"
+    else:
+        ip_out = None
+    # Preserve usage_log behavior: suppress user agent when PII redaction is enabled.
+    return ip_out, ""
+
+
 def compute_costs(provider: str, model: str, prompt_tokens: int, completion_tokens: int) -> tuple[float, float, float, bool]:
     """
     Compute (prompt_cost, completion_cost, total_cost, estimated)
@@ -186,6 +254,11 @@ async def log_llm_usage(
     currency: str = "USD",
     request_id: str | None = None,
     estimated: bool | None = None,
+    request: Any | None = None,
+    remote_ip: str | None = None,
+    user_agent: str | None = None,
+    token_name: str | None = None,
+    conversation_id: str | None = None,
 ) -> None:
     """
     Insert a single llm_usage_log row. Computes costs if needed.
@@ -203,6 +276,20 @@ async def log_llm_usage(
         p_cost, c_cost, t_cost, est_flag = compute_costs(provider, model, pt, ct)
         if estimated is None:
             estimated = est_flag
+
+        settings = get_settings()
+        effective_remote_ip = remote_ip
+        effective_user_agent = user_agent
+        if request is not None:
+            if effective_remote_ip is None:
+                effective_remote_ip = _derive_request_remote_ip(request, settings)
+            if effective_user_agent is None:
+                effective_user_agent = _derive_request_user_agent(request)
+        effective_remote_ip, effective_user_agent = _apply_pii_settings_to_meta(
+            remote_ip=effective_remote_ip,
+            user_agent=effective_user_agent,
+            settings=settings,
+        )
 
         # Record cost and tokens in Prometheus metrics (best-effort)
         try:
@@ -294,6 +381,12 @@ async def log_llm_usage(
 
         db_pool: DatabasePool = await get_db_pool()
         repo = AuthnzUsageRepo(db_pool)
+        effective_token_name = token_name
+        try:
+            if not effective_token_name and key_id is not None:
+                effective_token_name = await repo.get_api_key_name(key_id=int(key_id))
+        except Exception:
+            effective_token_name = token_name
         await repo.insert_llm_usage_log(
             user_id=user_id,
             key_id=key_id,
@@ -312,6 +405,10 @@ async def log_llm_usage(
             currency=currency,
             estimated=bool(estimated),
             request_id=request_id,
+            remote_ip=effective_remote_ip,
+            user_agent=effective_user_agent,
+            token_name=effective_token_name,
+            conversation_id=(str(conversation_id).strip() if conversation_id is not None else None),
         )
 
         # Shadow-write daily token usage into the shared ResourceDailyLedger so

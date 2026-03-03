@@ -55,6 +55,11 @@ function buildQueryString(params?: Record<string, QueryParamValue>): string {
   return query.toString();
 }
 
+function requestRouterAnalytics(path: string, params?: Record<string, string>) {
+  const queryParams = params ? new URLSearchParams(params).toString() : '';
+  return requestJson(`/admin/router-analytics/${path}${queryParams ? `?${queryParams}` : ''}`);
+}
+
 export async function getTeam(teamId: string) {
   return await requestJson(`/admin/teams/${encodeURIComponent(teamId)}`);
 }
@@ -684,6 +689,17 @@ export const api = {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/admin/llm-usage/top-spenders${queryParams ? `?${queryParams}` : ''}`);
   },
+  getRouterAnalyticsStatus: (params?: Record<string, string>) => requestRouterAnalytics('status', params),
+  getRouterAnalyticsStatusBreakdowns: (params?: Record<string, string>) =>
+    requestRouterAnalytics('status/breakdowns', params),
+  getRouterAnalyticsQuota: (params?: Record<string, string>) => requestRouterAnalytics('quota', params),
+  getRouterAnalyticsProviders: (params?: Record<string, string>) => requestRouterAnalytics('providers', params),
+  getRouterAnalyticsAccess: (params?: Record<string, string>) => requestRouterAnalytics('access', params),
+  getRouterAnalyticsNetwork: (params?: Record<string, string>) => requestRouterAnalytics('network', params),
+  getRouterAnalyticsModels: (params?: Record<string, string>) => requestRouterAnalytics('models', params),
+  getRouterAnalyticsConversations: (params?: Record<string, string>) => requestRouterAnalytics('conversations', params),
+  getRouterAnalyticsLog: (params?: Record<string, string>) => requestRouterAnalytics('log', params),
+  getRouterAnalyticsMeta: (params?: Record<string, string>) => requestRouterAnalytics('meta', params),
 
   // ============================================
   // Resource Governor

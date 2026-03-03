@@ -33,6 +33,11 @@ from starlette.staticfiles import StaticFiles
 from tldw_Server_API.app.core.startup_logging import (
     startup_api_key_log_value as _startup_api_key_log_value,
 )
+from tldw_Server_API.app.api.v1.router_registry import include_router_idempotent
+from tldw_Server_API.app.services.app_lifecycle import (
+    mark_lifecycle_shutdown,
+    mark_lifecycle_startup,
+)
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled as _shared_env_flag_enabled,
 )
@@ -1346,7 +1351,7 @@ async def lifespan(app: FastAPI):
     # Ensure in-process restarts (common in tests) reset readiness and job acquisition gates.
     # In production, the process typically exits after shutdown; in tests we reuse the app object.
     try:
-        READINESS_STATE["ready"] = True
+        mark_lifecycle_startup(app, READINESS_STATE)
         from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
 
         _JM.set_acquire_gate(False)
@@ -2231,6 +2236,7 @@ async def lifespan(app: FastAPI):
         import asyncio as _asyncio
         import os as _os
 
+        from tldw_Server_API.app.core.config import legacy_get as _legacy_get
         from tldw_Server_API.app.core.config import settings as _app_settings
         from tldw_Server_API.app.core.DB_Management.DB_Manager import (
             create_evaluations_database as _create_evals_db,
@@ -2953,7 +2959,9 @@ async def lifespan(app: FastAPI):
 
     # Start personalization consolidation service if enabled
     try:
-        _personalization_enabled = bool(_app_settings.get("PERSONALIZATION_ENABLED", True))
+        _personalization_enabled = bool(
+            _legacy_get("PERSONALIZATION_ENABLED", _app_settings.get("PERSONALIZATION_ENABLED", True))
+        )
         _skip_consolidation = _shared_env_flag_enabled("DISABLE_PERSONALIZATION_CONSOLIDATION")
         if not _personalization_enabled or _skip_consolidation:
             logger.info("Personalization consolidation disabled (flag or env)")
@@ -3321,7 +3329,7 @@ async def lifespan(app: FastAPI):
 
     # Flip readiness early and gate new job acquisitions for graceful shutdown
     try:
-        READINESS_STATE["ready"] = False
+        mark_lifecycle_shutdown(app, READINESS_STATE)
         from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
 
         _JM.set_acquire_gate(True)
@@ -4471,8 +4479,21 @@ def _resolve_cors_origins_or_raise(allowed_origins: list[str] | None) -> list[st
     raise RuntimeError(message)
 
 
-def _validate_cors_configuration_or_raise(origins: list[str], *, allow_credentials: bool) -> None:
+def _validate_cors_configuration_or_raise(
+    origins: list[str],
+    *,
+    allow_credentials: bool,
+    enforce_explicit_origins: bool = False,
+) -> None:
     """Reject invalid CORS combinations at startup."""
+    if enforce_explicit_origins and "*" in origins:
+        message = (
+            "Invalid CORS configuration: ALLOWED_ORIGINS cannot include '*' in production. "
+            "Configure explicit origins instead."
+        )
+        logger.critical(message)
+        raise RuntimeError(message)
+
     if allow_credentials and "*" in origins:
         message = (
             "Invalid CORS configuration: ALLOWED_ORIGINS cannot include '*' "
@@ -4776,6 +4797,7 @@ async def _display_startup_info_and_warm():
 from tldw_Server_API.app.core.config import (
     ALLOWED_ORIGINS,
     API_V1_PREFIX,
+    is_production_environment,
     route_enabled,
     should_allow_cors_credentials,
     should_disable_cors,
@@ -4787,7 +4809,11 @@ if should_disable_cors():
 else:
     origins = _resolve_cors_origins_or_raise(ALLOWED_ORIGINS)
     _cors_allow_credentials = should_allow_cors_credentials()
-    _validate_cors_configuration_or_raise(origins, allow_credentials=_cors_allow_credentials)
+    _validate_cors_configuration_or_raise(
+        origins,
+        allow_credentials=_cors_allow_credentials,
+        enforce_explicit_origins=is_production_environment(),
+    )
     _cors_allow_all_origins = "*" in origins
     _cors_allowed_openapi_origins = {str(o).rstrip("/") for o in origins if isinstance(o, str)}
     # # -- If you have any global middleware, add it here --
@@ -5155,16 +5181,16 @@ if _ULTRA_MINIMAL_APP:
     logger.info("ULTRA_MINIMAL_APP enabled: using control-plane health routes only.")
 elif _MINIMAL_TEST_APP:
     # Minimal set for paper_search tests
-    app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
-    app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
+    include_router_idempotent(app, research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
+    include_router_idempotent(app, paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
     # Include lightweight chat/character routes needed by tests
-    app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat")
-    app.include_router(conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
-    app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
-    app.include_router(
-        character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"]
+    include_router_idempotent(app, chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    include_router_idempotent(app, conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
+    include_router_idempotent(app, character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    include_router_idempotent(
+        app, character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"]
     )
-    app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    include_router_idempotent(app, character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
     # Include audio endpoints (REST + WebSocket) only when enabled by route policy.
     # In pytest + MINIMAL_TEST_APP, default to skipping audio router imports unless
     # explicitly requested. This avoids importing heavy optional transcriber deps
@@ -5414,8 +5440,10 @@ elif _MINIMAL_TEST_APP:
     # Guardian controls (parental/supervised account controls)
     try:
         from tldw_Server_API.app.api.v1.endpoints.guardian_controls import router as guardian_controls_router
+        from tldw_Server_API.app.api.v1.endpoints.family_wizard import router as family_wizard_router
 
         app.include_router(guardian_controls_router, prefix=f"{API_V1_PREFIX}/guardian", tags=["guardian"])
+        app.include_router(family_wizard_router, prefix=f"{API_V1_PREFIX}/guardian", tags=["guardian"])
     except _IMPORT_EXCEPTIONS as _guard_min_err:
         logger.debug(f"Skipping guardian controls router in minimal test app: {_guard_min_err}")
     # Self-monitoring (awareness notifications, crisis resources)
@@ -6183,11 +6211,19 @@ else:
     )
     try:
         from tldw_Server_API.app.api.v1.endpoints.guardian_controls import router as guardian_controls_router_full
+        from tldw_Server_API.app.api.v1.endpoints.family_wizard import router as family_wizard_router_full
         from tldw_Server_API.app.api.v1.endpoints.self_monitoring import router as self_monitoring_router_full
 
         _include_if_enabled(
             "guardian",
             guardian_controls_router_full,
+            prefix=f"{API_V1_PREFIX}/guardian",
+            tags=["guardian"],
+            default_stable=False,
+        )
+        _include_if_enabled(
+            "guardian",
+            family_wizard_router_full,
             prefix=f"{API_V1_PREFIX}/guardian",
             tags=["guardian"],
             default_stable=False,

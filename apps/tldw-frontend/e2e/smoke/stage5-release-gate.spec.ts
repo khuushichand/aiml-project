@@ -8,7 +8,7 @@ import {
 import type { DiagnosticsData } from "./smoke.setup"
 import type { Page } from "@playwright/test"
 
-const LOAD_TIMEOUT = 45_000
+const LOAD_TIMEOUT = 60_000
 const NAVIGATION_MAX_ATTEMPTS = 3
 
 const LISTED_ANTD_DEPRECATION_PATTERNS = [

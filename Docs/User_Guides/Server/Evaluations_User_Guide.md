@@ -1,5 +1,7 @@
 # Evaluations Module User Guide
 
+See also: [Benchmark Creation and Runs (API + WebUI/Extension)](Benchmark_Creation_API_WebUI_Extension_Guide.md)
+
 ## Table of Contents
 - [Overview](#overview)
 - [Getting Started](#getting-started)
