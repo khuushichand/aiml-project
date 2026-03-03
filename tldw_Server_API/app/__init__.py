@@ -21,18 +21,21 @@ except Exception:  # pragma: no cover - fallback for minimal tooling environment
     import logging
 
     logger = logging.getLogger(__name__)
-from starlette import status as _starlette_status
+try:
+    from starlette import status as _starlette_status
+except Exception:  # pragma: no cover - fallback for minimal tooling environments
+    _starlette_status = None
 from tldw_Server_API.app.core.testing import is_truthy
 
 # Compatibility aliases across Starlette versions.
-if not hasattr(_starlette_status, "HTTP_413_CONTENT_TOO_LARGE"):
+if _starlette_status is not None and not hasattr(_starlette_status, "HTTP_413_CONTENT_TOO_LARGE"):
     setattr(
         _starlette_status,
         "HTTP_413_CONTENT_TOO_LARGE",
         getattr(_starlette_status, "HTTP_413_REQUEST_ENTITY_TOO_LARGE", 413),
     )
 
-if not hasattr(_starlette_status, "HTTP_422_UNPROCESSABLE_CONTENT"):
+if _starlette_status is not None and not hasattr(_starlette_status, "HTTP_422_UNPROCESSABLE_CONTENT"):
     setattr(
         _starlette_status,
         "HTTP_422_UNPROCESSABLE_CONTENT",
