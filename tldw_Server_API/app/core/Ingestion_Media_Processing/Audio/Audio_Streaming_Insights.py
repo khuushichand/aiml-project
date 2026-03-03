@@ -337,7 +337,7 @@ class LiveMeetingInsights:
                 "groq": "mixtral-8x7b-32768",
                 "cohere": "command-r-plus",
                 "mistral": "mistral-large-latest",
-                "google": "gemini-1.5-flash",
+                "google": "gemini-2.5-flash",
                 "qwen": "qwen2-72b-instruct",
             }
             model = default_models.get(provider, "gpt-4o-mini")

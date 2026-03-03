@@ -153,7 +153,7 @@ def test_google_app_config_base_url_and_timeout(monkeypatch):
     a = GoogleAdapter()
     req = {
         "messages": [{"role": "user", "content": "hi"}],
-        "model": "gemini-1.5-flash",
+        "model": "gemini-2.5-flash",
         "api_key": "k",
         "app_config": {
             "google_api": {
@@ -164,4 +164,4 @@ def test_google_app_config_base_url_and_timeout(monkeypatch):
     }
     _ = a.chat(req)
     assert captured.get("timeout") == 45
-    assert str(captured.get("url", "")).startswith("https://google.mock/v1beta/models/gemini-1.5-flash:generateContent")
+    assert str(captured.get("url", "")).startswith("https://google.mock/v1beta/models/gemini-2.5-flash:generateContent")

@@ -294,42 +294,6 @@ MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
             "last_verified": None,
         },
-        "gemini-2.5-flash-preview": {
-            "context_window": None,
-            "max_output_tokens": None,
-            "capabilities": {
-                "vision": True,
-                "audio_input": True,
-                "audio_output": False,
-                "tool_use": True,
-                "json_mode": False,
-                "function_calling": True,
-                "streaming": True,
-                "thinking": False,
-            },
-            "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
-            "notes": "Gemini 2.5 Flash Preview (Gemini API).",
-            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
-            "last_verified": None,
-        },
-        "gemini-2.5-flash-preview-09-2025": {
-            "context_window": None,
-            "max_output_tokens": None,
-            "capabilities": {
-                "vision": True,
-                "audio_input": True,
-                "audio_output": False,
-                "tool_use": True,
-                "json_mode": False,
-                "function_calling": True,
-                "streaming": True,
-                "thinking": False,
-            },
-            "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
-            "notes": "Gemini 2.5 Flash Preview (09-2025).",
-            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
-            "last_verified": None,
-        },
         "gemini-2.5-flash-lite": {
             "context_window": 1_048_576,
             "max_output_tokens": None,
@@ -346,24 +310,6 @@ MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
             "notes": "Gemini 2.5 Flash Lite on Vertex AI; large context window per docs.",
             "source_url": "https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-flash-lite",
-            "last_verified": None,
-        },
-        "gemini-2.5-flash-lite-preview": {
-            "context_window": None,
-            "max_output_tokens": None,
-            "capabilities": {
-                "vision": True,
-                "audio_input": True,
-                "audio_output": False,
-                "tool_use": True,
-                "json_mode": False,
-                "function_calling": True,
-                "streaming": True,
-                "thinking": False,
-            },
-            "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
-            "notes": "Gemini 2.5 Flash-Lite Preview (Gemini API).",
-            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
             "last_verified": None,
         },
         "gemini-2.5-flash-lite-preview-09-2025": {
@@ -478,38 +424,6 @@ MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
             "last_verified": None,
         },
-        "gemini-1.5-pro": {
-            "context_window": None,
-            "max_output_tokens": None,
-            "capabilities": {
-                "vision": True,
-                "audio_input": True,
-                "audio_output": False,
-                "tool_use": True,
-                "json_mode": False,
-                "function_calling": True,
-                "streaming": True,
-                "thinking": False,
-            },
-            "modalities": {"input": ["text", "image", "audio"], "output": ["text"]},
-            "notes": "Multimodal Gemini; context may be very large.",
-        },
-        "gemini-1.5-flash": {
-            "context_window": None,
-            "max_output_tokens": None,
-            "capabilities": {
-                "vision": True,
-                "audio_input": True,
-                "audio_output": False,
-                "tool_use": True,
-                "json_mode": False,
-                "function_calling": True,
-                "streaming": True,
-                "thinking": False,
-            },
-            "modalities": {"input": ["text", "image", "audio"], "output": ["text"]},
-            "notes": "Fast multimodal Gemini variant.",
-        },
         "gemini-2.0-flash": {
             "context_window": None,
             "max_output_tokens": None,
@@ -527,22 +441,6 @@ MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "notes": "Gemini 2.0 Flash (Gemini API).",
             "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
             "last_verified": None,
-        },
-        "gemini-2.0-flash-exp": {
-            "context_window": None,
-            "max_output_tokens": None,
-            "capabilities": {
-                "vision": True,
-                "audio_input": True,
-                "audio_output": False,
-                "tool_use": True,
-                "json_mode": False,
-                "function_calling": True,
-                "streaming": True,
-                "thinking": False,
-            },
-            "modalities": {"input": ["text", "image", "audio"], "output": ["text"]},
-            "notes": "Experimental Gemini variant.",
         },
         "gemini-2.0-flash-lite": {
             "context_window": None,
@@ -1287,6 +1185,55 @@ def _resolve_model_tokenizer_support(
         }
 
 
+def _skipped_model_tokenizer_support(
+    reason: str,
+    *,
+    strict_mode_effective: bool,
+) -> dict[str, Any]:
+    return {
+        "available": False,
+        "tokenizer": None,
+        "kind": None,
+        "source": None,
+        "detokenize": False,
+        "count_accuracy": "unavailable",
+        "strict_mode_effective": strict_mode_effective,
+        "error": reason,
+    }
+
+
+def _should_probe_model_tokenizer(
+    *,
+    provider_type: str,
+    model_info: dict[str, Any],
+    model_name: str,
+    configured_model_names: set[str],
+    model_index: int,
+) -> tuple[bool, str | None]:
+    normalized_name = str(model_name or "").strip()
+    if not normalized_name:
+        return False, "Tokenizer probe skipped: model name is missing"
+
+    model_type = _infer_model_type(model_info)
+    if model_type in {"image", "video", "embedding"}:
+        return False, f"Tokenizer probe skipped: unsupported model type '{model_type}'"
+
+    modalities = model_info.get("modalities")
+    output_modalities: list[str] = []
+    if isinstance(modalities, dict):
+        output_modalities = _normalize_modalities(modalities.get("output"))
+    if output_modalities and "text" not in output_modalities:
+        return False, "Tokenizer probe skipped: model does not output text"
+
+    if provider_type == "commercial":
+        if configured_model_names and normalized_name not in configured_model_names:
+            return False, "Tokenizer probe skipped: catalog model is not explicitly configured"
+        if not configured_model_names and model_index > 0:
+            return False, "Tokenizer probe skipped: additional catalog models are not probed by default"
+
+    return True, None
+
+
 def _build_runtime_context(config_parser: Any) -> dict[str, Any]:
     strict_openai_compat = False
     try:
@@ -1632,6 +1579,7 @@ def get_configured_providers(
                     is_configured = True
             if provider_name == "mlx" and models and not is_configured:
                 is_configured = True
+            configured_model_names = {str(m).strip() for m in models if str(m).strip()}
 
             # Augment or seed with models from the pricing catalog for commercial providers.
             # This makes model_pricing.json the primary reference for available models,
@@ -1679,21 +1627,37 @@ def get_configured_providers(
                 models_info = filtered
                 models = [mi['name'] for mi in models_info]
 
-            for model_info in models_info:
+            strict_mode_effective = _strict_token_counting_enabled_shared(default=False)
+            for model_index, model_info in enumerate(models_info):
                 model_name = str(model_info.get("name") or model_info.get("id") or "").strip()
                 model_info["extra_body_compat"] = _safe_model_extra_body_compat(
                     provider_name,
                     model_name,
                     runtime_context,
                 )
-                tokenizer_support = _resolve_model_tokenizer_support(provider_name, model_name, config_parser)
+                should_probe_tokenizer, skip_reason = _should_probe_model_tokenizer(
+                    provider_type=provider_info["type"],
+                    model_info=model_info,
+                    model_name=model_name,
+                    configured_model_names=configured_model_names,
+                    model_index=model_index,
+                )
+                if should_probe_tokenizer:
+                    tokenizer_support = _resolve_model_tokenizer_support(provider_name, model_name, config_parser)
+                else:
+                    tokenizer_support = _skipped_model_tokenizer_support(
+                        skip_reason or "Tokenizer probe skipped",
+                        strict_mode_effective=strict_mode_effective,
+                    )
                 model_info["tokenizer_available"] = bool(tokenizer_support.get("available"))
                 model_info["tokenizer"] = tokenizer_support.get("tokenizer")
                 model_info["tokenizer_kind"] = tokenizer_support.get("kind")
                 model_info["tokenizer_source"] = tokenizer_support.get("source")
                 model_info["detokenize_available"] = bool(tokenizer_support.get("detokenize"))
                 model_info["count_accuracy"] = tokenizer_support.get("count_accuracy", "unavailable")
-                model_info["strict_mode_effective"] = bool(tokenizer_support.get("strict_mode_effective", False))
+                model_info["strict_mode_effective"] = bool(
+                    tokenizer_support.get("strict_mode_effective", strict_mode_effective)
+                )
                 if tokenizer_support.get("error"):
                     model_info["tokenization_error"] = tokenizer_support.get("error")
 

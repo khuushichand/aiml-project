@@ -134,7 +134,7 @@ class GoogleAdapter(ChatProvider):
         if merged.get("api_key") is None and cfg.get("api_key") is not None:
             merged["api_key"] = cfg.get("api_key")
         if merged.get("model") is None:
-            merged["model"] = cfg.get("model") or "gemini-1.5-flash-latest"
+            merged["model"] = cfg.get("model") or "gemini-2.5-flash"
         if merged.get("temperature") is None and cfg.get("temperature") is not None:
             merged["temperature"] = cfg.get("temperature")
         if merged.get("top_p") is None:

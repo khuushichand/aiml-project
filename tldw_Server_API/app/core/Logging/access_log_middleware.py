@@ -53,7 +53,7 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
                     status=status,
                     duration_ms=duration_ms,
                 )
-                level = "warning" if status >= 500 else "info"
+                level = "WARNING" if status >= 500 else "INFO"
                 log.log(level, f"HTTP {method} {path} -> {status} in {duration_ms}ms")
             except Exception as log_error:
                 # Never fail a request due to logging

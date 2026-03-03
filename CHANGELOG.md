@@ -6,6 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
 
+## [0.1.27] 2026-03-03
+
+### Added
+
+- Pinboard-style Collections enhancements for Reading:
+  - Added saved-search CRUD API surfaces:
+    - `POST /api/v1/reading/saved-searches`
+    - `GET /api/v1/reading/saved-searches`
+    - `PATCH /api/v1/reading/saved-searches/{search_id}`
+    - `DELETE /api/v1/reading/saved-searches/{search_id}`
+  - Added Reading item-note link API surfaces:
+    - `POST /api/v1/reading/items/{item_id}/links/note`
+    - `GET /api/v1/reading/items/{item_id}/links`
+    - `DELETE /api/v1/reading/items/{item_id}/links/note/{note_id}`
+  - Added strict same-user note existence enforcement for link creation while keeping note-content lifecycle under `/api/v1/notes`.
+  - Added archive-mode controls (`use_default|always|never`) and persisted archive metadata fields (`archive_requested`, `has_archive_copy`, `last_fetch_error`) in Reading responses.
+  - Added backend and frontend coverage for saved searches, note links, archive controls, and feature-flag gating.
+- Added changelog coverage for this session’s Collections strict-boundary delivery and review remediation pass.
+
+### Changed
+
+- Updated Product PRD acceptance and test criteria for Reading saved-search and item-note link surfaces, including strict notes-boundary expectations.
+- Improved the Collections implementation plan’s final commit-step readability by consolidating long `git add` instructions into grouped multiline commands.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed archive artifact creation in async paths by offloading blocking filesystem operations (`mkdir`, `write_text`) with `asyncio.to_thread`.
+- Fixed archive metadata update reliability by removing silent suppression and logging/reporting metadata patch failures via `archive_error`.
+- Fixed import-time crash risk from invalid archive env vars by introducing guarded integer parsing with safe defaults.
+- Fixed saved-search input validation gaps:
+  - Reject unsupported query keys and malformed query value types.
+  - Reject whitespace-only search names (create and update).
+  - Normalize and validate `sort`/filter payloads before persistence.
+- Fixed endpoint typing clarity by adding explicit row-type annotations for saved-search and note-link response helpers.
+
+
 ## [0.1.26] 2026-03-01
 
 ### Added

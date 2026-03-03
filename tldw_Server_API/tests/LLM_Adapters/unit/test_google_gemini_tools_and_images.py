@@ -64,7 +64,7 @@ def test_google_gemini_tools_and_inline_image_mapping(monkeypatch):
     adapter = GoogleAdapter()
     # Messages with text and data: URL image part
     request = {
-        "model": "gemini-1.5-pro",
+        "model": "gemini-2.5-pro",
         "api_key": "sk-test",
         "messages": [
             {
@@ -121,6 +121,6 @@ def test_google_error_normalization_auth(monkeypatch):
 
     adapter = GoogleAdapter()
     with pytest.raises(Exception) as ei:
-        adapter.chat({"model": "gemini-1.5-pro", "api_key": "bad", "messages": [{"role": "user", "content": "hi"}]})
+        adapter.chat({"model": "gemini-2.5-pro", "api_key": "bad", "messages": [{"role": "user", "content": "hi"}]})
     # Message should reflect provider auth mapping
     assert "invalid api key" in str(ei.value).lower() or "unauth" in str(ei.value).lower()

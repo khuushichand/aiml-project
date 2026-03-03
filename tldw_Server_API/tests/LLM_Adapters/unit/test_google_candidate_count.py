@@ -49,7 +49,7 @@ def test_google_includes_candidate_count_when_n_set(monkeypatch):
 
     adapter = GoogleAdapter()
     req = {
-        "model": "gemini-1.5-pro",
+        "model": "gemini-2.5-pro",
         "api_key": "sk-test",
         "n": 2,
         "messages": [{"role": "user", "content": "hi"}],

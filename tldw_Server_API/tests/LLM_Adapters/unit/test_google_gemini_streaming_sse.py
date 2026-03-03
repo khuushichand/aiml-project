@@ -36,7 +36,7 @@ def test_google_gemini_streaming_sse_passthrough(monkeypatch):
 
     adapter = GoogleAdapter()
     req = {
-        "model": "gemini-1.5-pro",
+        "model": "gemini-2.5-pro",
         "api_key": "sk-test",
         "messages": [{"role": "user", "content": "hi"}],
     }

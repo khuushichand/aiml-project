@@ -29,8 +29,9 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-3-haiku": { inputPer1K: 0.00025, outputPer1K: 0.00125 },
 
   // Google
-  "gemini-1.5-pro": { inputPer1K: 0.00125, outputPer1K: 0.005 },
-  "gemini-1.5-flash": { inputPer1K: 0.000075, outputPer1K: 0.0003 },
+  "gemini-2.5-pro": { inputPer1K: 0.00125, outputPer1K: 0.01 },
+  "gemini-2.5-flash": { inputPer1K: 0.0003, outputPer1K: 0.0025 },
+  "gemini-2.5-flash-lite": { inputPer1K: 0.0001, outputPer1K: 0.0004 },
   "gemini-2.0-flash": { inputPer1K: 0.0001, outputPer1K: 0.0004 },
   "gemini-pro": { inputPer1K: 0.0005, outputPer1K: 0.0015 },
 

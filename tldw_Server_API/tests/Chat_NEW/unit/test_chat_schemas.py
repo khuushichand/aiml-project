@@ -314,7 +314,7 @@ class TestToolsAndFunctions:
         """Test request accepts Gemini-native tools."""
         request = ChatCompletionRequest(
             api_provider="google",
-            model="gemini-1.5-pro",
+            model="gemini-2.5-pro",
             messages=[{"role": "user", "content": "Hello"}],
             tools=[{"function_declarations": [{"name": "lookup"}]}],
         )

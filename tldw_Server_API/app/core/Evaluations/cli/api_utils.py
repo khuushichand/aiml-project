@@ -156,7 +156,7 @@ def get_api_model(api_name: str, model_override: Optional[str] = None) -> str:
     api_defaults = {
         'openai': 'gpt-4',
         'anthropic': 'claude-sonnet-4.5',
-        'google': 'gemini-1.5-pro',
+        'google': 'gemini-2.5-flash',
         'cohere': 'command-r-plus',
         'deepseek': 'deepseek-chat',
         'groq': 'llama3-70b-8192',

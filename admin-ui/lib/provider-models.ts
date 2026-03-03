@@ -215,22 +215,6 @@ export const PROVIDER_MODELS: Record<string, Provider> = {
         defaultInputPrice: 0.04,
         defaultOutputPrice: 0.16,
       },
-      {
-        value: 'gemini-1.5-pro',
-        label: 'Gemini 1.5 Pro',
-        description: 'Advanced 1.5, 2M context, vision',
-        contextWindow: 2097152,
-        defaultInputPrice: 1.25,
-        defaultOutputPrice: 5.0,
-      },
-      {
-        value: 'gemini-1.5-flash',
-        label: 'Gemini 1.5 Flash',
-        description: 'Fast 1.5, 1M context, vision',
-        contextWindow: 1048576,
-        defaultInputPrice: 0.075,
-        defaultOutputPrice: 0.3,
-      },
     ],
   },
   fireworks: {

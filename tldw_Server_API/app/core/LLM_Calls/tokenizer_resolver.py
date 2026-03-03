@@ -395,6 +395,9 @@ class GoogleCountOnlyHTTPAdapter:
         header_auth = dict(headers)
         if self.api_key:
             header_auth["x-goog-api-key"] = self.api_key
+        allow_query_key_fallback = _truthy(
+            str(os.getenv("GOOGLE_COUNTTOKENS_ALLOW_QUERY_KEY_FALLBACK", "")).strip().lower()
+        )
         payload = {
             "contents": [
                 {
@@ -406,53 +409,60 @@ class GoogleCountOnlyHTTPAdapter:
 
         last_error: Exception | None = None
         for url in self._candidate_urls():
-            attempts: list[tuple[str, dict[str, str]]] = [(url, header_auth)]
-            if self.api_key:
+            try:
+                response = _http_post(
+                    url=url,
+                    payload=payload,
+                    headers=header_auth,
+                    timeout=self.timeout_seconds,
+                )
+            except Exception as exc:
+                last_error = exc
+                continue
+
+            if response.status_code == 404:
+                continue
+
+            # Optional compatibility mode for deployments that require key in query params.
+            # Disabled by default to avoid leaking secrets in URL logs.
+            if (
+                response.status_code in {401, 403}
+                and allow_query_key_fallback
+                and self.api_key
+            ):
                 separator = "&" if "?" in url else "?"
                 query_url = f"{url}{separator}key={quote_plus(self.api_key)}"
-                attempts.append((query_url, headers))
-
-            for attempt_index, (attempt_url, attempt_headers) in enumerate(attempts):
                 try:
                     response = _http_post(
-                        url=attempt_url,
+                        url=query_url,
                         payload=payload,
-                        headers=attempt_headers,
+                        headers=headers,
                         timeout=self.timeout_seconds,
                     )
                 except Exception as exc:
                     last_error = exc
                     continue
-
                 if response.status_code == 404:
                     continue
 
-                # Some Gemini deployments accept API keys only as query params.
-                if (
-                    response.status_code in {401, 403}
-                    and attempt_index == 0
-                    and len(attempts) > 1
-                ):
-                    continue
-
-                if response.status_code >= 400:
-                    raise TokenizerUnavailable(
-                        f"Provider tokenizer endpoint error ({response.status_code})"
-                    )
-                try:
-                    data = response.json()
-                except Exception as exc:
-                    raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid JSON") from exc
-                if not isinstance(data, dict):
-                    raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid payload")
-
-                parsed = _extract_int_value(
-                    data,
-                    ("totalTokens", "total_tokens", "token_count", "count", "promptTokenCount"),
+            if response.status_code >= 400:
+                raise TokenizerUnavailable(
+                    f"Provider tokenizer endpoint error ({response.status_code})"
                 )
-                if parsed is None or parsed < 0:
-                    raise TokenizerUnavailable("Google countTokens response missing token count")
-                return int(parsed)
+            try:
+                data = response.json()
+            except Exception as exc:
+                raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid JSON") from exc
+            if not isinstance(data, dict):
+                raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid payload")
+
+            parsed = _extract_int_value(
+                data,
+                ("totalTokens", "total_tokens", "token_count", "count", "promptTokenCount"),
+            )
+            if parsed is None or parsed < 0:
+                raise TokenizerUnavailable("Google countTokens response missing token count")
+            return int(parsed)
 
         if last_error is not None:
             raise TokenizerUnavailable("Provider tokenizer endpoint unavailable") from last_error

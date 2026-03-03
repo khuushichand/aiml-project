@@ -567,7 +567,7 @@ class TestZAIProvider:
         ),
         (
             "google",
-            {"messages": [{"role": "user", "content": "Hi"}], "api_key": "test_key", "model": "gemini-1.5-flash"},
+            {"messages": [{"role": "user", "content": "Hi"}], "api_key": "test_key", "model": "gemini-2.5-flash"},
             "google_adapter",
             503,
             ChatProviderError,
@@ -1066,7 +1066,7 @@ class TestSSENormalization:
             api_provider="google",
             messages=[{"role": "user", "content": "Hi"}],
             api_key="test",
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             streaming=True,
         )
         chunks = list(gen)
@@ -1110,7 +1110,7 @@ class TestSSENormalization:
             api_provider="google",
             messages=[{"role": "user", "content": "Hi"}],
             api_key="test",
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             streaming=True,
         )
         chunks = list(gen)
@@ -1162,7 +1162,7 @@ class TestSSENormalization:
             api_provider="google",
             messages=[{"role": "user", "content": "Hi"}],
             api_key="test",
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             streaming=True,
         )
         chunks = list(gen)
@@ -1274,7 +1274,7 @@ class TestSSENormalization:
                 api_provider="google",
                 messages=[{"role": "user", "content": "Hi"}],
                 api_key="test",
-                model="gemini-1.5-flash",
+                model="gemini-2.5-flash",
                 streaming=True,
             ))
 
@@ -1311,7 +1311,7 @@ class TestSSENormalization:
             api_provider="google",
             messages=[{"role": "user", "content": "Hi"}],
             api_key="test",
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             streaming=True,
         )
         chunks = list(gen)

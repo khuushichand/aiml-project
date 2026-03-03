@@ -83,12 +83,8 @@ DEFAULT_PRICING: dict[str, dict[str, dict[str, float]]] = {
         "gemini-3-pro-image-preview": {"prompt": 2e-3, "completion": 120e-3},
 
         "gemini-2.5-pro": {"prompt": 1.25e-3, "completion": 10e-3},
-        "gemini-2.5-pro-high": {"prompt": 2.5e-3, "completion": 15e-3},
         "gemini-2.5-flash": {"prompt": 0.3e-3, "completion": 2.5e-3},
-        "gemini-2.5-flash-preview": {"prompt": 0.3e-3, "completion": 2.5e-3},
-        "gemini-2.5-flash-preview-09-2025": {"prompt": 0.3e-3, "completion": 2.5e-3},
         "gemini-2.5-flash-lite": {"prompt": 0.1e-3, "completion": 0.4e-3},
-        "gemini-2.5-flash-lite-preview": {"prompt": 0.1e-3, "completion": 0.4e-3},
         "gemini-2.5-flash-lite-preview-09-2025": {"prompt": 0.1e-3, "completion": 0.4e-3},
         "gemini-2.5-flash-native-audio-preview-12-2025": {"prompt": 3e-3, "completion": 12e-3},
         "gemini-2.5-flash-image": {"prompt": 0.3e-3, "completion": 30e-3},
@@ -97,13 +93,7 @@ DEFAULT_PRICING: dict[str, dict[str, dict[str, float]]] = {
         "gemini-2.5-computer-use-preview-10-2025": {"prompt": 1.25e-3, "completion": 10e-3},
 
         "gemini-2.0-flash": {"prompt": 0.1e-3, "completion": 0.4e-3},
-        "gemini-2.0-flash-exp": {"prompt": 0.1e-3, "completion": 0.4e-3},
         "gemini-2.0-flash-lite": {"prompt": 0.075e-3, "completion": 0.3e-3},
-
-        "gemini-1.5-pro": {"prompt": 2e-3, "completion": 5e-3},
-        "gemini-1.5-pro-latest": {"prompt": 2e-3, "completion": 5e-3},
-        "gemini-1.5-flash": {"prompt": 0.5e-3, "completion": 1e-3},
-        "gemini-1.5-flash-latest": {"prompt": 0.5e-3, "completion": 1e-3},
 
         "imagen-4.0-generate-001": {"prompt": 0.0, "completion": 0.0},
         "imagen-4.0-ultra-generate-001": {"prompt": 0.0, "completion": 0.0},

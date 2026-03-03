@@ -3066,7 +3066,7 @@ def load_and_log_configs():
         groq_api_retry_delay = config_parser_object.get('API', 'groq_api_retry_delay', fallback='5')
 
         # Google
-        google_model = config_parser_object.get('API', 'google_model', fallback='gemini-1.5-pro')
+        google_model = config_parser_object.get('API', 'google_model', fallback='gemini-2.5-flash')
         google_streaming = config_parser_object.get('API', 'google_streaming', fallback='False')
         google_temperature = config_parser_object.get('API', 'google_temperature', fallback='0.7')
         google_top_p = config_parser_object.get('API', 'google_top_p', fallback='0.95')

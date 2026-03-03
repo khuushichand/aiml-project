@@ -500,6 +500,7 @@ def test_google_count_only_adapter_falls_back_to_query_key_auth(monkeypatch):
         return _FakeResponse(401, {"error": {"message": "invalid key transport"}})
 
     monkeypatch.setattr(resolver, "_http_post", _fake_post)
+    monkeypatch.setenv("GOOGLE_COUNTTOKENS_ALLOW_QUERY_KEY_FALLBACK", "true")
 
     adapter = resolver.GoogleCountOnlyHTTPAdapter(
         base_url="https://generativelanguage.googleapis.com/v1beta",
@@ -511,6 +512,38 @@ def test_google_count_only_adapter_falls_back_to_query_key_auth(monkeypatch):
     assert count == 7
     assert any("?key=test-google-key" in url for url, _headers in calls)
     assert any(headers.get("x-goog-api-key") == "test-google-key" for _url, headers in calls)
+
+
+def test_google_count_only_adapter_does_not_use_query_key_fallback_by_default(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    calls: list[str] = []
+
+    class _FakeResponse:
+        def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    def _fake_post(*, url: str, payload, headers, timeout):  # noqa: ANN001, ARG001
+        calls.append(url)
+        return _FakeResponse(401, {"error": {"message": "invalid key transport"}})
+
+    monkeypatch.setattr(resolver, "_http_post", _fake_post)
+    monkeypatch.delenv("GOOGLE_COUNTTOKENS_ALLOW_QUERY_KEY_FALLBACK", raising=False)
+
+    adapter = resolver.GoogleCountOnlyHTTPAdapter(
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        model="gemini-2.5-flash",
+        api_key="test-google-key",
+    )
+
+    with pytest.raises(resolver.TokenizerUnavailable, match="401"):
+        adapter.count_tokens("hello world")
+
+    assert all("?key=" not in url for url in calls)
 
 
 def test_coerce_int_rejects_non_integral_float():

@@ -606,21 +606,12 @@ class PromptExecutor:
                 "gemini-3-pro-preview": 0.007,
                 "gemini-3-flash-preview": 0.00175,
                 "gemini-2.5-pro": 0.005625,
-                "gemini-2.5-pro-high": 0.00875,
                 "gemini-2.5-flash": 0.0014,
-                "gemini-2.5-flash-preview": 0.0014,
-                "gemini-2.5-flash-preview-09-2025": 0.0014,
                 "gemini-2.5-flash-lite": 0.00025,
-                "gemini-2.5-flash-lite-preview": 0.00025,
                 "gemini-2.5-flash-lite-preview-09-2025": 0.00025,
                 "gemini-2.5-computer-use-preview-10-2025": 0.005625,
                 "gemini-2.0-flash": 0.00025,
-                "gemini-2.0-flash-exp": 0.00025,
                 "gemini-2.0-flash-lite": 0.0001875,
-                "gemini-1.5-pro": 0.0035,
-                "gemini-1.5-pro-latest": 0.0035,
-                "gemini-1.5-flash": 0.00075,
-                "gemini-1.5-flash-latest": 0.00075,
             }
         }
 
