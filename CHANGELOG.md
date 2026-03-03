@@ -73,6 +73,11 @@ and this project adheres to Some kind of Versioning
 
 - Updated Product PRD acceptance and test criteria for Reading saved-search and item-note link surfaces, including strict notes-boundary expectations.
 - Improved the Collections implementation plan’s final commit-step readability by consolidating long `git add` instructions into grouped multiline commands.
+- Character import preview UX now shows a dedicated `OK` button after successful upload completion so users can dismiss with explicit confirmation instead of relying on the modal close icon.
+- GitHub Advanced Security triage for PR #753 was completed end-to-end:
+  - Investigated each remaining CodeQL finding by rule/path and separated true issues from false positives.
+  - Closed residual `py/path-injection` findings as false positives only after validating trusted-root containment in MLX tokenizer artifact resolution.
+  - Stepped through failing checks until the PR returned to all-green status.
 
 ### Removed
 
@@ -88,6 +93,12 @@ and this project adheres to Some kind of Versioning
   - Reject whitespace-only search names (create and update).
   - Normalize and validate `sort`/filter payloads before persistence.
 - Fixed endpoint typing clarity by adding explicit row-type annotations for saved-search and note-link response helpers.
+- Fixed remaining security findings in PR #753:
+  - Hardened MLX tokenizer artifact candidate path normalization and trusted-root enforcement in `tokenizer_resolver.py` to prevent traversal/out-of-root resolution.
+  - Strengthened Notes attachment markdown escaping to include backslashes and newline normalization.
+  - Strengthened Notes export YAML escaping for backslashes and control characters (`\r`, `\n`, `\t`) in frontmatter values.
+  - Removed admin UI API key cleartext persistence in `sessionStorage`; API key auth now remains in-memory only for single-user mode.
+  - Added/updated regression coverage for MLX path handling, notes frontmatter escaping, and admin auth API key storage behavior.
 
 
 ## [0.1.26] 2026-03-01
