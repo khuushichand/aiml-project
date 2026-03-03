@@ -74,6 +74,74 @@ _CREATE_TOOL_CATALOGS = [
 ]
 
 
+_CREATE_MCP_HUB_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_acp_profiles (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            profile_json TEXT NOT NULL DEFAULT '{}',
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_acp_profiles_scope UNIQUE (name, owner_scope_type, owner_scope_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_acp_profiles_scope "
+        "ON mcp_acp_profiles(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_servers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            enabled BOOLEAN DEFAULT TRUE,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            transport TEXT NOT NULL,
+            config_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_servers_scope "
+        "ON mcp_external_servers(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_secrets (
+            server_id TEXT PRIMARY KEY REFERENCES mcp_external_servers(id) ON DELETE CASCADE,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT NULL,
+            updated_by INTEGER NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_secrets_updated_at "
+        "ON mcp_external_server_secrets(updated_at)",
+        (),
+    ),
+]
+
+
 _CREATE_PRIVILEGE_SNAPSHOTS = [
     (
         """
@@ -1144,6 +1212,28 @@ async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bo
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL tool catalogs tables: {exc}")
+        return False
+
+
+async def ensure_mcp_hub_tables_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure MCP Hub management tables exist on PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False  # not postgres
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"PG ensure authnz core tables before mcp hub tables failed: {exc}")
+        for sql, params in _CREATE_MCP_HUB_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure mcp hub tables DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL MCP Hub tables (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL MCP Hub tables: {exc}")
         return False
 
 
