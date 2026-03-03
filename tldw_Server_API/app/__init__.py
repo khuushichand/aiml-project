@@ -15,7 +15,12 @@ from __future__ import annotations
 import os
 import sys
 
-from loguru import logger
+try:
+    from loguru import logger
+except Exception:  # pragma: no cover - fallback for minimal tooling environments
+    import logging
+
+    logger = logging.getLogger(__name__)
 from starlette import status as _starlette_status
 from tldw_Server_API.app.core.testing import is_truthy
 
