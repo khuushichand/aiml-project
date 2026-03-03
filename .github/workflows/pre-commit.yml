@@ -54,5 +54,5 @@ jobs:
           fi
       - name: Guard Runtime Compatibility Debt
         run: |
-          # Run this guard test with a minimal config to avoid loading full-suite plugins.
-          python -m pytest -c /dev/null tldw_Server_API/tests/lint/test_no_new_runtime_compat_markers.py -v
+          # Run this guard test with a minimal config and cut off root conftest/plugin loading.
+          python -m pytest -c /dev/null --confcutdir=tldw_Server_API/tests/lint -o cache_dir=/tmp/pytest-cache-precommit tldw_Server_API/tests/lint/test_no_new_runtime_compat_markers.py -v
