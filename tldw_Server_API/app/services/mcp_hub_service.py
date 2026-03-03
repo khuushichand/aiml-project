@@ -243,11 +243,11 @@ class McpHubService:
                     existing_config = parsed
             except (TypeError, ValueError):
                 existing_config = {}
-        return await self.create_external_server(
-            server_id=server_id,
+        row = await self.repo.update_external_server(
+            server_id,
             name=name if name is not None else str(existing.get("name") or ""),
             transport=transport if transport is not None else str(existing.get("transport") or ""),
-            config=config if config is not None else existing_config,
+            config_json=json.dumps(config if config is not None else existing_config),
             owner_scope_type=(
                 owner_scope_type
                 if owner_scope_type is not None
@@ -256,8 +256,23 @@ class McpHubService:
             owner_scope_id=owner_scope_id if owner_scope_id is not None else existing.get("owner_scope_id"),
             enabled=enabled if enabled is not None else bool(existing.get("enabled")),
             actor_id=actor_id,
-            allow_existing=True,
         )
+        if not row:
+            raise ResourceNotFoundError("mcp_external_server", identifier=server_id)
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.external_server.update",
+                actor_id=actor_id,
+                resource_type="mcp_external_server",
+                resource_id=server_id,
+                metadata={
+                    "name": row.get("name"),
+                    "transport": row.get("transport"),
+                    "enabled": row.get("enabled"),
+                },
+            )
+        )
+        return row
 
     async def list_external_servers(
         self,

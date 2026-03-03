@@ -323,6 +323,53 @@ class McpHubRepo:
         row = await self.get_external_server(server_id)
         return row or {}
 
+    async def update_external_server(
+        self,
+        server_id: str,
+        *,
+        name: str,
+        transport: str,
+        config_json: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        enabled: bool,
+        actor_id: int | None,
+    ) -> dict[str, Any] | None:
+        """Update an existing external server row and return the normalized record."""
+        scope_type = _normalize_scope_type(owner_scope_type)
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        enabled_value: bool | int = enabled if getattr(self.db_pool, "pool", None) is not None else int(enabled)
+        cursor = await self.db_pool.execute(
+            """
+            UPDATE mcp_external_servers
+            SET name = ?,
+                enabled = ?,
+                owner_scope_type = ?,
+                owner_scope_id = ?,
+                transport = ?,
+                config_json = ?,
+                updated_by = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                name.strip(),
+                enabled_value,
+                scope_type,
+                owner_scope_id,
+                transport.strip(),
+                config_json,
+                actor_id,
+                ts,
+                server_id.strip(),
+            ),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        if not (rowcount and rowcount > 0):
+            return None
+        return await self.get_external_server(server_id)
+
     async def get_external_server(self, server_id: str) -> dict[str, Any] | None:
         row = await self.db_pool.fetchone(
             """
