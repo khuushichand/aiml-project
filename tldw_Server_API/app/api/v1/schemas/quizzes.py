@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class QuestionType(str, Enum):
@@ -12,10 +12,19 @@ class QuestionType(str, Enum):
     FILL_BLANK = "fill_blank"
 
 
+class QuizSourceType(str, Enum):
+    MEDIA = "media"
+    NOTE = "note"
+    FLASHCARD_DECK = "flashcard_deck"
+    FLASHCARD_CARD = "flashcard_card"
+
+
 AnswerValue = int | str | list[int] | dict[str, str]
 
 
 class SourceCitation(BaseModel):
+    source_type: Optional[QuizSourceType] = None
+    source_id: Optional[str] = Field(None, min_length=1)
     label: Optional[str] = None
     quote: Optional[str] = None
     media_id: Optional[int] = Field(None, ge=1)
@@ -24,11 +33,19 @@ class SourceCitation(BaseModel):
     source_url: Optional[str] = None
 
 
+class QuizGenerateSource(BaseModel):
+    source_type: QuizSourceType
+    source_id: str = Field(..., min_length=1)
+
+
 class QuizCreate(BaseModel):
     name: str = Field(..., description="Quiz name")
     description: Optional[str] = Field(None, description="Optional quiz description")
     workspace_tag: Optional[str] = Field(None, description="Optional workspace tag (e.g., 'workspace:<slug-or-id>')")
     media_id: Optional[int] = Field(None, description="Source media ID for AI-generated quizzes")
+    source_bundle_json: Optional[list[QuizGenerateSource]] = Field(
+        None, description="Optional canonical mixed-source bundle used to generate this quiz"
+    )
     time_limit_seconds: Optional[int] = Field(None, ge=1, description="Optional time limit in seconds")
     passing_score: Optional[int] = Field(None, ge=0, le=100, description="Passing score percentage")
 
@@ -40,6 +57,7 @@ class QuizUpdate(BaseModel):
     description: Optional[str] = None
     workspace_tag: Optional[str] = None
     media_id: Optional[int] = None
+    source_bundle_json: Optional[list[QuizGenerateSource]] = None
     time_limit_seconds: Optional[int] = Field(None, ge=1)
     passing_score: Optional[int] = Field(None, ge=0, le=100)
     expected_version: Optional[int] = None
@@ -51,6 +69,7 @@ class QuizResponse(BaseModel):
     description: Optional[str] = None
     workspace_tag: Optional[str] = None
     media_id: Optional[int] = None
+    source_bundle_json: Optional[list[QuizGenerateSource]] = None
     total_questions: int
     time_limit_seconds: Optional[int] = None
     passing_score: Optional[int] = None
@@ -168,13 +187,20 @@ class AttemptListResponse(BaseModel):
 
 
 class QuizGenerateRequest(BaseModel):
-    media_id: int
+    media_id: Optional[int] = Field(None, ge=1)
+    sources: Optional[list[QuizGenerateSource]] = Field(None, min_length=1)
     num_questions: int = Field(10, ge=1, le=100)
     question_types: Optional[list[QuestionType]] = None
     difficulty: str = Field("mixed", description="easy, medium, hard, mixed")
     focus_topics: Optional[list[str]] = None
     model: Optional[str] = None
     workspace_tag: Optional[str] = Field(None, description="Optional workspace tag (e.g., 'workspace:<slug-or-id>')")
+
+    @model_validator(mode="after")
+    def validate_media_id_or_sources(self) -> "QuizGenerateRequest":
+        if self.media_id is None and not self.sources:
+            raise ValueError("Either media_id or sources must be provided")
+        return self
 
 
 class QuizGenerateResponse(BaseModel):
@@ -201,6 +227,7 @@ class QuizImportQuiz(BaseModel):
     description: Optional[str] = None
     workspace_tag: Optional[str] = None
     media_id: Optional[int] = None
+    source_bundle_json: Optional[list[QuizGenerateSource]] = None
     time_limit_seconds: Optional[int] = Field(None, ge=1)
     passing_score: Optional[int] = Field(None, ge=0, le=100)
 

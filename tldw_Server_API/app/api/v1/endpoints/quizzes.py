@@ -30,7 +30,10 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.services.quiz_generator import generate_quiz_from_media
+from tldw_Server_API.app.services.quiz_generator import (
+    QuizProvenanceValidationError,
+    generate_quiz_from_sources,
+)
 
 router = APIRouter(prefix="/quizzes", tags=["quizzes"])
 QUIZ_EXPORT_FORMAT = "tldw.quiz.export.v1"
@@ -344,12 +347,19 @@ async def generate_quiz(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     media_db: MediaDatabase = Depends(get_media_db_for_user),
 ):
-    """Generate a quiz from media content using AI."""
+    """Generate a quiz from mixed sources using AI."""
     try:
-        return await generate_quiz_from_media(
+        if request.sources:
+            sources = [source.model_dump() for source in request.sources]
+        elif request.media_id is not None:
+            sources = [{"source_type": "media", "source_id": str(request.media_id)}]
+        else:
+            raise ValueError("Either media_id or sources must be provided")
+
+        return await generate_quiz_from_sources(
             db=db,
             media_db=media_db,
-            media_id=request.media_id,
+            sources=sources,
             num_questions=request.num_questions,
             question_types=request.question_types,
             difficulty=request.difficulty,
@@ -357,6 +367,8 @@ async def generate_quiz(
             model=request.model,
             workspace_tag=request.workspace_tag,
         )
+    except QuizProvenanceValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except ConflictError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:

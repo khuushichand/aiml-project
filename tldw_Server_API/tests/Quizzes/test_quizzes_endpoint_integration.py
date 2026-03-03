@@ -59,6 +59,37 @@ def client_with_quizzes_db(quizzes_db: CharactersRAGDB):
     TestConfig.reset_settings()
 
 
+def test_quiz_source_bundle_roundtrip_via_db_create_and_get(quizzes_db: CharactersRAGDB):
+    quiz_id = quizzes_db.create_quiz(
+        name="Source Bundle Quiz",
+        source_bundle_json=[{"source_type": "note", "source_id": "note-1"}],
+    )
+
+    row = quizzes_db.get_quiz(quiz_id)
+    assert row is not None
+    assert row["source_bundle_json"] == [{"source_type": "note", "source_id": "note-1"}]
+
+
+def test_quiz_response_includes_source_bundle(client_with_quizzes_db: TestClient):
+    create_response = client_with_quizzes_db.post(
+        "/api/v1/quizzes",
+        json={
+            "name": "API Source Bundle Quiz",
+            "source_bundle_json": [{"source_type": "note", "source_id": "note-1"}],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["source_bundle_json"] == [{"source_type": "note", "source_id": "note-1"}]
+
+    quiz_id = created["id"]
+    fetch_response = client_with_quizzes_db.get(f"/api/v1/quizzes/{quiz_id}", headers=AUTH_HEADERS)
+    assert fetch_response.status_code == 200
+    fetched = fetch_response.json()
+    assert fetched["source_bundle_json"] == [{"source_type": "note", "source_id": "note-1"}]
+
+
 def test_quiz_endpoints_flow(client_with_quizzes_db: TestClient):
     r = client_with_quizzes_db.post(
         "/api/v1/quizzes",
