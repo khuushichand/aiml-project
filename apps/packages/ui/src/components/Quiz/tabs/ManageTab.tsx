@@ -53,6 +53,7 @@ import { tldwAuth, tldwClient } from "@/services/tldw"
 import { importQuizzesJson, listQuestions } from "@/services/quizzes"
 import type { AnswerValue, Question, QuestionType, Quiz, SourceCitation } from "@/services/quizzes"
 import { normalizeMatchingAnswerMap } from "../utils/matchingAnswer"
+import { summarizeQuizSources } from "../utils/sourceBundle"
 
 interface ManageTabProps {
   onNavigateToCreate: () => void
@@ -1856,8 +1857,10 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               }
             }
           }}
-          renderItem={(quiz) => (
-            <List.Item
+          renderItem={(quiz) => {
+            const sourceSummary = summarizeQuizSources(quiz)
+            return (
+              <List.Item
               actions={[
                 <Button
                   key="start"
@@ -1951,23 +1954,49 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                   {t("option:quiz.delete", { defaultValue: "Delete" })}
                 </Button>
               ]}
-            >
-              <List.Item.Meta
-                title={
-                  <Space size="small" align="center">
-                    <Checkbox
-                      checked={selectedQuizIds.has(quiz.id)}
-                      onChange={(event) => toggleQuizSelection(quiz.id, event.target.checked)}
-                      aria-label={t("option:quiz.selectQuiz", {
-                        defaultValue: "Select quiz {{name}}",
-                        name: quiz.name
-                      })}
-                    />
-                    <span className="font-medium">{quiz.name}</span>
-                  </Space>
-                }
-                description={
-                  <div className="space-y-1">
+              >
+                <List.Item.Meta
+                  title={
+                    <Space size="small" align="center">
+                      <Checkbox
+                        checked={selectedQuizIds.has(quiz.id)}
+                        onChange={(event) => toggleQuizSelection(quiz.id, event.target.checked)}
+                        aria-label={t("option:quiz.selectQuiz", {
+                          defaultValue: "Select quiz {{name}}",
+                          name: quiz.name
+                        })}
+                      />
+                      <span className="font-medium">{quiz.name}</span>
+                    </Space>
+                  }
+                  description={
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap gap-2">
+                        {sourceSummary.media > 0 && (
+                          <Tag color="green" data-testid={`manage-quiz-source-media-${quiz.id}`}>
+                            {t("option:quiz.sourceBadgeMedia", {
+                              defaultValue: "Media {{count}}",
+                              count: sourceSummary.media
+                            })}
+                          </Tag>
+                        )}
+                        {sourceSummary.notes > 0 && (
+                          <Tag color="cyan" data-testid={`manage-quiz-source-notes-${quiz.id}`}>
+                            {t("option:quiz.sourceBadgeNotes", {
+                              defaultValue: "Notes {{count}}",
+                              count: sourceSummary.notes
+                            })}
+                          </Tag>
+                        )}
+                        {sourceSummary.flashcards > 0 && (
+                          <Tag color="magenta" data-testid={`manage-quiz-source-flashcards-${quiz.id}`}>
+                            {t("option:quiz.sourceBadgeFlashcards", {
+                              defaultValue: "Flashcards {{count}}",
+                              count: sourceSummary.flashcards
+                            })}
+                          </Tag>
+                        )}
+                      </div>
                     {quiz.description && (
                       <p className="text-sm text-text-muted line-clamp-1">
                         {quiz.description}
@@ -2000,10 +2029,11 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                       )}
                     </div>
                   </div>
-                }
-              />
-            </List.Item>
-          )}
+                  }
+                />
+              </List.Item>
+            )
+          }}
         />
       )}
 

@@ -69,6 +69,7 @@ import {
   isMatchingAnswerCorrect,
   normalizeMatchingAnswerMap
 } from "../utils/matchingAnswer"
+import { summarizeQuizSources } from "../utils/sourceBundle"
 import { QuizMarkdown } from "../components/QuizMarkdown"
 import { SourceCitations } from "../components/SourceCitations"
 
@@ -2446,6 +2447,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
         }}
         renderItem={(quiz) => {
           const isHighlighted = quiz.id === highlightedQuizId
+          const sourceSummary = summarizeQuizSources(quiz)
           return (
             <List.Item>
               <Card
@@ -2503,6 +2505,30 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
                         {(quiz as Quiz & { difficulty?: string | null }).difficulty && (
                           <Tag color="purple">
                             {getQuizDifficultyLabel(quiz)}
+                          </Tag>
+                        )}
+                        {sourceSummary.media > 0 && (
+                          <Tag color="green" data-testid={`take-quiz-source-media-${quiz.id}`}>
+                            {t("option:quiz.sourceBadgeMedia", {
+                              defaultValue: "Media {{count}}",
+                              count: sourceSummary.media
+                            })}
+                          </Tag>
+                        )}
+                        {sourceSummary.notes > 0 && (
+                          <Tag color="cyan" data-testid={`take-quiz-source-notes-${quiz.id}`}>
+                            {t("option:quiz.sourceBadgeNotes", {
+                              defaultValue: "Notes {{count}}",
+                              count: sourceSummary.notes
+                            })}
+                          </Tag>
+                        )}
+                        {sourceSummary.flashcards > 0 && (
+                          <Tag color="magenta" data-testid={`take-quiz-source-flashcards-${quiz.id}`}>
+                            {t("option:quiz.sourceBadgeFlashcards", {
+                              defaultValue: "Flashcards {{count}}",
+                              count: sourceSummary.flashcards
+                            })}
                           </Tag>
                         )}
                         {quiz.media_id != null && (

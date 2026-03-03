@@ -2288,6 +2288,57 @@
   "quiz_retake": {
     "message": "Retake Quiz"
   },
+  "quiz_selectSources": {
+    "message": "Select Sources"
+  },
+  "quiz_mediaSources": {
+    "message": "Media"
+  },
+  "quiz_noteSources": {
+    "message": "Notes"
+  },
+  "quiz_deckSources": {
+    "message": "Flashcard Decks"
+  },
+  "quiz_cardSources": {
+    "message": "Flashcards"
+  },
+  "quiz_selectNotesPlaceholder": {
+    "message": "Select notes..."
+  },
+  "quiz_selectDecksPlaceholder": {
+    "message": "Select flashcard decks..."
+  },
+  "quiz_selectCardsPlaceholder": {
+    "message": "Select flashcards from selected decks..."
+  },
+  "quiz_noNotesFound": {
+    "message": "No notes found"
+  },
+  "quiz_loadNotesError": {
+    "message": "Failed to load notes"
+  },
+  "quiz_loadDecksError": {
+    "message": "Failed to load flashcard decks"
+  },
+  "quiz_loadCardsError": {
+    "message": "Failed to load flashcards for selected decks"
+  },
+  "quiz_selectAtLeastOneSource": {
+    "message": "Select at least one source before generating."
+  },
+  "quiz_studyMaterialsMediaRequired": {
+    "message": "Flashcard deck generation currently requires a selected media source."
+  },
+  "quiz_sourceBadgeMedia": {
+    "message": "Media {{count}}"
+  },
+  "quiz_sourceBadgeNotes": {
+    "message": "Notes {{count}}"
+  },
+  "quiz_sourceBadgeFlashcards": {
+    "message": "Flashcards {{count}}"
+  },
   "searchPrompts": {
     "message": "Search prompts..."
   },
