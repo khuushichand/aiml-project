@@ -17,6 +17,7 @@ import {
   useQuickChatShortcuts
 } from "@/hooks/keyboard/useKeyboardShortcuts"
 import { useQuickChatStore } from "@/store/quick-chat"
+import { useStoreMessageOption } from "@/store/option"
 import { useLayoutUiStore } from "@/store/layout-ui"
 import { useRouteTransitionStore } from "@/store/route-transition"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
@@ -112,6 +113,10 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const isMobileViewport = useMobile()
   useServerOnline()
   const location = useLocation()
+  const { historyId, serverChatId } = useStoreMessageOption((state) => ({
+    historyId: state.historyId,
+    serverChatId: state.serverChatId
+  }))
   const mobileSidebarPathRef = React.useRef(location.pathname)
   const { phase, isConnected } = useConnectionState()
   const { checkOnce } = useConnectionActions()
@@ -156,8 +161,15 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   React.useEffect(() => {
     if (!isLayoutEffectsOwner) return
     const path = `${location.pathname}${location.search}${location.hash}`
-    setSettingsReturnTo(path)
-  }, [isLayoutEffectsOwner, location.pathname, location.search, location.hash])
+    setSettingsReturnTo(path, { historyId, serverChatId })
+  }, [
+    historyId,
+    isLayoutEffectsOwner,
+    location.hash,
+    location.pathname,
+    location.search,
+    serverChatId
+  ])
 
   React.useEffect(() => {
     setChatSidebarCollapsed(true)

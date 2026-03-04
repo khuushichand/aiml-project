@@ -1457,15 +1457,25 @@ def _normalize_mlx_model_path(model: str) -> Path | None:
     if not raw:
         return None
 
+    # Disallow absolute paths entirely; all MLX models must reside under the trusted root.
     raw_path = Path(raw).expanduser()
     if raw_path.is_absolute():
-        return raw_path.resolve(strict=False)
-
-    normalized = Path(os.path.normpath(raw))
-    if str(normalized) in ("", "."):
         return None
+
+    # Normalize the path string to eliminate redundant separators.
+    normalized_str = os.path.normpath(raw)
+    # Reject no-op / current-directory paths.
+    if normalized_str in ("", "."):
+        return None
+    # Prevent leading separators that could escape the trusted root when joined.
+    if normalized_str.startswith(os.path.sep) or normalized_str.startswith("/"):
+        return None
+    # Construct a Path object from the normalized string.
+    normalized = Path(normalized_str)
+    # Reject any path components that indicate traversal or current directory.
     if any(part in ("", ".", "..") for part in normalized.parts):
         return None
+
     return normalized
 
 
@@ -1475,12 +1485,11 @@ def _mlx_candidate_paths(model: str) -> list[Path]:
     if normalized is None:
         return []
 
-    if normalized.is_absolute():
-        candidate = normalized
-    else:
-        candidate = (trusted_root / normalized).resolve(strict=False)
+    # At this point, normalized is guaranteed to be a safe, relative path segment.
+    candidate = (trusted_root / normalized).resolve(strict=False)
 
     try:
+        # Ensure the resolved candidate remains under the trusted root directory.
         candidate.relative_to(trusted_root)
     except ValueError:
         return []

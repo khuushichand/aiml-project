@@ -70,6 +70,7 @@ import { isFirefoxTarget } from "@/config/platform"
 import { useDraftPersistence } from "@/hooks/useDraftPersistence"
 import { useSlashCommands, type SlashCommandItem } from "@/hooks/useSlashCommands"
 import { useTabMentions, type TabInfo } from "~/hooks/useTabMentions"
+import { useDeferredComposerInput } from "@/hooks/playground"
 import { KnowledgePanel } from "@/components/Knowledge"
 import { QueuedMessagesBanner } from "@/components/Sidepanel/Chat/QueuedMessagesBanner"
 import { ConnectionStatusIndicator } from "@/components/Sidepanel/Chat/ConnectionStatusIndicator"
@@ -106,6 +107,7 @@ import type { UploadedFile } from "@/db/dexie/types"
 import { formatFileSize } from "@/utils/format"
 import { formatPinnedResults } from "@/utils/rag-format"
 import { emitDictationDiagnostics } from "@/utils/dictation-diagnostics"
+import { createRenderPerfTracker } from "@/utils/perf/render-profiler"
 import {
   buildAvailableChatModelIds,
   findUnavailableChatModel,
@@ -267,8 +269,64 @@ export const SidepanelForm = ({
       image: ""
     }
   })
+  const { deferredInput: deferredComposerInput } = useDeferredComposerInput(
+    form.values.message || ""
+  )
+  const renderPerfTrackerRef = React.useRef(
+    createRenderPerfTracker({
+      enabled: Boolean((globalThis as any).__TLDW_CHAT_PERF__)
+    })
+  )
+  const onComposerRenderProfile = React.useCallback<React.ProfilerOnRenderCallback>(
+    (id, phase, actualDuration, baseDuration, startTime, commitTime) => {
+      renderPerfTrackerRef.current.onRender(
+        String(id),
+        phase,
+        actualDuration,
+        baseDuration,
+        startTime,
+        commitTime
+      )
+    },
+    []
+  )
+  const wrapComposerProfile = React.useCallback(
+    (id: string, node: React.ReactNode): React.ReactNode => {
+      if (!renderPerfTrackerRef.current.isEnabled()) {
+        return node
+      }
+      return (
+        <React.Profiler id={id} onRender={onComposerRenderProfile}>
+          {node}
+        </React.Profiler>
+      )
+    },
+    [onComposerRenderProfile]
+  )
+  React.useEffect(() => {
+    const tracker = renderPerfTrackerRef.current
+    if (!tracker.isEnabled() || typeof window === "undefined") {
+      return
+    }
+    ;(window as any).__TLDW_SIDEPANEL_CHAT_RENDER_PERF_SNAPSHOT__ = () =>
+      tracker.snapshot()
+    ;(window as any).__TLDW_SIDEPANEL_CHAT_RENDER_PERF_SUMMARY__ = () =>
+      tracker.summarize()
+    ;(window as any).__TLDW_SIDEPANEL_CHAT_RENDER_PERF_CLEAR__ = () =>
+      tracker.clear()
+    return () => {
+      delete (window as any).__TLDW_SIDEPANEL_CHAT_RENDER_PERF_SNAPSHOT__
+      delete (window as any).__TLDW_SIDEPANEL_CHAT_RENDER_PERF_SUMMARY__
+      delete (window as any).__TLDW_SIDEPANEL_CHAT_RENDER_PERF_CLEAR__
+    }
+  }, [])
   const messageInputProps = form.getInputProps("message")
   const [knowledgeMentionActive, setKnowledgeMentionActive] = React.useState(false)
+  const [knowledgePanelOpen, setKnowledgePanelOpen] = React.useState(false)
+  const imageValueRef = React.useRef(form.values.image)
+  React.useEffect(() => {
+    imageValueRef.current = form.values.image
+  }, [form.values.image])
   const [contextFiles, setContextFiles] = React.useState<UploadedFile[]>([])
   const [mentionActiveIndex, setMentionActiveIndex] = React.useState(0)
   const {
@@ -581,53 +639,60 @@ export const SidepanelForm = ({
       ? (t("playground:sendWhenEnter") as string)
       : undefined
 
-  const openUploadDialog = () => {
+  const openUploadDialog = React.useCallback(() => {
     fileInputRef.current?.click()
-  }
+  }, [])
 
-  const onInputChange = async (
-    e: React.ChangeEvent<HTMLInputElement> | File
-  ) => {
-    try {
-      let file: File
-      if (e instanceof File) {
-        file = e
-      } else if (e.target.files && e.target.files[0]) {
-        file = e.target.files[0]
-      } else {
-        return
-      }
+  const onInputChange = React.useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement> | File) => {
+      try {
+        let file: File
+        if (e instanceof File) {
+          file = e
+        } else if (e.target.files && e.target.files[0]) {
+          file = e.target.files[0]
+        } else {
+          return
+        }
 
-      // Validate that the file is an image
-      if (!file.type.startsWith("image/")) {
+        // Validate that the file is an image
+        if (!file.type.startsWith("image/")) {
+          message.error({
+            content: t(
+              "sidepanel:composer.imageTypeError",
+              "Please select an image file"
+            ),
+            duration: 3
+          })
+          return
+        }
+
+        const base64 = await toBase64(file)
+        form.setFieldValue("image", base64)
+
+        // Show success feedback
+        message.success({
+          content: t("sidepanel:composer.imageUploaded", {
+            defaultValue: "Image added: {{name}}",
+            name:
+              file.name.length > 20
+                ? `${file.name.slice(0, 17)}...`
+                : file.name
+          }),
+          duration: 2
+        })
+      } catch {
         message.error({
           content: t(
-            "sidepanel:composer.imageTypeError",
-            "Please select an image file"
+            "sidepanel:composer.imageUploadError",
+            "Failed to process image"
           ),
           duration: 3
         })
-        return
       }
-
-      const base64 = await toBase64(file)
-      form.setFieldValue("image", base64)
-
-      // Show success feedback
-      message.success({
-        content: t("sidepanel:composer.imageUploaded", {
-          defaultValue: "Image added: {{name}}",
-          name: file.name.length > 20 ? `${file.name.slice(0, 17)}...` : file.name
-        }),
-        duration: 2
-      })
-    } catch (err) {
-      message.error({
-        content: t("sidepanel:composer.imageUploadError", "Failed to process image"),
-        duration: 3
-      })
-    }
-  }
+    },
+    [form.setFieldValue, t]
+  )
   const textAreaFocus = React.useCallback(() => {
     if (textareaRef.current) {
       textareaRef.current.focus()
@@ -1408,6 +1473,10 @@ export const SidepanelForm = ({
     setContextFiles([])
     setKnowledgeMentionActive(false)
   }
+  const sendCurrentFormMessageRef = React.useRef(sendCurrentFormMessage)
+  React.useEffect(() => {
+    sendCurrentFormMessageRef.current = sendCurrentFormMessage
+  }, [sendCurrentFormMessage])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (showMentionMenu) {
@@ -1545,9 +1614,61 @@ export const SidepanelForm = ({
     window.open("/options.html#/settings/health", "_blank")
   }, [])
 
+  const handleOpenModelSettings = React.useCallback(() => {
+    setOpenModelSettings(true)
+  }, [setOpenModelSettings])
+
   const handleWebSearchToggle = React.useCallback(() => {
     setWebSearch(!webSearch)
   }, [setWebSearch, webSearch])
+
+  const handleKnowledgeInsert = React.useCallback(
+    (text: string) => {
+      const current = textareaRef.current?.value || ""
+      const next = current ? `${current}\n\n${text}` : text
+      form.setFieldValue("message", next)
+      textareaRef.current?.focus()
+    },
+    [form.setFieldValue, textareaRef]
+  )
+
+  const handleKnowledgeAsk = React.useCallback(
+    async (text: string, options?: { ignorePinnedResults?: boolean }) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+      form.setFieldValue("message", text)
+      if (!isConnectionReady) {
+        addQueuedMessage({
+          message: trimmed,
+          image: imageValueRef.current
+        })
+        form.reset()
+        return
+      }
+      await sendCurrentFormMessageRef.current(trimmed, "", options)
+    },
+    [
+      addQueuedMessage,
+      form.reset,
+      form.setFieldValue,
+      isConnectionReady
+    ]
+  )
+  const handleKnowledgePanelOpenChange = React.useCallback(
+    (nextOpen: boolean) => {
+      setKnowledgePanelOpen(nextOpen)
+    },
+    []
+  )
+  const handleKnowledgeAddFile = React.useCallback(() => {
+    contextFileInputRef.current?.click()
+  }, [])
+  const handleKnowledgeRemoveFile = React.useCallback((fileId: string) => {
+    setContextFiles((prev) => prev.filter((item) => item.id !== fileId))
+  }, [])
+  const handleKnowledgeClearFiles = React.useCallback(() => {
+    setContextFiles([])
+  }, [])
 
   const startBrowserDictation = React.useCallback(() => {
     resetTranscript()
@@ -2061,9 +2182,10 @@ export const SidepanelForm = ({
   }, [isConnectionReady, uxState, t])
 
   return (
-    <div
-      ref={formContainerRef}
-      className={`flex w-full flex-col items-center ${composerPadding}`}>
+    <React.Profiler id="sidepanel-form-root" onRender={onComposerRenderProfile}>
+      <div
+        ref={formContainerRef}
+        className={`flex w-full flex-col items-center ${composerPadding}`}>
       <div
         className={`relative z-10 flex w-full flex-col items-center justify-center ${composerGap} text-body`}>
         <div className="relative flex w-full flex-row justify-center gap-2">
@@ -2072,9 +2194,10 @@ export const SidepanelForm = ({
             className={`relative w-full max-w-[48rem] rounded-3xl border border-border/80 bg-surface/95 shadow-card backdrop-blur-lg duration-100 ${cardPadding}`}>
             <div>
               {/* Inline Model Parameters Panel (Pro mode only) */}
-              <ModelParamsPanel
-                onOpenFullSettings={() => setOpenModelSettings(true)}
-              />
+              {wrapComposerProfile(
+                "sidepanel-model-params-panel",
+                <ModelParamsPanel onOpenFullSettings={handleOpenModelSettings} />
+              )}
               <div className="flex">
                 <form
                   onSubmit={form.onSubmit(async (value) => {
@@ -2113,157 +2236,150 @@ export const SidepanelForm = ({
                         : ""
                     }`}>
                     {/* Connection status indicator when disconnected */}
-                    <ConnectionStatusIndicator
-                      isConnectionReady={isConnectionReady}
-                      uxState={uxState}
-                      onOpenSettings={openSettings}
-                    />
-                    {/* Knowledge Search: search KB, insert snippets, ask directly */}
-                    {isProMode && (
-                      <KnowledgePanel
-                        onInsert={(text) => {
-                          const current = form.values.message || ""
-                          const next = current ? `${current}\n\n${text}` : text
-                          form.setFieldValue("message", next)
-                          // Focus textarea for quick edits
-                          textareaRef.current?.focus()
-                        }}
-                        onAsk={async (text, options) => {
-                          // Set message and submit immediately
-                          const trimmed = text.trim()
-                          if (!trimmed) return
-                          form.setFieldValue("message", text)
-                          if (!isConnectionReady) {
-                            addQueuedMessage({
-                              message: trimmed,
-                              image: form.values.image
-                            })
-                            form.reset()
-                            return
-                          }
-                          await sendCurrentFormMessage(trimmed, "", options)
-                        }}
-                        currentMessage={form.values.message}
-                        showAttachedContext
-                        attachedTabs={selectedDocuments}
-                        availableTabs={availableTabs}
-                        attachedFiles={contextFiles}
-                        onAddTab={addDocument}
-                        onRemoveTab={removeDocument}
-                        onClearTabs={clearSelectedDocuments}
-                        onRefreshTabs={reloadTabs}
-                        onAddFile={() => contextFileInputRef.current?.click()}
-                        onRemoveFile={(fileId) =>
-                          setContextFiles((prev) =>
-                            prev.filter((item) => item.id !== fileId)
-                          )
-                        }
-                        onClearFiles={() => setContextFiles([])}
+                    {wrapComposerProfile(
+                      "sidepanel-connection-status",
+                      <ConnectionStatusIndicator
+                        isConnectionReady={isConnectionReady}
+                        uxState={uxState}
+                        onOpenSettings={openSettings}
                       />
                     )}
+                    {/* Knowledge Search: search KB, insert snippets, ask directly */}
+                    {isProMode && (
+                      wrapComposerProfile(
+                        "sidepanel-knowledge-panel",
+                        <KnowledgePanel
+                          onInsert={handleKnowledgeInsert}
+                          onAsk={handleKnowledgeAsk}
+                          open={knowledgePanelOpen}
+                          onOpenChange={handleKnowledgePanelOpenChange}
+                          currentMessage={knowledgePanelOpen ? deferredComposerInput : ""}
+                          showAttachedContext
+                          attachedTabs={selectedDocuments}
+                          availableTabs={availableTabs}
+                          attachedFiles={contextFiles}
+                          onAddTab={addDocument}
+                          onRemoveTab={removeDocument}
+                          onClearTabs={clearSelectedDocuments}
+                          onRefreshTabs={reloadTabs}
+                          onAddFile={handleKnowledgeAddFile}
+                          onRemoveFile={handleKnowledgeRemoveFile}
+                          onClearFiles={handleKnowledgeClearFiles}
+                        />
+                      )
+                    )}
                     {/* Queued messages banner - shown above input area */}
-                    <QueuedMessagesBanner
-                      queuedMessages={queuedMessages}
-                      isConnectionReady={isConnectionReady}
-                      isFlushingQueue={isFlushingQueue}
-                      onFlushQueue={handleFlushQueue}
-                      onClearQueue={clearQueuedMessages}
-                      onOpenDiagnostics={openDiagnostics}
-                    />
+                    {wrapComposerProfile(
+                      "sidepanel-queued-banner",
+                      <QueuedMessagesBanner
+                        queuedMessages={queuedMessages}
+                        isConnectionReady={isConnectionReady}
+                        isFlushingQueue={isFlushingQueue}
+                        onFlushQueue={handleFlushQueue}
+                        onClearQueue={clearQueuedMessages}
+                        onOpenDiagnostics={openDiagnostics}
+                      />
+                    )}
                     {contextChips.length > 0 && (
                       <div className="px-2 pb-2">
                         <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-text-subtle">
                           {t("playground:composer.contextLabel", "Context")}
                         </div>
-                        <ContextChips
-                          items={contextChips}
-                          ariaLabel={t("playground:composer.contextLabel", "Context:")}
-                          className="flex flex-wrap items-center gap-2"
-                        />
+                        {wrapComposerProfile(
+                          "sidepanel-context-chips",
+                          <ContextChips
+                            items={contextChips}
+                            ariaLabel={t("playground:composer.contextLabel", "Context:")}
+                            className="flex flex-wrap items-center gap-2"
+                          />
+                        )}
                       </div>
                     )}
                     <div className="relative">
-                      <div className="relative rounded-2xl border border-border/70 bg-surface/80 px-1 py-1.5 transition focus-within:border-focus/60 focus-within:ring-2 focus-within:ring-focus/30">
-                        <SlashCommandMenu
-                          open={showSlashMenu}
-                          commands={filteredSlashCommands}
-                          activeIndex={slashActiveIndex}
-                          onActiveIndexChange={setSlashActiveIndex}
-                          onSelect={handleSlashCommandPick}
-                          emptyLabel={t(
-                            "common:commandPalette.noResults",
-                            "No results found"
-                          )}
-                          className="absolute bottom-full left-3 right-3 mb-2"
-                        />
-                        <MentionsMenu
-                          open={showMentionMenu}
-                          items={mentionItems}
-                          activeIndex={mentionActiveIndex}
-                          onActiveIndexChange={setMentionActiveIndex}
-                          onSelect={handleMentionSelect}
-                          emptyLabel={t(
-                            "sidepanel:composer.noMentions",
-                            "No matches found"
-                          )}
-                          className="absolute bottom-full left-3 right-3 mb-2"
-                        />
-                        <textarea
-                          id="textarea-message"
-                          onKeyDown={(e) => handleKeyDown(e)}
-                          ref={textareaRef}
-                          data-testid="chat-input"
-                          className={`w-full resize-none border-0 bg-transparent px-3 py-2 text-body text-text placeholder:text-text-muted/80 focus-within:outline-none focus:ring-0 focus-visible:ring-0 ring-0 dark:ring-0 ${
-                            !isConnectionReady
-                              ? "cursor-not-allowed text-text-muted placeholder:text-text-subtle"
-                              : ""
-                          }`}
-                          readOnly={!isConnectionReady}
-                          aria-readonly={!isConnectionReady}
-                          aria-disabled={!isConnectionReady}
-                          aria-label={
-                            !isConnectionReady
-                              ? t(
-                                  "sidepanel:composer.disconnectedAriaLabel",
-                                  "Message input (read-only: not connected to server)"
+                      {wrapComposerProfile(
+                        "sidepanel-textarea-shell",
+                        <div className="relative rounded-2xl border border-border/70 bg-surface/80 px-1 py-1.5 transition focus-within:border-focus/60 focus-within:ring-2 focus-within:ring-focus/30">
+                          <SlashCommandMenu
+                            open={showSlashMenu}
+                            commands={filteredSlashCommands}
+                            activeIndex={slashActiveIndex}
+                            onActiveIndexChange={setSlashActiveIndex}
+                            onSelect={handleSlashCommandPick}
+                            emptyLabel={t(
+                              "common:commandPalette.noResults",
+                              "No results found"
+                            )}
+                            className="absolute bottom-full left-3 right-3 mb-2"
+                          />
+                          <MentionsMenu
+                            open={showMentionMenu}
+                            items={mentionItems}
+                            activeIndex={mentionActiveIndex}
+                            onActiveIndexChange={setMentionActiveIndex}
+                            onSelect={handleMentionSelect}
+                            emptyLabel={t(
+                              "sidepanel:composer.noMentions",
+                              "No matches found"
+                            )}
+                            className="absolute bottom-full left-3 right-3 mb-2"
+                          />
+                          <textarea
+                            id="textarea-message"
+                            onKeyDown={(e) => handleKeyDown(e)}
+                            ref={textareaRef}
+                            data-testid="chat-input"
+                            className={`w-full resize-none border-0 bg-transparent px-3 py-2 text-body text-text placeholder:text-text-muted/80 focus-within:outline-none focus:ring-0 focus-visible:ring-0 ring-0 dark:ring-0 ${
+                              !isConnectionReady
+                                ? "cursor-not-allowed text-text-muted placeholder:text-text-subtle"
+                                : ""
+                            }`}
+                            readOnly={!isConnectionReady}
+                            aria-readonly={!isConnectionReady}
+                            aria-disabled={!isConnectionReady}
+                            aria-label={
+                              !isConnectionReady
+                                ? t(
+                                    "sidepanel:composer.disconnectedAriaLabel",
+                                    "Message input (read-only: not connected to server)"
+                                  )
+                                : t("sidepanel:composer.messageAriaLabel", "Message input")
+                            }
+                            onPaste={handlePaste}
+                            rows={1}
+                            style={{ minHeight: `${textareaMinHeight}px` }}
+                            tabIndex={0}
+                            onCompositionStart={() => {
+                              if (!isFirefoxTarget) {
+                                setTyping(true)
+                              }
+                            }}
+                            onCompositionEnd={() => {
+                              if (!isFirefoxTarget) {
+                                setTyping(false)
+                              }
+                            }}
+                            placeholder={debouncedPlaceholder || t("form.textarea.placeholder")}
+                            {...messageInputProps}
+                            onChange={(event) => {
+                              messageInputProps.onChange(event)
+                              if (tabMentionsEnabled && textareaRef.current) {
+                                handleTextChange(
+                                  event.target.value,
+                                  textareaRef.current.selectionStart || 0
                                 )
-                              : t("sidepanel:composer.messageAriaLabel", "Message input")
-                          }
-                          onPaste={handlePaste}
-                          rows={1}
-                          style={{ minHeight: `${textareaMinHeight}px` }}
-                          tabIndex={0}
-                          onCompositionStart={() => {
-                          if (!isFirefoxTarget) {
-                              setTyping(true)
-                            }
-                          }}
-                          onCompositionEnd={() => {
-                          if (!isFirefoxTarget) {
-                              setTyping(false)
-                            }
-                          }}
-                          placeholder={debouncedPlaceholder || t("form.textarea.placeholder")}
-                          {...messageInputProps}
-                          onChange={(event) => {
-                            messageInputProps.onChange(event)
-                            if (tabMentionsEnabled && textareaRef.current) {
-                              handleTextChange(
-                                event.target.value,
-                                textareaRef.current.selectionStart || 0
-                              )
-                            }
-                          }}
-                          onSelect={() => {
-                            if (tabMentionsEnabled && textareaRef.current) {
-                              handleTextChange(
-                                textareaRef.current.value,
-                                textareaRef.current.selectionStart || 0
-                              )
-                            }
-                          }}
-                        />
-                      </div>
+                              }
+                            }}
+                            onSelect={() => {
+                              if (tabMentionsEnabled && textareaRef.current) {
+                                handleTextChange(
+                                  textareaRef.current.value,
+                                  textareaRef.current.selectionStart || 0
+                                )
+                              }
+                            }}
+                          />
+                        </div>
+                      )}
                       {/* Draft saved indicator */}
                       {draftSaved && (
                         <span
@@ -2340,22 +2456,25 @@ export const SidepanelForm = ({
                       {isProMode ? (
                         <>
                           {/* Control Row - contains Prompt, Model, RAG, and More tools */}
-                          <ControlRow
-                            selectedSystemPrompt={selectedSystemPrompt}
-                            setSelectedSystemPrompt={setSelectedSystemPrompt}
-                            setSelectedQuickPrompt={setSelectedQuickPrompt}
-                            selectedCharacterId={selectedCharacterId}
-                            setSelectedCharacterId={setSelectedCharacterId}
-                            webSearch={webSearch}
-                            setWebSearch={setWebSearch}
-                            chatMode={chatMode}
-                            setChatMode={setChatMode}
-                            onImageUpload={onInputChange}
-                            onToggleRag={handleRagToggle}
-                            isConnected={isConnectionReady}
-                            toolChoice={toolChoice}
-                            setToolChoice={setToolChoice}
-                          />
+                          {wrapComposerProfile(
+                            "sidepanel-control-row",
+                            <ControlRow
+                              selectedSystemPrompt={selectedSystemPrompt}
+                              setSelectedSystemPrompt={setSelectedSystemPrompt}
+                              setSelectedQuickPrompt={setSelectedQuickPrompt}
+                              selectedCharacterId={selectedCharacterId}
+                              setSelectedCharacterId={setSelectedCharacterId}
+                              webSearch={webSearch}
+                              setWebSearch={setWebSearch}
+                              chatMode={chatMode}
+                              setChatMode={setChatMode}
+                              onImageUpload={onInputChange}
+                              onToggleRag={handleRagToggle}
+                              isConnected={isConnectionReady}
+                              toolChoice={toolChoice}
+                              setToolChoice={setToolChoice}
+                            />
+                          )}
                           <div className="flex flex-wrap items-center justify-end gap-2">
                             <div
                               role="group"
@@ -2866,36 +2985,44 @@ export const SidepanelForm = ({
           </div>
         </div>
       </div>
-      {/* Modal/Drawer for current conversation settings */}
-      <CurrentChatModelSettings
-        open={openModelSettings}
-        setOpen={setOpenModelSettings}
-        isOCREnabled={useOCR}
-      />
-      <ActorPopout open={openActorSettings} setOpen={setOpenActorSettings} />
-      <DocumentGeneratorDrawer
-        open={documentGeneratorOpen}
-        onClose={() => {
-          setDocumentGeneratorOpen(false)
-          setDocumentGeneratorSeed({})
-        }}
-        conversationId={
-          documentGeneratorSeed?.conversationId ?? serverChatId ?? null
-        }
-        defaultModel={selectedModel || null}
-        seedMessage={documentGeneratorSeed?.message ?? null}
-        seedMessageId={documentGeneratorSeed?.messageId ?? null}
-      />
-      {/* Quick ingest modal */}
-      <QuickIngestModal
-        open={ingestOpen}
-        autoProcessQueued={autoProcessQueuedIngest}
-        onClose={() => {
-          setIngestOpen(false)
-          setAutoProcessQueuedIngest(false)
-          requestAnimationFrame(() => quickIngestBtnRef.current?.focus())
-        }}
-      />
-    </div>
+      {/* Mount heavy overlays only when open to avoid keystroke-time rerenders. */}
+      {openModelSettings && (
+        <CurrentChatModelSettings
+          open={openModelSettings}
+          setOpen={setOpenModelSettings}
+          isOCREnabled={useOCR}
+        />
+      )}
+      {openActorSettings && (
+        <ActorPopout open={openActorSettings} setOpen={setOpenActorSettings} />
+      )}
+      {documentGeneratorOpen && (
+        <DocumentGeneratorDrawer
+          open={documentGeneratorOpen}
+          onClose={() => {
+            setDocumentGeneratorOpen(false)
+            setDocumentGeneratorSeed({})
+          }}
+          conversationId={
+            documentGeneratorSeed?.conversationId ?? serverChatId ?? null
+          }
+          defaultModel={selectedModel || null}
+          seedMessage={documentGeneratorSeed?.message ?? null}
+          seedMessageId={documentGeneratorSeed?.messageId ?? null}
+        />
+      )}
+        {ingestOpen && (
+          <QuickIngestModal
+            open={ingestOpen}
+            autoProcessQueued={autoProcessQueuedIngest}
+            onClose={() => {
+              setIngestOpen(false)
+              setAutoProcessQueuedIngest(false)
+              requestAnimationFrame(() => quickIngestBtnRef.current?.focus())
+            }}
+          />
+        )}
+      </div>
+    </React.Profiler>
   )
 }

@@ -4048,6 +4048,39 @@ describe("CharactersManager first-use onboarding", () => {
     )
   })
 
+  it("shows an OK action after successful import completion and closes preview", async () => {
+    const user = userEvent.setup()
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const file = new File(
+      [JSON.stringify({ name: "Uploaded Character" })],
+      "uploaded-character.json",
+      { type: "application/json" }
+    )
+    await user.upload(input, file)
+
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Confirm import" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.importCharacterFile).toHaveBeenCalled()
+    })
+
+    const okButton = await screen.findByRole("button", { name: /ok/i })
+    expect(okButton).toBeEnabled()
+    expect(screen.queryByRole("button", { name: "Confirm import" })).not.toBeInTheDocument()
+
+    await user.click(okButton)
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: /Import preview/i })).toHaveClass(
+        "ant-zoom-leave-active"
+      )
+    })
+  })
+
   it("opens import preview when files are dropped on the import drop zone", async () => {
     render(<CharactersManager />)
 

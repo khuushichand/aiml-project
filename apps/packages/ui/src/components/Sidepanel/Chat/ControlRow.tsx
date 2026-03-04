@@ -47,7 +47,7 @@ interface ControlRowProps {
   isConnected: boolean
 }
 
-export const ControlRow: React.FC<ControlRowProps> = ({
+const ControlRowBase: React.FC<ControlRowProps> = ({
   selectedSystemPrompt,
   setSelectedSystemPrompt,
   setSelectedQuickPrompt,
@@ -736,3 +736,6 @@ export const ControlRow: React.FC<ControlRowProps> = ({
       </div>
     )
 }
+
+export const ControlRow = React.memo(ControlRowBase)
+ControlRow.displayName = "ControlRow"

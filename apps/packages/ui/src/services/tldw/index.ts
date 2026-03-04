@@ -4,6 +4,7 @@ export { tldwAuth, type LoginCredentials, type TokenResponse, type UserInfo } fr
 export { tldwModels, type ModelInfo } from './TldwModels'
 export { tldwChat, type TldwChatOptions, type ChatStreamChunk } from './TldwChat'
 export { getWorkflowStepTypes } from './workflows'
+export * from './mcp-hub'
 
 // Re-export for convenience
 export * from './TldwApiClient'

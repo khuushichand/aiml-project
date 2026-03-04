@@ -59,6 +59,31 @@ describe("resolveApiProviderForModel", () => {
     ).resolves.toBe("deepseek")
   })
 
+  it("prefers server catalog provider for tldw namespaced models", async () => {
+    getModelsMock.mockResolvedValue([
+      {
+        id: "anthropic/claude-4.5-sonnet",
+        name: "anthropic/claude-4.5-sonnet",
+        provider: "openrouter",
+        type: "chat"
+      }
+    ] as any)
+
+    await expect(
+      resolveApiProviderForModel({
+        modelId: "tldw:anthropic/claude-4.5-sonnet"
+      })
+    ).resolves.toBe("openrouter")
+  })
+
+  it("keeps inline provider inference for non-tldw namespaced model ids", async () => {
+    await expect(
+      resolveApiProviderForModel({
+        modelId: "anthropic/claude-4.5-sonnet"
+      })
+    ).resolves.toBe("anthropic")
+  })
+
   it("returns undefined when the provider cannot be inferred", async () => {
     await expect(
       resolveApiProviderForModel({

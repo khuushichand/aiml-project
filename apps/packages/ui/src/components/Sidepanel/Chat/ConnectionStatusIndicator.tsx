@@ -8,7 +8,7 @@ export interface ConnectionStatusIndicatorProps {
   onOpenSettings: () => void
 }
 
-export const ConnectionStatusIndicator: React.FC<
+const ConnectionStatusIndicatorBase: React.FC<
   ConnectionStatusIndicatorProps
 > = ({ isConnectionReady, uxState, onOpenSettings }) => {
   const { t } = useTranslation(["sidepanel"])
@@ -57,5 +57,8 @@ export const ConnectionStatusIndicator: React.FC<
     </div>
   )
 }
+
+export const ConnectionStatusIndicator = React.memo(ConnectionStatusIndicatorBase)
+ConnectionStatusIndicator.displayName = "ConnectionStatusIndicator"
 
 export default ConnectionStatusIndicator

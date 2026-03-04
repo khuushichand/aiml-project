@@ -38,7 +38,7 @@ const validateJson = (value: string): string | null => {
   }
 }
 
-export const ModelParamsPanel: React.FC<ModelParamsPanelProps> = ({
+const ModelParamsPanelBase: React.FC<ModelParamsPanelProps> = ({
   onOpenFullSettings,
   className
 }) => {
@@ -488,3 +488,6 @@ export const ModelParamsPanel: React.FC<ModelParamsPanelProps> = ({
     </div>
   )
 }
+
+export const ModelParamsPanel = React.memo(ModelParamsPanelBase)
+ModelParamsPanel.displayName = "ModelParamsPanel"

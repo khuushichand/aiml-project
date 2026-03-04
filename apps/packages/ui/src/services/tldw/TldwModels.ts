@@ -7,6 +7,38 @@ import {
   inferProviderFromModel
 } from "@/utils/provider-registry"
 
+const IMAGE_MODEL_HINTS = [
+  "image",
+  "dall-e",
+  "dalle",
+  "flux",
+  "stable-diffusion",
+  "sdxl",
+  "midjourney",
+  "recraft",
+  "pixart",
+  "playground",
+  "kolors",
+  "imagen"
+]
+
+const VIDEO_MODEL_HINTS = ["video", "veo", "sora", "kling", "hunyuan-video"]
+
+const AUDIO_MODEL_HINTS = [
+  "whisper",
+  "transcribe",
+  "asr",
+  "tts",
+  "speech",
+  "audio",
+  "voice"
+]
+
+const NON_CHAT_MODEL_HINTS = ["rerank", "moderation", "safety"]
+
+const hasAnyHint = (value: string, hints: string[]): boolean =>
+  hints.some((hint) => value.includes(hint))
+
 export interface ModelInfo {
   id: string
   name: string
@@ -273,14 +305,30 @@ export class TldwModelsService {
       type = 'image'
     } else if (declaredType === 'embedding') {
       type = 'embedding'
+    } else if (declaredType === 'video' || declaredType === 'audio') {
+      type = 'other'
     } else if (outputMods.includes('image')) {
       type = 'image'
     } else if (outputMods.includes('embedding')) {
       type = 'embedding'
     } else if (capsNormalized.includes('image') || capsNormalized.includes('image_generation')) {
       type = 'image'
+    } else if (
+      hasAnyHint(nameLower, IMAGE_MODEL_HINTS) ||
+      hasAnyHint(tldwModel.id.toLowerCase(), IMAGE_MODEL_HINTS)
+    ) {
+      type = 'image'
     } else if (nameLower.includes('embed') || nameLower.includes('embedding')) {
       type = 'embedding'
+    } else if (
+      hasAnyHint(nameLower, VIDEO_MODEL_HINTS) ||
+      hasAnyHint(tldwModel.id.toLowerCase(), VIDEO_MODEL_HINTS) ||
+      hasAnyHint(nameLower, AUDIO_MODEL_HINTS) ||
+      hasAnyHint(tldwModel.id.toLowerCase(), AUDIO_MODEL_HINTS) ||
+      hasAnyHint(nameLower, NON_CHAT_MODEL_HINTS) ||
+      hasAnyHint(tldwModel.id.toLowerCase(), NON_CHAT_MODEL_HINTS)
+    ) {
+      type = 'other'
     }
 
     // Extract provider from model ID or name if not provided

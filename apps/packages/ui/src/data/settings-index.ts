@@ -161,6 +161,16 @@ export const SETTINGS_INDEX: SettingDefinition[] = [
     keywords: ["key", "auth", "authentication", "token", "password"],
     controlType: "input",
   },
+  {
+    id: "setting-mcp-hub",
+    labelKey: "settings:mcpHubNav",
+    defaultLabel: "MCP Hub",
+    defaultDescription: "Manage ACP profiles, tool catalogs, and external MCP servers",
+    route: "/settings/mcp-hub",
+    section: "Server",
+    keywords: ["mcp", "tooling", "agent", "catalog", "external server", "acp"],
+    controlType: "button",
+  },
 
   // ========================================
   // RAG Settings

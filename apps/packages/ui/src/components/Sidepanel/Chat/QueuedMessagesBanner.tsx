@@ -16,7 +16,7 @@ export interface QueuedMessagesBannerProps {
   onOpenDiagnostics: () => void
 }
 
-export const QueuedMessagesBanner: React.FC<QueuedMessagesBannerProps> = ({
+const QueuedMessagesBannerBase: React.FC<QueuedMessagesBannerProps> = ({
   queuedMessages,
   isConnectionReady,
   isFlushingQueue,
@@ -95,11 +95,12 @@ export const QueuedMessagesBanner: React.FC<QueuedMessagesBannerProps> = ({
                 !isConnectionReady || isFlushingQueue
                   ? "cursor-not-allowed opacity-60"
                   : ""
-              }`}>
+              }`}
               title={t(
                 "playground:composer.queuedBanner.sendNow",
                 "Send queued messages"
               )}
+            >
               {t(
                 "playground:composer.queuedBanner.sendNow",
                 "Send queued messages"
@@ -127,5 +128,8 @@ export const QueuedMessagesBanner: React.FC<QueuedMessagesBannerProps> = ({
     </div>
   )
 }
+
+export const QueuedMessagesBanner = React.memo(QueuedMessagesBannerBase)
+QueuedMessagesBanner.displayName = "QueuedMessagesBanner"
 
 export default QueuedMessagesBanner

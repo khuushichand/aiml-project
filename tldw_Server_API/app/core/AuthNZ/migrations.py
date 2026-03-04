@@ -1355,6 +1355,74 @@ def migration_054_add_llm_usage_log_router_analytics_columns(conn: sqlite3.Conne
     logger.info("Migration 054: Added llm_usage_log router analytics columns/indexes")
 
 
+def migration_055_create_mcp_hub_tables(conn: sqlite3.Connection) -> None:
+    """Create MCP Hub management tables (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_acp_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            profile_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(name, owner_scope_type, owner_scope_id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_acp_profiles_scope "
+        "ON mcp_acp_profiles(owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_servers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            transport TEXT NOT NULL,
+            config_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_servers_scope "
+        "ON mcp_external_servers(owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_secrets (
+            server_id TEXT PRIMARY KEY,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT,
+            updated_by INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (server_id) REFERENCES mcp_external_servers(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_secrets_updated_at "
+        "ON mcp_external_server_secrets(updated_at)"
+    )
+
+    conn.commit()
+    logger.info("Migration 055: Created MCP Hub tables")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
@@ -2782,6 +2850,11 @@ def get_authnz_migrations() -> list[Migration]:
             54,
             "Add llm_usage_log router analytics columns and indexes",
             migration_054_add_llm_usage_log_router_analytics_columns,
+        ),
+        Migration(
+            55,
+            "Create MCP Hub tables",
+            migration_055_create_mcp_hub_tables,
         ),
     ]
 

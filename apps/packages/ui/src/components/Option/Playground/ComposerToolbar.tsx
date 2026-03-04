@@ -169,230 +169,286 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     useStorage(PLAYGROUND_APPEND_FORMATTING_GUIDE_PROMPT_STORAGE_KEY, false)
 
   // --- Shared sub-elements ---
-  const ephemeralToggle = (
-    <Tooltip title={persistenceTooltip}>
-      <span>
+  const ephemeralToggle = React.useMemo(
+    () => (
+      <Tooltip title={persistenceTooltip}>
+        <span>
+          <button
+            type="button"
+            onClick={() => onToggleTemporaryChat(!temporaryChat)}
+            disabled={ephemeralDisabled}
+            aria-pressed={temporaryChat}
+            aria-label={
+              temporaryChat
+                ? (t("playground:composer.ephemeralLabel", "Temporary") as string)
+                : (t("playground:composer.savedLabel", "Saved") as string)
+            }
+            className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition hover:bg-surface2 hover:text-text ${
+              temporaryChat
+                ? "bg-primary/10 text-primaryStrong"
+                : "text-text-muted"
+            } ${ephemeralDisabled ? "cursor-not-allowed opacity-50" : ""}`}
+          >
+            {temporaryChat
+              ? t("playground:composer.ephemeralLabel", "Temporary")
+              : t("playground:composer.savedLabel", "Saved")}
+          </button>
+        </span>
+      </Tooltip>
+    ),
+    [
+      ephemeralDisabled,
+      onToggleTemporaryChat,
+      persistenceTooltip,
+      t,
+      temporaryChat
+    ]
+  )
+
+  const searchContextButton = React.useMemo(
+    () => (
+      <button
+        type="button"
+        onClick={() => onToggleKnowledgePanel("search")}
+        title={
+          contextToolsOpen
+            ? (t(
+                "playground:composer.contextKnowledgeClose",
+                "Close Search & Context"
+              ) as string)
+            : (t("playground:composer.contextKnowledge", "Search & Context") as string)
+        }
+        aria-pressed={contextToolsOpen}
+        aria-expanded={contextToolsOpen}
+        aria-label={
+          contextToolsOpen
+            ? (t(
+                "playground:composer.contextKnowledgeClose",
+                "Close Search & Context"
+              ) as string)
+            : (t("playground:composer.contextKnowledge", "Search & Context") as string)
+        }
+        data-testid="knowledge-search-toggle"
+        className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition hover:bg-surface2 hover:text-text ${
+          contextToolsOpen
+            ? "bg-primary/10 text-primaryStrong"
+            : "text-text-muted"
+        }`}
+      >
+        <Search className="h-3 w-3" />
+        <span className={isProMode ? "" : "truncate"}>
+          {contextToolsOpen
+            ? t("playground:composer.contextKnowledgeClose", "Close Search & Context")
+            : t("playground:composer.contextKnowledge", "Search & Context")}
+        </span>
+      </button>
+    ),
+    [contextToolsOpen, isProMode, onToggleKnowledgePanel, t]
+  )
+
+  const webSearchButton = React.useMemo(
+    () =>
+      hasWebSearch ? (
         <button
           type="button"
-          onClick={() => onToggleTemporaryChat(!temporaryChat)}
-          disabled={ephemeralDisabled}
-          aria-pressed={temporaryChat}
-          aria-label={
-            temporaryChat
-              ? (t("playground:composer.ephemeralLabel", "Temporary") as string)
-              : (t("playground:composer.savedLabel", "Saved") as string)
-          }
+          onClick={onToggleWebSearch}
+          aria-pressed={webSearch}
+          aria-label={t("playground:tools.webSearch", "Web search") as string}
+          title={t("playground:tools.webSearch", "Web search") as string}
+          data-testid="web-search-toggle"
           className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition hover:bg-surface2 hover:text-text ${
-            temporaryChat
+            webSearch
               ? "bg-primary/10 text-primaryStrong"
               : "text-text-muted"
-          } ${ephemeralDisabled ? "cursor-not-allowed opacity-50" : ""}`}
+          }`}
         >
-          {temporaryChat
-            ? t("playground:composer.ephemeralLabel", "Temporary")
-            : t("playground:composer.savedLabel", "Saved")}
+          <Globe className="h-3 w-3" />
+          <span>{t("playground:actions.webSearchShort", "Web")}</span>
         </button>
-      </span>
-    </Tooltip>
+      ) : null,
+    [hasWebSearch, onToggleWebSearch, t, webSearch]
   )
 
-  const searchContextButton = (
-    <button
-      type="button"
-      onClick={() => onToggleKnowledgePanel("search")}
-      title={
-        contextToolsOpen
-          ? (t("playground:composer.contextKnowledgeClose", "Close Search & Context") as string)
-          : (t("playground:composer.contextKnowledge", "Search & Context") as string)
-      }
-      aria-pressed={contextToolsOpen}
-      aria-expanded={contextToolsOpen}
-      aria-label={
-        contextToolsOpen
-          ? (t("playground:composer.contextKnowledgeClose", "Close Search & Context") as string)
-          : (t("playground:composer.contextKnowledge", "Search & Context") as string)
-      }
-      data-testid="knowledge-search-toggle"
-      className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition hover:bg-surface2 hover:text-text ${
-        contextToolsOpen
-          ? "bg-primary/10 text-primaryStrong"
-          : "text-text-muted"
-      }`}
-    >
-      <Search className="h-3 w-3" />
-      <span className={isProMode ? "" : "truncate"}>
-        {contextToolsOpen
-          ? t("playground:composer.contextKnowledgeClose", "Close Search & Context")
-          : t("playground:composer.contextKnowledge", "Search & Context")}
-      </span>
-    </button>
+  const dictationButton = React.useMemo(
+    () =>
+      hasDictation ? (
+        <Tooltip title={speechTooltip}>
+          <button
+            type="button"
+            onClick={onDictationToggle}
+            disabled={!speechAvailable || voiceChatEnabled}
+            data-testid="dictation-button"
+            className={`inline-flex items-center justify-center rounded-md text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
+              speechAvailable &&
+              ((speechUsesServer && isServerDictating) ||
+                (!speechUsesServer && isListening))
+                ? "text-primaryStrong"
+                : "text-text-muted"
+            } ${isProMode ? "px-2 py-1" : "h-9 w-9 p-0"}`}
+            aria-label={
+              !speechAvailable
+                ? (t(
+                    "playground:actions.speechUnavailableTitle",
+                    "Dictation unavailable"
+                  ) as string)
+                : speechUsesServer
+                  ? (isServerDictating
+                      ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                      : (t("playground:actions.speechStart", "Start dictation") as string))
+                  : (isListening
+                      ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                      : (t("playground:actions.speechStart", "Start dictation") as string))
+            }
+          >
+            <MicIcon className="h-4 w-4" />
+          </button>
+        </Tooltip>
+      ) : null,
+    [
+      hasDictation,
+      isListening,
+      isProMode,
+      isServerDictating,
+      onDictationToggle,
+      speechAvailable,
+      speechTooltip,
+      speechUsesServer,
+      t,
+      voiceChatEnabled
+    ]
   )
 
-  const webSearchButton = hasWebSearch ? (
-    <button
-      type="button"
-      onClick={onToggleWebSearch}
-      aria-pressed={webSearch}
-      aria-label={t("playground:tools.webSearch", "Web search") as string}
-      title={t("playground:tools.webSearch", "Web search") as string}
-      data-testid="web-search-toggle"
-      className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition hover:bg-surface2 hover:text-text ${
-        webSearch
-          ? "bg-primary/10 text-primaryStrong"
-          : "text-text-muted"
-      }`}
-    >
-      <Globe className="h-3 w-3" />
-      <span>{t("playground:actions.webSearchShort", "Web")}</span>
-    </button>
-  ) : null
-
-  const dictationButton = hasDictation ? (
-    <Tooltip title={speechTooltip}>
-      <button
-        type="button"
-        onClick={onDictationToggle}
-        disabled={!speechAvailable || voiceChatEnabled}
-        data-testid="dictation-button"
-        className={`inline-flex items-center justify-center rounded-md text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
-          speechAvailable &&
-          ((speechUsesServer && isServerDictating) ||
-            (!speechUsesServer && isListening))
-            ? "text-primaryStrong"
-            : "text-text-muted"
-        } ${isProMode ? "px-2 py-1" : "h-9 w-9 p-0"}`}
-        aria-label={
-          !speechAvailable
-            ? (t("playground:actions.speechUnavailableTitle", "Dictation unavailable") as string)
-            : speechUsesServer
-              ? (isServerDictating
-                  ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                  : (t("playground:actions.speechStart", "Start dictation") as string))
-              : (isListening
-                  ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                  : (t("playground:actions.speechStart", "Start dictation") as string))
-        }
-      >
-        <MicIcon className="h-4 w-4" />
-      </button>
-    </Tooltip>
-  ) : null
-
-  const chatSettingsButton = isProMode ? (
-    <Tooltip title={t("common:currentChatModelSettings") as string}>
-      <button
-        type="button"
-        onClick={onOpenModelSettings}
-        aria-label={t("common:currentChatModelSettings") as string}
-        className="inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-xs text-text transition hover:bg-surface2"
-      >
-        <Gauge className="h-4 w-4" aria-hidden="true" />
-        <span className="flex flex-col items-start text-left">
-          <span className="font-medium">
-            {t("playground:composer.chatSettings", "Chat Settings")}
-          </span>
-          <span className="text-xs text-text-muted">
-            {modelSummaryLabel} • {promptSummaryLabel}
-          </span>
-        </span>
-      </button>
-    </Tooltip>
-  ) : (
-    <Tooltip title={t("common:currentChatModelSettings") as string}>
-      <TldwButton
-        variant="outline"
-        shape="pill"
-        iconOnly
-        onClick={onOpenModelSettings}
-        ariaLabel={t("common:currentChatModelSettings") as string}
-        className="text-text-muted"
-      >
-        <Gauge className="h-4 w-4" aria-hidden="true" />
-        <span className="sr-only">
-          {t("playground:composer.chatSettings", "Chat Settings")}
-        </span>
-      </TldwButton>
-    </Tooltip>
+  const chatSettingsButton = React.useMemo(
+    () =>
+      isProMode ? (
+        <Tooltip title={t("common:currentChatModelSettings") as string}>
+          <button
+            type="button"
+            onClick={onOpenModelSettings}
+            aria-label={t("common:currentChatModelSettings") as string}
+            className="inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-xs text-text transition hover:bg-surface2"
+          >
+            <Gauge className="h-4 w-4" aria-hidden="true" />
+            <span className="flex flex-col items-start text-left">
+              <span className="font-medium">
+                {t("playground:composer.chatSettings", "Chat Settings")}
+              </span>
+              <span className="text-xs text-text-muted">
+                {modelSummaryLabel} • {promptSummaryLabel}
+              </span>
+            </span>
+          </button>
+        </Tooltip>
+      ) : (
+        <Tooltip title={t("common:currentChatModelSettings") as string}>
+          <TldwButton
+            variant="outline"
+            shape="pill"
+            iconOnly
+            onClick={onOpenModelSettings}
+            ariaLabel={t("common:currentChatModelSettings") as string}
+            className="text-text-muted"
+          >
+            <Gauge className="h-4 w-4" aria-hidden="true" />
+            <span className="sr-only">
+              {t("playground:composer.chatSettings", "Chat Settings")}
+            </span>
+          </TldwButton>
+        </Tooltip>
+      ),
+    [isProMode, modelSummaryLabel, onOpenModelSettings, promptSummaryLabel, t]
   )
 
-  const tabsCountBadge =
-    isProMode && selectedDocumentsCount > 0 ? (
-      <button
-        type="button"
-        onClick={() => {
-          const chips = document.querySelector<HTMLElement>(
-            "[data-playground-tabs='true']"
-          )
-          if (chips) {
-            chips.focus()
-            chips.scrollIntoView({ block: "nearest" })
+  const tabsCountBadge = React.useMemo(
+    () =>
+      isProMode && selectedDocumentsCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => {
+            const chips = document.querySelector<HTMLElement>(
+              "[data-playground-tabs='true']"
+            )
+            if (chips) {
+              chips.focus()
+              chips.scrollIntoView({ block: "nearest" })
+            }
+          }}
+          title={
+            t(
+              "playground:composer.contextTabsHint",
+              "Review or remove referenced tabs, or add more from your open browser tabs."
+            ) as string
           }
-        }}
-        title={
-          t(
-            "playground:composer.contextTabsHint",
-            "Review or remove referenced tabs, or add more from your open browser tabs."
-          ) as string
-        }
-        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
-      >
-        <FileText className="h-3 w-3 text-text-subtle" />
-        <span>
-          {t("playground:composer.contextTabs", {
-            defaultValue: "{{count}} tabs",
-            count: selectedDocumentsCount
-          } as any) as string}
-        </span>
-      </button>
-    ) : null
-
-  const filesCountBadge =
-    isProMode && uploadedFilesCount > 0 ? (
-      <button
-        type="button"
-        onClick={() => {
-          const files = document.querySelector<HTMLElement>(
-            "[data-playground-uploads='true']"
-          )
-          if (files) {
-            files.focus()
-            files.scrollIntoView({ block: "nearest" })
-          }
-        }}
-        title={
-          t(
-            "playground:composer.contextFilesHint",
-            "Review attached files, remove them, or add more."
-          ) as string
-        }
-        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
-      >
-        <FileIcon className="h-3 w-3 text-text-subtle" />
-        <span>
-          {t("playground:composer.contextFiles", {
-            defaultValue: "{{count}} files",
-            count: uploadedFilesCount
-          } as any) as string}
-        </span>
-      </button>
-    ) : null
-
-  const promptSelectControl = (
-    <PromptSelect
-      selectedSystemPrompt={selectedSystemPrompt}
-      setSelectedSystemPrompt={setSelectedSystemPrompt}
-      setSelectedQuickPrompt={setSelectedQuickPrompt}
-      iconClassName="h-4 w-4"
-      className="text-text-muted hover:text-text"
-    />
+          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
+        >
+          <FileText className="h-3 w-3 text-text-subtle" />
+          <span>
+            {t("playground:composer.contextTabs", {
+              defaultValue: "{{count}} tabs",
+              count: selectedDocumentsCount
+            } as any) as string}
+          </span>
+        </button>
+      ) : null,
+    [isProMode, selectedDocumentsCount, t]
   )
 
-  const characterSelectControl = (
-    <CharacterSelect
-      showLabel={isProMode ? undefined : false}
-      iconClassName="h-4 w-4"
-      className="text-text-muted hover:text-text"
-    />
+  const filesCountBadge = React.useMemo(
+    () =>
+      isProMode && uploadedFilesCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => {
+            const files = document.querySelector<HTMLElement>(
+              "[data-playground-uploads='true']"
+            )
+            if (files) {
+              files.focus()
+              files.scrollIntoView({ block: "nearest" })
+            }
+          }}
+          title={
+            t(
+              "playground:composer.contextFilesHint",
+              "Review attached files, remove them, or add more."
+            ) as string
+          }
+          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
+        >
+          <FileIcon className="h-3 w-3 text-text-subtle" />
+          <span>
+            {t("playground:composer.contextFiles", {
+              defaultValue: "{{count}} files",
+              count: uploadedFilesCount
+            } as any) as string}
+          </span>
+        </button>
+      ) : null,
+    [isProMode, t, uploadedFilesCount]
+  )
+
+  const promptSelectControl = React.useMemo(
+    () => (
+      <PromptSelect
+        selectedSystemPrompt={selectedSystemPrompt}
+        setSelectedSystemPrompt={setSelectedSystemPrompt}
+        setSelectedQuickPrompt={setSelectedQuickPrompt}
+        iconClassName="h-4 w-4"
+        className="text-text-muted hover:text-text"
+      />
+    ),
+    [selectedSystemPrompt, setSelectedQuickPrompt, setSelectedSystemPrompt]
+  )
+
+  const characterSelectControl = React.useMemo(
+    () => (
+      <CharacterSelect
+        showLabel={isProMode ? undefined : false}
+        iconClassName="h-4 w-4"
+        className="text-text-muted hover:text-text"
+      />
+    ),
+    [isProMode]
   )
 
   const providerStatusItem = contextItems.find(

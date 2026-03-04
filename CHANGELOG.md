@@ -25,6 +25,21 @@ and this project adheres to Some kind of Versioning
   - edit metadata save + persisted verification (UI + API),
   - manual create flow persistence verification,
   - take/submit/results flow with explicit attempts API assertion.
+- MCP Hub management end-to-end surfaces across AuthNZ storage, API, and WebUI/extension:
+  - Added AuthNZ migrations for MCP Hub ACP profile and external server tables in SQLite and PostgreSQL bootstrap paths.
+  - Added `McpHubRepo` and `McpHubService` for ACP profile CRUD and external server lifecycle handling, including encrypted secret storage and masked secret status responses.
+  - Added MCP Hub management API contracts and routes under `/api/v1/mcp/hub` for ACP profiles, external servers, and secret set operations.
+  - Added WebUI + extension MCP Hub page wiring and tabs (`AcpProfilesTab`, `ExternalServersTab`, `ToolCatalogsTab`) with shared route-registry coverage (`/mcp-hub`, `/settings/mcp-hub`).
+  - Added frontend MCP Hub API client module/tests and route parity tests for web/extension settings exposure.
+  - Added docs for architecture and usage:
+    - `Docs/MCP/mcp_hub_management.md`
+    - `Docs/MCP/README.md`
+- Added backend and frontend regression coverage for MCP Hub migrations, repo/service behavior, API authorization boundaries, and tab interactions/error states.
+
+### Changed
+
+- Refined MCP Hub external server update flow to use a dedicated repository-level `update_external_server` path (direct `UPDATE` pattern) for consistency with ACP profile updates and clearer audit semantics.
+- Extended settings/navigation indexing so MCP Hub management is discoverable in both settings and workspace-oriented routes.
 
 ### Removed
 
@@ -35,6 +50,10 @@ and this project adheres to Some kind of Versioning
 - Fixed route matching ambiguity where `/api/v1/quizzes/attempts` could be interpreted as `/{quiz_id}`, causing attempts list failures.
 - Fixed strict take/results E2E behavior to fail fast with diagnostic screenshot when the started-quiz question list does not render.
 - Fixed unsaved-create tab navigation handling to accept only the expected unsaved-changes prompt copy.
+- Fixed MCP Hub list endpoint access-control gaps by constraining ACP profile and external server visibility to principal-allowed scopes (`global`, own `user`, member `org/team`) and returning `403` for forbidden explicit filters.
+- Fixed PostgreSQL timestamp persistence in MCP Hub repo by preserving timezone-aware UTC datetimes for `TIMESTAMPTZ` writes.
+- Fixed silent UI failures in MCP Hub tabs by surfacing user-visible Ant Design error alerts for load/create/save-secret failures.
+- Fixed MCP Hub security hardening follow-ups flagged during review and revalidated with targeted tests and Bandit checks for touched backend paths.
 
 ## [0.1.27] 2026-03-02
 

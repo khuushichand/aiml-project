@@ -195,6 +195,7 @@ const OptionCollections = lazy(() => import("./option-collections"))
 const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
 const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
+const OptionMcpHub = lazy(() => import("./option-mcp-hub"))
 const OptionSkills = lazy(() => import("./option-skills"))
 const OptionRepo2Txt = lazy(() => import("./option-repo2txt"))
 const OptionSetup = lazy(() => import("./option-setup"))
@@ -243,6 +244,17 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "settings:manageModels.title",
       icon: BrainCircuitIcon,
       order: 6
+    }
+  },
+  {
+    kind: "options",
+    path: "/settings/mcp-hub",
+    element: <OptionMcpHub />,
+    nav: {
+      group: "server",
+      labelToken: "settings:mcpHubNav",
+      icon: ServerIcon,
+      order: 7
     }
   },
   {
@@ -645,6 +657,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "settings:acpPlaygroundNav",
       icon: Bot,
       order: 12,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/mcp-hub",
+    element: <OptionMcpHub />,
+    nav: {
+      group: "workspace",
+      labelToken: "settings:mcpHubNav",
+      icon: Bot,
+      order: 12.5,
       beta: true
     }
   },
