@@ -11,6 +11,8 @@ This directory contains the Model Context Protocol (MCP) documentation for the T
   - `User_Guide.md` - HTTP/WebSocket usage patterns and examples
   - `Modules.md` - Authoring reference for pluggable MCP modules
   - `Documentation_Ingestion_Playbook.md` - How to ingest project docs and query them via MCP tools
+- `mcp_hub_management.md` - MCP Hub UI and API management surface (ACP profiles + external servers)
+- `mcp_tool_catalogs.md` - Tool catalog governance and scope-aware APIs
 
 ## Picking the Right Guide
 

@@ -35,6 +35,9 @@
   "chatSettingsNav": {
     "message": "Chat"
   },
+  "mcpHubNav": {
+    "message": "MCP Hub"
+  },
   "admin_adminGuardForbiddenTitle": {
     "message": "Admin access required for these controls"
   },

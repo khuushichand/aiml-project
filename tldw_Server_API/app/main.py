@@ -5634,6 +5634,12 @@ elif _MINIMAL_TEST_APP:
             app.include_router(mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-catalogs"])
         except _IMPORT_EXCEPTIONS as _mcp_cat_err:
             logger.debug(f"Skipping MCP catalogs router in minimal test app: {_mcp_cat_err}")
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.mcp_hub_management import router as mcp_hub_management_router
+
+            app.include_router(mcp_hub_management_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-hub"])
+        except _IMPORT_EXCEPTIONS as _mcp_hub_err:
+            logger.debug(f"Skipping MCP hub router in minimal test app: {_mcp_hub_err}")
         # Privileges endpoints used by tests that introspect RBAC snapshots
         try:
             from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
@@ -5807,10 +5813,12 @@ else:
         logger.warning(f"Admin endpoints unavailable at import time; deferring: {_admin_import_err}")
         admin_router = None  # type: ignore[assignment]
     from tldw_Server_API.app.api.v1.endpoints.mcp_catalogs_manage import router as mcp_catalogs_manage_router
+    from tldw_Server_API.app.api.v1.endpoints.mcp_hub_management import router as mcp_hub_management_router
 
     if admin_router is not None:
         _include_if_enabled("admin", admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
     _include_if_enabled("mcp-catalogs", mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}")
+    _include_if_enabled("mcp-hub", mcp_hub_management_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-hub"])
     # Self-service organization management endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.orgs import router as orgs_router
