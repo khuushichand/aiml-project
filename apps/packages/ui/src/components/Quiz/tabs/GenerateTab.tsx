@@ -7,11 +7,13 @@ import { useNavigate } from "react-router-dom"
 import { useGenerateQuizMutation } from "../hooks"
 import { useDebounce } from "@/hooks/useDebounce"
 import { tldwClient } from "@/services/tldw"
-import type { QuestionType } from "@/services/quizzes"
+import type { QuestionType, QuizGenerateSource } from "@/services/quizzes"
 import {
   createDeck,
   createFlashcard,
   generateFlashcards,
+  listDecks,
+  listFlashcards,
   type FlashcardGeneratedDraft
 } from "@/services/flashcards"
 import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
@@ -32,6 +34,22 @@ interface MediaItem {
 interface MediaListResponse {
   items: MediaItem[]
   total: number | null
+}
+
+interface NoteItem {
+  id: string
+  title: string
+}
+
+interface DeckItem {
+  id: number
+  name: string
+}
+
+interface CardItem {
+  id: string
+  label: string
+  deckId: number
 }
 
 type GeneratedPreview = {
@@ -196,6 +214,77 @@ const normalizeMediaListResponse = (raw: unknown): MediaListResponse => {
   return { items, total }
 }
 
+const normalizeNoteListResponse = (raw: unknown): NoteItem[] => {
+  const record = asRecord(raw)
+  const rawItems = record?.items ?? record?.notes ?? record?.results ?? record?.data ?? raw
+  const array = Array.isArray(rawItems) ? rawItems : []
+  const seen = new Set<string>()
+
+  return array
+    .map((entry) => {
+      const item = asRecord(entry)
+      if (!item) return null
+      const id = asString(item.id ?? item.note_id)
+      if (!id || seen.has(id)) return null
+      seen.add(id)
+      return {
+        id,
+        title: asString(item.title) ?? asString(item.name) ?? `Note ${id}`
+      } satisfies NoteItem
+    })
+    .filter((item): item is NoteItem => item != null)
+}
+
+const normalizeDeckListResponse = (raw: unknown): DeckItem[] => {
+  const array = Array.isArray(raw) ? raw : []
+  const seen = new Set<number>()
+
+  return array
+    .map((entry) => {
+      const item = asRecord(entry)
+      if (!item) return null
+      const id = asNumber(item.id)
+      if (id == null || id <= 0 || seen.has(id)) return null
+      seen.add(id)
+      return {
+        id,
+        name: asString(item.name) ?? `Deck ${id}`
+      } satisfies DeckItem
+    })
+    .filter((item): item is DeckItem => item != null)
+}
+
+const normalizeFlashcardListResponse = (
+  raw: unknown,
+  deckNames: Map<number, string>
+): CardItem[] => {
+  const record = asRecord(raw)
+  const rawItems = record?.items ?? record?.results ?? record?.data ?? []
+  const array = Array.isArray(rawItems) ? rawItems : []
+  const seen = new Set<string>()
+
+  return array
+    .map((entry) => {
+      const item = asRecord(entry)
+      if (!item) return null
+      const id = asString(item.uuid ?? item.id)
+      if (!id || seen.has(id)) return null
+      const deckId = asNumber(item.deck_id)
+      if (deckId == null || deckId <= 0) return null
+      seen.add(id)
+      const front = asString(item.front) ?? ""
+      const back = asString(item.back) ?? ""
+      const preview = [front, back].filter(Boolean).join(" - ")
+      const deckName = deckNames.get(deckId) ?? `Deck ${deckId}`
+      return {
+        id,
+        deckId,
+        label: preview ? `${deckName}: ${preview}` : `${deckName}: ${id}`
+      } satisfies CardItem
+    })
+    .filter((item): item is CardItem => item != null)
+}
+
 const getFirstNonEmptyString = (...values: unknown[]): string => {
   for (const value of values) {
     if (typeof value === "string" && value.trim().length > 0) {
@@ -292,8 +381,12 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake, onNa
   const navigate = useNavigate()
   const [form] = Form.useForm()
   const [selectedMediaId, setSelectedMediaId] = React.useState<number | null>(null)
+  const [selectedNoteIds, setSelectedNoteIds] = React.useState<string[]>([])
+  const [selectedDeckIds, setSelectedDeckIds] = React.useState<number[]>([])
+  const [selectedCardIds, setSelectedCardIds] = React.useState<string[]>([])
   const [messageApi, contextHolder] = message.useMessage()
   const [mediaSearchInput, setMediaSearchInput] = React.useState("")
+  const [notesSearchInput, setNotesSearchInput] = React.useState("")
   const [mediaPage, setMediaPage] = React.useState(1)
   const [loadedMediaItems, setLoadedMediaItems] = React.useState<MediaItem[]>([])
   const [mediaTotal, setMediaTotal] = React.useState<number | null>(null)
@@ -301,6 +394,7 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake, onNa
   const [generationInFlight, setGenerationInFlight] = React.useState(false)
   const [generatedPreview, setGeneratedPreview] = React.useState<GeneratedPreview | null>(null)
   const debouncedMediaSearch = useDebounce(mediaSearchInput, 300)
+  const debouncedNotesSearch = useDebounce(notesSearchInput, 300)
   const generateAbortRef = React.useRef<AbortController | null>(null)
 
   const generateMutation = useGenerateQuizMutation()
@@ -328,6 +422,80 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake, onNa
       return normalizeMediaListResponse(response)
     },
     placeholderData: (previousData) => previousData,
+    staleTime: 60 * 1000
+  })
+
+  const {
+    data: notesData = [],
+    isLoading: isLoadingNotes,
+    error: notesError
+  } = useQuery<NoteItem[]>({
+    queryKey: ["quiz-generate-note-list", debouncedNotesSearch],
+    queryFn: async () => {
+      const searchTerm = debouncedNotesSearch.trim()
+      if (searchTerm) {
+        const response = await tldwClient.searchNotes(searchTerm)
+        return normalizeNoteListResponse(response)
+      }
+      const response = await tldwClient.listNotes({
+        page: 1,
+        results_per_page: 200,
+        include_keywords: false
+      })
+      return normalizeNoteListResponse(response)
+    },
+    staleTime: 60 * 1000
+  })
+
+  const {
+    data: decksData = [],
+    isLoading: isLoadingDecks,
+    error: decksError
+  } = useQuery<DeckItem[]>({
+    queryKey: ["quiz-generate-decks"],
+    queryFn: async () => {
+      const decks = await listDecks()
+      return normalizeDeckListResponse(decks)
+    },
+    staleTime: 60 * 1000
+  })
+
+  const {
+    data: cardsData = [],
+    isFetching: isFetchingCards,
+    error: cardsError
+  } = useQuery<CardItem[]>({
+    queryKey: ["quiz-generate-cards-by-deck", selectedDeckIds],
+    queryFn: async () => {
+      const deckNames = new Map<number, string>()
+      decksData.forEach((deck) => {
+        deckNames.set(deck.id, deck.name)
+      })
+
+      const responses = await Promise.all(
+        selectedDeckIds.map((deckId) =>
+          listFlashcards({
+            deck_id: deckId,
+            due_status: "all",
+            limit: 200,
+            offset: 0,
+            order_by: "created_at"
+          })
+        )
+      )
+
+      const merged: CardItem[] = []
+      const seen = new Set<string>()
+      responses.forEach((response) => {
+        normalizeFlashcardListResponse(response, deckNames).forEach((card) => {
+          if (seen.has(card.id)) return
+          seen.add(card.id)
+          merged.push(card)
+        })
+      })
+      return merged
+    },
+    enabled: selectedDeckIds.length > 0,
     staleTime: 60 * 1000
   })
 
@@ -384,6 +552,27 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake, onNa
   }, [selectedMediaId])
 
   React.useEffect(() => {
+    if (selectedMediaId != null) return
+    if (!form.getFieldValue("generateStudyMaterials")) return
+    form.setFieldsValue({ generateStudyMaterials: false })
+  }, [form, selectedMediaId])
+
+  React.useEffect(() => {
+    if (selectedDeckIds.length === 0) {
+      setSelectedCardIds((prev) => (prev.length === 0 ? prev : []))
+      return
+    }
+    const availableCardIds = new Set(cardsData.map((card) => card.id))
+    setSelectedCardIds((prev) => {
+      const next = prev.filter((cardId) => availableCardIds.has(cardId))
+      if (next.length === prev.length && next.every((id, index) => id === prev[index])) {
+        return prev
+      }
+      return next
+    })
+  }, [cardsData, selectedDeckIds])
+
+  React.useEffect(() => {
     return () => {
       generateAbortRef.current?.abort()
     }
@@ -411,6 +600,56 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake, onNa
     }
     return options
   }, [loadedMediaItems, selectedMediaId, t])
+
+  const noteOptions = React.useMemo(
+    () =>
+      notesData.map((item) => ({
+        value: item.id,
+        label: item.title
+      })),
+    [notesData]
+  )
+
+  const deckOptions = React.useMemo(
+    () =>
+      decksData.map((deck) => ({
+        value: deck.id,
+        label: deck.name
+      })),
+    [decksData]
+  )
+
+  const cardOptions = React.useMemo(
+    () =>
+      cardsData.map((card) => ({
+        value: card.id,
+        label: card.label
+      })),
+    [cardsData]
+  )
+
+  const selectedSources = React.useMemo<QuizGenerateSource[]>(() => {
+    const sourceMap = new Map<string, QuizGenerateSource>()
+    const put = (source: QuizGenerateSource) => {
+      sourceMap.set(`${source.source_type}:${source.source_id}`, source)
+    }
+
+    if (selectedMediaId != null) {
+      put({ source_type: "media", source_id: String(selectedMediaId) })
+    }
+    selectedNoteIds.forEach((noteId) => {
+      put({ source_type: "note", source_id: noteId })
+    })
+    selectedDeckIds.forEach((deckId) => {
+      put({ source_type: "flashcard_deck", source_id: String(deckId) })
+    })
+    selectedCardIds.forEach((cardId) => {
+      put({ source_type: "flashcard_card", source_id: cardId })
+    })
+    return Array.from(sourceMap.values())
+  }, [selectedCardIds, selectedDeckIds, selectedMediaId, selectedNoteIds])
+
+  const hasSelectedSources = selectedSources.length > 0
 
   const selectedMedia = React.useMemo(
     () =>
@@ -584,9 +823,11 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake, onNa
       return
     }
 
-    if (!selectedMediaId) {
+    if (!hasSelectedSources) {
       messageApi.warning(
-        t("option:quiz.selectMediaFirst", { defaultValue: "Please select a media item first" })
+        t("option:quiz.selectAtLeastOneSource", {
+          defaultValue: "Select at least one source before generating."
+        })
       )
       return
     }
@@ -605,7 +846,7 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake, onNa
 
       const generated = await generateMutation.mutateAsync({
         request: {
-          media_id: selectedMediaId,
+          sources: selectedSources,
           num_questions: values.numQuestions,
           question_types: values.questionTypes,
           difficulty: values.difficulty,
@@ -619,15 +860,28 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake, onNa
       let flashcardsSummary: FlashcardsSummary | null = null
 
       if (shouldGenerateStudyMaterials) {
-        flashcardsSummary = await generateStudyMaterialsFlashcards({
-          mediaId: selectedMediaId,
-          mediaTitle: selectedMedia?.title || `Media #${selectedMediaId}`,
-          quizName: generatedQuizName,
-          numQuestions: values.numQuestions ?? (generated.questions.length || 10),
-          difficulty: values.difficulty,
-          focusTopics,
-          signal: requestAbortController.signal
-        })
+        if (selectedMediaId == null) {
+          flashcardsSummary = {
+            status: "failed",
+            generatedCount: 0,
+            savedCount: 0,
+            failedCount: 0,
+            errorDetail: t("option:quiz.studyMaterialsMediaRequired", {
+              defaultValue: "Flashcard deck generation currently requires a selected media source."
+            }),
+            handoffRoute: "/flashcards?tab=importExport"
+          }
+        } else {
+          flashcardsSummary = await generateStudyMaterialsFlashcards({
+            mediaId: selectedMediaId,
+            mediaTitle: selectedMedia?.title || `Media #${selectedMediaId}`,
+            quizName: generatedQuizName,
+            numQuestions: values.numQuestions ?? (generated.questions.length || 10),
+            difficulty: values.difficulty,
+            focusTopics,
+            signal: requestAbortController.signal
+          })
+        }
       }
 
       setGeneratedPreview({
@@ -693,65 +947,156 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake, onNa
       {contextHolder}
 
       <Card
-        title={t("option:quiz.selectMedia", { defaultValue: "Select Media" })}
+        title={t("option:quiz.selectSources", { defaultValue: "Select Sources" })}
         size="small"
       >
-        {listError ? (
-          <Alert
-            type="error"
-            title={t("settings:chunkingPlayground.loadMediaListError", "Failed to load media library")}
-          />
-        ) : (
+        <div className="space-y-4">
           <div className="space-y-2">
-            <Select
-              showSearch
-              placeholder={t("option:quiz.selectMediaPlaceholder", { defaultValue: "Select media item..." })}
-              loading={isLoadingList && mediaPage === 1}
-              value={selectedMediaId}
-              onChange={(value) => setSelectedMediaId(value)}
-              onSearch={(value) => setMediaSearchInput(value)}
-              options={mediaOptions}
-              filterOption={false}
-              className="w-full"
-              disabled={generationInFlight}
-              notFoundContent={
-                isLoadingList && mediaPage === 1
-                  ? <Spin size="small" />
-                  : t("option:quiz.noMediaFound", { defaultValue: "No media found" })
-              }
-            />
-            {mediaTotal != null ? (
-              <div className="text-xs text-text-subtle">
-                {t("option:quiz.mediaCount", {
-                  defaultValue: loadedMediaItems.length < mediaTotal
-                    ? "Showing {{loaded}} of {{count}} media items"
-                    : "{{count}} media items available",
-                  loaded: loadedMediaItems.length,
-                  count: mediaTotal
-                })}
-              </div>
+            <div className="text-xs font-medium text-text-subtle">
+              {t("option:quiz.mediaSources", { defaultValue: "Media" })}
+            </div>
+            {listError ? (
+              <Alert
+                type="error"
+                title={t("settings:chunkingPlayground.loadMediaListError", "Failed to load media library")}
+              />
             ) : (
-              <div className="text-xs text-text-subtle">
-                {t("option:quiz.loadedMediaCount", {
-                  defaultValue: "Showing {{count}} media items",
-                  count: loadedMediaItems.length
-                })}
-              </div>
-            )}
-            {hasMoreMedia && (
-              <Button
-                type="default"
-                size="small"
-                onClick={() => setMediaPage((prev) => prev + 1)}
-                loading={isLoadingMoreMedia}
-                disabled={isLoadingMoreMedia || generationInFlight}
-                data-testid="generate-media-load-more"
-              >
-                {t("common:loadMore", { defaultValue: "Load More" })}
-              </Button>
+              <>
+                <Select
+                  showSearch
+                  placeholder={t("option:quiz.selectMediaPlaceholder", { defaultValue: "Select media item..." })}
+                  loading={isLoadingList && mediaPage === 1}
+                  value={selectedMediaId}
+                  onChange={(value) => setSelectedMediaId(value)}
+                  onSearch={(value) => setMediaSearchInput(value)}
+                  options={mediaOptions}
+                  filterOption={false}
+                  className="w-full"
+                  disabled={generationInFlight}
+                  notFoundContent={
+                    isLoadingList && mediaPage === 1
+                      ? <Spin size="small" />
+                      : t("option:quiz.noMediaFound", { defaultValue: "No media found" })
+                  }
+                />
+                {mediaTotal != null ? (
+                  <div className="text-xs text-text-subtle">
+                    {t("option:quiz.mediaCount", {
+                      defaultValue: loadedMediaItems.length < mediaTotal
+                        ? "Showing {{loaded}} of {{count}} media items"
+                        : "{{count}} media items available",
+                      loaded: loadedMediaItems.length,
+                      count: mediaTotal
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-xs text-text-subtle">
+                    {t("option:quiz.loadedMediaCount", {
+                      defaultValue: "Showing {{count}} media items",
+                      count: loadedMediaItems.length
+                    })}
+                  </div>
+                )}
+                {hasMoreMedia && (
+                  <Button
+                    type="default"
+                    size="small"
+                    onClick={() => setMediaPage((prev) => prev + 1)}
+                    loading={isLoadingMoreMedia}
+                    disabled={isLoadingMoreMedia || generationInFlight}
+                    data-testid="generate-media-load-more"
+                  >
+                    {t("common:loadMore", { defaultValue: "Load More" })}
+                  </Button>
+                )}
+              </>
             )}
           </div>
-        )}
+
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-text-subtle">
+              {t("option:quiz.noteSources", { defaultValue: "Notes" })}
+            </div>
+            {notesError ? (
+              <Alert
+                type="error"
+                title={t("option:quiz.loadNotesError", { defaultValue: "Failed to load notes" })}
+              />
+            ) : (
+              <Select
+                mode="multiple"
+                showSearch
+                value={selectedNoteIds}
+                onChange={(values) => setSelectedNoteIds(values)}
+                onSearch={(value) => setNotesSearchInput(value)}
+                placeholder={t("option:quiz.selectNotesPlaceholder", { defaultValue: "Select notes..." })}
+                options={noteOptions}
+                loading={isLoadingNotes}
+                disabled={generationInFlight}
+                filterOption={false}
+                className="w-full"
+                data-testid="generate-note-select"
+                notFoundContent={
+                  isLoadingNotes
+                    ? <Spin size="small" />
+                    : t("option:quiz.noNotesFound", { defaultValue: "No notes found" })
+                }
+              />
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-text-subtle">
+              {t("option:quiz.deckSources", { defaultValue: "Flashcard Decks" })}
+            </div>
+            {decksError ? (
+              <Alert
+                type="error"
+                title={t("option:quiz.loadDecksError", { defaultValue: "Failed to load flashcard decks" })}
+              />
+            ) : (
+              <Select
+                mode="multiple"
+                value={selectedDeckIds}
+                onChange={(values) => setSelectedDeckIds(values)}
+                placeholder={t("option:quiz.selectDecksPlaceholder", { defaultValue: "Select flashcard decks..." })}
+                options={deckOptions}
+                loading={isLoadingDecks}
+                disabled={generationInFlight}
+                className="w-full"
+                data-testid="generate-deck-select"
+              />
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-text-subtle">
+              {t("option:quiz.cardSources", { defaultValue: "Flashcards" })}
+            </div>
+            {cardsError ? (
+              <Alert
+                type="warning"
+                title={t("option:quiz.loadCardsError", { defaultValue: "Failed to load flashcards for selected decks" })}
+              />
+            ) : (
+              <Select
+                mode="multiple"
+                value={selectedCardIds}
+                onChange={(values) => setSelectedCardIds(values)}
+                placeholder={t("option:quiz.selectCardsPlaceholder", {
+                  defaultValue: selectedDeckIds.length > 0
+                    ? "Select flashcards from selected decks..."
+                    : "Select one or more decks first"
+                })}
+                options={cardOptions}
+                loading={isFetchingCards}
+                disabled={generationInFlight || selectedDeckIds.length === 0}
+                className="w-full"
+                data-testid="generate-card-select"
+              />
+            )}
+          </div>
+        </div>
       </Card>
 
       <Card
@@ -841,7 +1186,7 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake, onNa
 
           <Form.Item name="generateStudyMaterials" valuePropName="checked" className="!mb-0">
             <Checkbox
-              disabled={generationInFlight}
+              disabled={generationInFlight || selectedMediaId == null}
               data-testid="generate-study-materials-toggle"
             >
               {t("option:quiz.generateStudyMaterialsToggle", {
@@ -986,7 +1331,7 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake, onNa
         size="large"
         onClick={handleGenerate}
         loading={generationInFlight}
-        disabled={!selectedMediaId || generationInFlight}
+        disabled={!hasSelectedSources || generationInFlight}
         block
       >
         {t("option:quiz.generateQuiz", { defaultValue: "Generate Quiz" })}

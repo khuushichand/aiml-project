@@ -59,6 +59,37 @@ def client_with_quizzes_db(quizzes_db: CharactersRAGDB):
     TestConfig.reset_settings()
 
 
+def test_quiz_source_bundle_roundtrip_via_db_create_and_get(quizzes_db: CharactersRAGDB):
+    quiz_id = quizzes_db.create_quiz(
+        name="Source Bundle Quiz",
+        source_bundle_json=[{"source_type": "note", "source_id": "note-1"}],
+    )
+
+    row = quizzes_db.get_quiz(quiz_id)
+    assert row is not None
+    assert row["source_bundle_json"] == [{"source_type": "note", "source_id": "note-1"}]
+
+
+def test_quiz_response_includes_source_bundle(client_with_quizzes_db: TestClient):
+    create_response = client_with_quizzes_db.post(
+        "/api/v1/quizzes",
+        json={
+            "name": "API Source Bundle Quiz",
+            "source_bundle_json": [{"source_type": "note", "source_id": "note-1"}],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["source_bundle_json"] == [{"source_type": "note", "source_id": "note-1"}]
+
+    quiz_id = created["id"]
+    fetch_response = client_with_quizzes_db.get(f"/api/v1/quizzes/{quiz_id}", headers=AUTH_HEADERS)
+    assert fetch_response.status_code == 200
+    fetched = fetch_response.json()
+    assert fetched["source_bundle_json"] == [{"source_type": "note", "source_id": "note-1"}]
+
+
 def test_quiz_endpoints_flow(client_with_quizzes_db: TestClient):
     r = client_with_quizzes_db.post(
         "/api/v1/quizzes",
@@ -114,6 +145,55 @@ def test_quiz_endpoints_flow(client_with_quizzes_db: TestClient):
     result = r.json()
     assert result["score"] == 1
     assert result["answers"][0]["is_correct"] is True
+
+
+def test_attempts_list_route_is_not_shadowed_by_quiz_id(client_with_quizzes_db: TestClient):
+    create_quiz_response = client_with_quizzes_db.post(
+        "/api/v1/quizzes",
+        json={"name": "Attempts Route Quiz"},
+        headers=AUTH_HEADERS,
+    )
+    assert create_quiz_response.status_code == 200
+    quiz_id = create_quiz_response.json()["id"]
+
+    create_question_response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/{quiz_id}/questions",
+        json={
+            "question_type": "multiple_choice",
+            "question_text": "Pick two",
+            "options": ["1", "2", "3"],
+            "correct_answer": 1,
+            "points": 1,
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert create_question_response.status_code == 200
+    question_id = create_question_response.json()["id"]
+
+    start_attempt_response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/{quiz_id}/attempts",
+        headers=AUTH_HEADERS,
+    )
+    assert start_attempt_response.status_code == 200
+    attempt_id = start_attempt_response.json()["id"]
+
+    submit_attempt_response = client_with_quizzes_db.put(
+        f"/api/v1/quizzes/attempts/{attempt_id}",
+        json={"answers": [{"question_id": question_id, "user_answer": 1}]},
+        headers=AUTH_HEADERS,
+    )
+    assert submit_attempt_response.status_code == 200
+
+    list_attempts_response = client_with_quizzes_db.get(
+        "/api/v1/quizzes/attempts",
+        params={"quiz_id": quiz_id, "limit": 20, "offset": 0},
+        headers=AUTH_HEADERS,
+    )
+    assert list_attempts_response.status_code == 200
+    attempts_payload = list_attempts_response.json()
+    assert attempts_payload["count"] >= 1
+    assert any(item["id"] == attempt_id for item in attempts_payload["items"])
+    assert all(item["quiz_id"] == quiz_id for item in attempts_payload["items"])
 
 
 def test_quiz_multi_select_endpoints_flow(client_with_quizzes_db: TestClient):

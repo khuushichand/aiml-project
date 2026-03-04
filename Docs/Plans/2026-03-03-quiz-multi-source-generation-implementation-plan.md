@@ -686,3 +686,15 @@ git commit -m "test(quiz-e2e): cover mixed-source generation flow"
 - Keep commits scoped to each task (do not batch unrelated changes).
 - Do not modify unrelated dirty files already present in workspace.
 - For strict provenance behavior, fail entire generation on any invalid citation.
+
+## Execution Status (Updated 2026-03-03)
+
+- Task 1: Complete
+- Task 2: Complete
+- Task 3: Complete
+- Task 4: Complete
+- Task 5: Complete
+- Task 6: Complete
+- Task 7: Complete
+- Task 8: Complete
+- Task 9: In Progress (spec updates complete; local run currently skips in environments without real-server E2E config)

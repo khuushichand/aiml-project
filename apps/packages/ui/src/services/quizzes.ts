@@ -26,7 +26,14 @@ const getQuizAttemptsClient = (quizId: number) =>
 // Question types
 export type QuestionType = "multiple_choice" | "multi_select" | "matching" | "true_false" | "fill_blank"
 export type AnswerValue = number | string | number[] | Record<string, string>
+export type QuizGenerateSourceType = "media" | "note" | "flashcard_deck" | "flashcard_card"
+export type QuizGenerateSource = {
+  source_type: QuizGenerateSourceType
+  source_id: string
+}
 export type SourceCitation = {
+  source_type?: QuizGenerateSourceType | null
+  source_id?: string | null
   label?: string | null
   quote?: string | null
   media_id?: number | null
@@ -42,6 +49,7 @@ export type Quiz = {
   description?: string | null
   workspace_tag?: string | null
   media_id?: number | null
+  source_bundle_json?: QuizGenerateSource[] | null
   total_questions: number
   time_limit_seconds?: number | null
   passing_score?: number | null
@@ -121,6 +129,7 @@ export type QuizCreate = {
   description?: string | null
   workspace_tag?: string | null
   media_id?: number | null
+  source_bundle_json?: QuizGenerateSource[] | null
   time_limit_seconds?: number | null
   passing_score?: number | null
 }
@@ -130,6 +139,7 @@ export type QuizUpdate = {
   description?: string | null
   workspace_tag?: string | null
   media_id?: number | null
+  source_bundle_json?: QuizGenerateSource[] | null
   time_limit_seconds?: number | null
   passing_score?: number | null
   expected_version?: number | null
@@ -165,8 +175,7 @@ export type QuestionUpdate = {
 }
 
 // AI generation request
-export type QuizGenerateRequest = {
-  media_id: number
+type QuizGenerateRequestBase = {
   num_questions?: number
   question_types?: QuestionType[]
   difficulty?: "easy" | "medium" | "hard" | "mixed"
@@ -174,6 +183,18 @@ export type QuizGenerateRequest = {
   model?: string
   workspace_tag?: string | null
 }
+
+type QuizGenerateRequestWithMedia = QuizGenerateRequestBase & {
+  media_id: number
+  sources?: QuizGenerateSource[]
+}
+
+type QuizGenerateRequestWithSources = QuizGenerateRequestBase & {
+  sources: QuizGenerateSource[]
+  media_id?: number
+}
+
+export type QuizGenerateRequest = QuizGenerateRequestWithMedia | QuizGenerateRequestWithSources
 
 // List response types
 export type QuizListResponse = {

@@ -30,7 +30,10 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.services.quiz_generator import generate_quiz_from_media
+from tldw_Server_API.app.services.quiz_generator import (
+    QuizProvenanceValidationError,
+    generate_quiz_from_sources,
+)
 
 router = APIRouter(prefix="/quizzes", tags=["quizzes"])
 QUIZ_EXPORT_FORMAT = "tldw.quiz.export.v1"
@@ -142,7 +145,7 @@ def import_quizzes_json(
     )
 
 
-@router.get("/{quiz_id}", response_model=QuizResponse)
+@router.get("/{quiz_id:int}", response_model=QuizResponse)
 def get_quiz(quiz_id: int, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     """Get a quiz by ID."""
     quiz = db.get_quiz(quiz_id)
@@ -151,7 +154,7 @@ def get_quiz(quiz_id: int, db: CharactersRAGDB = Depends(get_chacha_db_for_user)
     return quiz
 
 
-@router.patch("/{quiz_id}", response_model=QuizResponse)
+@router.patch("/{quiz_id:int}", response_model=QuizResponse)
 def update_quiz(
     quiz_id: int,
     updates: QuizUpdate,
@@ -173,7 +176,7 @@ def update_quiz(
         raise HTTPException(status_code=500, detail="Failed to update quiz") from e
 
 
-@router.delete("/{quiz_id}")
+@router.delete("/{quiz_id:int}")
 def delete_quiz(
     quiz_id: int,
     expected_version: Optional[int] = None,
@@ -194,7 +197,7 @@ def delete_quiz(
 
 
 @router.get(
-    "/{quiz_id}/questions",
+    "/{quiz_id:int}/questions",
     response_model=QuestionListResponse,
     response_model_exclude_none=True,
 )
@@ -214,7 +217,7 @@ def list_questions(
         raise HTTPException(status_code=500, detail="Failed to list questions") from e
 
 
-@router.post("/{quiz_id}/questions", response_model=QuestionAdminResponse)
+@router.post("/{quiz_id:int}/questions", response_model=QuestionAdminResponse)
 def create_question(
     quiz_id: int,
     question: QuestionCreate,
@@ -234,7 +237,7 @@ def create_question(
         raise HTTPException(status_code=500, detail="Failed to create question") from e
 
 
-@router.patch("/{quiz_id}/questions/{question_id}", response_model=QuestionAdminResponse)
+@router.patch("/{quiz_id:int}/questions/{question_id:int}", response_model=QuestionAdminResponse)
 def update_question(
     quiz_id: int,
     question_id: int,
@@ -257,7 +260,7 @@ def update_question(
         raise HTTPException(status_code=500, detail="Failed to update question") from e
 
 
-@router.delete("/{quiz_id}/questions/{question_id}")
+@router.delete("/{quiz_id:int}/questions/{question_id:int}")
 def delete_question(
     quiz_id: int,
     question_id: int,
@@ -278,7 +281,7 @@ def delete_question(
         raise HTTPException(status_code=500, detail="Failed to delete question") from e
 
 
-@router.post("/{quiz_id}/attempts", response_model=AttemptResponse, response_model_exclude_none=True)
+@router.post("/{quiz_id:int}/attempts", response_model=AttemptResponse, response_model_exclude_none=True)
 def start_attempt(
     quiz_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
@@ -293,7 +296,7 @@ def start_attempt(
         raise HTTPException(status_code=500, detail="Failed to start attempt") from e
 
 
-@router.put("/attempts/{attempt_id}", response_model=AttemptResponse, response_model_exclude_none=True)
+@router.put("/attempts/{attempt_id:int}", response_model=AttemptResponse, response_model_exclude_none=True)
 def submit_attempt(
     attempt_id: int,
     submission: AttemptSubmitRequest,
@@ -324,7 +327,7 @@ def list_attempts(
         raise HTTPException(status_code=500, detail="Failed to list attempts") from e
 
 
-@router.get("/attempts/{attempt_id}", response_model=AttemptResponse, response_model_exclude_none=True)
+@router.get("/attempts/{attempt_id:int}", response_model=AttemptResponse, response_model_exclude_none=True)
 def get_attempt(
     attempt_id: int,
     include_questions: bool = False,
@@ -344,12 +347,19 @@ async def generate_quiz(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     media_db: MediaDatabase = Depends(get_media_db_for_user),
 ):
-    """Generate a quiz from media content using AI."""
+    """Generate a quiz from mixed sources using AI."""
     try:
-        return await generate_quiz_from_media(
+        if request.sources:
+            sources = [source.model_dump(mode="json") for source in request.sources]
+        elif request.media_id is not None:
+            sources = [{"source_type": "media", "source_id": str(request.media_id)}]
+        else:
+            raise ValueError("Either media_id or sources must be provided")
+
+        return await generate_quiz_from_sources(
             db=db,
             media_db=media_db,
-            media_id=request.media_id,
+            sources=sources,
             num_questions=request.num_questions,
             question_types=request.question_types,
             difficulty=request.difficulty,
@@ -357,6 +367,8 @@ async def generate_quiz(
             model=request.model,
             workspace_tag=request.workspace_tag,
         )
+    except QuizProvenanceValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except ConflictError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:

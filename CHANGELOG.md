@@ -9,6 +9,22 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
+- Quiz critical-path E2E coverage is now split into focused specs with shared strict helpers:
+  - `apps/extension/tests/e2e/quiz-critical-edit.spec.ts`
+  - `apps/extension/tests/e2e/quiz-critical-create.spec.ts`
+  - `apps/extension/tests/e2e/quiz-critical-take-results.spec.ts`
+  - `apps/extension/tests/e2e/utils/quiz-critical-helpers.ts`
+- Added backend regression coverage to ensure the attempts listing route is not shadowed by dynamic quiz routes:
+  - `tldw_Server_API/tests/Quizzes/test_quizzes_endpoint_integration.py`
+
+### Changed
+
+- Hardened quiz endpoint routing by typing dynamic route segments (`{...:int}`) for quiz/question/attempt IDs in:
+  - `tldw_Server_API/app/api/v1/endpoints/quizzes.py`
+- Upgraded strict quiz E2E critical flows to hard assertions for:
+  - edit metadata save + persisted verification (UI + API),
+  - manual create flow persistence verification,
+  - take/submit/results flow with explicit attempts API assertion.
 - MCP Hub management end-to-end surfaces across AuthNZ storage, API, and WebUI/extension:
   - Added AuthNZ migrations for MCP Hub ACP profile and external server tables in SQLite and PostgreSQL bootstrap paths.
   - Added `McpHubRepo` and `McpHubService` for ACP profile CRUD and external server lifecycle handling, including encrypted secret storage and masked secret status responses.
@@ -31,6 +47,9 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 
+- Fixed route matching ambiguity where `/api/v1/quizzes/attempts` could be interpreted as `/{quiz_id}`, causing attempts list failures.
+- Fixed strict take/results E2E behavior to fail fast with diagnostic screenshot when the started-quiz question list does not render.
+- Fixed unsaved-create tab navigation handling to accept only the expected unsaved-changes prompt copy.
 - Fixed MCP Hub list endpoint access-control gaps by constraining ACP profile and external server visibility to principal-allowed scopes (`global`, own `user`, member `org/team`) and returning `403` for forbidden explicit filters.
 - Fixed PostgreSQL timestamp persistence in MCP Hub repo by preserving timezone-aware UTC datetimes for `TIMESTAMPTZ` writes.
 - Fixed silent UI failures in MCP Hub tabs by surfacing user-visible Ant Design error alerts for load/create/save-secret failures.

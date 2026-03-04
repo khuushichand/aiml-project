@@ -434,7 +434,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 29  # Schema v29 adds moodboards + moodboard note membership tables
+    _CURRENT_SCHEMA_VERSION = 30  # Schema v30 adds quizzes.source_bundle_json for mixed-source metadata
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -2892,6 +2892,19 @@ UPDATE db_schema_version
    AND version < 29;
 """
 
+    _MIGRATION_SQL_V29_TO_V30 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 30 - Quiz source bundle metadata (2026-03-03)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE quizzes
+  ADD COLUMN IF NOT EXISTS source_bundle_json TEXT;
+
+UPDATE db_schema_version
+   SET version = 30
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 30;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4365,6 +4378,36 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V28->V29: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V29 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v29_to_v30(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V29 to V30 (quiz source bundle metadata)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V29 to V30 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('quizzes')").fetchall()}
+            if "source_bundle_json" not in existing_cols:
+                conn.execute("ALTER TABLE quizzes ADD COLUMN source_bundle_json TEXT")
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 30
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 30;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 30:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V29->V30 failed version check. Expected 30, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V30 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V29->V30 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V29->V30 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V29->V30: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V30 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4589,6 +4632,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 29 and current_db_version == 28:
                         self._migrate_from_v28_to_v29(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 30 and current_db_version == 29:
+                        self._migrate_from_v29_to_v30(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -4890,6 +4936,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v27_to_v28(conn)
                             elif fallback_version == 28:
                                 self._migrate_from_v28_to_v29(conn)
+                            elif fallback_version == 29:
+                                self._migrate_from_v29_to_v30(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -4952,6 +5000,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 29 and current_db_version == 28:
                     self._migrate_from_v28_to_v29(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 30 and current_db_version == 29:
+                    self._migrate_from_v29_to_v30(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -5228,6 +5279,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 29:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V28_TO_V29, conn, expected_version=29)
                 current_version = 29
+            if current_version < 30:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V29_TO_V30, conn, expected_version=30)
+                current_version = 30
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -15354,6 +15408,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             item["correct_answer"] = self._normalize_matching_map(item["correct_answer"])
         return item
 
+    def _deserialize_quiz_row(self, row: Any) -> dict[str, Any] | None:
+        item = self._deserialize_row_fields(row, ["source_bundle_json"])
+        if not item:
+            return None
+        source_bundle = item.get("source_bundle_json")
+        if isinstance(source_bundle, list):
+            item["source_bundle_json"] = source_bundle
+        elif isinstance(source_bundle, dict):
+            item["source_bundle_json"] = [source_bundle]
+        else:
+            item["source_bundle_json"] = None
+        return item
+
     def _public_quiz_question(self, question: dict[str, Any]) -> dict[str, Any]:
         payload = dict(question)
         payload.pop("correct_answer", None)
@@ -15380,24 +15447,27 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         description: str | None = None,
         workspace_tag: str | None = None,
         media_id: int | None = None,
+        source_bundle_json: list[dict[str, Any]] | None = None,
         time_limit_seconds: int | None = None,
         passing_score: int | None = None,
         client_id: str = "unknown",
     ) -> int:
         """Create a new quiz and return its ID."""
         now = self._get_current_utc_timestamp_iso()
+        source_bundle_payload = self._ensure_json_string(source_bundle_json)
         try:
             with self.transaction() as conn:
                 insert_sql = (
-                    "INSERT INTO quizzes(name, description, workspace_tag, media_id, total_questions, time_limit_seconds, "
-                    "passing_score, deleted, client_id, version, created_at, last_modified) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "INSERT INTO quizzes(name, description, workspace_tag, media_id, source_bundle_json, total_questions, "
+                    "time_limit_seconds, passing_score, deleted, client_id, version, created_at, last_modified) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     name,
                     description,
                     workspace_tag,
                     media_id,
+                    source_bundle_payload,
                     0,
                     time_limit_seconds,
                     passing_score,
@@ -15426,14 +15496,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Get quiz by ID, returns None if not found or deleted (unless include_deleted)."""
         deleted_clause = "" if include_deleted else "AND deleted = 0"
         query = (
-            "SELECT id, name, description, workspace_tag, media_id, total_questions, time_limit_seconds, passing_score, "  # nosec B608
+            "SELECT id, name, description, workspace_tag, media_id, source_bundle_json, total_questions, "  # nosec B608
+            "time_limit_seconds, passing_score, "
             "deleted, client_id, version, created_at, last_modified "
             "FROM quizzes WHERE id = ? " + deleted_clause
         )
         try:
             cursor = self.execute_query(query, (quiz_id,))
             row = cursor.fetchone()
-            return dict(row) if row else None
+            return self._deserialize_quiz_row(row) if row else None
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 
@@ -15464,14 +15535,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         where_sql = " AND ".join(where_clauses)
         query = (
-            "SELECT id, name, description, workspace_tag, media_id, total_questions, time_limit_seconds, passing_score, "  # nosec B608
+            "SELECT id, name, description, workspace_tag, media_id, source_bundle_json, total_questions, "  # nosec B608
+            "time_limit_seconds, passing_score, "
             "deleted, client_id, version, created_at, last_modified "
             f"FROM quizzes WHERE {where_sql} ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
         count_query = f"SELECT COUNT(*) AS count FROM quizzes WHERE {where_sql}"  # nosec B608
         try:
             cursor = self.execute_query(query, tuple(params + [limit, offset]))
-            items = [dict(row) for row in cursor.fetchall()]
+            items = [self._deserialize_quiz_row(row) for row in cursor.fetchall()]
+            items = [item for item in items if item is not None]
             count_cursor = self.execute_query(count_query, tuple(params))
             count_row = count_cursor.fetchone()
             total = int(count_row["count"]) if count_row else 0
@@ -15482,11 +15555,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def update_quiz(self, quiz_id: int, updates: dict[str, Any], client_id: str = "unknown") -> bool:
         """Update quiz fields, returns True if successful."""
         expected_version = updates.pop("expected_version", None)
-        allowed = {"name", "description", "workspace_tag", "media_id", "time_limit_seconds", "passing_score"}
+        allowed = {
+            "name",
+            "description",
+            "workspace_tag",
+            "media_id",
+            "source_bundle_json",
+            "time_limit_seconds",
+            "passing_score",
+        }
         set_parts = []
         params: list[Any] = []
         for k, v in updates.items():
             if k in allowed:
+                if k == "source_bundle_json":
+                    v = self._ensure_json_string_from_mixed(v)
                 set_parts.append(f"{k} = ?")
                 params.append(v)
         if not set_parts:

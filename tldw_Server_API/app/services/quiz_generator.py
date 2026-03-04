@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from collections.abc import Sequence
@@ -14,12 +15,18 @@ from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.services.quiz_source_resolver import resolve_quiz_sources
 
 DEFAULT_QUESTION_TYPES = ["multiple_choice", "true_false", "fill_blank"]
 MAX_CONTENT_CHARS = 15000
+
+
+class QuizProvenanceValidationError(ValueError):
+    """Raised when generated quiz questions fail strict source provenance validation."""
+
 
 QUIZ_GENERATION_PROMPT = """You are a quiz generator. Based on the following content, generate {num_questions} quiz questions.
 
@@ -31,6 +38,7 @@ Requirements:
 - Difficulty: {difficulty}
 - Question types to include: {question_types}
 {focus_instruction}
+{source_contract}
 
 Return a JSON object in this exact format:
 {{
@@ -45,6 +53,8 @@ Return a JSON object in this exact format:
       "hint_penalty_points": 0,
       "source_citations": [
         {{
+          "source_type": "media" | "note" | "flashcard_deck" | "flashcard_card",
+          "source_id": "Canonical source identifier",
           "label": "Optional citation label",
           "quote": "Supporting excerpt",
           "chunk_id": "Optional source chunk id",
@@ -61,7 +71,7 @@ Important:
 - For true_false: correct_answer must be exactly "true" or "false"
 - For fill_blank: question_text should contain ___ where answer goes, correct_answer is the word/phrase
 - hint_penalty_points must be a non-negative integer
-- source_citations should reference supporting source evidence for the explanation when available
+- source_citations must include source_type and source_id and reference only provided sources
 - Vary question difficulty according to the specified level
 - Make questions test understanding, not just memorization
 - Return ONLY valid JSON, no other text
@@ -160,7 +170,11 @@ def _normalize_tf_answer(raw: Any) -> str:
     return "true" if text in {"true", "1", "yes", "y"} else "false"
 
 
-def _coerce_source_citations(raw: Any, media_id: int) -> list[dict[str, Any]] | None:
+def _coerce_source_citations(
+    raw: Any,
+    default_source_type: str,
+    default_source_id: str,
+) -> list[dict[str, Any]] | None:
     entries: list[dict[str, Any]] = []
     if isinstance(raw, list):
         candidates = raw
@@ -183,16 +197,29 @@ def _coerce_source_citations(raw: Any, media_id: int) -> list[dict[str, Any]] | 
         if isinstance(timestamp_raw, (int, float)):
             timestamp_seconds = float(max(0, timestamp_raw))
 
-        media_ref = media_id
+        source_type = str(candidate.get("source_type") or default_source_type).strip()
+        source_id = str(candidate.get("source_id") or default_source_id).strip()
+        if not source_type or not source_id:
+            continue
+
+        media_ref: int | None = None
         media_id_raw = candidate.get("media_id")
         if isinstance(media_id_raw, (int, float)):
             media_id_candidate = int(media_id_raw)
             if media_id_candidate > 0:
                 media_ref = media_id_candidate
+        elif source_type == "media":
+            with contextlib.suppress(TypeError, ValueError):
+                parsed_media_id = int(source_id)
+                if parsed_media_id > 0:
+                    media_ref = parsed_media_id
 
         citation: dict[str, Any] = {
-            "media_id": media_ref
+            "source_type": source_type,
+            "source_id": source_id,
         }
+        if media_ref is not None:
+            citation["media_id"] = media_ref
         if label:
             citation["label"] = label
         elif quote:
@@ -235,7 +262,11 @@ def _extract_json_payload(raw: Any) -> Any:
     raise ValueError("Failed to parse quiz JSON from LLM response")
 
 
-def _normalize_questions(raw_questions: Sequence[Any], media_id: int) -> list[dict[str, Any]]:
+def _normalize_questions(
+    raw_questions: Sequence[Any],
+    default_source_type: str,
+    default_source_id: str,
+) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for raw in raw_questions:
         if not isinstance(raw, dict):
@@ -257,7 +288,11 @@ def _normalize_questions(raw_questions: Sequence[Any], media_id: int) -> list[di
         except (TypeError, ValueError):
             hint_penalty_points = 0
         hint = str(raw.get("hint") or "").strip() or None
-        source_citations = _coerce_source_citations(raw.get("source_citations"), media_id)
+        source_citations = _coerce_source_citations(
+            raw.get("source_citations"),
+            default_source_type=default_source_type,
+            default_source_id=default_source_id,
+        )
 
         options: list[str] | None = None
         correct_answer: int | str
@@ -285,53 +320,89 @@ def _normalize_questions(raw_questions: Sequence[Any], media_id: int) -> list[di
     return normalized
 
 
-async def generate_quiz_from_media(
+def _normalize_sources(sources: Sequence[Any]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for item in sources:
+        if isinstance(item, dict):
+            source_type = str(item.get("source_type") or "").strip()
+            source_id = str(item.get("source_id") or "").strip()
+        else:
+            source_type = str(getattr(item, "source_type", "") or "").strip()
+            source_id = str(getattr(item, "source_id", "") or "").strip()
+        if not source_type or not source_id:
+            raise ValueError("Each source must include non-empty source_type and source_id")
+        normalized.append({"source_type": source_type, "source_id": source_id})
+    if not normalized:
+        raise ValueError("At least one source is required")
+    return normalized
+
+
+def _build_content_from_evidence(evidence_items: Sequence[dict[str, Any]]) -> str:
+    blocks: list[str] = []
+    remaining = MAX_CONTENT_CHARS
+
+    for item in evidence_items:
+        source_type = str(item.get("source_type") or "").strip()
+        source_id = str(item.get("source_id") or "").strip()
+        text = str(item.get("text") or "").strip()
+        if not source_type or not source_id or not text:
+            continue
+        chunk_id = str(item.get("chunk_id") or "").strip()
+        label = str(item.get("label") or "").strip()
+        header = f"Source: {source_type}:{source_id}"
+        if chunk_id:
+            header += f" (chunk: {chunk_id})"
+        if label:
+            header += f" [{label}]"
+        block = f"{header}\n{text}"
+        if len(block) > remaining:
+            block = block[:remaining]
+        blocks.append(block)
+        remaining -= len(block) + 2
+        if remaining <= 0:
+            break
+
+    content = "\n\n".join(blocks).strip()
+    if not content:
+        raise ValueError("Resolved sources contained no usable content")
+    return content
+
+
+def _validate_strict_provenance(questions: Sequence[dict[str, Any]], selected_sources: Sequence[dict[str, str]]) -> None:
+    allowed_sources = {(s["source_type"], s["source_id"]) for s in selected_sources}
+    if not allowed_sources:
+        raise QuizProvenanceValidationError("No selected sources available for provenance validation")
+
+    for index, question in enumerate(questions):
+        citations = question.get("source_citations")
+        if not isinstance(citations, list) or not citations:
+            raise QuizProvenanceValidationError(
+                f"Question {index + 1} is missing required source_citations"
+            )
+
+        for citation in citations:
+            if not isinstance(citation, dict):
+                raise QuizProvenanceValidationError(
+                    f"Question {index + 1} has source citations that do not map to selected sources"
+                )
+            source_type = str(citation.get("source_type") or "").strip()
+            source_id = str(citation.get("source_id") or "").strip()
+            if (source_type, source_id) not in allowed_sources:
+                raise QuizProvenanceValidationError(
+                    f"Question {index + 1} has source citations that do not map to selected sources"
+                )
+
+
+def _build_source_contract(selected_sources: Sequence[dict[str, str]]) -> str:
+    source_refs = ", ".join(f"{s['source_type']}:{s['source_id']}" for s in selected_sources)
+    return f"- Allowed sources for source_citations.source_type/source_id: {source_refs}"
+
+
+async def _call_quiz_generation_llm(
     *,
-    db: CharactersRAGDB,
-    media_db: MediaDatabase,
-    media_id: int,
-    num_questions: int = 10,
-    question_types: list[Any] | None = None,
-    difficulty: str = "mixed",
-    focus_topics: list[str] | None = None,
+    prompt: str,
     model: str | None = None,
-    workspace_tag: str | None = None,
-) -> dict[str, Any]:
-    """
-    Generate a quiz from media content using an LLM.
-
-    1. Fetch media content
-    2. Build prompt
-    3. Call LLM
-    4. Parse response
-    5. Create quiz + questions in database
-    6. Return created quiz + questions
-    """
-    media = media_db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
-    if not media:
-        raise ValueError(f"Media {media_id} not found")
-
-    content = str(media.get("content") or "").strip()
-    if not content:
-        content = (get_latest_transcription(media_db, media_id) or "").strip()
-    if not content:
-        raise ValueError(f"Media {media_id} has no content to generate quiz from")
-    if len(content) > MAX_CONTENT_CHARS:
-        content = content[:MAX_CONTENT_CHARS] + "..."
-
-    normalized_types = _coerce_question_types(question_types)
-    focus_instruction = ""
-    if focus_topics:
-        focus_instruction = f"- Focus on these topics: {', '.join(t for t in focus_topics if t)}"
-
-    prompt = QUIZ_GENERATION_PROMPT.format(
-        num_questions=num_questions,
-        content=content,
-        difficulty=difficulty,
-        question_types=", ".join(normalized_types),
-        focus_instruction=focus_instruction,
-    )
-
+) -> Any:
     provider = (DEFAULT_LLM_PROVIDER or "openai").strip().lower()
     api_key, _debug = resolve_provider_api_key(provider, prefer_module_keys_in_tests=True)
     if provider_requires_api_key(provider) and not api_key:
@@ -361,25 +432,45 @@ async def generate_quiz_from_media(
     start = time.time()
     raw_response = await asyncio.get_running_loop().run_in_executor(None, _call_llm)
     logger.info("Quiz generation LLM call completed in {:.1f}ms", (time.time() - start) * 1000.0)
+    return raw_response
 
-    content_text = extract_response_content(raw_response)
-    payload = _extract_json_payload(content_text if content_text is not None else raw_response)
-    raw_questions = payload.get("questions") if isinstance(payload, dict) else payload
-    if not isinstance(raw_questions, list):
-        raise ValueError("LLM response did not include a questions list")
 
-    questions = _normalize_questions(raw_questions, media_id)
-    if num_questions and len(questions) > num_questions:
-        questions = questions[:num_questions]
-    if not questions:
-        raise ValueError("No valid questions generated")
+def _resolve_primary_media_id(normalized_sources: Sequence[dict[str, str]]) -> int | None:
+    for source in normalized_sources:
+        if source["source_type"] != "media":
+            continue
+        with contextlib.suppress(TypeError, ValueError):
+            media_candidate = int(source["source_id"])
+            if media_candidate > 0:
+                return media_candidate
+    return None
 
-    quiz_title = str(media.get("title") or f"Media #{media_id}").strip()
+
+def _resolve_quiz_title_from_media(media_db: MediaDatabase, primary_media_id: int | None) -> str:
+    if primary_media_id is None:
+        return "Mixed Sources"
+
+    media = media_db.get_media_by_id(primary_media_id, include_deleted=False, include_trash=False)
+    if not media:
+        return "Mixed Sources"
+    return str(media.get("title") or "").strip() or f"Media #{primary_media_id}"
+
+
+def _persist_generated_quiz(
+    *,
+    db: CharactersRAGDB,
+    normalized_sources: list[dict[str, str]],
+    questions: list[dict[str, Any]],
+    quiz_title: str,
+    primary_media_id: int | None,
+    workspace_tag: str | None,
+) -> dict[str, Any]:
     quiz_id = db.create_quiz(
-        name=f"Quiz: {quiz_title}" if quiz_title else f"Quiz: Media #{media_id}",
-        description="Auto-generated quiz from media content",
+        name=f"Quiz: {quiz_title}" if quiz_title else "Quiz: Mixed Sources",
+        description="Auto-generated quiz from selected sources",
         workspace_tag=workspace_tag,
-        media_id=media_id,
+        media_id=primary_media_id,
+        source_bundle_json=normalized_sources,
     )
     for idx, question in enumerate(questions):
         db.create_question(
@@ -404,3 +495,98 @@ async def generate_quiz_from_media(
         "quiz": quiz,
         "questions": questions_payload.get("items", []),
     }
+
+
+async def generate_quiz_from_sources(
+    *,
+    db: CharactersRAGDB,
+    media_db: MediaDatabase,
+    sources: Sequence[Any],
+    num_questions: int = 10,
+    question_types: list[Any] | None = None,
+    difficulty: str = "mixed",
+    focus_topics: list[str] | None = None,
+    model: str | None = None,
+    workspace_tag: str | None = None,
+) -> dict[str, Any]:
+    """Generate a quiz from mixed sources (media, notes, flashcard decks/cards)."""
+    normalized_sources = _normalize_sources(sources)
+    evidence = await asyncio.to_thread(
+        resolve_quiz_sources,
+        normalized_sources,
+        db=db,
+        media_db=media_db,
+    )
+    content = _build_content_from_evidence(evidence)
+
+    normalized_types = _coerce_question_types(question_types)
+    focus_instruction = ""
+    if focus_topics:
+        focus_instruction = f"- Focus on these topics: {', '.join(t for t in focus_topics if t)}"
+    source_contract = _build_source_contract(normalized_sources)
+
+    prompt = QUIZ_GENERATION_PROMPT.format(
+        num_questions=num_questions,
+        content=content,
+        difficulty=difficulty,
+        question_types=", ".join(normalized_types),
+        focus_instruction=focus_instruction,
+        source_contract=source_contract,
+    )
+
+    raw_response = await _call_quiz_generation_llm(prompt=prompt, model=model)
+    content_text = extract_response_content(raw_response)
+    payload = _extract_json_payload(content_text if content_text is not None else raw_response)
+    raw_questions = payload.get("questions") if isinstance(payload, dict) else payload
+    if not isinstance(raw_questions, list):
+        raise ValueError("LLM response did not include a questions list")
+
+    default_source = normalized_sources[0]
+    questions = _normalize_questions(
+        raw_questions,
+        default_source_type=default_source["source_type"],
+        default_source_id=default_source["source_id"],
+    )
+    if num_questions and len(questions) > num_questions:
+        questions = questions[:num_questions]
+    if not questions:
+        raise ValueError("No valid questions generated")
+    _validate_strict_provenance(questions, normalized_sources)
+
+    primary_media_id = _resolve_primary_media_id(normalized_sources)
+    quiz_title = await asyncio.to_thread(_resolve_quiz_title_from_media, media_db, primary_media_id)
+    return await asyncio.to_thread(
+        _persist_generated_quiz,
+        db=db,
+        normalized_sources=normalized_sources,
+        questions=questions,
+        quiz_title=quiz_title,
+        primary_media_id=primary_media_id,
+        workspace_tag=workspace_tag,
+    )
+
+
+async def generate_quiz_from_media(
+    *,
+    db: CharactersRAGDB,
+    media_db: MediaDatabase,
+    media_id: int,
+    num_questions: int = 10,
+    question_types: list[Any] | None = None,
+    difficulty: str = "mixed",
+    focus_topics: list[str] | None = None,
+    model: str | None = None,
+    workspace_tag: str | None = None,
+) -> dict[str, Any]:
+    """Backward-compatible wrapper for legacy media-only generation requests."""
+    return await generate_quiz_from_sources(
+        db=db,
+        media_db=media_db,
+        sources=[{"source_type": "media", "source_id": str(media_id)}],
+        num_questions=num_questions,
+        question_types=question_types,
+        difficulty=difficulty,
+        focus_topics=focus_topics,
+        model=model,
+        workspace_tag=workspace_tag,
+    )

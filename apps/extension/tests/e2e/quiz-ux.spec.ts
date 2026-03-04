@@ -512,8 +512,26 @@ test.describe("Quiz workspace UX", () => {
 
       mark("generate tab")
       await page.getByRole("tab", { name: /Generate/i }).click()
-      await expect(page.getByText("Select Media", { exact: true })).toBeVisible()
+      await expect(page.getByText("Select Sources", { exact: true })).toBeVisible()
+      await expect(page.getByText("Media", { exact: true })).toBeVisible()
+      await expect(page.getByText("Notes", { exact: true })).toBeVisible()
+      await expect(page.getByText("Flashcard Decks", { exact: true })).toBeVisible()
+      await expect(page.getByText("Flashcards", { exact: true })).toBeVisible()
       await expect(page.getByText("Quiz Settings", { exact: true })).toBeVisible()
+
+      const generateButton = page.getByRole("button", { name: /Generate Quiz/i })
+      await expect(generateButton).toBeDisabled()
+
+      if (mediaFixture.mediaId != null) {
+        const mediaCombobox = page.getByRole("combobox").first()
+        await mediaCombobox.click()
+        const mediaOption = page.locator(".ant-select-dropdown .ant-select-item-option").first()
+        if ((await mediaOption.count()) > 0) {
+          await mediaOption.click()
+          await expect(generateButton).toBeEnabled()
+        }
+      }
+
       await page.getByRole("tab", { name: /Manage/i }).click()
       await expect(
         page.getByRole("tabpanel").filter({ has: page.getByPlaceholder(/Search quizzes/i) })
