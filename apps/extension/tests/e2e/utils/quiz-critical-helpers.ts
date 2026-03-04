@@ -214,8 +214,9 @@ const cleanupQuizzes = async (baseUrl: string, apiKey: string, quizIds: number[]
           method: "DELETE"
         }
       )
-    } catch {
+    } catch (error) {
       // Keep cleanup best effort to avoid masking the primary assertion failures.
+      console.warn(`[quiz-critical] cleanup failed for quiz ${quizId}:`, error)
     }
   }
 }
@@ -508,11 +509,7 @@ export const runStrictEditQuizMetadataAndQuestionSet = async () => {
     await expect(editButton).toBeVisible({ timeout: 20000 })
     await editButton.click({ force: true })
 
-    const editTitle = page.getByText("Edit Quiz", { exact: true }).last()
-    await expect(editTitle).toBeVisible({ timeout: 20000 })
-    const editDialog = editTitle.locator(
-      'xpath=ancestor::*[.//button[normalize-space()="Save"] and .//label[contains(normalize-space(), "Quiz Name")] and .//label[contains(normalize-space(), "Description")]][1]'
-    )
+    const editDialog = page.getByTestId("manage-edit-quiz-modal")
     await expect(editDialog).toBeVisible({ timeout: 20000 })
 
     await editDialog.getByLabel(/Quiz Name/i).fill(updatedQuizName)

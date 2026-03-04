@@ -435,6 +435,68 @@ async def _call_quiz_generation_llm(
     return raw_response
 
 
+def _resolve_primary_media_id(normalized_sources: Sequence[dict[str, str]]) -> int | None:
+    for source in normalized_sources:
+        if source["source_type"] != "media":
+            continue
+        with contextlib.suppress(TypeError, ValueError):
+            media_candidate = int(source["source_id"])
+            if media_candidate > 0:
+                return media_candidate
+    return None
+
+
+def _resolve_quiz_title_from_media(media_db: MediaDatabase, primary_media_id: int | None) -> str:
+    if primary_media_id is None:
+        return "Mixed Sources"
+
+    media = media_db.get_media_by_id(primary_media_id, include_deleted=False, include_trash=False)
+    if not media:
+        return "Mixed Sources"
+    return str(media.get("title") or "").strip() or f"Media #{primary_media_id}"
+
+
+def _persist_generated_quiz(
+    *,
+    db: CharactersRAGDB,
+    normalized_sources: list[dict[str, str]],
+    questions: list[dict[str, Any]],
+    quiz_title: str,
+    primary_media_id: int | None,
+    workspace_tag: str | None,
+) -> dict[str, Any]:
+    quiz_id = db.create_quiz(
+        name=f"Quiz: {quiz_title}" if quiz_title else "Quiz: Mixed Sources",
+        description="Auto-generated quiz from selected sources",
+        workspace_tag=workspace_tag,
+        media_id=primary_media_id,
+        source_bundle_json=normalized_sources,
+    )
+    for idx, question in enumerate(questions):
+        db.create_question(
+            quiz_id=quiz_id,
+            question_type=question["question_type"],
+            question_text=question["question_text"],
+            correct_answer=question["correct_answer"],
+            options=question.get("options"),
+            explanation=question.get("explanation"),
+            hint=question.get("hint"),
+            hint_penalty_points=question.get("hint_penalty_points", 0),
+            source_citations=question.get("source_citations"),
+            points=question.get("points", 1),
+            order_index=idx,
+        )
+
+    quiz = db.get_quiz(quiz_id)
+    if not quiz:
+        raise ValueError("Failed to load generated quiz")
+    questions_payload = db.list_questions(quiz_id, include_answers=True, limit=None, offset=0)
+    return {
+        "quiz": quiz,
+        "questions": questions_payload.get("items", []),
+    }
+
+
 async def generate_quiz_from_sources(
     *,
     db: CharactersRAGDB,
@@ -449,7 +511,12 @@ async def generate_quiz_from_sources(
 ) -> dict[str, Any]:
     """Generate a quiz from mixed sources (media, notes, flashcard decks/cards)."""
     normalized_sources = _normalize_sources(sources)
-    evidence = resolve_quiz_sources(normalized_sources, db=db, media_db=media_db)
+    evidence = await asyncio.to_thread(
+        resolve_quiz_sources,
+        normalized_sources,
+        db=db,
+        media_db=media_db,
+    )
     content = _build_content_from_evidence(evidence)
 
     normalized_types = _coerce_question_types(question_types)
@@ -486,51 +553,17 @@ async def generate_quiz_from_sources(
         raise ValueError("No valid questions generated")
     _validate_strict_provenance(questions, normalized_sources)
 
-    primary_media_id: int | None = None
-    for source in normalized_sources:
-        if source["source_type"] == "media":
-            with contextlib.suppress(TypeError, ValueError):
-                media_candidate = int(source["source_id"])
-                if media_candidate > 0:
-                    primary_media_id = media_candidate
-                    break
-
-    quiz_title = "Mixed Sources"
-    if primary_media_id is not None:
-        media = media_db.get_media_by_id(primary_media_id, include_deleted=False, include_trash=False)
-        if media:
-            quiz_title = str(media.get("title") or "").strip() or f"Media #{primary_media_id}"
-
-    quiz_id = db.create_quiz(
-        name=f"Quiz: {quiz_title}" if quiz_title else "Quiz: Mixed Sources",
-        description="Auto-generated quiz from selected sources",
+    primary_media_id = _resolve_primary_media_id(normalized_sources)
+    quiz_title = await asyncio.to_thread(_resolve_quiz_title_from_media, media_db, primary_media_id)
+    return await asyncio.to_thread(
+        _persist_generated_quiz,
+        db=db,
+        normalized_sources=normalized_sources,
+        questions=questions,
+        quiz_title=quiz_title,
+        primary_media_id=primary_media_id,
         workspace_tag=workspace_tag,
-        media_id=primary_media_id,
-        source_bundle_json=normalized_sources,
     )
-    for idx, question in enumerate(questions):
-        db.create_question(
-            quiz_id=quiz_id,
-            question_type=question["question_type"],
-            question_text=question["question_text"],
-            correct_answer=question["correct_answer"],
-            options=question.get("options"),
-            explanation=question.get("explanation"),
-            hint=question.get("hint"),
-            hint_penalty_points=question.get("hint_penalty_points", 0),
-            source_citations=question.get("source_citations"),
-            points=question.get("points", 1),
-            order_index=idx,
-        )
-
-    quiz = db.get_quiz(quiz_id)
-    if not quiz:
-        raise ValueError("Failed to load generated quiz")
-    questions_payload = db.list_questions(quiz_id, include_answers=True, limit=None, offset=0)
-    return {
-        "quiz": quiz,
-        "questions": questions_payload.get("items", []),
-    }
 
 
 async def generate_quiz_from_media(

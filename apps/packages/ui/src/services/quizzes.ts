@@ -175,9 +175,7 @@ export type QuestionUpdate = {
 }
 
 // AI generation request
-export type QuizGenerateRequest = {
-  media_id?: number
-  sources?: QuizGenerateSource[]
+type QuizGenerateRequestBase = {
   num_questions?: number
   question_types?: QuestionType[]
   difficulty?: "easy" | "medium" | "hard" | "mixed"
@@ -185,6 +183,18 @@ export type QuizGenerateRequest = {
   model?: string
   workspace_tag?: string | null
 }
+
+type QuizGenerateRequestWithMedia = QuizGenerateRequestBase & {
+  media_id: number
+  sources?: QuizGenerateSource[]
+}
+
+type QuizGenerateRequestWithSources = QuizGenerateRequestBase & {
+  sources: QuizGenerateSource[]
+  media_id?: number
+}
+
+export type QuizGenerateRequest = QuizGenerateRequestWithMedia | QuizGenerateRequestWithSources
 
 // List response types
 export type QuizListResponse = {

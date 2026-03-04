@@ -2047,6 +2047,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         confirmLoading={updateQuizMutation.isPending}
         width="95vw"
         style={{ top: 16 }}
+        modalRender={(node) => <div data-testid="manage-edit-quiz-modal">{node}</div>}
       >
         <Form form={editForm} layout="vertical">
           <Form.Item

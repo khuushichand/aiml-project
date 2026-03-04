@@ -350,7 +350,7 @@ async def generate_quiz(
     """Generate a quiz from mixed sources using AI."""
     try:
         if request.sources:
-            sources = [source.model_dump() for source in request.sources]
+            sources = [source.model_dump(mode="json") for source in request.sources]
         elif request.media_id is not None:
             sources = [{"source_type": "media", "source_id": str(request.media_id)}]
         else:
