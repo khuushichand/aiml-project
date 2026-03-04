@@ -405,10 +405,38 @@ export const SIDEBAR_SHORTCUT_IDS = [
 ] as const
 export type SidebarShortcutId = (typeof SIDEBAR_SHORTCUT_IDS)[number]
 
-export const DEFAULT_SIDEBAR_SHORTCUT_SELECTION = SIDEBAR_SHORTCUT_IDS.slice(
-  0,
-  SIDEBAR_SHORTCUT_MAX_COUNT
-) as SidebarShortcutId[]
+const LEGACY_DEFAULT_SIDEBAR_SHORTCUT_SELECTION: SidebarShortcutId[] = [
+  "quick-ingest",
+  "chat",
+  "prompts",
+  "prompt-studio",
+  "characters",
+  "chat-dictionaries",
+  "world-books",
+  "knowledge-qa",
+  "media",
+  "document-workspace"
+]
+
+export const DEFAULT_SIDEBAR_SHORTCUT_SELECTION: SidebarShortcutId[] = [
+  "quick-ingest",
+  "chat",
+  "prompts",
+  "characters",
+  "chat-dictionaries",
+  "world-books",
+  "knowledge-qa",
+  "media",
+  "document-workspace",
+  "moderation-playground"
+]
+
+const areShortcutSelectionsEqual = (
+  first: SidebarShortcutId[],
+  second: SidebarShortcutId[]
+): boolean =>
+  first.length === second.length &&
+  first.every((entry, index) => entry === second[index])
 
 const coerceSidebarShortcutSelection = (
   value: unknown,
@@ -432,6 +460,11 @@ const coerceSidebarShortcutSelection = (
     0,
     SIDEBAR_SHORTCUT_MAX_COUNT
   )
+  if (
+    areShortcutSelectionsEqual(normalized, LEGACY_DEFAULT_SIDEBAR_SHORTCUT_SELECTION)
+  ) {
+    return DEFAULT_SIDEBAR_SHORTCUT_SELECTION
+  }
   if (normalized.length === 0 && value.length > 0) {
     return fallback
   }
