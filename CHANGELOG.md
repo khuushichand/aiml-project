@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.27] 2026-03-04
+
+### Added
+
+- Quiz critical-path E2E coverage is now split into focused specs with shared strict helpers:
+  - `apps/extension/tests/e2e/quiz-critical-edit.spec.ts`
+  - `apps/extension/tests/e2e/quiz-critical-create.spec.ts`
+  - `apps/extension/tests/e2e/quiz-critical-take-results.spec.ts`
+  - `apps/extension/tests/e2e/utils/quiz-critical-helpers.ts`
+- Added backend regression coverage to ensure the attempts listing route is not shadowed by dynamic quiz routes:
+  - `tldw_Server_API/tests/Quizzes/test_quizzes_endpoint_integration.py`
+
+### Changed
+
+- Hardened quiz endpoint routing by typing dynamic route segments (`{...:int}`) for quiz/question/attempt IDs in:
+  - `tldw_Server_API/app/api/v1/endpoints/quizzes.py`
+- Upgraded strict quiz E2E critical flows to hard assertions for:
+  - edit metadata save + persisted verification (UI + API),
+  - manual create flow persistence verification,
+  - take/submit/results flow with explicit attempts API assertion.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed route matching ambiguity where `/api/v1/quizzes/attempts` could be interpreted as `/{quiz_id}`, causing attempts list failures.
+- Fixed strict take/results E2E behavior to fail fast with diagnostic screenshot when the started-quiz question list does not render.
+- Fixed unsaved-create tab navigation handling to accept only the expected unsaved-changes prompt copy.
+
 ## [0.1.27] 2026-03-02
 
 ### Added
