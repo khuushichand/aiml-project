@@ -16,7 +16,7 @@ type ContextChipsProps = {
   ariaLabel?: string
 }
 
-export const ContextChips: React.FC<ContextChipsProps> = ({
+const ContextChipsBase: React.FC<ContextChipsProps> = ({
   items,
   className = "",
   ariaLabel
@@ -61,5 +61,8 @@ export const ContextChips: React.FC<ContextChipsProps> = ({
     </div>
   )
 }
+
+export const ContextChips = React.memo(ContextChipsBase)
+ContextChips.displayName = "ContextChips"
 
 export default ContextChips

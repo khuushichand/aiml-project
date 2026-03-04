@@ -229,6 +229,7 @@ import {
   type CompareResponseDiff
 } from "./compare-response-diff"
 import { createComposerPerfTracker } from "@/utils/perf/composer-perf"
+import { createRenderPerfTracker } from "@/utils/perf/render-profiler"
 
 type Props = {
   droppedFiles: File[]
@@ -1457,9 +1458,27 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       enabled: Boolean((globalThis as any).__TLDW_CHAT_PERF__)
     })
   )
+  const renderPerfTrackerRef = React.useRef(
+    createRenderPerfTracker({
+      enabled: Boolean((globalThis as any).__TLDW_CHAT_PERF__)
+    })
+  )
   const markComposerPerf = React.useCallback((label: string) => {
     return composerPerfTrackerRef.current.start(label)
   }, [])
+  const onComposerRenderProfile = React.useCallback<React.ProfilerOnRenderCallback>(
+    (id, phase, actualDuration, baseDuration, startTime, commitTime) => {
+      renderPerfTrackerRef.current.onRender(
+        String(id),
+        phase,
+        actualDuration,
+        baseDuration,
+        startTime,
+        commitTime
+      )
+    },
+    []
+  )
   const measureComposerPerf = React.useCallback(
     <T,>(label: string, fn: () => T): T => {
       const end = markComposerPerf(label)
@@ -1471,17 +1490,43 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     },
     [markComposerPerf]
   )
+  const wrapComposerProfile = React.useCallback(
+    (id: string, node: React.ReactNode): React.ReactNode => {
+      if (!renderPerfTrackerRef.current.isEnabled()) {
+        return node
+      }
+      return (
+        <React.Profiler id={id} onRender={onComposerRenderProfile}>
+          {node}
+        </React.Profiler>
+      )
+    },
+    [onComposerRenderProfile]
+  )
 
   React.useEffect(() => {
-    const tracker = composerPerfTrackerRef.current
-    if (!tracker.isEnabled() || typeof window === "undefined") {
+    const inputTracker = composerPerfTrackerRef.current
+    const renderTracker = renderPerfTrackerRef.current
+    if (!inputTracker.isEnabled() || typeof window === "undefined") {
       return
     }
-    ;(window as any).__TLDW_CHAT_PERF_SNAPSHOT__ = () => tracker.snapshot()
-    ;(window as any).__TLDW_CHAT_PERF_CLEAR__ = () => tracker.clear()
+    ;(window as any).__TLDW_CHAT_PERF_SNAPSHOT__ = () => inputTracker.snapshot()
+    ;(window as any).__TLDW_CHAT_PERF_CLEAR__ = () => {
+      inputTracker.clear()
+      renderTracker.clear()
+    }
+    ;(window as any).__TLDW_CHAT_RENDER_PERF_SNAPSHOT__ = () =>
+      renderTracker.snapshot()
+    ;(window as any).__TLDW_CHAT_RENDER_PERF_SUMMARY__ = () =>
+      renderTracker.summarize()
+    ;(window as any).__TLDW_CHAT_RENDER_PERF_CLEAR__ = () =>
+      renderTracker.clear()
     return () => {
       delete (window as any).__TLDW_CHAT_PERF_SNAPSHOT__
       delete (window as any).__TLDW_CHAT_PERF_CLEAR__
+      delete (window as any).__TLDW_CHAT_RENDER_PERF_SNAPSHOT__
+      delete (window as any).__TLDW_CHAT_RENDER_PERF_SUMMARY__
+      delete (window as any).__TLDW_CHAT_RENDER_PERF_CLEAR__
     }
   }, [])
 
@@ -2100,7 +2145,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     </Dropdown>
   )
 
-  const modelUsageBadge = (
+  const modelUsageBadge = wrapComposerProfile(
+    "token-progress",
     <TokenProgressBar
       conversationTokens={conversationTokenCount}
       draftTokens={draftTokenCount}
@@ -3997,6 +4043,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const handleToggleWebSearch = React.useCallback(() => {
     setWebSearch(!webSearch)
   }, [setWebSearch, webSearch])
+  const handleOpenModelSettings = React.useCallback(() => {
+    setOpenModelSettings(true)
+  }, [setOpenModelSettings])
+  const handleDismissServerPersistenceHint = React.useCallback(() => {
+    setShowServerPersistenceHint(false)
+  }, [setShowServerPersistenceHint])
 
   const handleImageUpload = React.useCallback(() => {
     inputRef.current?.click()
@@ -7199,7 +7251,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     : undefined
 
   return (
-    <div className="flex w-full flex-col items-center px-4 pb-6">
+    <React.Profiler
+      id="playground-form-root"
+      onRender={onComposerRenderProfile}
+    >
+      <div className="flex w-full flex-col items-center px-4 pb-6">
       <div
         data-checkwidemode={checkWideMode}
         data-ui-mode={uiMode}
@@ -7235,18 +7291,21 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               !isConnectionReady ? "opacity-80" : ""
             }`}>
             {/* Attachments summary (collapsed context management) */}
-            <AttachmentsSummary
-              image={form.values.image}
-              documents={selectedDocuments}
-              files={uploadedFiles}
-              onRemoveImage={() => form.setFieldValue("image", "")}
-              onRemoveDocument={removeDocument}
-              onClearDocuments={clearSelectedDocuments}
-              onRemoveFile={removeUploadedFile}
-              onClearFiles={clearUploadedFiles}
-              onOpenKnowledgePanel={() => openKnowledgePanel("context")}
-              readOnly
-            />
+            {wrapComposerProfile(
+              "attachments-summary",
+              <AttachmentsSummary
+                image={form.values.image}
+                documents={selectedDocuments}
+                files={uploadedFiles}
+                onRemoveImage={() => form.setFieldValue("image", "")}
+                onRemoveDocument={removeDocument}
+                onClearDocuments={clearSelectedDocuments}
+                onRemoveFile={removeUploadedFile}
+                onClearFiles={clearUploadedFiles}
+                onOpenKnowledgePanel={() => openKnowledgePanel("context")}
+                readOnly
+              />
+            )}
             {/* Link to Model Playground for Compare mode */}
             <div>
               <div className="flex w-full min-w-0 bg-transparent">
@@ -7440,34 +7499,37 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                 "Search & Context"
                               )}
                             </div>
-                            <KnowledgePanel
-                              onInsert={handleKnowledgeInsert}
-                              onAsk={handleKnowledgeAsk}
-                              isConnected={isConnectionReady}
-                              open={contextToolsOpen}
-                              onOpenChange={handleKnowledgePanelOpenChange}
-                              openTab={knowledgePanelTab}
-                              openTabRequestId={knowledgePanelTabRequestId}
-                              autoFocus
-                              showToggle={false}
-                              variant="embedded"
-                              currentMessage={contextToolsOpen ? deferredComposerInput : ""}
-                              showAttachedContext
-                              attachedImage={form.values.image}
-                              attachedTabs={selectedDocuments}
-                              availableTabs={availableTabs}
-                              attachedFiles={uploadedFiles}
-                              onRemoveImage={handleKnowledgeRemoveImage}
-                              onRemoveTab={removeDocument}
-                              onAddTab={addDocument}
-                              onClearTabs={clearSelectedDocuments}
-                              onRefreshTabs={reloadTabs}
-                              onAddFile={handleKnowledgeAddFile}
-                              onRemoveFile={removeUploadedFile}
-                              onClearFiles={clearUploadedFiles}
-                              fileRetrievalEnabled={fileRetrievalEnabled}
-                              onFileRetrievalChange={setFileRetrievalEnabled}
-                            />
+                            {wrapComposerProfile(
+                              "knowledge-panel",
+                              <KnowledgePanel
+                                onInsert={handleKnowledgeInsert}
+                                onAsk={handleKnowledgeAsk}
+                                isConnected={isConnectionReady}
+                                open={contextToolsOpen}
+                                onOpenChange={handleKnowledgePanelOpenChange}
+                                openTab={knowledgePanelTab}
+                                openTabRequestId={knowledgePanelTabRequestId}
+                                autoFocus
+                                showToggle={false}
+                                variant="embedded"
+                                currentMessage={contextToolsOpen ? deferredComposerInput : ""}
+                                showAttachedContext
+                                attachedImage={form.values.image}
+                                attachedTabs={selectedDocuments}
+                                availableTabs={availableTabs}
+                                attachedFiles={uploadedFiles}
+                                onRemoveImage={handleKnowledgeRemoveImage}
+                                onRemoveTab={removeDocument}
+                                onAddTab={addDocument}
+                                onClearTabs={clearSelectedDocuments}
+                                onRefreshTabs={reloadTabs}
+                                onAddFile={handleKnowledgeAddFile}
+                                onRemoveFile={removeUploadedFile}
+                                onClearFiles={clearUploadedFiles}
+                                fileRetrievalEnabled={fileRetrievalEnabled}
+                                onFileRetrievalChange={setFileRetrievalEnabled}
+                              />
+                            )}
                           </div>
                         </div>
                       </div>
@@ -7497,54 +7559,57 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           </button>
                         </div>
                       )}
-                      <ComposerTextarea
-                        textareaRef={textareaRef}
-                        value={form.values.message}
-                        displayValue={messageDisplayValue}
-                        onChange={handleTextareaChange}
-                        onKeyDown={handleTextareaKeyDown}
-                        onPaste={handlePaste}
-                        onFocus={handleTextareaFocus}
-                        onSelect={handleTextareaSelect}
-                        onCompositionStart={handleCompositionStart}
-                        onCompositionEnd={handleCompositionEnd}
-                        onMouseDown={handleTextareaMouseDown}
-                        onMouseUp={handleTextareaMouseUp}
-                        placeholder={
-                          isConnectionReady
-                            ? t(
-                                "playground:composer.placeholderWithMentions",
-                                "Type a message... (/ commands, @ mentions)"
-                              )
-                            : t(
-                                "playground:composer.connectionPlaceholder",
-                                "Connect to tldw to start chatting."
-                              )
-                        }
-                        isProMode={isProMode}
-                        isMobile={isMobileViewport}
-                        isConnectionReady={isConnectionReady}
-                        isCollapsed={isMessageCollapsed}
-                        ariaExpanded={!isMessageCollapsed}
-                        formInputProps={form.getInputProps("message")}
-                        showSlashMenu={showSlashMenu}
-                        slashCommands={filteredSlashCommands}
-                        slashActiveIndex={slashActiveIndex}
-                        onSlashSelect={handleSlashCommandSelect}
-                        onSlashActiveIndexChange={setSlashActiveIndex}
-                        slashEmptyLabel={t(
-                          "common:commandPalette.noResults",
-                          "No results found"
-                        )}
-                        showMentions={showMentions}
-                        filteredTabs={filteredTabs}
-                        mentionPosition={mentionPosition}
-                        onMentionSelect={handleMentionSelect}
-                        onMentionsClose={closeMentions}
-                        onMentionRefetch={handleMentionRefetch}
-                        onMentionsOpen={handleMentionsOpen}
-                        draftSaved={draftSaved}
-                      />
+                      {wrapComposerProfile(
+                        "composer-textarea",
+                        <ComposerTextarea
+                          textareaRef={textareaRef}
+                          value={form.values.message}
+                          displayValue={messageDisplayValue}
+                          onChange={handleTextareaChange}
+                          onKeyDown={handleTextareaKeyDown}
+                          onPaste={handlePaste}
+                          onFocus={handleTextareaFocus}
+                          onSelect={handleTextareaSelect}
+                          onCompositionStart={handleCompositionStart}
+                          onCompositionEnd={handleCompositionEnd}
+                          onMouseDown={handleTextareaMouseDown}
+                          onMouseUp={handleTextareaMouseUp}
+                          placeholder={
+                            isConnectionReady
+                              ? t(
+                                  "playground:composer.placeholderWithMentions",
+                                  "Type a message... (/ commands, @ mentions)"
+                                )
+                              : t(
+                                  "playground:composer.connectionPlaceholder",
+                                  "Connect to tldw to start chatting."
+                                )
+                          }
+                          isProMode={isProMode}
+                          isMobile={isMobileViewport}
+                          isConnectionReady={isConnectionReady}
+                          isCollapsed={isMessageCollapsed}
+                          ariaExpanded={!isMessageCollapsed}
+                          formInputProps={form.getInputProps("message")}
+                          showSlashMenu={showSlashMenu}
+                          slashCommands={filteredSlashCommands}
+                          slashActiveIndex={slashActiveIndex}
+                          onSlashSelect={handleSlashCommandSelect}
+                          onSlashActiveIndexChange={setSlashActiveIndex}
+                          slashEmptyLabel={t(
+                            "common:commandPalette.noResults",
+                            "No results found"
+                          )}
+                          showMentions={showMentions}
+                          filteredTabs={filteredTabs}
+                          mentionPosition={mentionPosition}
+                          onMentionSelect={handleMentionSelect}
+                          onMentionsClose={closeMentions}
+                          onMentionRefetch={handleMentionRefetch}
+                          onMentionsOpen={handleMentionsOpen}
+                          draftSaved={draftSaved}
+                        />
+                      )}
                     </div>
                     {/* Inline error message with shake animation */}
                     {form.errors.message && (
@@ -7855,15 +7920,18 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         ))}
                       </div>
                     )}
-                    <ModelRecommendationsPanel
-                      t={t}
-                      recommendations={visibleModelRecommendations}
-                      showOpenInsights={sessionInsights.totals.totalTokens > 0}
-                      onOpenInsights={openSessionInsightsModal}
-                      onRunAction={handleModelRecommendationAction}
-                      onDismiss={dismissModelRecommendation}
-                      getActionLabel={getModelRecommendationActionLabel}
-                    />
+                    {wrapComposerProfile(
+                      "model-recommendations",
+                      <ModelRecommendationsPanel
+                        t={t}
+                        recommendations={visibleModelRecommendations}
+                        showOpenInsights={sessionInsights.totals.totalTokens > 0}
+                        onOpenInsights={openSessionInsightsModal}
+                        onRunAction={handleModelRecommendationAction}
+                        onDismiss={dismissModelRecommendation}
+                        getActionLabel={getModelRecommendationActionLabel}
+                      />
+                    )}
                     {currentChatModelSettings.jsonMode && (
                       <div
                         role="status"
@@ -7988,57 +8056,60 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                       aria-hidden={!actionBarVisible}
                       className={`transition-all duration-200 overflow-hidden ${actionBarVisibilityClass}`}
                     >
-                      <ComposerToolbar
-                        isProMode={isProMode}
-                        isMobile={isMobileViewport}
-                        isConnectionReady={isConnectionReady}
-                        isSending={isSending}
-                        modeLauncherButton={modeLauncherButton}
-                        compareControl={compareControl}
-                        modelSelectButton={modelSelectButton}
-                        mcpControl={mcpControl}
-                        sendControl={sendControl}
-                        attachmentButton={attachmentButton}
-                        generateButton={generateButton}
-                        toolsButton={toolsButton}
-                        voiceChatButton={voiceChatButton}
-                        modelUsageBadge={modelUsageBadge}
-                        selectedSystemPrompt={selectedSystemPrompt}
-                        setSelectedSystemPrompt={setSelectedSystemPrompt}
-                        setSelectedQuickPrompt={setSelectedQuickPrompt}
-                        temporaryChat={temporaryChat}
-                        onToggleTemporaryChat={handleToggleTemporaryChat}
-                        privateChatLocked={privateChatLocked}
-                        isFireFoxPrivateMode={isFireFoxPrivateMode}
-                        persistenceTooltip={persistenceTooltip}
-                        contextToolsOpen={contextToolsOpen}
-                        onToggleKnowledgePanel={toggleKnowledgePanel}
-                        webSearch={webSearch}
-                        onToggleWebSearch={handleToggleWebSearch}
-                        hasWebSearch={!!capabilities?.hasWebSearch}
-                        onOpenModelSettings={() => setOpenModelSettings(true)}
-                        modelSummaryLabel={modelSummaryLabel}
-                        promptSummaryLabel={promptSummaryLabel}
-                        hasDictation={!!(browserSupportsSpeechRecognition || hasServerStt)}
-                        speechAvailable={speechAvailable}
-                        speechUsesServer={speechUsesServer}
-                        isListening={isListening}
-                        isServerDictating={isServerDictating}
-                        voiceChatEnabled={voiceChatEnabled}
-                        speechTooltip={speechTooltipText}
-                        onDictationToggle={handleDictationToggle}
-                        onTemplateSelect={handleTemplateSelect}
-                        selectedModel={selectedModel}
-                        resolvedProviderKey={resolvedProviderKey}
-                        messages={messages}
-                        selectedDocumentsCount={selectedDocuments.length}
-                        uploadedFilesCount={uploadedFiles.length}
-                        serverChatId={serverChatId}
-                        showServerPersistenceHint={showServerPersistenceHint}
-                        onDismissServerPersistenceHint={() => setShowServerPersistenceHint(false)}
-                        onFocusConnectionCard={focusConnectionCard}
-                        contextItems={contextItems}
-                      />
+                      {wrapComposerProfile(
+                        "composer-toolbar",
+                        <ComposerToolbar
+                          isProMode={isProMode}
+                          isMobile={isMobileViewport}
+                          isConnectionReady={isConnectionReady}
+                          isSending={isSending}
+                          modeLauncherButton={modeLauncherButton}
+                          compareControl={compareControl}
+                          modelSelectButton={modelSelectButton}
+                          mcpControl={mcpControl}
+                          sendControl={sendControl}
+                          attachmentButton={attachmentButton}
+                          generateButton={generateButton}
+                          toolsButton={toolsButton}
+                          voiceChatButton={voiceChatButton}
+                          modelUsageBadge={modelUsageBadge}
+                          selectedSystemPrompt={selectedSystemPrompt}
+                          setSelectedSystemPrompt={setSelectedSystemPrompt}
+                          setSelectedQuickPrompt={setSelectedQuickPrompt}
+                          temporaryChat={temporaryChat}
+                          onToggleTemporaryChat={handleToggleTemporaryChat}
+                          privateChatLocked={privateChatLocked}
+                          isFireFoxPrivateMode={isFireFoxPrivateMode}
+                          persistenceTooltip={persistenceTooltip}
+                          contextToolsOpen={contextToolsOpen}
+                          onToggleKnowledgePanel={toggleKnowledgePanel}
+                          webSearch={webSearch}
+                          onToggleWebSearch={handleToggleWebSearch}
+                          hasWebSearch={!!capabilities?.hasWebSearch}
+                          onOpenModelSettings={handleOpenModelSettings}
+                          modelSummaryLabel={modelSummaryLabel}
+                          promptSummaryLabel={promptSummaryLabel}
+                          hasDictation={!!(browserSupportsSpeechRecognition || hasServerStt)}
+                          speechAvailable={speechAvailable}
+                          speechUsesServer={speechUsesServer}
+                          isListening={isListening}
+                          isServerDictating={isServerDictating}
+                          voiceChatEnabled={voiceChatEnabled}
+                          speechTooltip={speechTooltipText}
+                          onDictationToggle={handleDictationToggle}
+                          onTemplateSelect={handleTemplateSelect}
+                          selectedModel={selectedModel}
+                          resolvedProviderKey={resolvedProviderKey}
+                          messages={messages}
+                          selectedDocumentsCount={selectedDocuments.length}
+                          uploadedFilesCount={uploadedFiles.length}
+                          serverChatId={serverChatId}
+                          showServerPersistenceHint={showServerPersistenceHint}
+                          onDismissServerPersistenceHint={handleDismissServerPersistenceHint}
+                          onFocusConnectionCard={focusConnectionCard}
+                          contextItems={contextItems}
+                        />
+                      )}
                     </div>
                     {showConnectBanner && !isConnectionReady && (
                       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
@@ -9223,16 +9294,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           onStop={handleVoiceChatToggle}
         />
       )}
-      {voiceModeSelectorOpen && (
-        <VoiceModeSelector
-          open={voiceModeSelectorOpen}
-          onClose={() => setVoiceModeSelectorOpen(false)}
-          onSelectDictation={handleDictationToggle}
-          onSelectConversation={handleVoiceChatToggle}
-          dictationAvailable={speechAvailable}
-          conversationAvailable={voiceChatAvailable}
-        />
-      )}
-    </div>
+        {voiceModeSelectorOpen && (
+          <VoiceModeSelector
+            open={voiceModeSelectorOpen}
+            onClose={() => setVoiceModeSelectorOpen(false)}
+            onSelectDictation={handleDictationToggle}
+            onSelectConversation={handleVoiceChatToggle}
+            dictationAvailable={speechAvailable}
+            conversationAvailable={voiceChatAvailable}
+          />
+        )}
+      </div>
+    </React.Profiler>
   )
 }

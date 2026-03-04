@@ -129,6 +129,7 @@ https://arxiv.org/abs/2506.18032
 https://accounting.penrose.com/
 https://github.com/Kiln-AI/Kiln
 https://b-score.github.io/
+https://github.com/T3-Content/SnitchBench
 https://codeberg.org/jts2323/censorbench
 https://github.com/the-crypt-keeper/reasonscape/tree/main
 https://www.amazon.science/blog/falsereject-reducing-overcautiousness-in-llms-through-reasoning-aware-safety-evaluation
