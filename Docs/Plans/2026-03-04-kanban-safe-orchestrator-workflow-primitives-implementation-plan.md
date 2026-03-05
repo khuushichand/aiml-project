@@ -14,7 +14,7 @@
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/DB_Management/Kanban_DB.py`
-- Test: `tldw_Server_API/tests/Agent_Client_Protocol/test_kanban_module.py`
+- Test: `tldw_Server_API/app/core/MCP_unified/tests/test_kanban_module.py`
 - Create: `tldw_Server_API/tests/kanban/test_workflow_schema_bootstrap.py`
 
 **Step 1: Write the failing test**
@@ -82,6 +82,11 @@ Add DB methods:
 - `get_card_workflow_state(card_id)`
 - `patch_card_workflow_state(card_id, ..., expected_version, lease_owner, idempotency_key)`
 
+Include compatibility bootstrap behavior:
+- Seed default workflow policy/statuses/transitions for existing boards that have no policy yet.
+- Add lazy initialization for `kanban_card_workflow_state` on first workflow access for legacy cards.
+- Ensure bootstrap is idempotent and safe under concurrency.
+
 **Step 4: Run test to verify it passes**
 
 Run same pytest command.
@@ -143,8 +148,9 @@ git commit -m "feat(kanban): add transactional workflow transition and approval 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/schemas/kanban_schemas.py`
 - Create: `tldw_Server_API/app/api/v1/endpoints/kanban/kanban_workflow.py`
-- Modify: `tldw_Server_API/app/api/v1/endpoints/kanban/__init__.py`
+- Modify: `tldw_Server_API/app/main.py`
 - Create: `tldw_Server_API/tests/kanban/test_workflow_endpoints.py`
+- Create: `tldw_Server_API/tests/kanban/test_workflow_authz.py`
 
 **Step 1: Write the failing endpoint test**
 
@@ -174,16 +180,18 @@ Add endpoints:
 - force reassign
 
 Ensure required fields on writes: `expected_version`, `idempotency_key`, `correlation_id` (for orchestrator write paths).
+Wire router in `main.py` alongside existing kanban routers in both registration paths.
+Enforce authz for privileged operations (pause/resume/drain/force-reassign) and return forbidden responses for non-admin callers.
 
 **Step 4: Run test to verify it passes**
 
-Run same endpoint test, then full `test_workflow_endpoints.py`.
+Run same endpoint test, then full `test_workflow_endpoints.py` and `test_workflow_authz.py`.
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/api/v1/schemas/kanban_schemas.py tldw_Server_API/app/api/v1/endpoints/kanban/kanban_workflow.py tldw_Server_API/app/api/v1/endpoints/kanban/__init__.py tldw_Server_API/tests/kanban/test_workflow_endpoints.py
+git add tldw_Server_API/app/api/v1/schemas/kanban_schemas.py tldw_Server_API/app/api/v1/endpoints/kanban/kanban_workflow.py tldw_Server_API/app/main.py tldw_Server_API/tests/kanban/test_workflow_endpoints.py tldw_Server_API/tests/kanban/test_workflow_authz.py
 git commit -m "feat(kanban-api): expose workflow control endpoints"
 ```
 
@@ -226,6 +234,7 @@ Add MCP tools:
 - `kanban.workflow.recovery.force_reassign`
 
 Wire validation and execution handlers to DB methods.
+Add explicit tool-level auth checks for privileged recovery/control operations and test forbidden paths.
 
 **Step 4: Run test to verify it passes**
 
@@ -346,7 +355,16 @@ Expected: clean working tree.
 **Step 5: Commit any final adjustments**
 
 ```bash
-git add -A
+git add tldw_Server_API/app/core/DB_Management/Kanban_DB.py \
+  tldw_Server_API/app/api/v1/schemas/kanban_schemas.py \
+  tldw_Server_API/app/api/v1/endpoints/kanban/kanban_workflow.py \
+  tldw_Server_API/app/main.py \
+  tldw_Server_API/app/core/MCP_unified/modules/implementations/kanban_module.py \
+  tldw_Server_API/tests/kanban \
+  tldw_Server_API/app/core/MCP_unified/tests/test_kanban_module.py \
+  Docs/MCP/Unified/User_Guide.md \
+  Docs/Published/User_Guides/WebUI_Extension/Kanban_Board_Guide.md \
+  Docs/Prompts/Skills/kanban/SKILL.md
 git commit -m "chore(kanban-workflow): final verification and hardening"
 ```
 
@@ -356,3 +374,4 @@ git commit -m "chore(kanban-workflow): final verification and hardening"
 - Never bypass transition policy checks in API or MCP layers.
 - Keep stable machine-readable error codes for orchestrator retry logic.
 - Maintain backward compatibility for existing Kanban CRUD APIs.
+- Do not require manual one-off migration scripts for existing boards/cards; policy and state bootstrap must be automatic and idempotent.
