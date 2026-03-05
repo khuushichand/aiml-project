@@ -99,6 +99,44 @@ class _PostgresConnWithSqliteTrap:
         }
 
 
+class _PostgresConnForListInvites:
+    def __init__(self) -> None:
+        self.fetchrow_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetch_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def fetchrow(self, query: str, *params: Any) -> tuple[int]:
+        lower_q = str(query).lower()
+        if "?" in lower_q:
+            raise AssertionError("Postgres backend path should not use SQLite placeholders")
+        self.fetchrow_calls.append((str(query), tuple(params)))
+        if "select count(*)" not in lower_q:
+            raise AssertionError("Expected COUNT query in fetchrow for list_org_invites")
+        return (1,)
+
+    async def fetch(self, query: str, *params: Any) -> list[dict[str, Any]]:
+        lower_q = str(query).lower()
+        if "?" in lower_q:
+            raise AssertionError("Postgres backend path should not use SQLite placeholders")
+        self.fetch_calls.append((str(query), tuple(params)))
+        now = datetime.now(timezone.utc)
+        return [{
+            "id": 77,
+            "code": "INV-LISTTEST1234",
+            "org_id": 5,
+            "team_id": None,
+            "role_to_grant": "member",
+            "created_by": 9,
+            "created_at": now,
+            "expires_at": now,
+            "max_uses": 1,
+            "uses_count": 0,
+            "is_active": True,
+            "description": None,
+            "allowed_email_domain": None,
+            "team_name": None,
+        }]
+
+
 @pytest.mark.asyncio
 async def test_create_invite_sqlite_backend_selection_uses_execute():
     conn = _SqliteConnWithFetchrowTrap()
@@ -129,3 +167,32 @@ async def test_create_invite_postgres_backend_selection_uses_fetchrow():
     assert "values ($1, $2, $3" in query.lower()
     assert "returning id, code" in query.lower()
     assert params and isinstance(params[0], str) and params[0].startswith("INV-")
+
+
+@pytest.mark.asyncio
+async def test_list_org_invites_postgres_uses_numbered_limit_offset_placeholders():
+    conn = _PostgresConnForListInvites()
+    repo = AuthnzOrgInvitesRepo(db_pool=_PoolStub(conn, postgres=True))
+
+    invites, total = await repo.list_org_invites(org_id=5, limit=25, offset=10)
+
+    assert total == 1
+    assert invites and invites[0]["id"] == 77
+    assert isinstance(invites[0]["created_at"], str)
+    assert conn.fetchrow_calls
+    assert conn.fetch_calls
+
+    count_query, count_params = conn.fetchrow_calls[0]
+    assert "select count(*)" in count_query.lower()
+    assert len(count_params) == 2
+    assert count_params[0] == 5
+    assert isinstance(count_params[1], datetime)
+
+    select_query, select_params = conn.fetch_calls[0]
+    normalized_select = " ".join(select_query.lower().split())
+    assert "limit $3 offset $4" in normalized_select
+    assert len(select_params) == 4
+    assert select_params[0] == 5
+    assert isinstance(select_params[1], datetime)
+    assert select_params[2] == 25
+    assert select_params[3] == 10

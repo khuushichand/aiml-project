@@ -149,12 +149,23 @@ def _audio_shim_attr(name: str):
         "finish_job": finish_job,
     }
     try:
-        from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
+        from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_module_shim
 
-        if hasattr(audio_shim, name):
-            return getattr(audio_shim, name)
+        if hasattr(audio_module_shim, name):
+            return getattr(audio_module_shim, name)
     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-        pass
+        logger.debug("audio_streaming shim module lookup failed for {}", name, exc_info=True)
+    except Exception:
+        logger.debug("audio_streaming shim module lookup raised unexpected error for {}", name, exc_info=True)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints import audio as audio_pkg_shim
+
+        if hasattr(audio_pkg_shim, name):
+            return getattr(audio_pkg_shim, name)
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        logger.debug("audio_streaming shim package lookup failed for {}", name, exc_info=True)
+    except Exception:
+        logger.debug("audio_streaming shim package lookup raised unexpected error for {}", name, exc_info=True)
     if name in defaults:
         return defaults[name]
     raise NameError(name)

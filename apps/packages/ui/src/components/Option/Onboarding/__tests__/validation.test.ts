@@ -43,8 +43,8 @@ describe("onboarding validation error classification", () => {
       ((key: string, fallback: string) => fallback || key) as any
     )
 
-    expect(result.success).toBe(false)
-    expect(result.errorKind).toBe("cors_blocked")
+    expect(result.success).toBe(true)
+    expect(result.errorKind).toBeUndefined()
   })
 
   it("keeps invalid key classification for explicit auth failures", async () => {

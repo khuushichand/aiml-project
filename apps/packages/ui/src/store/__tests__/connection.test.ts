@@ -20,7 +20,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
 
 import { apiSend } from "@/services/api-send"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { useConnectionStore } from "../connection"
+import { CONNECTION_TIMEOUT_MS, useConnectionStore } from "../connection"
 
 const mockedApiSend = vi.mocked(apiSend)
 const mockedClient = vi.mocked(tldwClient, true)
@@ -125,7 +125,8 @@ describe("connection store stability", () => {
     expect(mockedApiSend).toHaveBeenCalledWith(
       expect.objectContaining({
         path: "/api/v1/health/live",
-        method: "GET"
+        method: "GET",
+        timeoutMs: CONNECTION_TIMEOUT_MS
       })
     )
   })
@@ -148,6 +149,35 @@ describe("connection store stability", () => {
       ok: false,
       status: 0,
       error: "NetworkError when attempting to fetch resource."
+    })
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.ERROR)
+    expect(state.errorKind).toBe("unreachable")
+    expect(state.lastError).toContain("Likely CORS mismatch")
+    expect(state.lastError).toContain("ALLOWED_ORIGINS")
+  })
+
+  it("surfaces a CORS/network hint for aborted cross-origin health checks", async () => {
+    setConnectionState({
+      phase: ConnectionPhase.SEARCHING,
+      serverUrl: "http://192.168.5.186:8000",
+      isConnected: false,
+      isChecking: false,
+      lastCheckedAt: Date.now() - 60_000,
+      consecutiveFailures: 0
+    })
+    mockedClient.getConfig.mockResolvedValue({
+      serverUrl: "http://192.168.5.186:8000",
+      authMode: "single-user",
+      apiKey: "test-key"
+    } as any)
+    mockedApiSend.mockResolvedValue({
+      ok: false,
+      status: 0,
+      error: "The operation was aborted."
     })
 
     await useConnectionStore.getState().checkOnce()

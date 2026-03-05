@@ -63,14 +63,11 @@ const OptionIndex = () => {
         <OnboardingWizard
           onFinish={async () => {
             try {
-              await checkOnce()
-            } finally {
-              try {
-                await markFirstRunComplete()
-              } catch {
-                // ignore markFirstRunComplete failures here; connection state will self-heal on next load
-              }
+              await markFirstRunComplete()
+            } catch {
+              // ignore markFirstRunComplete failures here; connection state will self-heal on next load
             }
+            void checkOnce().catch(() => undefined)
           }}
         />
       </OptionLayout>

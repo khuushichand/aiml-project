@@ -235,12 +235,14 @@ class AuthnzUsersRepo:
 
             # Page of users
             if is_pg:
+                limit_pos = param_count + 1
+                offset_pos = param_count + 2
                 query_template = """
                     SELECT DISTINCT users.id, users.uuid, users.username, users.email, users.role, users.is_active, users.is_verified,
                            created_at, last_login, storage_quota_mb, storage_used_mb
                     FROM users{join_clause}{where_clause}
                     ORDER BY users.created_at DESC
-                    LIMIT ${param_count + 1} OFFSET ${param_count + 2}
+                    LIMIT ${limit_pos} OFFSET ${offset_pos}
                 """
                 query = query_template.format_map(locals())  # nosec B608
                 q_params = [*params, limit, offset]

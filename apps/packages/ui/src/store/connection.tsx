@@ -209,7 +209,8 @@ const NETWORK_BLOCK_PATTERNS = [
   /networkerror when attempting to fetch resource/i,
   /failed to fetch/i,
   /network request failed/i,
-  /load failed/i
+  /load failed/i,
+  /the operation was aborted/i
 ]
 
 const maybeAnnotateCorsMismatchError = ({
@@ -495,6 +496,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           const resp = await apiSend({
             path: HEALTH_LIVENESS_PATH,
             method: 'GET',
+            timeoutMs: CONNECTION_TIMEOUT_MS,
             // Allow unauthenticated health checks when no credentials have
             // been configured yet so first‑run onboarding can still detect a
             // reachable server URL. Once an API key or access token exists,

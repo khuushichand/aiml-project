@@ -1,12 +1,20 @@
 """Test helpers for stubbing heavyweight ML imports in Characters tests."""
 
+import importlib.machinery
 from types import ModuleType
+from types import SimpleNamespace
 import sys
 
 
 def stub_heavy_ml_imports() -> None:
     """Install lightweight stand-ins for optional ML modules used by app imports."""
-    sys.modules.setdefault("torch", ModuleType("torch"))
+    if "torch" not in sys.modules:
+        torch_stub = ModuleType("torch")
+        torch_stub.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
+        # SciPy checks torch.Tensor during import-time array API compatibility probes.
+        torch_stub.Tensor = object
+        torch_stub.nn = SimpleNamespace(Module=object)
+        sys.modules["torch"] = torch_stub
     sys.modules.setdefault("transformers", ModuleType("transformers"))
     sys.modules.setdefault("optimum", ModuleType("optimum"))
 

@@ -1,6 +1,6 @@
 import React from "react"
-import { describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import OptionIndex from "../option-index"
 import OptionSetup from "../option-setup"
 import OptionOnboardingTest from "../option-onboarding-test"
@@ -57,7 +57,23 @@ vi.mock("react-router-dom", () => ({
 }))
 
 vi.mock("@/components/Option/Onboarding/OnboardingWizard", () => ({
-  OnboardingWizard: () => <div data-testid="onboarding-wizard">Wizard</div>
+  OnboardingWizard: ({
+    onFinish
+  }: {
+    onFinish?: () => void | Promise<void>
+  }) => (
+    <div>
+      <div data-testid="onboarding-wizard">Wizard</div>
+      <button
+        data-testid="onboarding-finish"
+        onClick={() => {
+          void onFinish?.()
+        }}
+      >
+        Finish onboarding
+      </button>
+    </div>
+  )
 }))
 
 vi.mock("~/components/Option/LandingHub", () => ({
@@ -65,10 +81,16 @@ vi.mock("~/components/Option/LandingHub", () => ({
 }))
 
 describe("core route identity guardrails", () => {
-  it("provides unique route-intent headings for home/setup/onboarding-test", () => {
+  beforeEach(() => {
     optionLayoutMock.mockClear()
+    navigateMock.mockClear()
+    checkOnceMock.mockReset().mockResolvedValue(undefined)
+    beginOnboardingMock.mockReset().mockResolvedValue(undefined)
+    markFirstRunCompleteMock.mockReset().mockResolvedValue(undefined)
     state.hasCompletedFirstRun = false
+  })
 
+  it("provides unique route-intent headings for home/setup/onboarding-test", () => {
     const firstRender = render(<OptionIndex />)
     expect(screen.getByText("Home Onboarding")).toBeInTheDocument()
     expect(screen.getByTestId("onboarding-wizard")).toBeInTheDocument()
@@ -101,5 +123,34 @@ describe("core route identity guardrails", () => {
         hideSidebar: true
       })
     )
+  })
+
+  it("completes onboarding immediately without waiting for connection recheck", async () => {
+    optionLayoutMock.mockClear()
+    state.hasCompletedFirstRun = false
+
+    let resolveCheck: (() => void) | null = null
+    checkOnceMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCheck = resolve
+        })
+    )
+
+    render(<OptionIndex />)
+    expect(screen.getByTestId("onboarding-wizard")).toBeInTheDocument()
+
+    checkOnceMock.mockClear()
+    markFirstRunCompleteMock.mockClear()
+
+    fireEvent.click(screen.getByTestId("onboarding-finish"))
+
+    await waitFor(() => {
+      expect(markFirstRunCompleteMock).toHaveBeenCalledTimes(1)
+    })
+    expect(checkOnceMock).toHaveBeenCalledTimes(1)
+
+    // Prevent unresolved Promise leakage in this test process.
+    resolveCheck?.()
   })
 })

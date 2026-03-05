@@ -578,7 +578,7 @@ class ChromaDBManager:
             # analyze may return a generator; ensure string
             text = resp if isinstance(resp, str) else str(resp)
             return (text or "").strip()
-        except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
+        except Exception as e:
             logger.error(f"User '{self.user_id}': Error in situate_context with LLM '{provider}': {e}", exc_info=True)
             return ""
 

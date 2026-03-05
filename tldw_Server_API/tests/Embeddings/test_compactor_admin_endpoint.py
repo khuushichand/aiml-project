@@ -16,10 +16,14 @@ def test_compactor_admin_endpoint(monkeypatch, admin_user):
 
     import types
     import sys
-    # Insert a proper module object to avoid unhashable SimpleNamespace in sys.modules
+    # Use monkeypatch so sys.modules override is reverted after test.
     fake_service = types.ModuleType("vector_compactor_stub")
     setattr(fake_service, "compact_once", _fake_compact_once)
-    sys.modules['tldw_Server_API.app.core.Embeddings.services.vector_compactor'] = fake_service
+    monkeypatch.setitem(
+        sys.modules,
+        "tldw_Server_API.app.core.Embeddings.services.vector_compactor",
+        fake_service,
+    )
 
     client = TestClient(app)
     resp = client.post("/api/v1/embeddings/compactor/run", json={"user_id": "u42", "media_db_path": "Databases/Media_DB_v2.db"})

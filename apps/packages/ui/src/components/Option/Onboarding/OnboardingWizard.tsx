@@ -20,6 +20,7 @@ import { openSidepanelForActiveTab } from '@/utils/sidepanel'
 import { useFeatureFlag, FEATURE_FLAGS } from '@/hooks/useFeatureFlags'
 import { OnboardingConnectForm } from './OnboardingConnectForm'
 import { requestOptionalHostPermission } from '@/utils/extension-permissions'
+import { categorizeConnectionError } from './validation'
 
 type Props = {
   onFinish?: () => void
@@ -448,11 +449,30 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
             return
           }
         } catch (error: unknown) {
-          setAuthError(
+          const errorMessage =
             (error as Error)?.message ||
             t('settings:onboarding.errors.apiKeyValidationFailed', 'API key validation failed')
+          const status =
+            (error as { status?: number; statusCode?: number; response?: { status?: number } } | null)?.status ??
+            (error as { status?: number; statusCode?: number; response?: { status?: number } } | null)?.statusCode ??
+            (error as { status?: number; statusCode?: number; response?: { status?: number } } | null)?.response?.status ??
+            null
+          const kind = categorizeConnectionError(status, errorMessage)
+          if (
+            kind === 'cors_blocked' ||
+            kind === 'dns_failed' ||
+            kind === 'refused' ||
+            kind === 'timeout' ||
+            kind === 'ssl_error'
+          ) {
+            // Defer these connectivity failures to the health step where users
+            // get clearer remediation and can proceed.
+          } else {
+          setAuthError(
+            errorMessage
           )
           return
+          }
         }
       }
 

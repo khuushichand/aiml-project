@@ -96,14 +96,10 @@ def test_stage_flag_metric_after_pause(disable_heavy_startup, admin_user, redis_
     # Build snapshot to set gauges
     r1 = client.get("/api/v1/embeddings/orchestrator/summary")
     assert r1.status_code == 200
-    # Check metrics text contains embedding_stage_flag{stage="embedding",flag="paused"} 1
+    # Check metrics text contains embedding_stage_flag for embedding paused = 1
     r2 = client.get("/api/v1/metrics/text")
     assert r2.status_code == 200
     text = r2.text
-    import re as _re
-    m = _re.search(r'^embedding_stage_flag\{[^}]*stage="embedding",[^}]*flag="paused"[^}]*\}\s+(\d+(?:\.\d+)?)$', text, _re.M)
-    assert m, f"embedding_stage_flag paused metric not found for embedding stage in metrics: {text[:4000]}"
-    assert float(m.group(1)) == 1.0
     paused_lines = [
         line for line in text.splitlines()
         if line.startswith("embedding_stage_flag{")
@@ -111,3 +107,5 @@ def test_stage_flag_metric_after_pause(disable_heavy_startup, admin_user, redis_
         and 'flag="paused"' in line
     ]
     assert len(paused_lines) == 1
+    metric_value = paused_lines[0].split("}", 1)[1].strip()
+    assert float(metric_value) == 1.0

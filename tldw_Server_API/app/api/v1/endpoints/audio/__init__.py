@@ -6,8 +6,11 @@ at module import time.
 """
 
 import asyncio as asyncio
+import importlib
+import os
 
 import soundfile as sf
+from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user_id,
@@ -116,6 +119,90 @@ def SileroTurnDetector(*args, **kwargs):
     )
 
     return _impl(*args, **kwargs)
+
+
+def _get_failopen_cap_minutes() -> float:
+    """Return per-connection fail-open cap in minutes for streaming quotas.
+
+    Resolution order:
+      1) Env var AUDIO_FAILOPEN_CAP_MINUTES (>0)
+      2) Config [Audio-Quota] failopen_cap_minutes (>0)
+      3) Config [Audio] failopen_cap_minutes (>0)
+      4) Default 5.0
+    """
+    v = os.getenv("AUDIO_FAILOPEN_CAP_MINUTES")
+    if v is not None:
+        try:
+            f = float(v)
+            if f > 0:
+                return f
+        except (ValueError, TypeError) as exc:
+            logger.debug(f"AUDIO_FAILOPEN_CAP_MINUTES parse failed: {exc}")
+    try:
+        cfg = load_comprehensive_config()
+        if cfg is not None:
+            if cfg.has_section("Audio-Quota"):
+                try:
+                    f = float(cfg.get("Audio-Quota", "failopen_cap_minutes", fallback=""))
+                    if f > 0:
+                        return f
+                except (ValueError, TypeError) as exc:
+                    logger.debug(f"[Audio-Quota].failopen_cap_minutes parse failed: {exc}")
+            if cfg.has_section("Audio"):
+                try:
+                    f = float(cfg.get("Audio", "failopen_cap_minutes", fallback=""))
+                    if f > 0:
+                        return f
+                except (ValueError, TypeError) as exc:
+                    logger.debug(f"[Audio].failopen_cap_minutes parse failed: {exc}")
+    except Exception as exc:
+        logger.debug(f"Config read for failopen cap failed: {exc}")
+    return 5.0
+
+
+_LEGACY_AUDIO_ATTRS = {
+    "router",
+    "ws_router",
+    "create_speech_metadata",
+    "list_tts_providers",
+    "list_tts_voices",
+    "reset_tts_metrics",
+    "encode_audio_tokenizer",
+    "decode_audio_tokenizer",
+    "create_transcription",
+    "create_translation",
+    "segment_transcript",
+    "audio_chat_turn",
+    "streaming_status",
+    "streaming_limits",
+    "test_streaming",
+    "get_tts_health",
+    "get_stt_health",
+    "upload_voice",
+    "encode_voice_reference",
+    "list_voices",
+    "get_voice_details",
+    "delete_voice",
+    "preview_voice",
+    "CHAT_HISTORY_MAX_MESSAGES",
+}
+
+
+def __getattr__(name: str):
+    """Backwards-compatible lazy attribute forwarding to aggregate audio module.
+
+    Historically callers imported symbols from
+    ``tldw_Server_API.app.api.v1.endpoints.audio`` when audio lived in a single
+    module. Keep that behavior while preserving lazy imports.
+    """
+    if name in _LEGACY_AUDIO_ATTRS:
+        try:
+            aggregate = importlib.import_module(f"{__name__}.audio")
+        except Exception as exc:  # pragma: no cover - defensive import fallback
+            raise AttributeError(name) from exc
+        if hasattr(aggregate, name):
+            return getattr(aggregate, name)
+    raise AttributeError(name)
 
 
 __all__ = sorted(

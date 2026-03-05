@@ -40,7 +40,6 @@ from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE, SYSTEM
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import (
     get_settings,
-    is_single_user_mode as _authnz_is_single_user_mode,
     is_single_user_profile_mode,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
@@ -65,6 +64,7 @@ _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS = (
     ipaddress.AddressValueError,
     ipaddress.NetmaskValueError,
 )
+_ACCESS_TOKEN_TYPE = "access"  # nosec B105
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
@@ -176,8 +176,7 @@ def _should_use_single_user_api_key_compat() -> bool:
     if flag in {"0", "false", "off"}:
         return False
     try:
-        single_mode = bool(_authnz_is_single_user_mode())
-        return bool(is_single_user_profile_mode() or single_mode)
+        return bool(is_single_user_profile_mode())
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "MCP unified: single-user profile detection failed; defaulting compat shim to False",
@@ -267,7 +266,7 @@ async def _resolve_token_data_compat(
                     username=getattr(user, "username", None),
                     roles=list(getattr(user, "roles", []) or []),
                     permissions=list(getattr(user, "permissions", []) or []),
-                    token_type="access",
+                    token_type=_ACCESS_TOKEN_TYPE,
                 )
     except HTTPException:
         logger.debug(
@@ -384,7 +383,7 @@ async def _resolve_token_data_compat(
                             username="single_user",
                             roles=roles,
                             permissions=perms,
-                            token_type="access",
+                            token_type=_ACCESS_TOKEN_TYPE,
                         )
             except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 # Fall through to multi-user API key validation
@@ -415,7 +414,7 @@ async def _resolve_token_data_compat(
                     username=None,
                     roles=["api_client"],
                     permissions=_extract_api_key_permissions(info),
-                    token_type="access",
+                    token_type=_ACCESS_TOKEN_TYPE,
                 )
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
