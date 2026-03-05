@@ -84,6 +84,25 @@ JSON-RPC Usage
 }
 ```
 
+Recommended Catalog: `kanban-safe-orchestrator`
+- Use this catalog to expose only workflow-control primitives to autonomous agents.
+- Suggested entries:
+  - `kanban.workflow.policy.get`
+  - `kanban.workflow.statuses.list`
+  - `kanban.workflow.transitions.list`
+  - `kanban.workflow.task.state.get`
+  - `kanban.workflow.task.claim`
+  - `kanban.workflow.task.transition`
+  - `kanban.workflow.task.approval.decide`
+  - `kanban.workflow.task.release`
+  - `kanban.workflow.task.events.list`
+- Add admin-only controls/recovery tools only for operator identities:
+  - `kanban.workflow.control.pause`
+  - `kanban.workflow.control.resume`
+  - `kanban.workflow.control.drain`
+  - `kanban.workflow.recovery.list_stale_claims`
+  - `kanban.workflow.recovery.force_reassign`
+
 Migration
 - Add migration 022 to AuthNZ migrations (SQLite) to create the two tables (with indexes/constraints above).
 - Future: add Postgres DDL to `Databases/Postgres/Schema` and include in PG init path.
