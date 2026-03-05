@@ -1,10 +1,11 @@
 import pytest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.kanban_module import KanbanModule
 from tldw_Server_API.app.core.MCP_unified.modules.base import ModuleConfig
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import NotFoundError, InputError
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import ConflictError, NotFoundError, InputError
 
 
 class FakeKanbanDB:
@@ -24,6 +25,10 @@ class FakeKanbanDB:
         self._comment_counter = 0
         self._checklist_counter = 0
         self._checklist_item_counter = 0
+        self._workflow_policy_counter = 0
+        self._workflow_policies: Dict[int, Dict[str, Any]] = {}
+        self._workflow_states: Dict[int, Dict[str, Any]] = {}
+        self._workflow_events: Dict[int, List[Dict[str, Any]]] = {}
 
     def create_board(
         self,
@@ -412,6 +417,432 @@ class FakeKanbanDB:
         self._checklist_items.pop(item_id, None)
         return True
 
+    def _now(self) -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _ensure_workflow_policy_for_board(self, board_id: int) -> Dict[str, Any]:
+        policy = self._workflow_policies.get(board_id)
+        if policy:
+            return policy
+        return self.upsert_workflow_policy(board_id=board_id)
+
+    def _ensure_workflow_state_for_card(self, card_id: int) -> Dict[str, Any]:
+        state = self._workflow_states.get(card_id)
+        if state:
+            return state
+        card = self._cards.get(card_id)
+        if not card:
+            raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+        policy = self._ensure_workflow_policy_for_board(card["board_id"])
+        default_status = policy["statuses"][0]["status_key"]
+        now = self._now()
+        created = {
+            "card_id": card_id,
+            "policy_id": policy["id"],
+            "workflow_status_key": default_status,
+            "lease_owner": None,
+            "lease_expires_at": None,
+            "approval_state": "none",
+            "pending_transition_id": None,
+            "retry_counters": None,
+            "last_transition_at": None,
+            "last_actor": None,
+            "version": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self._workflow_states[card_id] = created
+        return dict(created)
+
+    def _append_workflow_event(
+        self,
+        card_id: int,
+        event_type: str,
+        from_status_key: Optional[str],
+        to_status_key: Optional[str],
+        actor: str,
+        idempotency_key: str,
+        correlation_id: Optional[str],
+        reason: Optional[str],
+        before_snapshot: Optional[Dict[str, Any]],
+        after_snapshot: Optional[Dict[str, Any]],
+    ) -> None:
+        events = self._workflow_events.setdefault(card_id, [])
+        event_id = len(events) + 1
+        events.append(
+            {
+                "id": event_id,
+                "card_id": card_id,
+                "event_type": event_type,
+                "from_status_key": from_status_key,
+                "to_status_key": to_status_key,
+                "actor": actor,
+                "reason": reason,
+                "idempotency_key": idempotency_key,
+                "correlation_id": correlation_id,
+                "before_snapshot": before_snapshot,
+                "after_snapshot": after_snapshot,
+                "created_at": self._now(),
+            }
+        )
+
+    def upsert_workflow_policy(
+        self,
+        *,
+        board_id: int,
+        statuses: Optional[List[Dict[str, Any]]] = None,
+        transitions: Optional[List[Dict[str, Any]]] = None,
+        is_paused: bool = False,
+        is_draining: bool = False,
+        default_lease_ttl_sec: int = 900,
+        strict_projection: bool = True,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if board_id not in self._boards:
+            raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+        existing = self._workflow_policies.get(board_id)
+        if existing:
+            policy = dict(existing)
+            policy["version"] = int(policy.get("version", 1)) + 1
+        else:
+            self._workflow_policy_counter += 1
+            now = self._now()
+            policy = {
+                "id": self._workflow_policy_counter,
+                "board_id": board_id,
+                "version": 1,
+                "created_at": now,
+            }
+        policy["statuses"] = statuses if statuses is not None else policy.get("statuses") or [
+            {"status_key": "todo", "display_name": "To Do", "sort_order": 0, "is_active": True, "is_terminal": False}
+        ]
+        policy["transitions"] = transitions if transitions is not None else policy.get("transitions") or []
+        policy["is_paused"] = bool(is_paused)
+        policy["is_draining"] = bool(is_draining)
+        policy["default_lease_ttl_sec"] = int(default_lease_ttl_sec)
+        policy["strict_projection"] = bool(strict_projection)
+        policy["metadata"] = policy.get("metadata") if metadata is None and existing else metadata
+        policy["updated_at"] = self._now()
+        self._workflow_policies[board_id] = policy
+        return dict(policy)
+
+    def get_workflow_policy(self, board_id: int) -> Optional[Dict[str, Any]]:
+        policy = self._workflow_policies.get(board_id)
+        return dict(policy) if policy else None
+
+    def list_workflow_statuses(self, board_id: int) -> List[Dict[str, Any]]:
+        policy = self._ensure_workflow_policy_for_board(board_id)
+        return [dict(status) for status in policy.get("statuses", [])]
+
+    def list_workflow_transitions(self, board_id: int) -> List[Dict[str, Any]]:
+        policy = self._ensure_workflow_policy_for_board(board_id)
+        return [dict(transition) for transition in policy.get("transitions", [])]
+
+    def get_card_workflow_state(self, card_id: int) -> Dict[str, Any]:
+        return dict(self._ensure_workflow_state_for_card(card_id))
+
+    def patch_card_workflow_state(
+        self,
+        *,
+        card_id: int,
+        workflow_status_key: Optional[str],
+        expected_version: int,
+        lease_owner: Optional[str],
+        idempotency_key: str,
+        correlation_id: Optional[str] = None,
+        last_actor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        state = self._ensure_workflow_state_for_card(card_id)
+        if int(expected_version) != int(state["version"]):
+            raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)
+        before = dict(state)
+        if workflow_status_key is not None:
+            state["workflow_status_key"] = workflow_status_key
+        state["lease_owner"] = lease_owner
+        state["last_actor"] = last_actor
+        state["last_transition_at"] = self._now()
+        state["version"] = int(state["version"]) + 1
+        state["updated_at"] = self._now()
+        self._workflow_states[card_id] = state
+        self._append_workflow_event(
+            card_id=card_id,
+            event_type="state_patched",
+            from_status_key=before["workflow_status_key"],
+            to_status_key=state["workflow_status_key"],
+            actor=last_actor or "tester",
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            reason=None,
+            before_snapshot=before,
+            after_snapshot=dict(state),
+        )
+        return dict(state)
+
+    def claim_card_workflow(
+        self,
+        *,
+        card_id: int,
+        owner: str,
+        lease_ttl_sec: Optional[int] = None,
+        idempotency_key: str,
+        correlation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        state = self._ensure_workflow_state_for_card(card_id)
+        before = dict(state)
+        ttl = int(lease_ttl_sec or 900)
+        state["lease_owner"] = owner
+        state["lease_expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=ttl)).strftime("%Y-%m-%d %H:%M:%S")
+        state["last_actor"] = owner
+        state["version"] = int(state["version"]) + 1
+        state["updated_at"] = self._now()
+        self._workflow_states[card_id] = state
+        self._append_workflow_event(
+            card_id=card_id,
+            event_type="workflow_claimed",
+            from_status_key=before["workflow_status_key"],
+            to_status_key=state["workflow_status_key"],
+            actor=owner,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            reason="claim_acquired",
+            before_snapshot=before,
+            after_snapshot=dict(state),
+        )
+        return dict(state)
+
+    def release_card_workflow(
+        self,
+        *,
+        card_id: int,
+        owner: str,
+        idempotency_key: str,
+        correlation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        state = self._ensure_workflow_state_for_card(card_id)
+        if state.get("lease_owner") and state.get("lease_owner") != owner:
+            raise ConflictError("lease_mismatch", entity="card_workflow_state", entity_id=card_id)
+        before = dict(state)
+        state["lease_owner"] = None
+        state["lease_expires_at"] = None
+        state["last_actor"] = owner
+        state["version"] = int(state["version"]) + 1
+        state["updated_at"] = self._now()
+        self._workflow_states[card_id] = state
+        self._append_workflow_event(
+            card_id=card_id,
+            event_type="workflow_released",
+            from_status_key=before["workflow_status_key"],
+            to_status_key=state["workflow_status_key"],
+            actor=owner,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            reason="claim_released",
+            before_snapshot=before,
+            after_snapshot=dict(state),
+        )
+        return dict(state)
+
+    def transition_card_workflow(
+        self,
+        *,
+        card_id: int,
+        to_status_key: str,
+        actor: str,
+        expected_version: int,
+        idempotency_key: str,
+        correlation_id: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        state = self._ensure_workflow_state_for_card(card_id)
+        if int(expected_version) != int(state["version"]):
+            raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)
+        card = self._cards.get(card_id)
+        if not card:
+            raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+        policy = self._ensure_workflow_policy_for_board(card["board_id"])
+        if bool(policy.get("is_paused", False)):
+            raise ConflictError("policy_paused", entity="workflow_policy", entity_id=policy["id"])
+        transitions = policy.get("transitions", [])
+        edge = next(
+            (
+                t for t in transitions
+                if t.get("from_status_key") == state["workflow_status_key"]
+                and t.get("to_status_key") == to_status_key
+                and bool(t.get("is_active", True))
+            ),
+            None,
+        )
+        if edge is None:
+            raise ConflictError("transition_not_allowed", entity="card_workflow_state", entity_id=card_id)
+        if bool(edge.get("requires_claim", True)):
+            if state.get("lease_owner") != actor:
+                raise ConflictError("lease_required", entity="card_workflow_state", entity_id=card_id)
+        before = dict(state)
+        if bool(edge.get("requires_approval", False)):
+            state["approval_state"] = "awaiting_approval"
+            state["pending_transition_id"] = int(edge.get("id", 1))
+            state["last_actor"] = actor
+            state["version"] = int(state["version"]) + 1
+            state["updated_at"] = self._now()
+            self._workflow_states[card_id] = state
+            self._append_workflow_event(
+                card_id=card_id,
+                event_type="workflow_approval_requested",
+                from_status_key=before["workflow_status_key"],
+                to_status_key=to_status_key,
+                actor=actor,
+                idempotency_key=idempotency_key,
+                correlation_id=correlation_id,
+                reason=reason,
+                before_snapshot=before,
+                after_snapshot=dict(state),
+            )
+            return dict(state)
+        state["workflow_status_key"] = to_status_key
+        state["approval_state"] = "none"
+        state["pending_transition_id"] = None
+        state["last_transition_at"] = self._now()
+        state["last_actor"] = actor
+        state["version"] = int(state["version"]) + 1
+        state["updated_at"] = self._now()
+        self._workflow_states[card_id] = state
+        self._append_workflow_event(
+            card_id=card_id,
+            event_type="workflow_transitioned",
+            from_status_key=before["workflow_status_key"],
+            to_status_key=state["workflow_status_key"],
+            actor=actor,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            reason=reason,
+            before_snapshot=before,
+            after_snapshot=dict(state),
+        )
+        return dict(state)
+
+    def decide_card_workflow_approval(
+        self,
+        *,
+        card_id: int,
+        reviewer: str,
+        decision: str,
+        expected_version: int,
+        idempotency_key: str,
+        correlation_id: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        state = self._ensure_workflow_state_for_card(card_id)
+        if int(expected_version) != int(state["version"]):
+            raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)
+        if state.get("approval_state") != "awaiting_approval":
+            raise ConflictError("approval_required", entity="card_workflow_state", entity_id=card_id)
+        card = self._cards.get(card_id)
+        if not card:
+            raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+        policy = self._ensure_workflow_policy_for_board(card["board_id"])
+        transition = next(
+            (
+                t for t in policy.get("transitions", [])
+                if t.get("from_status_key") == state["workflow_status_key"]
+                and bool(t.get("requires_approval", False))
+            ),
+            None,
+        )
+        if transition is None:
+            raise ConflictError("transition_not_allowed", entity="card_workflow_state", entity_id=card_id)
+        before = dict(state)
+        if decision == "approved":
+            state["workflow_status_key"] = transition.get("approve_to_status_key") or transition.get("to_status_key")
+            state["approval_state"] = "approved"
+        else:
+            state["workflow_status_key"] = transition.get("reject_to_status_key") or state["workflow_status_key"]
+            state["approval_state"] = "rejected"
+        state["pending_transition_id"] = None
+        state["last_transition_at"] = self._now()
+        state["last_actor"] = reviewer
+        state["version"] = int(state["version"]) + 1
+        state["updated_at"] = self._now()
+        self._workflow_states[card_id] = state
+        self._append_workflow_event(
+            card_id=card_id,
+            event_type="workflow_approval_decided",
+            from_status_key=before["workflow_status_key"],
+            to_status_key=state["workflow_status_key"],
+            actor=reviewer,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            reason=reason or decision,
+            before_snapshot=before,
+            after_snapshot=dict(state),
+        )
+        return dict(state)
+
+    def list_card_workflow_events(self, *, card_id: int, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        if card_id not in self._cards:
+            raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+        events = list(self._workflow_events.get(card_id, []))
+        events.sort(key=lambda row: row["id"], reverse=True)
+        return events[offset: offset + limit]
+
+    def list_stale_workflow_claims(self, *, board_id: Optional[int] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        now = self._now()
+        stale: List[Dict[str, Any]] = []
+        for card_id, state in self._workflow_states.items():
+            lease_owner = state.get("lease_owner")
+            lease_expires_at = state.get("lease_expires_at")
+            if not lease_owner or not lease_expires_at or str(lease_expires_at) > now:
+                continue
+            card = self._cards.get(card_id)
+            if not card:
+                continue
+            if board_id is not None and card.get("board_id") != board_id:
+                continue
+            stale.append(
+                {
+                    "card_id": card_id,
+                    "board_id": card["board_id"],
+                    "list_id": card["list_id"],
+                    "title": card["title"],
+                    "workflow_status_key": state["workflow_status_key"],
+                    "lease_owner": lease_owner,
+                    "lease_expires_at": lease_expires_at,
+                    "version": state["version"],
+                    "updated_at": state["updated_at"],
+                }
+            )
+        return stale[:limit]
+
+    def force_reassign_workflow_claim(
+        self,
+        *,
+        card_id: int,
+        new_owner: str,
+        idempotency_key: str,
+        correlation_id: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        state = self._ensure_workflow_state_for_card(card_id)
+        before = dict(state)
+        state["lease_owner"] = new_owner
+        state["lease_expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=900)).strftime("%Y-%m-%d %H:%M:%S")
+        state["last_actor"] = new_owner
+        state["version"] = int(state["version"]) + 1
+        state["updated_at"] = self._now()
+        self._workflow_states[card_id] = state
+        self._append_workflow_event(
+            card_id=card_id,
+            event_type="workflow_claim_reassigned",
+            from_status_key=before["workflow_status_key"],
+            to_status_key=state["workflow_status_key"],
+            actor=new_owner,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            reason=reason,
+            before_snapshot=before,
+            after_snapshot=dict(state),
+        )
+        return dict(state)
+
 
 @pytest.mark.asyncio
 async def test_kanban_module_basic_flow(tmp_path):
@@ -532,3 +963,145 @@ async def test_kanban_module_basic_flow(tmp_path):
         context=ctx,
     )
     assert searched["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_kanban_workflow_transition_tool_requires_expected_version_and_idempotency(tmp_path):
+    mod = KanbanModule(ModuleConfig(name="kanban"))
+    fake_db = FakeKanbanDB()
+    mod._open_db = lambda ctx: fake_db  # type: ignore[assignment]
+
+    ctx = SimpleNamespace(user_id="1", db_paths={"kanban": tmp_path / "kanban.db"})
+
+    with pytest.raises(ValueError, match="expected_version"):
+        await mod.execute_tool(
+            "kanban.workflow.task.transition",
+            {
+                "card_id": 1,
+                "to_status_key": "impl",
+                "actor": "builder",
+                "correlation_id": "corr-missing-version",
+            },
+            context=ctx,
+        )
+
+    with pytest.raises(ValueError, match="idempotency_key"):
+        await mod.execute_tool(
+            "kanban.workflow.task.transition",
+            {
+                "card_id": 1,
+                "to_status_key": "impl",
+                "actor": "builder",
+                "expected_version": 1,
+                "correlation_id": "corr-missing-idem",
+            },
+            context=ctx,
+        )
+
+
+@pytest.mark.asyncio
+async def test_kanban_workflow_control_tools_require_admin(tmp_path):
+    mod = KanbanModule(ModuleConfig(name="kanban"))
+    fake_db = FakeKanbanDB()
+    mod._open_db = lambda ctx: fake_db  # type: ignore[assignment]
+
+    non_admin_ctx = SimpleNamespace(user_id="1", db_paths={"kanban": tmp_path / "kanban.db"}, metadata={"roles": []})
+
+    board = await mod.execute_tool("kanban.boards.create", {"name": "Workflow Board"}, context=non_admin_ctx)
+    board_id = board["board"]["id"]
+    created_list = await mod.execute_tool(
+        "kanban.lists.create",
+        {"board_id": board_id, "name": "Todo"},
+        context=non_admin_ctx,
+    )
+    card = await mod.execute_tool(
+        "kanban.cards.create",
+        {"list_id": created_list["list"]["id"], "title": "Workflow Card"},
+        context=non_admin_ctx,
+    )
+    card_id = card["card"]["id"]
+
+    with pytest.raises(ValueError, match="forbidden"):
+        await mod.execute_tool("kanban.workflow.control.pause", {"board_id": board_id}, context=non_admin_ctx)
+
+    with pytest.raises(ValueError, match="forbidden"):
+        await mod.execute_tool(
+            "kanban.workflow.recovery.force_reassign",
+            {
+                "card_id": card_id,
+                "new_owner": "builder",
+                "idempotency_key": "mcp-force-reassign",
+                "correlation_id": "corr-force-reassign",
+                "reason": "stale lease",
+            },
+            context=non_admin_ctx,
+        )
+
+
+@pytest.mark.asyncio
+async def test_kanban_workflow_tool_roundtrip(tmp_path):
+    mod = KanbanModule(ModuleConfig(name="kanban"))
+    fake_db = FakeKanbanDB()
+    mod._open_db = lambda ctx: fake_db  # type: ignore[assignment]
+
+    admin_ctx = SimpleNamespace(
+        user_id="1",
+        db_paths={"kanban": tmp_path / "kanban.db"},
+        metadata={"roles": ["admin"]},
+    )
+
+    board = await mod.execute_tool("kanban.boards.create", {"name": "WF Board"}, context=admin_ctx)
+    board_id = board["board"]["id"]
+    lst = await mod.execute_tool("kanban.lists.create", {"board_id": board_id, "name": "Todo"}, context=admin_ctx)
+    card = await mod.execute_tool(
+        "kanban.cards.create",
+        {"list_id": lst["list"]["id"], "title": "WF Card"},
+        context=admin_ctx,
+    )
+    card_id = card["card"]["id"]
+
+    policy = await mod.execute_tool(
+        "kanban.workflow.policy.upsert",
+        {
+            "board_id": board_id,
+            "statuses": [
+                {"status_key": "todo", "display_name": "To Do", "sort_order": 0},
+                {"status_key": "impl", "display_name": "Implement", "sort_order": 1},
+            ],
+            "transitions": [
+                {
+                    "id": 1,
+                    "from_status_key": "todo",
+                    "to_status_key": "impl",
+                    "requires_claim": False,
+                    "requires_approval": False,
+                    "is_active": True,
+                }
+            ],
+        },
+        context=admin_ctx,
+    )
+    assert policy["policy"]["board_id"] == board_id
+
+    state = await mod.execute_tool("kanban.workflow.task.state.get", {"card_id": card_id}, context=admin_ctx)
+    transitioned = await mod.execute_tool(
+        "kanban.workflow.task.transition",
+        {
+            "card_id": card_id,
+            "to_status_key": "impl",
+            "actor": "builder",
+            "expected_version": state["state"]["version"],
+            "idempotency_key": "mcp-transition-1",
+            "correlation_id": "corr-mcp-transition-1",
+            "reason": "begin impl",
+        },
+        context=admin_ctx,
+    )
+    assert transitioned["state"]["workflow_status_key"] == "impl"
+
+    events = await mod.execute_tool(
+        "kanban.workflow.task.events.list",
+        {"card_id": card_id, "limit": 10, "offset": 0},
+        context=admin_ctx,
+    )
+    assert events["events"][0]["correlation_id"] == "corr-mcp-transition-1"
