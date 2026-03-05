@@ -420,6 +420,234 @@ class KanbanModule(BaseModule):
                 },
                 metadata={"category": "management", "auth_required": True},
             ),
+            create_tool_definition(
+                name="kanban.workflow.policy.get",
+                description="Get workflow policy for a board.",
+                parameters={
+                    "properties": {
+                        "board_id": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["board_id"],
+                },
+                metadata={"category": "retrieval", "readOnlyHint": True, "auth_required": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.policy.upsert",
+                description="Upsert workflow policy, statuses, and transitions for a board.",
+                parameters={
+                    "properties": {
+                        "board_id": {"type": "integer", "minimum": 1},
+                        "statuses": {"type": "array", "items": {"type": "object"}},
+                        "transitions": {"type": "array", "items": {"type": "object"}},
+                        "is_paused": {"type": "boolean"},
+                        "is_draining": {"type": "boolean"},
+                        "default_lease_ttl_sec": {"type": "integer", "minimum": 1},
+                        "strict_projection": {"type": "boolean"},
+                        "metadata": {"type": "object"},
+                    },
+                    "required": ["board_id"],
+                },
+                metadata={"category": "management", "auth_required": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.statuses.list",
+                description="List workflow statuses for a board.",
+                parameters={
+                    "properties": {
+                        "board_id": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["board_id"],
+                },
+                metadata={"category": "retrieval", "readOnlyHint": True, "auth_required": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.transitions.list",
+                description="List workflow transitions for a board.",
+                parameters={
+                    "properties": {
+                        "board_id": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["board_id"],
+                },
+                metadata={"category": "retrieval", "readOnlyHint": True, "auth_required": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.task.state.get",
+                description="Get workflow runtime state for a card.",
+                parameters={
+                    "properties": {
+                        "card_id": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["card_id"],
+                },
+                metadata={"category": "retrieval", "readOnlyHint": True, "auth_required": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.task.state.patch",
+                description="Patch workflow runtime state for a card using optimistic concurrency.",
+                parameters={
+                    "properties": {
+                        "card_id": {"type": "integer", "minimum": 1},
+                        "workflow_status_key": {"type": "string", "minLength": 1},
+                        "expected_version": {"type": "integer", "minimum": 1},
+                        "lease_owner": {"type": "string"},
+                        "idempotency_key": {"type": "string", "minLength": 1},
+                        "correlation_id": {"type": "string", "minLength": 1},
+                        "last_actor": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["card_id", "expected_version", "idempotency_key"],
+                },
+                metadata={"category": "management", "auth_required": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.task.claim",
+                description="Claim a workflow lease for a card.",
+                parameters={
+                    "properties": {
+                        "card_id": {"type": "integer", "minimum": 1},
+                        "owner": {"type": "string", "minLength": 1},
+                        "lease_ttl_sec": {"type": "integer", "minimum": 1},
+                        "idempotency_key": {"type": "string", "minLength": 1},
+                        "correlation_id": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["card_id", "owner", "idempotency_key"],
+                },
+                metadata={"category": "management", "auth_required": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.task.release",
+                description="Release a workflow lease for a card.",
+                parameters={
+                    "properties": {
+                        "card_id": {"type": "integer", "minimum": 1},
+                        "owner": {"type": "string", "minLength": 1},
+                        "idempotency_key": {"type": "string", "minLength": 1},
+                        "correlation_id": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["card_id", "owner", "idempotency_key"],
+                },
+                metadata={"category": "management", "auth_required": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.task.transition",
+                description="Transition a card workflow status with policy/CAS enforcement.",
+                parameters={
+                    "properties": {
+                        "card_id": {"type": "integer", "minimum": 1},
+                        "to_status_key": {"type": "string", "minLength": 1},
+                        "actor": {"type": "string", "minLength": 1},
+                        "expected_version": {"type": "integer", "minimum": 1},
+                        "idempotency_key": {"type": "string", "minLength": 1},
+                        "correlation_id": {"type": "string", "minLength": 1},
+                        "reason": {"type": "string"},
+                    },
+                    "required": [
+                        "card_id",
+                        "to_status_key",
+                        "actor",
+                        "expected_version",
+                        "idempotency_key",
+                        "correlation_id",
+                    ],
+                },
+                metadata={"category": "management", "auth_required": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.task.approval.decide",
+                description="Record approval decision for pending workflow transition.",
+                parameters={
+                    "properties": {
+                        "card_id": {"type": "integer", "minimum": 1},
+                        "reviewer": {"type": "string", "minLength": 1},
+                        "decision": {"type": "string", "enum": ["approved", "rejected"]},
+                        "expected_version": {"type": "integer", "minimum": 1},
+                        "idempotency_key": {"type": "string", "minLength": 1},
+                        "correlation_id": {"type": "string", "minLength": 1},
+                        "reason": {"type": "string"},
+                    },
+                    "required": [
+                        "card_id",
+                        "reviewer",
+                        "decision",
+                        "expected_version",
+                        "idempotency_key",
+                        "correlation_id",
+                    ],
+                },
+                metadata={"category": "management", "auth_required": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.task.events.list",
+                description="List workflow events for a card.",
+                parameters={
+                    "properties": {
+                        "card_id": {"type": "integer", "minimum": 1},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+                        "offset": {"type": "integer", "minimum": 0, "default": 0},
+                    },
+                    "required": ["card_id"],
+                },
+                metadata={"category": "retrieval", "readOnlyHint": True, "auth_required": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.control.pause",
+                description="Pause workflow transitions for a board (admin only).",
+                parameters={
+                    "properties": {
+                        "board_id": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["board_id"],
+                },
+                metadata={"category": "management", "auth_required": True, "admin_only": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.control.resume",
+                description="Resume workflow transitions for a board (admin only).",
+                parameters={
+                    "properties": {
+                        "board_id": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["board_id"],
+                },
+                metadata={"category": "management", "auth_required": True, "admin_only": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.control.drain",
+                description="Enable workflow drain mode for a board (admin only).",
+                parameters={
+                    "properties": {
+                        "board_id": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["board_id"],
+                },
+                metadata={"category": "management", "auth_required": True, "admin_only": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.recovery.list_stale_claims",
+                description="List stale workflow claims optionally scoped to a board.",
+                parameters={
+                    "properties": {
+                        "board_id": {"type": "integer", "minimum": 1},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+                    },
+                },
+                metadata={"category": "retrieval", "readOnlyHint": True, "auth_required": True},
+            ),
+            create_tool_definition(
+                name="kanban.workflow.recovery.force_reassign",
+                description="Force-reassign workflow claim to another owner (admin only).",
+                parameters={
+                    "properties": {
+                        "card_id": {"type": "integer", "minimum": 1},
+                        "new_owner": {"type": "string", "minLength": 1},
+                        "idempotency_key": {"type": "string", "minLength": 1},
+                        "correlation_id": {"type": "string", "minLength": 1},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["card_id", "new_owner", "idempotency_key", "correlation_id"],
+                },
+                metadata={"category": "management", "auth_required": True, "admin_only": True},
+            ),
         ]
 
     async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
@@ -485,6 +713,38 @@ class KanbanModule(BaseModule):
                 return await self._update_checklist_item(args, context)
             if tool_name == "kanban.checklists.items.delete":
                 return await self._delete_checklist_item(args, context)
+            if tool_name == "kanban.workflow.policy.get":
+                return await self._workflow_policy_get(args, context)
+            if tool_name == "kanban.workflow.policy.upsert":
+                return await self._workflow_policy_upsert(args, context)
+            if tool_name == "kanban.workflow.statuses.list":
+                return await self._workflow_statuses_list(args, context)
+            if tool_name == "kanban.workflow.transitions.list":
+                return await self._workflow_transitions_list(args, context)
+            if tool_name == "kanban.workflow.task.state.get":
+                return await self._workflow_task_state_get(args, context)
+            if tool_name == "kanban.workflow.task.state.patch":
+                return await self._workflow_task_state_patch(args, context)
+            if tool_name == "kanban.workflow.task.claim":
+                return await self._workflow_task_claim(args, context)
+            if tool_name == "kanban.workflow.task.release":
+                return await self._workflow_task_release(args, context)
+            if tool_name == "kanban.workflow.task.transition":
+                return await self._workflow_task_transition(args, context)
+            if tool_name == "kanban.workflow.task.approval.decide":
+                return await self._workflow_task_approval_decide(args, context)
+            if tool_name == "kanban.workflow.task.events.list":
+                return await self._workflow_task_events_list(args, context)
+            if tool_name == "kanban.workflow.control.pause":
+                return await self._workflow_control_pause(args, context)
+            if tool_name == "kanban.workflow.control.resume":
+                return await self._workflow_control_resume(args, context)
+            if tool_name == "kanban.workflow.control.drain":
+                return await self._workflow_control_drain(args, context)
+            if tool_name == "kanban.workflow.recovery.list_stale_claims":
+                return await self._workflow_recovery_list_stale_claims(args, context)
+            if tool_name == "kanban.workflow.recovery.force_reassign":
+                return await self._workflow_recovery_force_reassign(args, context)
         except (InputError, ConflictError, NotFoundError, KanbanDBError) as exc:
             raise ValueError(str(exc)) from exc
         raise ValueError(f"Unknown tool: {tool_name}")
@@ -599,6 +859,98 @@ class KanbanModule(BaseModule):
                 raise ValueError("must provide name or checked")
         elif tool_name == "kanban.checklists.items.delete":
             _ensure_positive_int(arguments.get("item_id"), "item_id")
+        elif tool_name in {"kanban.workflow.policy.get", "kanban.workflow.statuses.list", "kanban.workflow.transitions.list"}:
+            _ensure_positive_int(arguments.get("board_id"), "board_id")
+        elif tool_name == "kanban.workflow.policy.upsert":
+            _ensure_positive_int(arguments.get("board_id"), "board_id")
+            lease_ttl = arguments.get("default_lease_ttl_sec")
+            if lease_ttl is not None:
+                _ensure_positive_int(lease_ttl, "default_lease_ttl_sec")
+        elif tool_name == "kanban.workflow.task.state.get":
+            _ensure_positive_int(arguments.get("card_id"), "card_id")
+        elif tool_name == "kanban.workflow.task.state.patch":
+            _ensure_positive_int(arguments.get("card_id"), "card_id")
+            _ensure_positive_int(arguments.get("expected_version"), "expected_version")
+            idem = arguments.get("idempotency_key")
+            if not isinstance(idem, str) or not idem.strip():
+                raise ValueError("idempotency_key must be a non-empty string")
+        elif tool_name == "kanban.workflow.task.claim":
+            _ensure_positive_int(arguments.get("card_id"), "card_id")
+            owner = arguments.get("owner")
+            if not isinstance(owner, str) or not owner.strip():
+                raise ValueError("owner must be a non-empty string")
+            idem = arguments.get("idempotency_key")
+            if not isinstance(idem, str) or not idem.strip():
+                raise ValueError("idempotency_key must be a non-empty string")
+            ttl = arguments.get("lease_ttl_sec")
+            if ttl is not None:
+                _ensure_positive_int(ttl, "lease_ttl_sec")
+        elif tool_name == "kanban.workflow.task.release":
+            _ensure_positive_int(arguments.get("card_id"), "card_id")
+            owner = arguments.get("owner")
+            if not isinstance(owner, str) or not owner.strip():
+                raise ValueError("owner must be a non-empty string")
+            idem = arguments.get("idempotency_key")
+            if not isinstance(idem, str) or not idem.strip():
+                raise ValueError("idempotency_key must be a non-empty string")
+        elif tool_name == "kanban.workflow.task.transition":
+            _ensure_positive_int(arguments.get("card_id"), "card_id")
+            _ensure_positive_int(arguments.get("expected_version"), "expected_version")
+            to_status_key = arguments.get("to_status_key")
+            actor = arguments.get("actor")
+            idem = arguments.get("idempotency_key")
+            corr = arguments.get("correlation_id")
+            if not isinstance(to_status_key, str) or not to_status_key.strip():
+                raise ValueError("to_status_key must be a non-empty string")
+            if not isinstance(actor, str) or not actor.strip():
+                raise ValueError("actor must be a non-empty string")
+            if not isinstance(idem, str) or not idem.strip():
+                raise ValueError("idempotency_key must be a non-empty string")
+            if not isinstance(corr, str) or not corr.strip():
+                raise ValueError("correlation_id must be a non-empty string")
+        elif tool_name == "kanban.workflow.task.approval.decide":
+            _ensure_positive_int(arguments.get("card_id"), "card_id")
+            _ensure_positive_int(arguments.get("expected_version"), "expected_version")
+            reviewer = arguments.get("reviewer")
+            decision = arguments.get("decision")
+            idem = arguments.get("idempotency_key")
+            corr = arguments.get("correlation_id")
+            if not isinstance(reviewer, str) or not reviewer.strip():
+                raise ValueError("reviewer must be a non-empty string")
+            if decision not in {"approved", "rejected"}:
+                raise ValueError("decision must be 'approved' or 'rejected'")
+            if not isinstance(idem, str) or not idem.strip():
+                raise ValueError("idempotency_key must be a non-empty string")
+            if not isinstance(corr, str) or not corr.strip():
+                raise ValueError("correlation_id must be a non-empty string")
+        elif tool_name == "kanban.workflow.task.events.list":
+            _ensure_positive_int(arguments.get("card_id"), "card_id")
+            limit = int(arguments.get("limit", 100))
+            offset = int(arguments.get("offset", 0))
+            if limit < 1 or limit > 500:
+                raise ValueError("limit must be 1..500")
+            if offset < 0:
+                raise ValueError("offset must be >= 0")
+        elif tool_name in {"kanban.workflow.control.pause", "kanban.workflow.control.resume", "kanban.workflow.control.drain"}:
+            _ensure_positive_int(arguments.get("board_id"), "board_id")
+        elif tool_name == "kanban.workflow.recovery.list_stale_claims":
+            board_id = arguments.get("board_id")
+            if board_id is not None:
+                _ensure_positive_int(board_id, "board_id")
+            limit = int(arguments.get("limit", 100))
+            if limit < 1 or limit > 500:
+                raise ValueError("limit must be 1..500")
+        elif tool_name == "kanban.workflow.recovery.force_reassign":
+            _ensure_positive_int(arguments.get("card_id"), "card_id")
+            new_owner = arguments.get("new_owner")
+            idem = arguments.get("idempotency_key")
+            corr = arguments.get("correlation_id")
+            if not isinstance(new_owner, str) or not new_owner.strip():
+                raise ValueError("new_owner must be a non-empty string")
+            if not isinstance(idem, str) or not idem.strip():
+                raise ValueError("idempotency_key must be a non-empty string")
+            if not isinstance(corr, str) or not corr.strip():
+                raise ValueError("correlation_id must be a non-empty string")
 
     def _open_db(self, context: Any) -> KanbanDB:
         if context is None or not getattr(context, "db_paths", None):
@@ -1181,3 +1533,231 @@ class KanbanModule(BaseModule):
         db = self._open_db(context)
         deleted = db.delete_checklist_item(item_id)
         return {"deleted": bool(deleted), "item_id": item_id}
+
+    def _is_admin(self, context: Any | None) -> bool:
+        try:
+            if bool(getattr(context, "is_admin", False)):
+                return True
+            roles = (getattr(context, "metadata", {}) or {}).get("roles")
+            return isinstance(roles, list) and any(str(r).lower() == "admin" for r in roles)
+        except (AttributeError, TypeError, ValueError):
+            return False
+
+    def _require_admin(self, context: Any | None) -> None:
+        if not self._is_admin(context):
+            raise ValueError("forbidden: admin privileges required")
+
+    async def _workflow_policy_get(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        board_id = _ensure_positive_int(args.get("board_id"), "board_id")
+        return await asyncio.to_thread(self._workflow_policy_get_sync, context, board_id)
+
+    def _workflow_policy_get_sync(self, context: Any | None, board_id: int) -> dict[str, Any]:
+        db = self._open_db(context)
+        policy = db.get_workflow_policy(board_id)
+        if not policy:
+            raise NotFoundError("Workflow policy not found", entity="workflow_policy", entity_id=board_id)
+        return {"policy": policy}
+
+    async def _workflow_policy_upsert(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        board_id = _ensure_positive_int(args.get("board_id"), "board_id")
+        return await asyncio.to_thread(self._workflow_policy_upsert_sync, context, board_id, args)
+
+    def _workflow_policy_upsert_sync(self, context: Any | None, board_id: int, args: dict[str, Any]) -> dict[str, Any]:
+        db = self._open_db(context)
+        upsert_kwargs: dict[str, Any] = {
+            "board_id": board_id,
+            "statuses": args.get("statuses"),
+            "transitions": args.get("transitions"),
+            "is_paused": bool(args.get("is_paused", False)),
+            "is_draining": bool(args.get("is_draining", False)),
+            "default_lease_ttl_sec": int(args.get("default_lease_ttl_sec", 900)),
+            "strict_projection": bool(args.get("strict_projection", True)),
+        }
+        if "metadata" in args:
+            upsert_kwargs["metadata"] = args.get("metadata")
+
+        policy = db.upsert_workflow_policy(
+            **upsert_kwargs,
+        )
+        return {"policy": policy}
+
+    async def _workflow_statuses_list(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        board_id = _ensure_positive_int(args.get("board_id"), "board_id")
+        return await asyncio.to_thread(self._workflow_statuses_list_sync, context, board_id)
+
+    def _workflow_statuses_list_sync(self, context: Any | None, board_id: int) -> dict[str, Any]:
+        db = self._open_db(context)
+        return {"board_id": board_id, "statuses": db.list_workflow_statuses(board_id)}
+
+    async def _workflow_transitions_list(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        board_id = _ensure_positive_int(args.get("board_id"), "board_id")
+        return await asyncio.to_thread(self._workflow_transitions_list_sync, context, board_id)
+
+    def _workflow_transitions_list_sync(self, context: Any | None, board_id: int) -> dict[str, Any]:
+        db = self._open_db(context)
+        return {"board_id": board_id, "transitions": db.list_workflow_transitions(board_id)}
+
+    async def _workflow_task_state_get(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        card_id = _ensure_positive_int(args.get("card_id"), "card_id")
+        return await asyncio.to_thread(self._workflow_task_state_get_sync, context, card_id)
+
+    def _workflow_task_state_get_sync(self, context: Any | None, card_id: int) -> dict[str, Any]:
+        db = self._open_db(context)
+        return {"state": db.get_card_workflow_state(card_id)}
+
+    async def _workflow_task_state_patch(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        return await asyncio.to_thread(self._workflow_task_state_patch_sync, context, args)
+
+    def _workflow_task_state_patch_sync(self, context: Any | None, args: dict[str, Any]) -> dict[str, Any]:
+        db = self._open_db(context)
+        state = db.patch_card_workflow_state(
+            card_id=_ensure_positive_int(args.get("card_id"), "card_id"),
+            workflow_status_key=args.get("workflow_status_key"),
+            expected_version=_ensure_positive_int(args.get("expected_version"), "expected_version"),
+            lease_owner=args.get("lease_owner"),
+            idempotency_key=str(args.get("idempotency_key")).strip(),
+            correlation_id=args.get("correlation_id"),
+            last_actor=args.get("last_actor"),
+        )
+        return {"state": state}
+
+    async def _workflow_task_claim(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        return await asyncio.to_thread(self._workflow_task_claim_sync, context, args)
+
+    def _workflow_task_claim_sync(self, context: Any | None, args: dict[str, Any]) -> dict[str, Any]:
+        db = self._open_db(context)
+        state = db.claim_card_workflow(
+            card_id=_ensure_positive_int(args.get("card_id"), "card_id"),
+            owner=str(args.get("owner")).strip(),
+            lease_ttl_sec=args.get("lease_ttl_sec"),
+            idempotency_key=str(args.get("idempotency_key")).strip(),
+            correlation_id=args.get("correlation_id"),
+        )
+        return {"state": state}
+
+    async def _workflow_task_release(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        return await asyncio.to_thread(self._workflow_task_release_sync, context, args)
+
+    def _workflow_task_release_sync(self, context: Any | None, args: dict[str, Any]) -> dict[str, Any]:
+        db = self._open_db(context)
+        state = db.release_card_workflow(
+            card_id=_ensure_positive_int(args.get("card_id"), "card_id"),
+            owner=str(args.get("owner")).strip(),
+            idempotency_key=str(args.get("idempotency_key")).strip(),
+            correlation_id=args.get("correlation_id"),
+        )
+        return {"state": state}
+
+    async def _workflow_task_transition(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        return await asyncio.to_thread(self._workflow_task_transition_sync, context, args)
+
+    def _workflow_task_transition_sync(self, context: Any | None, args: dict[str, Any]) -> dict[str, Any]:
+        db = self._open_db(context)
+        state = db.transition_card_workflow(
+            card_id=_ensure_positive_int(args.get("card_id"), "card_id"),
+            to_status_key=str(args.get("to_status_key")).strip(),
+            actor=str(args.get("actor")).strip(),
+            expected_version=_ensure_positive_int(args.get("expected_version"), "expected_version"),
+            idempotency_key=str(args.get("idempotency_key")).strip(),
+            correlation_id=str(args.get("correlation_id")).strip(),
+            reason=args.get("reason"),
+        )
+        return {"state": state}
+
+    async def _workflow_task_approval_decide(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        return await asyncio.to_thread(self._workflow_task_approval_decide_sync, context, args)
+
+    def _workflow_task_approval_decide_sync(self, context: Any | None, args: dict[str, Any]) -> dict[str, Any]:
+        db = self._open_db(context)
+        state = db.decide_card_workflow_approval(
+            card_id=_ensure_positive_int(args.get("card_id"), "card_id"),
+            reviewer=str(args.get("reviewer")).strip(),
+            decision=str(args.get("decision")).strip(),
+            expected_version=_ensure_positive_int(args.get("expected_version"), "expected_version"),
+            idempotency_key=str(args.get("idempotency_key")).strip(),
+            correlation_id=str(args.get("correlation_id")).strip(),
+            reason=args.get("reason"),
+        )
+        return {"state": state}
+
+    async def _workflow_task_events_list(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        card_id = _ensure_positive_int(args.get("card_id"), "card_id")
+        limit = int(args.get("limit", 100))
+        offset = int(args.get("offset", 0))
+        return await asyncio.to_thread(self._workflow_task_events_list_sync, context, card_id, limit, offset)
+
+    def _workflow_task_events_list_sync(
+        self,
+        context: Any | None,
+        card_id: int,
+        limit: int,
+        offset: int,
+    ) -> dict[str, Any]:
+        db = self._open_db(context)
+        events = db.list_card_workflow_events(card_id=card_id, limit=limit, offset=offset)
+        return {"card_id": card_id, "events": events, "limit": limit, "offset": offset}
+
+    async def _workflow_control_pause(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        board_id = _ensure_positive_int(args.get("board_id"), "board_id")
+        return await asyncio.to_thread(self._workflow_control_pause_sync, context, board_id)
+
+    def _workflow_control_pause_sync(self, context: Any | None, board_id: int) -> dict[str, Any]:
+        self._require_admin(context)
+        db = self._open_db(context)
+        updated = db.update_workflow_policy_flags(board_id=board_id, is_paused=True)
+        return {"success": True, "policy": updated}
+
+    async def _workflow_control_resume(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        board_id = _ensure_positive_int(args.get("board_id"), "board_id")
+        return await asyncio.to_thread(self._workflow_control_resume_sync, context, board_id)
+
+    def _workflow_control_resume_sync(self, context: Any | None, board_id: int) -> dict[str, Any]:
+        self._require_admin(context)
+        db = self._open_db(context)
+        updated = db.update_workflow_policy_flags(board_id=board_id, is_paused=False)
+        return {"success": True, "policy": updated}
+
+    async def _workflow_control_drain(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        board_id = _ensure_positive_int(args.get("board_id"), "board_id")
+        return await asyncio.to_thread(self._workflow_control_drain_sync, context, board_id)
+
+    def _workflow_control_drain_sync(self, context: Any | None, board_id: int) -> dict[str, Any]:
+        self._require_admin(context)
+        db = self._open_db(context)
+        updated = db.update_workflow_policy_flags(board_id=board_id, is_draining=True)
+        return {"success": True, "policy": updated}
+
+    async def _workflow_recovery_list_stale_claims(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        board_id = args.get("board_id")
+        board_id_val = _ensure_positive_int(board_id, "board_id") if board_id is not None else None
+        limit = int(args.get("limit", 100))
+        return await asyncio.to_thread(
+            self._workflow_recovery_list_stale_claims_sync,
+            context,
+            board_id_val,
+            limit,
+        )
+
+    def _workflow_recovery_list_stale_claims_sync(
+        self,
+        context: Any | None,
+        board_id: int | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        db = self._open_db(context)
+        return {"stale_claims": db.list_stale_workflow_claims(board_id=board_id, limit=limit)}
+
+    async def _workflow_recovery_force_reassign(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
+        return await asyncio.to_thread(self._workflow_recovery_force_reassign_sync, context, args)
+
+    def _workflow_recovery_force_reassign_sync(self, context: Any | None, args: dict[str, Any]) -> dict[str, Any]:
+        self._require_admin(context)
+        db = self._open_db(context)
+        state = db.force_reassign_workflow_claim(
+            card_id=_ensure_positive_int(args.get("card_id"), "card_id"),
+            new_owner=str(args.get("new_owner")).strip(),
+            idempotency_key=str(args.get("idempotency_key")).strip(),
+            correlation_id=str(args.get("correlation_id")).strip(),
+            reason=args.get("reason"),
+        )
+        return {"state": state}
