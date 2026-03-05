@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.29] 2026-03-05
+
+### Added
+
+- Moderation per-user phrase rule support across schema, runtime, and UX:
+  - Added typed per-user override `rules` model (`id`, `pattern`, `is_regex`, `action`, `phase`) to moderation schemas.
+  - Added runtime compilation of per-user rules with literal/regex handling and safety checks, then merged compiled rules into effective moderation policy resolution.
+  - Added non-advanced Moderation Playground User-scope quick composer for phrase-list management:
+    - `Banlist` entries map to `block`
+    - `Notify list` entries map to `warn`
+    - Optional regex toggle, per-item removal, and list views for `Banned phrases` and `Notify phrases`.
+- Added moderation API and service test coverage for per-user rules:
+  - Added contract coverage for `GET/PUT /api/v1/moderation/users/{user_id}` with `rules` payloads.
+  - Added unit coverage for per-user rule compilation, dangerous-regex rejection, effective-policy merge behavior, and phase-aware action behavior.
+- Added frontend service contract and component coverage for phrase-list workflows:
+  - Added moderation service contract tests to verify rules roundtrip in user override requests/responses.
+  - Added Moderation Playground quick-list tests for rendering, add/remove flows, duplicate and invalid-regex validation, and save-payload assertions.
+
+### Changed
+
+- Enhanced moderation policy snapshots to include per-rule `phase` metadata alongside existing pattern/action/replacement/category fields.
+- Updated Moderation Playground override payload normalization/comparison so `rules` participate in dirty-state detection and save/reset lifecycle.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed user override loading/reset normalization so persisted `rules` are preserved in draft state and correctly re-applied.
+- Fixed Moderation Playground User ID input suffix rendering to remain structurally stable, preventing focus-loss behavior from dynamic suffix mount/unmount.
+
 ## [0.1.28] 2026-03-04
 
 ### Added
