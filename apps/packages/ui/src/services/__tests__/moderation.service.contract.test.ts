@@ -1,36 +1,84 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { getUserOverride } from "@/services/moderation"
-
-const { bgRequestMock } = vi.hoisted(() => ({
-  bgRequestMock: vi.fn()
+const mocks = vi.hoisted(() => ({
+  bgRequest: vi.fn()
 }))
 
 vi.mock("@/services/background-proxy", () => ({
-  bgRequest: bgRequestMock
+  bgRequest: (...args: unknown[]) => mocks.bgRequest(...args)
 }))
 
-describe("moderation service contracts", () => {
+import {
+  getUserOverride,
+  setUserOverride,
+  type ModerationUserOverride
+} from "@/services/moderation"
+
+describe("moderation service contract", () => {
   beforeEach(() => {
-    bgRequestMock.mockReset()
+    vi.clearAllMocks()
   })
 
-  it("requests encoded user override path", async () => {
-    bgRequestMock.mockResolvedValue({ exists: false, override: {} })
-
-    await getUserOverride("user/one")
-
-    expect(bgRequestMock).toHaveBeenCalledWith({
-      path: "/api/v1/moderation/users/user%2Fone",
-      method: "GET"
+  it("returns rules from getUserOverride payload", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      enabled: true,
+      rules: [
+        {
+          id: "r1",
+          pattern: "bad",
+          is_regex: false,
+          action: "block",
+          phase: "both"
+        }
+      ]
     })
+
+    const response = await getUserOverride("alice")
+
+    expect((response as any).rules?.[0]).toMatchObject({
+      id: "r1",
+      action: "block",
+      phase: "both"
+    })
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "GET",
+        path: "/api/v1/moderation/users/alice"
+      })
+    )
   })
 
-  it("returns explicit existence metadata for missing override", async () => {
-    bgRequestMock.mockResolvedValue({ exists: false, override: {} })
+  it("sends rules in setUserOverride payload", async () => {
+    const body: ModerationUserOverride = {
+      enabled: true,
+      rules: [
+        {
+          id: "n1",
+          pattern: "heads up",
+          is_regex: false,
+          action: "warn",
+          phase: "both"
+        }
+      ]
+    }
+    mocks.bgRequest.mockResolvedValue({ persisted: true })
 
-    const response = await getUserOverride("new-user")
+    await setUserOverride("alice", body)
 
-    expect(response).toEqual({ exists: false, override: {} })
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "PUT",
+        path: "/api/v1/moderation/users/alice",
+        body: expect.objectContaining({
+          rules: [
+            expect.objectContaining({
+              id: "n1",
+              action: "warn",
+              phase: "both"
+            })
+          ]
+        })
+      })
+    )
   })
 })

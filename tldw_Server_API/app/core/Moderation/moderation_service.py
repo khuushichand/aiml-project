@@ -85,10 +85,19 @@ class ModerationPolicy:
                             "pattern": p.regex.pattern,
                             "action": p.action or "",
                             "replacement": p.replacement or "",
+                            "phase": p.phase or "both",
                             "categories": ",".join(sorted(cats)) if cats else "",
                         })
                     else:
-                        rules.append({"pattern": getattr(p, 'pattern', ''), "action": "", "replacement": "", "categories": ""})
+                        rules.append(
+                            {
+                                "pattern": getattr(p, 'pattern', ''),
+                                "action": "",
+                                "replacement": "",
+                                "phase": "both",
+                                "categories": "",
+                            }
+                        )
         except _MODERATION_NONCRITICAL_EXCEPTIONS:
             rules = []
         return {
@@ -112,6 +121,7 @@ class PatternRule:
     action: str | None = None  # block | redact | warn | None
     replacement: str | None = None  # only used when action=redact
     categories: set[str] | None = None  # e.g., {"pii", "confidential"}
+    phase: str = "both"  # input | output | both
 
 
 class ModerationService:
@@ -641,6 +651,15 @@ class ModerationService:
             block_patterns=list(p.block_patterns or []),  # avoid mutating shared list
             categories_enabled=self._resolve_categories_override(u, p.categories_enabled),
         )
+        rules_raw = u.get("rules")
+        if isinstance(rules_raw, list):
+            compiled_rules: list[PatternRule] = []
+            for raw_rule in rules_raw:
+                compiled = self._compile_user_rule(raw_rule)
+                if compiled is not None:
+                    compiled_rules.append(compiled)
+            if compiled_rules:
+                policy.block_patterns.extend(compiled_rules)
         return policy
 
     def _resolve_categories_override(
@@ -689,6 +708,43 @@ class ModerationService:
                     return f"invalid {key}: {override.get(key)}"
         return None
 
+    def _validate_override_rules_strict(self, override: dict[str, object]) -> str | None:
+        """Validate per-user override rules for API writes.
+
+        Returns a descriptive validation error string when invalid, else ``None``.
+        """
+        rules_raw = (override or {}).get("rules")
+        if rules_raw is None:
+            return None
+        if not isinstance(rules_raw, list):
+            return "invalid rules: expected a list"
+        for idx, raw in enumerate(rules_raw):
+            if not isinstance(raw, dict):
+                return f"invalid rule at index {idx}: expected object"
+            rule_id = str(raw.get("id", "")).strip()
+            pattern = str(raw.get("pattern", "")).strip()
+            action = str(raw.get("action", "")).strip().lower()
+            phase = str(raw.get("phase", "both")).strip().lower()
+            is_regex_raw = raw.get("is_regex", False)
+            if not rule_id:
+                return f"invalid rule id at index {idx}"
+            if not pattern:
+                return f"invalid rule pattern at index {idx}"
+            if action not in {"block", "warn"}:
+                return f"invalid rule action: {raw.get('action')}"
+            if phase not in {"input", "output", "both"}:
+                return f"invalid rule phase: {raw.get('phase')}"
+            if "is_regex" in raw and not isinstance(is_regex_raw, bool):
+                return f"invalid rule is_regex at index {idx}: expected boolean"
+            if bool(is_regex_raw):
+                if self._is_regex_dangerous(pattern):
+                    return f"dangerous regex in rule: {rule_id}"
+                try:
+                    re.compile(pattern, flags=re.IGNORECASE)
+                except re.error:
+                    return f"invalid regex in rule: {rule_id}"
+        return None
+
     def _sanitize_user_override(self, override: dict[str, object]) -> dict[str, object]:
         out = self._normalize_override_actions(override)
         for key in ("input_action", "output_action"):
@@ -697,13 +753,121 @@ class ModerationService:
                 if val not in self._ALLOWED_ACTIONS:
                     logger.warning(f"Invalid moderation override action '{out.get(key)}' for {key}; dropping value")
                     out.pop(key, None)
+        rules_raw = out.get("rules")
+        if rules_raw is None:
+            return out
+        if not isinstance(rules_raw, list):
+            out.pop("rules", None)
+            return out
+        normalized_rules: list[dict[str, object]] = []
+        for raw in rules_raw:
+            if not isinstance(raw, dict):
+                continue
+            rule_id = str(raw.get("id", "")).strip()
+            pattern = str(raw.get("pattern", "")).strip()
+            action = str(raw.get("action", "")).strip().lower()
+            phase = str(raw.get("phase", "both")).strip().lower()
+            parsed_is_regex = self._parse_bool_value(raw.get("is_regex", False))
+            if parsed_is_regex is None:
+                continue
+            is_regex = parsed_is_regex
+            if not rule_id or not pattern or action not in {"block", "warn"}:
+                continue
+            if phase not in {"input", "output", "both"}:
+                continue
+            if is_regex:
+                if self._is_regex_dangerous(pattern):
+                    continue
+                try:
+                    re.compile(pattern, flags=re.IGNORECASE)
+                except re.error:
+                    continue
+            normalized_rules.append(
+                {
+                    "id": rule_id,
+                    "pattern": pattern,
+                    "is_regex": is_regex,
+                    "action": action,
+                    "phase": phase,
+                }
+            )
+        if not normalized_rules and rules_raw:
+            logger.warning("Dropped invalid moderation override rules during sanitize")
+        out["rules"] = normalized_rules
         return out
+
+    def _compile_user_rule(self, raw_rule: object) -> PatternRule | None:
+        """Compile a per-user override rule into a PatternRule."""
+        if not isinstance(raw_rule, dict):
+            return None
+        rule_id = str(raw_rule.get("id", "")).strip()
+        pattern = str(raw_rule.get("pattern", "")).strip()
+        action = str(raw_rule.get("action", "")).strip().lower()
+        phase = str(raw_rule.get("phase", "both")).strip().lower()
+        parsed_is_regex = self._parse_bool_value(raw_rule.get("is_regex", False))
+        if parsed_is_regex is None:
+            logger.warning(f"Skipped per-user rule with invalid is_regex: {rule_id or '<unknown>'}")
+            return None
+        is_regex = parsed_is_regex
+
+        if not pattern or action not in {"block", "warn"}:
+            return None
+        if phase not in {"input", "output", "both"}:
+            phase = "both"
+
+        try:
+            if is_regex:
+                if self._is_regex_dangerous(pattern):
+                    logger.warning(f"Skipped dangerous per-user regex rule: {rule_id or '<unknown>'}")
+                    return None
+                compiled = re.compile(pattern, flags=re.IGNORECASE)
+            else:
+                compiled = re.compile(re.escape(pattern), flags=re.IGNORECASE)
+        except re.error:
+            logger.warning(f"Skipped invalid per-user regex rule: {rule_id or '<unknown>'}")
+            return None
+
+        return PatternRule(
+            regex=compiled,
+            action=action,
+            replacement=None,
+            # Per-user quick-list rules are category-agnostic and should still apply
+            # when category filtering is enabled.
+            categories={"*"},
+            phase=phase,
+        )
 
     @classmethod
     def _effective_rule_categories(cls, rule: PatternRule) -> set[str]:
         cats = rule.categories or set()
         normalized = {str(c).strip().lower() for c in cats if str(c).strip()}
         return normalized if normalized else {cls._UNCATEGORIZED_CATEGORY}
+
+    @staticmethod
+    def _rule_applies_to_phase(rule: PatternRule, phase: str | None) -> bool:
+        """Return whether a rule should run for the requested moderation phase."""
+        if phase not in {"input", "output"}:
+            return True
+        rule_phase = str(getattr(rule, "phase", "both") or "both").strip().lower()
+        if rule_phase not in {"input", "output", "both"}:
+            rule_phase = "both"
+        return rule_phase in {"both", phase}
+
+    @classmethod
+    def _rule_matches_enabled_categories(
+        cls,
+        rule: PatternRule,
+        categories_enabled: set[str] | None,
+    ) -> bool:
+        """Return whether a rule is allowed by the active category filter."""
+        if not categories_enabled:
+            return True
+        if "*" in categories_enabled:
+            return True
+        rcats = cls._effective_rule_categories(rule)
+        if "*" in rcats:
+            return True
+        return bool(rcats & categories_enabled)
 
     def effective_policy_snapshot(self, user_id: str | None) -> dict[str, object]:
         """Return a serializable dict of the effective policy for inspection."""
@@ -755,11 +919,11 @@ class ModerationService:
         best_match_pos: int | None = None
         best_replacement: str | None = None
         for rule in policy.block_patterns:
+            if isinstance(rule, PatternRule) and not self._rule_applies_to_phase(rule, phase):
+                continue
             # Category gating mirrors evaluate_action() behavior
-            if isinstance(rule, PatternRule) and policy.categories_enabled:
-                rcats = self._effective_rule_categories(rule)
-                if not (rcats & policy.categories_enabled):
-                    continue
+            if isinstance(rule, PatternRule) and not self._rule_matches_enabled_categories(rule, policy.categories_enabled):
+                continue
             pat = rule.regex if isinstance(rule, PatternRule) else rule
             match_span = self._find_match_span(pat, text)
             if not match_span:
@@ -836,10 +1000,8 @@ class ModerationService:
         redacted = text
         for rule in policy.block_patterns:
             # Respect category gating similar to evaluate_action/check_text
-            if isinstance(rule, PatternRule) and policy.categories_enabled:
-                rcats = self._effective_rule_categories(rule)
-                if not (rcats & policy.categories_enabled):
-                    continue
+            if isinstance(rule, PatternRule) and not self._rule_matches_enabled_categories(rule, policy.categories_enabled):
+                continue
             pat = rule.regex if isinstance(rule, PatternRule) else rule
             repl = None
             if isinstance(rule, PatternRule) and rule.replacement:
@@ -873,10 +1035,8 @@ class ModerationService:
         total_count = 0
         for rule in policy.block_patterns:
             # Respect category gating similar to evaluate_action/check_text
-            if isinstance(rule, PatternRule) and policy.categories_enabled:
-                rcats = self._effective_rule_categories(rule)
-                if not (rcats & policy.categories_enabled):
-                    continue
+            if isinstance(rule, PatternRule) and not self._rule_matches_enabled_categories(rule, policy.categories_enabled):
+                continue
             pat = rule.regex if isinstance(rule, PatternRule) else rule
             repl = None
             if isinstance(rule, PatternRule) and rule.replacement:
@@ -928,11 +1088,11 @@ class ModerationService:
         best_match_span: tuple[int, int] | None = None
         for rule in policy.block_patterns or []:
             pat = rule.regex if isinstance(rule, PatternRule) else rule
+            if isinstance(rule, PatternRule) and not self._rule_applies_to_phase(rule, phase):
+                continue
             # Category gating
-            if isinstance(rule, PatternRule) and policy.categories_enabled:
-                rcats = self._effective_rule_categories(rule)
-                if not (rcats & policy.categories_enabled):
-                    continue
+            if isinstance(rule, PatternRule) and not self._rule_matches_enabled_categories(rule, policy.categories_enabled):
+                continue
             match_span = self._find_match_span(pat, text)
             if not match_span:
                 continue
@@ -1083,15 +1243,19 @@ class ModerationService:
     def set_user_override(self, user_id: str, override: dict[str, object]) -> dict[str, object]:
         """Create or update a user override and persist to file if configured.
 
-        Returns a dict {ok: bool, persisted: bool, error?: str}
+        Returns a dict ``{ok, persisted, error?, error_type?}``, where
+        ``error_type`` is ``validation`` or ``persistence`` when ``ok`` is false.
         """
         if not user_id:
-            return {"ok": False, "persisted": False, "error": "user_id required"}
+            return {"ok": False, "persisted": False, "error": "user_id required", "error_type": "validation"}
         err = self._validate_override_actions(override)
         if err:
-            return {"ok": False, "persisted": False, "error": err}
+            return {"ok": False, "persisted": False, "error": err, "error_type": "validation"}
+        rule_err = self._validate_override_rules_strict(override)
+        if rule_err:
+            return {"ok": False, "persisted": False, "error": rule_err, "error_type": "validation"}
         with self._lock:
-            normalized = self._normalize_override_actions(override)
+            normalized = self._sanitize_user_override(override)
             self._user_overrides[str(user_id)] = {str(k): v for k, v in normalized.items()}
             path = getattr(self, "_user_overrides_path", None)
             if not path:
@@ -1107,7 +1271,7 @@ class ModerationService:
                 return {"ok": True, "persisted": True}
             except _MODERATION_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to save user overrides: {e}")
-                return {"ok": False, "persisted": False, "error": str(e)}
+                return {"ok": False, "persisted": False, "error": str(e), "error_type": "persistence"}
 
     def delete_user_override(self, user_id: str) -> dict[str, object]:
         """Delete a user override and persist to file if configured.

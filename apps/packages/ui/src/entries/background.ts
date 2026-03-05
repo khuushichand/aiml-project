@@ -2622,6 +2622,7 @@ export default defineBackground({
               }
               safePost({
                 event: "error",
+                status: resp.status,
                 message: formatErrorMessage(errMsg, `HTTP ${resp.status}`)
               })
               return

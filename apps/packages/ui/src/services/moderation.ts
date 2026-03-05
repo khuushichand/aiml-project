@@ -8,6 +8,14 @@ import { appendPathQuery, toAllowedPath } from "@/services/tldw/path-utils"
 
 export type ModerationAction = "block" | "redact" | "warn" | "pass"
 
+export interface ModerationOverrideRule {
+  id: string
+  pattern: string
+  is_regex: boolean
+  action: "block" | "warn"
+  phase: "input" | "output" | "both"
+}
+
 export interface ModerationSettingsResponse {
   pii_enabled?: boolean | null
   categories_enabled?: string[] | null
@@ -31,6 +39,7 @@ export interface ModerationUserOverride {
   output_action?: "block" | "redact" | "warn"
   redact_replacement?: string
   categories_enabled?: string[] | string
+  rules?: ModerationOverrideRule[]
 }
 
 export interface ModerationUserOverridesResponse {
