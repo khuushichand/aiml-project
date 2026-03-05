@@ -41,6 +41,7 @@ def test_transition_requires_lease_and_expected_version(
             actor="builder",
             expected_version=initial_state["version"],
             idempotency_key="transition-without-lease",
+            correlation_id="corr-transition-without-lease",
             reason="start implementation",
         )
 
@@ -58,7 +59,44 @@ def test_transition_requires_lease_and_expected_version(
             actor="builder",
             expected_version=initial_state["version"],
             idempotency_key="transition-wrong-version",
+            correlation_id="corr-transition-wrong-version",
             reason="start implementation",
+        )
+
+
+def test_transition_blocked_when_policy_paused(
+    kanban_db: KanbanDB,
+    sample_board: dict[str, Any],
+    sample_card: dict[str, Any],
+) -> None:
+    """Transitions should be blocked when workflow policy is paused."""
+    kanban_db.upsert_workflow_policy(
+        board_id=sample_board["id"],
+        statuses=[
+            {"status_key": "todo", "display_name": "To Do", "sort_order": 0},
+            {"status_key": "impl", "display_name": "Implement", "sort_order": 1},
+        ],
+        transitions=[
+            {
+                "from_status_key": "todo",
+                "to_status_key": "impl",
+                "requires_claim": False,
+                "requires_approval": False,
+            }
+        ],
+        is_paused=True,
+    )
+
+    state = kanban_db.get_card_workflow_state(sample_card["id"])
+    with pytest.raises(ConflictError, match="policy_paused"):
+        kanban_db.transition_card_workflow(
+            card_id=sample_card["id"],
+            to_status_key="impl",
+            actor="builder",
+            expected_version=state["version"],
+            idempotency_key="paused-transition",
+            correlation_id="corr-paused-transition",
+            reason="attempt while paused",
         )
 
 
@@ -93,6 +131,7 @@ def test_transition_approval_flow_and_decision(
         actor="planner",
         expected_version=initial_state["version"],
         idempotency_key="approval-request",
+        correlation_id="corr-approval-request",
         reason="request plan review",
     )
 
@@ -106,6 +145,7 @@ def test_transition_approval_flow_and_decision(
         decision="approved",
         expected_version=pending_state["version"],
         idempotency_key="approval-decision",
+        correlation_id="corr-approval-decision",
         reason="looks good",
     )
 
@@ -117,6 +157,10 @@ def test_transition_approval_flow_and_decision(
     event_types = {event["event_type"] for event in events}
     assert "workflow_approval_requested" in event_types
     assert "workflow_approval_decided" in event_types
+
+    event_by_type = {event["event_type"]: event for event in events}
+    assert event_by_type["workflow_approval_requested"]["correlation_id"] == "corr-approval-request"
+    assert event_by_type["workflow_approval_decided"]["correlation_id"] == "corr-approval-decision"
 
 
 def test_stale_claim_listing_and_force_reassign(
@@ -151,6 +195,7 @@ def test_stale_claim_listing_and_force_reassign(
         card_id=sample_card["id"],
         new_owner="inspector",
         idempotency_key="force-reassign-stale",
+        correlation_id="corr-force-reassign-stale",
         reason="stale claim recovered",
     )
     assert reassigned["lease_owner"] == "inspector"

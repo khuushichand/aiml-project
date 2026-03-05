@@ -913,3 +913,171 @@ class LinkedCardsListResponse(BaseModel):
     linked_type: str = Field(..., description="Type queried")
     linked_id: str = Field(..., description="Content ID queried")
     cards: list[LinkedCardResponse] = Field(..., description="Cards linked to this content")
+
+
+# =============================================================================
+# Workflow Control Schemas (Safe Orchestrator)
+# =============================================================================
+
+
+class WorkflowPolicyStatusConfig(BaseModel):
+    """Status configuration for workflow policy upsert."""
+
+    status_key: str = Field(..., min_length=1, max_length=128)
+    display_name: str = Field(..., min_length=1, max_length=255)
+    is_terminal: bool = Field(False)
+    sort_order: int = Field(0)
+    is_active: bool = Field(True)
+
+
+class WorkflowPolicyTransitionConfig(BaseModel):
+    """Transition edge configuration for workflow policy upsert."""
+
+    from_status_key: str = Field(..., min_length=1, max_length=128)
+    to_status_key: str = Field(..., min_length=1, max_length=128)
+    requires_claim: bool = Field(True)
+    requires_approval: bool = Field(False)
+    approve_to_status_key: Optional[str] = Field(None, min_length=1, max_length=128)
+    reject_to_status_key: Optional[str] = Field(None, min_length=1, max_length=128)
+    auto_move_list_id: Optional[int] = Field(None)
+    max_retries: int = Field(0, ge=0)
+    is_active: bool = Field(True)
+
+
+class WorkflowPolicyUpsertRequest(BaseModel):
+    """Workflow policy upsert payload."""
+
+    statuses: Optional[list[WorkflowPolicyStatusConfig]] = None
+    transitions: Optional[list[WorkflowPolicyTransitionConfig]] = None
+    is_paused: bool = Field(False)
+    is_draining: bool = Field(False)
+    default_lease_ttl_sec: int = Field(900, gt=0)
+    strict_projection: bool = Field(True)
+    metadata: Optional[dict[str, Any]] = None
+
+
+class WorkflowStateResponse(BaseModel):
+    """Workflow runtime state response."""
+
+    card_id: int
+    policy_id: int
+    workflow_status_key: str
+    lease_owner: Optional[str] = None
+    lease_expires_at: Optional[datetime] = None
+    approval_state: str
+    pending_transition_id: Optional[int] = None
+    retry_counters: Optional[dict[str, Any]] = None
+    last_transition_at: Optional[datetime] = None
+    last_actor: Optional[str] = None
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkflowStatePatchRequest(BaseModel):
+    """Patch workflow runtime state payload."""
+
+    workflow_status_key: Optional[str] = Field(None, min_length=1, max_length=128)
+    expected_version: int = Field(..., ge=1)
+    lease_owner: Optional[str] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=255)
+    correlation_id: Optional[str] = Field(None, min_length=1, max_length=255)
+    actor: Optional[str] = Field(None, min_length=1, max_length=255)
+
+
+class WorkflowClaimRequest(BaseModel):
+    """Claim/lease request payload."""
+
+    owner: str = Field(..., min_length=1, max_length=255)
+    lease_ttl_sec: Optional[int] = Field(None, gt=0)
+    idempotency_key: str = Field(..., min_length=1, max_length=255)
+    correlation_id: Optional[str] = Field(None, min_length=1, max_length=255)
+
+
+class WorkflowReleaseRequest(BaseModel):
+    """Release claim payload."""
+
+    owner: str = Field(..., min_length=1, max_length=255)
+    idempotency_key: str = Field(..., min_length=1, max_length=255)
+    correlation_id: Optional[str] = Field(None, min_length=1, max_length=255)
+
+
+class WorkflowTransitionRequest(BaseModel):
+    """Workflow transition payload."""
+
+    to_status_key: str = Field(..., min_length=1, max_length=128)
+    actor: str = Field(..., min_length=1, max_length=255)
+    expected_version: int = Field(..., ge=1)
+    idempotency_key: str = Field(..., min_length=1, max_length=255)
+    reason: Optional[str] = Field(None, max_length=2000)
+    correlation_id: str = Field(..., min_length=1, max_length=255)
+
+
+class WorkflowApprovalDecisionRequest(BaseModel):
+    """Approval decision payload."""
+
+    reviewer: str = Field(..., min_length=1, max_length=255)
+    decision: Literal["approved", "rejected"]
+    expected_version: int = Field(..., ge=1)
+    idempotency_key: str = Field(..., min_length=1, max_length=255)
+    reason: Optional[str] = Field(None, max_length=2000)
+    correlation_id: str = Field(..., min_length=1, max_length=255)
+
+
+class WorkflowForceReassignRequest(BaseModel):
+    """Force-reassign payload."""
+
+    new_owner: str = Field(..., min_length=1, max_length=255)
+    idempotency_key: str = Field(..., min_length=1, max_length=255)
+    reason: Optional[str] = Field(None, max_length=2000)
+    correlation_id: str = Field(..., min_length=1, max_length=255)
+
+
+class WorkflowControlResponse(BaseModel):
+    """Simple success response for workflow controls."""
+
+    success: bool = Field(True)
+    policy: dict[str, Any]
+
+
+class WorkflowEventResponse(BaseModel):
+    """Workflow event response item."""
+
+    id: int
+    card_id: int
+    event_type: str
+    from_status_key: Optional[str] = None
+    to_status_key: Optional[str] = None
+    actor: str
+    reason: Optional[str] = None
+    idempotency_key: str
+    correlation_id: Optional[str] = None
+    before_snapshot: Optional[dict[str, Any]] = None
+    after_snapshot: Optional[dict[str, Any]] = None
+    created_at: datetime
+
+
+class WorkflowEventsListResponse(BaseModel):
+    """Workflow events list response."""
+
+    events: list[WorkflowEventResponse]
+
+
+class WorkflowStaleClaimResponse(BaseModel):
+    """Stale claim item response."""
+
+    card_id: int
+    board_id: int
+    list_id: int
+    title: str
+    workflow_status_key: str
+    lease_owner: str
+    lease_expires_at: datetime
+    version: int
+    updated_at: datetime
+
+
+class WorkflowStaleClaimsListResponse(BaseModel):
+    """Stale claims list response."""
+
+    stale_claims: list[WorkflowStaleClaimResponse]

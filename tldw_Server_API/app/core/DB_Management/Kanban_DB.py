@@ -1347,6 +1347,7 @@ END;
         expected_version: int,
         lease_owner: str | None,
         idempotency_key: str,
+        correlation_id: str | None = None,
         last_actor: str | None = None,
     ) -> dict[str, Any]:
         if expected_version < 1:
@@ -1355,6 +1356,7 @@ END;
             raise InputError("idempotency_key is required")  # noqa: TRY003
 
         actor = (last_actor or self.user_id).strip()
+        corr_id = correlation_id.strip() if correlation_id and correlation_id.strip() else None
 
         with self._lock:
             conn = self._connect()
@@ -1427,8 +1429,8 @@ END;
                     """
                     INSERT INTO kanban_card_workflow_events
                     (card_id, event_type, from_status_key, to_status_key, actor, idempotency_key,
-                     before_snapshot, after_snapshot, created_at)
-                    VALUES (?, 'state_patched', ?, ?, ?, ?, ?, ?, ?)
+                     correlation_id, before_snapshot, after_snapshot, created_at)
+                    VALUES (?, 'state_patched', ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         card_id,
@@ -1436,6 +1438,7 @@ END;
                         updated_state["workflow_status_key"],
                         actor,
                         idempotency_key.strip(),
+                        corr_id,
                         json.dumps(current_state),
                         json.dumps(updated_state),
                         now,
@@ -1454,11 +1457,13 @@ END;
         owner: str,
         lease_ttl_sec: int | None = None,
         idempotency_key: str,
+        correlation_id: str | None = None,
     ) -> dict[str, Any]:
         if not owner or not owner.strip():
             raise InputError("owner is required")  # noqa: TRY003
         if not idempotency_key or not idempotency_key.strip():
             raise InputError("idempotency_key is required")  # noqa: TRY003
+        corr_id = correlation_id.strip() if correlation_id and correlation_id.strip() else None
 
         with self._lock:
             conn = self._connect()
@@ -1514,8 +1519,8 @@ END;
                     """
                     INSERT INTO kanban_card_workflow_events
                     (card_id, event_type, from_status_key, to_status_key, actor, reason, idempotency_key,
-                     before_snapshot, after_snapshot, created_at)
-                    VALUES (?, 'workflow_claimed', ?, ?, ?, ?, ?, ?, ?, ?)
+                     correlation_id, before_snapshot, after_snapshot, created_at)
+                    VALUES (?, 'workflow_claimed', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         card_id,
@@ -1524,6 +1529,7 @@ END;
                         owner.strip(),
                         "claim_acquired",
                         idempotency_key.strip(),
+                        corr_id,
                         json.dumps(current_state),
                         json.dumps(updated_state),
                         now,
@@ -1541,11 +1547,13 @@ END;
         card_id: int,
         owner: str,
         idempotency_key: str,
+        correlation_id: str | None = None,
     ) -> dict[str, Any]:
         if not owner or not owner.strip():
             raise InputError("owner is required")  # noqa: TRY003
         if not idempotency_key or not idempotency_key.strip():
             raise InputError("idempotency_key is required")  # noqa: TRY003
+        corr_id = correlation_id.strip() if correlation_id and correlation_id.strip() else None
 
         with self._lock:
             conn = self._connect()
@@ -1593,8 +1601,8 @@ END;
                     """
                     INSERT INTO kanban_card_workflow_events
                     (card_id, event_type, from_status_key, to_status_key, actor, reason, idempotency_key,
-                     before_snapshot, after_snapshot, created_at)
-                    VALUES (?, 'workflow_released', ?, ?, ?, ?, ?, ?, ?, ?)
+                     correlation_id, before_snapshot, after_snapshot, created_at)
+                    VALUES (?, 'workflow_released', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         card_id,
@@ -1603,6 +1611,7 @@ END;
                         owner.strip(),
                         "claim_released",
                         idempotency_key.strip(),
+                        corr_id,
                         json.dumps(current_state),
                         json.dumps(updated_state),
                         now,
@@ -1622,6 +1631,7 @@ END;
         actor: str,
         expected_version: int,
         idempotency_key: str,
+        correlation_id: str | None = None,
         reason: str | None = None,
     ) -> dict[str, Any]:
         if not to_status_key or not to_status_key.strip():
@@ -1635,12 +1645,20 @@ END;
 
         target_status_key = to_status_key.strip()
         actor_name = actor.strip()
+        corr_id = correlation_id.strip() if correlation_id and correlation_id.strip() else None
 
         with self._lock:
             conn = self._connect()
             try:
                 state_row = self._ensure_card_workflow_state(conn, card_id)
                 current_state = self._row_to_card_workflow_state_dict(state_row)
+
+                policy_row = conn.execute(
+                    "SELECT is_paused FROM board_workflow_policies WHERE id = ?",
+                    (current_state["policy_id"],),
+                ).fetchone()
+                if policy_row and bool(policy_row["is_paused"]):
+                    raise ConflictError("policy_paused", entity="workflow_policy", entity_id=current_state["policy_id"])  # noqa: TRY003
 
                 replay = conn.execute(
                     """
@@ -1719,8 +1737,8 @@ END;
                         """
                         INSERT INTO kanban_card_workflow_events
                         (card_id, event_type, from_status_key, to_status_key, actor, reason, idempotency_key,
-                         before_snapshot, after_snapshot, created_at)
-                        VALUES (?, 'workflow_approval_requested', ?, ?, ?, ?, ?, ?, ?, ?)
+                         correlation_id, before_snapshot, after_snapshot, created_at)
+                        VALUES (?, 'workflow_approval_requested', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             card_id,
@@ -1729,6 +1747,7 @@ END;
                             actor_name,
                             reason,
                             idempotency_key.strip(),
+                            corr_id,
                             json.dumps(current_state),
                             json.dumps(updated_state),
                             now,
@@ -1764,8 +1783,8 @@ END;
                     """
                     INSERT INTO kanban_card_workflow_events
                     (card_id, event_type, from_status_key, to_status_key, actor, reason, idempotency_key,
-                     before_snapshot, after_snapshot, created_at)
-                    VALUES (?, 'workflow_transitioned', ?, ?, ?, ?, ?, ?, ?, ?)
+                     correlation_id, before_snapshot, after_snapshot, created_at)
+                    VALUES (?, 'workflow_transitioned', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         card_id,
@@ -1774,6 +1793,7 @@ END;
                         actor_name,
                         reason,
                         idempotency_key.strip(),
+                        corr_id,
                         json.dumps(current_state),
                         json.dumps(updated_state),
                         now,
@@ -1793,6 +1813,7 @@ END;
         decision: str,
         expected_version: int,
         idempotency_key: str,
+        correlation_id: str | None = None,
         reason: str | None = None,
     ) -> dict[str, Any]:
         if not reviewer or not reviewer.strip():
@@ -1805,6 +1826,7 @@ END;
             raise InputError("idempotency_key is required")  # noqa: TRY003
 
         reviewer_name = reviewer.strip()
+        corr_id = correlation_id.strip() if correlation_id and correlation_id.strip() else None
 
         with self._lock:
             conn = self._connect()
@@ -1883,8 +1905,8 @@ END;
                     """
                     INSERT INTO kanban_card_workflow_events
                     (card_id, event_type, from_status_key, to_status_key, actor, reason, idempotency_key,
-                     before_snapshot, after_snapshot, created_at)
-                    VALUES (?, 'workflow_approval_decided', ?, ?, ?, ?, ?, ?, ?, ?)
+                     correlation_id, before_snapshot, after_snapshot, created_at)
+                    VALUES (?, 'workflow_approval_decided', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         card_id,
@@ -1893,6 +1915,7 @@ END;
                         reviewer_name,
                         reason or decision,
                         idempotency_key.strip(),
+                        corr_id,
                         json.dumps(current_state),
                         json.dumps(updated_state),
                         now,
@@ -2010,6 +2033,7 @@ END;
         card_id: int,
         new_owner: str,
         idempotency_key: str,
+        correlation_id: str | None = None,
         reason: str | None = None,
     ) -> dict[str, Any]:
         if not new_owner or not new_owner.strip():
@@ -2018,6 +2042,7 @@ END;
             raise InputError("idempotency_key is required")  # noqa: TRY003
 
         owner = new_owner.strip()
+        corr_id = correlation_id.strip() if correlation_id and correlation_id.strip() else None
         with self._lock:
             conn = self._connect()
             try:
@@ -2068,8 +2093,8 @@ END;
                     """
                     INSERT INTO kanban_card_workflow_events
                     (card_id, event_type, from_status_key, to_status_key, actor, reason, idempotency_key,
-                     before_snapshot, after_snapshot, created_at)
-                    VALUES (?, 'workflow_claim_reassigned', ?, ?, ?, ?, ?, ?, ?, ?)
+                     correlation_id, before_snapshot, after_snapshot, created_at)
+                    VALUES (?, 'workflow_claim_reassigned', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         card_id,
@@ -2078,6 +2103,7 @@ END;
                         owner,
                         reason,
                         idempotency_key.strip(),
+                        corr_id,
                         json.dumps(current_state),
                         json.dumps(updated_state),
                         now,
