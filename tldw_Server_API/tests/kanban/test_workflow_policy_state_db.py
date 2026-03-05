@@ -72,3 +72,22 @@ def test_get_and_patch_card_workflow_state_lazy_bootstrap(
 
     assert updated["workflow_status_key"] == "impl"
     assert updated["version"] == state["version"] + 1
+
+
+def test_upsert_workflow_policy_preserves_metadata_when_omitted(
+    kanban_db: KanbanDB,
+    sample_board: dict[str, Any],
+) -> None:
+    """Omitted metadata should preserve existing value instead of clearing it."""
+    first = kanban_db.upsert_workflow_policy(
+        board_id=sample_board["id"],
+        metadata={"retain": True},
+    )
+    assert first["metadata"] == {"retain": True}
+
+    second = kanban_db.upsert_workflow_policy(
+        board_id=sample_board["id"],
+        default_lease_ttl_sec=1800,
+    )
+    assert second["default_lease_ttl_sec"] == 1800
+    assert second["metadata"] == {"retain": True}

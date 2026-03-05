@@ -59,6 +59,8 @@ _KANBAN_NONCRITICAL_EXCEPTIONS = (
     ValueError,
 )
 
+_WORKFLOW_METADATA_UNSET = object()
+
 
 # --- Helper Functions ---
 def _utcnow_iso() -> str:
@@ -1028,7 +1030,7 @@ END;
         is_draining: bool = False,
         default_lease_ttl_sec: int = 900,
         strict_projection: bool = True,
-        metadata: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None | object = _WORKFLOW_METADATA_UNSET,
     ) -> dict[str, Any]:
         board = self._get_board_by_id(conn, board_id)
         if not board:
@@ -1045,8 +1047,11 @@ END;
         )
 
         now = _utcnow_iso()
-        metadata_json = json.dumps(metadata) if metadata is not None else None
         policy_row = self._get_workflow_policy_row(conn, board_id)
+        if metadata is _WORKFLOW_METADATA_UNSET:
+            metadata_json = policy_row["metadata"] if policy_row else None
+        else:
+            metadata_json = json.dumps(metadata) if metadata is not None else None
 
         if policy_row:
             policy_id = policy_row["id"]
@@ -1210,7 +1215,7 @@ END;
         is_draining: bool = False,
         default_lease_ttl_sec: int = 900,
         strict_projection: bool = True,
-        metadata: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None | object = _WORKFLOW_METADATA_UNSET,
     ) -> dict[str, Any]:
         with self._lock:
             conn = self._connect()
