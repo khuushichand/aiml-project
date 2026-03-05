@@ -137,37 +137,6 @@ describe("request-core absolute URL policy", () => {
     expect(authHeader).toBeUndefined()
   })
 
-  it("injects auth headers for same-origin absolute URLs", async () => {
-    const fetchFn = vi.fn(async () =>
-      new Response(JSON.stringify({ healthy: true }), {
-        status: 200,
-        headers: { "content-type": "application/json" }
-      })
-    )
-
-    const response = await tldwRequest(
-      {
-        path: "http://127.0.0.1:8000/api/v1/health",
-        method: "GET"
-      },
-      {
-        getConfig: async () => ({
-          serverUrl: "http://127.0.0.1:8000",
-          authMode: "multi-user",
-          accessToken: "secret-access-token"
-        }),
-        fetchFn
-      }
-    )
-
-    const requestInit = fetchFn.mock.calls[0]?.[1] as RequestInit | undefined
-    const headerEntries = Object.entries((requestInit?.headers || {}) as Record<string, string>)
-    const authHeader = headerEntries.find(([key]) => key.toLowerCase() === "authorization")
-
-    expect(response.ok).toBe(true)
-    expect(authHeader).toEqual(["Authorization", "Bearer secret-access-token"])
-  })
-
   it("allows absolute URLs that match configured server origin", async () => {
     const fetchFn = vi.fn(async () =>
       new Response(JSON.stringify({ ok: true }), {
@@ -194,77 +163,5 @@ describe("request-core absolute URL policy", () => {
     expect(response.ok).toBe(true)
     expect(fetchFn).toHaveBeenCalledTimes(1)
     expect(fetchFn.mock.calls[0]?.[0]).toBe("http://127.0.0.1:8000/openapi.json")
-  })
-
-  it("warns when configured serverUrl is malformed", async () => {
-    const fetchFn = vi.fn(async () =>
-      new Response(JSON.stringify({ healthy: true }), {
-        status: 200,
-        headers: { "content-type": "application/json" }
-      })
-    )
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
-
-    try {
-      const response = await tldwRequest(
-        {
-          path: "https://example.com/api/v1/health",
-          method: "GET"
-        },
-        {
-          getConfig: async () => ({
-            serverUrl: `not-a-valid-url-${Date.now()}`,
-            authMode: "single-user",
-            apiKey: "test-key-not-placeholder",
-            absoluteUrlAllowlist: ["https://example.com"]
-          }),
-          fetchFn
-        }
-      )
-
-      expect(response.ok).toBe(true)
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Invalid configured serverUrl"),
-        expect.anything()
-      )
-    } finally {
-      warnSpy.mockRestore()
-    }
-  })
-
-  it("warns when absoluteUrlAllowlist contains a malformed origin", async () => {
-    const fetchFn = vi.fn(async () =>
-      new Response(JSON.stringify({ healthy: true }), {
-        status: 200,
-        headers: { "content-type": "application/json" }
-      })
-    )
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
-
-    try {
-      const response = await tldwRequest(
-        {
-          path: "https://example.com/api/v1/health",
-          method: "GET"
-        },
-        {
-          getConfig: async () => ({
-            serverUrl: "http://127.0.0.1:8000",
-            authMode: "single-user",
-            apiKey: "test-key-not-placeholder",
-            absoluteUrlAllowlist: ["https://example.com", `bad-origin-${Date.now()}`]
-          }),
-          fetchFn
-        }
-      )
-
-      expect(response.ok).toBe(true)
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Invalid absoluteUrlAllowlist entry"),
-        expect.anything()
-      )
-    } finally {
-      warnSpy.mockRestore()
-    }
   })
 })

@@ -186,6 +186,13 @@ def test_validate_payload_allows_tool_choice_none_without_tools():
     assert normalized["tool_choice"] == "none"
 
 
+def test_validate_payload_normalizes_tool_choice_auto_when_tools_empty():
+    payload = {"messages": [], "model": "test", "tool_choice": "auto", "tools": []}
+    normalized = cr.validate_payload("openai", payload)
+    assert normalized.get("tool_choice") == "none"
+    assert normalized.get("tools") is None
+
+
 def test_validate_payload_allows_unknown_response_format_type():
 
 

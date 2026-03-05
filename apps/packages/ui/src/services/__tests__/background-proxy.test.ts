@@ -623,8 +623,8 @@ describe("background proxy fallback safety", () => {
     vi.stubGlobal("fetch", fetchSpy as any)
 
     const { bgStream } = await importProxy()
-    const streamPromise = (async () => {
-      const chunks: string[] = []
+    const chunks: string[] = []
+    try {
       for await (const chunk of bgStream({
         path: "/api/v1/chat/completions",
         method: "POST",
@@ -633,18 +633,12 @@ describe("background proxy fallback safety", () => {
       })) {
         chunks.push(chunk)
       }
-      return chunks
-    })()
-
-    await vi.advanceTimersByTimeAsync(3001)
-    const chunks = await streamPromise
-
-    try {
-      expect(mocks.connect).not.toHaveBeenCalled()
-      expect(fetchSpy).toHaveBeenCalledTimes(1)
-      expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
     } finally {
       vi.unstubAllGlobals()
     }
+
+    expect(mocks.connect).not.toHaveBeenCalled()
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
   })
 })

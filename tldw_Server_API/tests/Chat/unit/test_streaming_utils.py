@@ -71,6 +71,19 @@ class TestStreamingResponseHandler:
         handler.cancel()
         assert handler.is_cancelled is True
 
+    def test_parse_save_callback_result_accepts_loop_events_alias(self):
+        handler = StreamingResponseHandler("conv_123", "gpt-4")
+        message_id, events = handler._parse_save_callback_result(
+            {
+                "saved_message_id": "m-1",
+                "loop_events": [{"event": "run_started", "data": {"run_id": "run_1", "seq": 1}}],
+            }
+        )
+
+        assert message_id == "m-1"
+        assert len(events) == 1
+        assert events[0]["event"] == "run_started"
+
     @pytest.mark.asyncio
     async def test_heartbeat_generator(self):
         """Test heartbeat message generation."""

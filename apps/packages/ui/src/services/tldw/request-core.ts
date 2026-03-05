@@ -146,9 +146,16 @@ const parseConfiguredServerOrigin = (cfg: TldwConfigLike): string | null => {
 
 const absoluteOriginAllowlistFromConfig = (cfg: TldwConfigLike): Set<string> => {
   const out = new Set<string>()
-  const configuredServerOrigin = parseConfiguredServerOrigin(cfg)
-  if (configuredServerOrigin) {
-    out.add(configuredServerOrigin)
+  const configuredServerUrl = String((cfg as Record<string, unknown> | null)?.serverUrl || "").trim()
+  if (configuredServerUrl) {
+    try {
+      const serverParsed = new URL(configuredServerUrl)
+      if (/^https?:$/i.test(serverParsed.protocol)) {
+        out.add(serverParsed.origin.toLowerCase())
+      }
+    } catch {
+      // Ignore malformed configured server URL.
+    }
   }
   const entries = toAllowlistEntries((cfg as Record<string, unknown> | null)?.absoluteUrlAllowlist)
   for (const entry of entries) {

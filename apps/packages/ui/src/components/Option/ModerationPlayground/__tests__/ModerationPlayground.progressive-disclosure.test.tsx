@@ -53,7 +53,8 @@ describe("ModerationPlayground disclosure UX", () => {
 
   const overridesQueryResult = {
     data: { overrides: {} as Record<string, unknown> },
-    isFetching: false
+    isFetching: false,
+    error: null
   }
 
   beforeAll(() => {
@@ -89,15 +90,15 @@ describe("ModerationPlayground disclosure UX", () => {
       const firstKey = options?.queryKey?.[0]
       const queryKey = typeof firstKey === "string" ? firstKey : ""
       if (queryKey === "moderation-settings") {
-        return settingsQueryResult
+        return { ...settingsQueryResult, error: null }
       }
       if (queryKey === "moderation-policy") {
-        return policyQueryResult
+        return { ...policyQueryResult, error: null }
       }
       if (queryKey === "moderation-overrides") {
         return overridesQueryResult
       }
-      return { data: null, isFetching: false }
+      return { data: null, isFetching: false, error: null }
     })
   })
 
@@ -132,5 +133,38 @@ describe("ModerationPlayground disclosure UX", () => {
     await waitFor(() => {
       expect(screen.getByText("Blocklist Studio")).toBeInTheDocument()
     })
+  })
+
+  it("prioritizes server setup by hiding per-user configuration in server scope", () => {
+    render(<ModerationPlayground />)
+
+    expect(screen.getByText("Global Server Rules")).toBeInTheDocument()
+    expect(screen.queryByText("Per-User Safety Rules")).not.toBeInTheDocument()
+  })
+
+  it("shows explicit admin-permission error state instead of fallback policy defaults", () => {
+    useQueryMock.mockImplementation((options: { queryKey?: unknown[] } | undefined) => {
+      const firstKey = options?.queryKey?.[0]
+      const queryKey = typeof firstKey === "string" ? firstKey : ""
+      if (queryKey === "moderation-settings") {
+        return {
+          data: null,
+          isFetching: false,
+          error: { status: 403, message: "Forbidden" }
+        }
+      }
+      if (queryKey === "moderation-policy") {
+        return { ...policyQueryResult, error: null }
+      }
+      if (queryKey === "moderation-overrides") {
+        return overridesQueryResult
+      }
+      return { data: null, isFetching: false, error: null }
+    })
+
+    render(<ModerationPlayground />)
+
+    expect(screen.getByText("Admin moderation access required")).toBeInTheDocument()
+    expect(screen.queryByText("Current Policy Status")).not.toBeInTheDocument()
   })
 })

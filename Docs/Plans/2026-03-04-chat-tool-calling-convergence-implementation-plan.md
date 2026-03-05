@@ -130,9 +130,18 @@ git commit -m "feat(chat-loop): add event store and replay cursor"
 ```python
 
 def test_loop_mode_disables_legacy_autoexec_path(monkeypatch):
-    # Arrange request context to enable loop mode
-    # Assert execute_assistant_tool_calls is called only by loop engine path
-    assert True
+    calls = {"legacy": 0, "loop": 0}
+
+    def _legacy(*_args, **_kwargs):
+        calls["legacy"] += 1
+
+    def _loop(*_args, **_kwargs):
+        calls["loop"] += 1
+
+    # monkeypatch chat_service legacy and loop handlers
+    # issue one tool-enabled request with loop mode enabled
+    assert calls["legacy"] == 0
+    assert calls["loop"] == 1
 ```
 
 **Step 2: Run test to verify it fails**
@@ -172,8 +181,23 @@ git commit -m "feat(chat-loop): add loop executor and disable duplicate autoexec
 ```python
 
 def test_approval_token_rejects_mismatched_args_hash():
-    # mint token for args_a, verify with args_b -> denied
-    assert True
+    token = mint_approval_token(
+        run_id="run_1",
+        seq=7,
+        tool_call_id="tc_1",
+        args_hash="hash_a",
+    )
+
+    ok, error = verify_approval_token(
+        token=token,
+        run_id="run_1",
+        seq=7,
+        tool_call_id="tc_1",
+        args_hash="hash_b",
+    )
+
+    assert ok is False
+    assert "args_hash" in error
 ```
 
 **Step 2: Run test to verify it fails**
@@ -259,10 +283,19 @@ git commit -m "feat(api): add chat loop endpoints and replay stream"
 ```python
 
 def test_dual_emit_preserves_legacy_and_loop_events(client, auth_headers):
-    # stream request with loop-compat flag enabled
-    # assert legacy stream_start/tool_results/stream_end still present
-    # assert loop events also present
-    assert True
+    with client.stream(
+        "POST",
+        "/api/v1/chat/completions",
+        headers={**auth_headers, "X-TLDW-Loop-Compat": "1"},
+        json={"model": "test", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+    ) as resp:
+        lines = [line for line in resp.iter_lines() if line]
+
+    payload = "\n".join(lines)
+    assert "event: stream_start" in payload
+    assert "event: stream_end" in payload
+    assert "event: tool_results" in payload or "tool_results" in payload
+    assert "event: run_started" in payload or "event: tool_proposed" in payload
 ```
 
 **Step 2: Run test to verify it fails**
@@ -347,20 +380,25 @@ git commit -m "feat(ui): add shared chat loop sdk and reducer"
 - Modify: `apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx`
 - Modify: `apps/packages/ui/src/components/Sidepanel/Chat/form.tsx`
 - Modify: `apps/packages/ui/src/components/Sidepanel/Chat/ControlRow.tsx`
-- Test: `apps/tldw-frontend/e2e/workflows/chat.spec.ts`
-- Test: `apps/extension/tests/e2e/sidepanel-chat-smoke.spec.ts`
+- Test: `apps/tldw-frontend/e2e/workflows/chat-tool-approval-parity.spec.ts`
+- Test: `apps/extension/tests/e2e/chat-tool-approval-parity.spec.ts`
 
 **Step 1: Write the failing test**
 
 ```ts
-// Add assertions that both surfaces show pending risky-tool approvals
-// and identical lifecycle status labels for the same mocked run events.
+import { test, expect } from "@playwright/test"
+
+test("webui and extension show identical risky-tool approval states", async ({ page }) => {
+  // Arrange mocked loop events with approval_required + tool_started + tool_finished
+  // Assert both surfaces render Pending approval, Running, Done in same order
+  await expect(page.getByText(/pending approval/i)).toBeVisible()
+})
 ```
 
 **Step 2: Run test to verify it fails**
 
-Run: `bunx playwright test apps/tldw-frontend/e2e/workflows/chat.spec.ts --grep "tool approval parity"`
-Expected: FAIL on missing approval rendering parity.
+Run: `bunx playwright test apps/tldw-frontend/e2e/workflows/chat-tool-approval-parity.spec.ts --reporter=line`
+Expected: FAIL before migration due missing parity behavior.
 
 **Step 3: Write minimal implementation**
 
@@ -372,13 +410,13 @@ Expected: FAIL on missing approval rendering parity.
 
 **Step 4: Run test to verify it passes**
 
-Run: `bunx playwright test apps/tldw-frontend/e2e/workflows/chat.spec.ts apps/extension/tests/e2e/sidepanel-chat-smoke.spec.ts --reporter=line`
+Run: `bunx playwright test apps/tldw-frontend/e2e/workflows/chat-tool-approval-parity.spec.ts apps/extension/tests/e2e/chat-tool-approval-parity.spec.ts --reporter=line`
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add apps/packages/ui/src/hooks/useMessageOption.tsx apps/packages/ui/src/hooks/useMessage.tsx apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx apps/packages/ui/src/components/Sidepanel/Chat/form.tsx apps/packages/ui/src/components/Sidepanel/Chat/ControlRow.tsx apps/tldw-frontend/e2e/workflows/chat.spec.ts apps/extension/tests/e2e/sidepanel-chat-smoke.spec.ts
+git add apps/packages/ui/src/hooks/useMessageOption.tsx apps/packages/ui/src/hooks/useMessage.tsx apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx apps/packages/ui/src/components/Sidepanel/Chat/form.tsx apps/packages/ui/src/components/Sidepanel/Chat/ControlRow.tsx apps/tldw-frontend/e2e/workflows/chat-tool-approval-parity.spec.ts apps/extension/tests/e2e/chat-tool-approval-parity.spec.ts
 git commit -m "feat(chat-ui): migrate chat surfaces to shared loop state"
 ```
 
@@ -396,9 +434,15 @@ git commit -m "feat(chat-ui): migrate chat surfaces to shared loop state"
 ```python
 
 def test_auto_tool_choice_with_empty_toolset_is_normalized_safely():
-    # payload has tool_choice="auto" but no executable tools
-    # assert normalized payload does not violate provider/tool contract
-    assert True
+    payload = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "model": "test",
+        "tool_choice": "auto",
+        "tools": [],
+    }
+    normalized = normalize_tool_payload(payload)
+    assert normalized.get("tools") in (None, [])
+    assert normalized.get("tool_choice") in (None, "none")
 ```
 
 **Step 2: Run test to verify it fails**
@@ -432,7 +476,6 @@ git commit -m "fix(chat-loop): normalize guided tool choice when toolset unavail
 - Modify: `tldw_Server_API/app/core/Chat/chat_loop_store.py`
 - Modify: `tldw_Server_API/app/core/Chat/chat_metrics.py`
 - Modify: `tldw_Server_API/app/core/Chat/chat_service.py`
-- Modify: `Docs/Plans/2026-03-04-chat-tool-calling-convergence-design.md`
 - Test: `tldw_Server_API/tests/Chat_NEW/unit/test_chat_loop_store_compaction.py`
 - Test: `tldw_Server_API/tests/Metrics/test_chat_metrics_reset_safety.py`
 
@@ -441,10 +484,14 @@ git commit -m "fix(chat-loop): normalize guided tool choice when toolset unavail
 ```python
 
 def test_loop_store_compaction_retains_checkpoint_and_tail():
-    # append many chunk events
-    # compact
-    # ensure replay still reconstructs final state
-    assert True
+    store = InMemoryChatLoopStore()
+    for i in range(1000):
+        store.append("run_1", "llm_chunk", {"i": i})
+
+    store.compact("run_1")
+    rebuilt = store.replay("run_1")
+    assert rebuilt is not None
+    assert rebuilt.last_seq >= 1000
 ```
 
 **Step 2: Run test to verify it fails**
@@ -467,7 +514,7 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/core/Chat/chat_loop_store.py tldw_Server_API/app/core/Chat/chat_metrics.py tldw_Server_API/app/core/Chat/chat_service.py Docs/Plans/2026-03-04-chat-tool-calling-convergence-design.md tldw_Server_API/tests/Chat_NEW/unit/test_chat_loop_store_compaction.py tldw_Server_API/tests/Metrics/test_chat_metrics_reset_safety.py
+git add tldw_Server_API/app/core/Chat/chat_loop_store.py tldw_Server_API/app/core/Chat/chat_metrics.py tldw_Server_API/app/core/Chat/chat_service.py tldw_Server_API/tests/Chat_NEW/unit/test_chat_loop_store_compaction.py tldw_Server_API/tests/Metrics/test_chat_metrics_reset_safety.py
 git commit -m "feat(chat-loop): add event compaction, metrics, and release safeguards"
 ```
 
@@ -476,8 +523,8 @@ git commit -m "feat(chat-loop): add event compaction, metrics, and release safeg
 **Files:**
 - Modify: `Docs/Plans/2026-03-04-chat-tool-calling-convergence-implementation-plan.md`
 - Test: `tldw_Server_API/tests/Chat_NEW/integration/test_chat_loop_endpoints.py`
-- Test: `apps/tldw-frontend/e2e/workflows/chat.spec.ts`
-- Test: `apps/extension/tests/e2e/sidepanel-chat-smoke.spec.ts`
+- Test: `apps/tldw-frontend/e2e/workflows/chat-tool-approval-parity.spec.ts`
+- Test: `apps/extension/tests/e2e/chat-tool-approval-parity.spec.ts`
 
 **Step 1: Run focused regression suites**
 
@@ -485,8 +532,8 @@ Run:
 
 ```bash
 source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Chat_NEW/integration/test_chat_loop_endpoints.py -v
-bunx playwright test apps/tldw-frontend/e2e/workflows/chat.spec.ts --reporter=line
-bunx playwright test apps/extension/tests/e2e/sidepanel-chat-smoke.spec.ts --reporter=line
+bunx playwright test apps/tldw-frontend/e2e/workflows/chat-tool-approval-parity.spec.ts --reporter=line
+bunx playwright test apps/extension/tests/e2e/chat-tool-approval-parity.spec.ts --reporter=line
 ```
 
 Expected: PASS.
@@ -507,4 +554,3 @@ Expected: no new high-severity findings in changed code.
 git add Docs/Plans/2026-03-04-chat-tool-calling-convergence-implementation-plan.md
 git commit -m "docs(plan): add execution and validation gates for chat loop convergence"
 ```
-

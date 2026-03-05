@@ -70,7 +70,9 @@ export const categorizeConnectionError = (
     normalized.includes("cors") ||
     normalized.includes("cross-origin") ||
     normalized.includes("disallowed origin") ||
-    normalized.includes("likely cors mismatch")
+    normalized.includes("likely cors mismatch") ||
+    normalized.includes("networkerror when attempting to fetch resource") ||
+    normalized.includes("failed to fetch")
   ) {
     return "cors_blocked"
   }

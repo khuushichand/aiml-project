@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 try:
@@ -66,7 +67,17 @@ class ToolExecutor:
         idempotency_key: str | None = None,
         validate_only: bool = False,
         allowed_tools: list[str] | None = None,
+        approval_token: str | None = None,
+        approval_context: dict[str, Any] | None = None,
+        approval_verifier: Callable[..., tuple[bool, str | None]] | None = None,
     ) -> dict[str, Any]:
+        if approval_token is not None:
+            if approval_verifier is None or not isinstance(approval_context, dict):
+                raise ToolExecutionError("Approval verification unavailable")
+            ok, error = approval_verifier(token=approval_token, **approval_context)
+            if not ok:
+                raise ToolExecutionError(f"Approval denied: {error or 'invalid token'}")
+
         if validate_only:
             # Lightweight permission probe via tools/list; skips actual execution
             listing = await self.list_tools(user_id=user_id, client_id=client_id)

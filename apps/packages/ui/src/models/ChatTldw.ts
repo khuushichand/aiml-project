@@ -11,6 +11,8 @@ import {
   type ChatCompletionContentPart
 } from "@/services/tldw"
 import type { ToolCall } from "@/types/tool-calls"
+import { publishChatLoopEvent } from "@/services/chat-loop/bridge"
+import { extractChatLoopEvent } from "@/services/chat-loop/stream"
 
 export interface ChatTldwOptions {
   model: string
@@ -132,6 +134,11 @@ export class ChatTldw {
     }
 
     const handleChunk = (chunk: any) => {
+      const loopEvent = extractChatLoopEvent(chunk)
+      if (loopEvent) {
+        publishChatLoopEvent(loopEvent)
+      }
+
       const deltas =
         chunk?.choices?.[0]?.delta?.tool_calls ??
         chunk?.choices?.[0]?.tool_calls ??

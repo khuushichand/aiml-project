@@ -901,6 +901,9 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.chat import (
         router as chat_router,
     )
+    from tldw_Server_API.app.api.v1.endpoints.chat_loop import (
+        router as chat_loop_router,
+    )
 
     # Metrics Endpoint
     from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
@@ -1134,6 +1137,9 @@ elif _MINIMAL_TEST_APP:
     )
     from tldw_Server_API.app.api.v1.endpoints.chat import (
         router as chat_router,
+    )
+    from tldw_Server_API.app.api.v1.endpoints.chat_loop import (
+        router as chat_loop_router,
     )
 
     # Sandbox endpoint is optional; guard import so minimal startup never fails
@@ -5186,6 +5192,7 @@ elif _MINIMAL_TEST_APP:
     include_router_idempotent(app, paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
     # Include lightweight chat/character routes needed by tests
     include_router_idempotent(app, chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    include_router_idempotent(app, chat_loop_router, prefix=f"{API_V1_PREFIX}")
     include_router_idempotent(app, conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
     include_router_idempotent(app, character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     include_router_idempotent(
@@ -5890,6 +5897,8 @@ else:
     # Guard optional routers that may not be imported in ULTRA_MINIMAL_APP
     if "chat_router" in locals():
         _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    if "chat_loop_router" in locals():
+        _include_if_enabled("chat", chat_loop_router, prefix=f"{API_V1_PREFIX}")
     if "conversations_alias_router" in locals():
         _include_if_enabled("chat", conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
     # Tools (MCP-backed server tool execution) - include if initial guarded import succeeded

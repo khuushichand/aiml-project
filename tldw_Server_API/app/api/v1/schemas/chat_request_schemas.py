@@ -723,6 +723,13 @@ class ChatCompletionRequest(BaseModel):
             "if omitted, providers default to their standard behavior (typically `auto`)."
         ),
     )
+    chat_loop_mode: Optional[Literal["legacy", "enabled"]] = Field(
+        None,
+        description=(
+            "[Extension] Optional loop engine routing hint. `enabled` requests server-driven chat loop mode; "
+            "`legacy` keeps existing chat execution behavior."
+        ),
+    )
     user: Optional[str] = Field(None, description="End-user identifier for monitoring.")
 
     # --- Slash Commands Injection Override ---
@@ -830,6 +837,13 @@ class ChatCompletionRequest(BaseModel):
 
     @model_validator(mode="before")
     def check_logprobs(cls, values):
+        if isinstance(values, dict):
+            tools = values.get("tools")
+            tool_choice = values.get("tool_choice")
+            if isinstance(tools, list) and len(tools) == 0:
+                values["tools"] = None
+                if isinstance(tool_choice, str) and tool_choice.strip().lower() == "auto":
+                    values["tool_choice"] = "none"
         logprobs = values.get("logprobs")
         top_logprobs = values.get("top_logprobs")
         if top_logprobs is not None and not logprobs:

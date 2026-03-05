@@ -20,10 +20,8 @@ const ERROR_LOG_THROTTLE_MS = 15_000
 const RATE_LIMIT_LOG_THROTTLE_MS = 60_000
 const ERROR_LOG_MAX_ENTRIES = 200
 const BACKEND_UNREACHABLE_EVENT_THROTTLE_MS = 5_000
-const STREAM_RUNTIME_PING_TIMEOUT_MS = 3_000
-const STREAM_RUNTIME_HEALTH_TTL_MS = 5_000
-const ABSOLUTE_URL_BLOCK_ERROR =
-  "Absolute URL requests are blocked unless the request origin is explicitly allowlisted."
+const STREAM_RUNTIME_PING_TIMEOUT_MS = 400
+const STREAM_RUNTIME_HEALTH_TTL_MS = 30_000
 const BACKEND_UNREACHABLE_PATTERN =
   /(networkerror|failed to fetch|network error|load failed|err_connection|could not establish connection|receiving end does not exist)/i
 const errorLogHistory = new Map<string, number>()
@@ -958,6 +956,11 @@ export async function* bgStream<
 >(
   { path, method = 'POST' as UpperLower<M>, headers = {}, body, streamIdleTimeoutMs, abortSignal }: BgStreamInit<P, M>
 ): AsyncGenerator<string> {
+  const hasHttpStatusInMessage = (value: unknown): boolean => {
+    const message = value instanceof Error ? value.message : String(value || "")
+    return /\bhttp\s+\d{3}\b/i.test(message)
+  }
+
   const canUseRuntimePortTransport = async (): Promise<boolean> => {
     const hasRuntimePort = Boolean(browser?.runtime?.connect && browser?.runtime?.id)
     if (!hasRuntimePort) return false
@@ -1091,8 +1094,7 @@ export async function* bgStream<
       !firstDataReceived &&
       !abortSignal?.aborted &&
       Boolean(error) &&
-      isExtensionTransportFailure(error) &&
-      extractHttpStatus(error) === null
+      (isExtensionTransportFailure(error) || !hasHttpStatusInMessage(error))
     if (shouldFallbackAfterEarlyError) {
       yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
       return

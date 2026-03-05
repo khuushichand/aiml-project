@@ -28,6 +28,7 @@ from tldw_Server_API.app.api.v1.schemas.moderation_schemas import (
     ModerationTestRequest,
     ModerationTestResponse,
     ModerationUserOverride,
+    ModerationUserOverrideLookupResponse,
     ModerationUserOverridesResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
@@ -49,7 +50,8 @@ def _normalize_etag_list(value: str | None) -> list[str]:
         token = raw.strip()
         if not token:
             continue
-        if token == "*":
+        # RFC 7232 wildcard token for If-Match.
+        if token == "*":  # nosec B105
             tokens.append(token)
             continue
         if token.lower().startswith("w/"):
@@ -68,14 +70,19 @@ async def list_user_overrides() -> ModerationUserOverridesResponse:
     return {"overrides": svc.list_user_overrides()}
 
 
-@router.get("/moderation/users/{user_id}", response_model=dict, summary="Get per-user moderation override", tags=["moderation"])
-async def get_user_override(user_id: str) -> dict[str, Any]:
+@router.get(
+    "/moderation/users/{user_id}",
+    response_model=ModerationUserOverrideLookupResponse,
+    summary="Get per-user moderation override",
+    tags=["moderation"],
+)
+async def get_user_override(user_id: str) -> ModerationUserOverrideLookupResponse:
     """Return the per-user moderation override for the given user id."""
     svc = get_moderation_service()
     data = svc.list_user_overrides().get(str(user_id))
     if data is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Override not found")
-    return data
+        return ModerationUserOverrideLookupResponse(exists=False, override={})
+    return ModerationUserOverrideLookupResponse(exists=True, override=data)
 
 
 @router.put("/moderation/users/{user_id}", response_model=dict, summary="Set per-user moderation override", tags=["moderation"])
@@ -87,7 +94,16 @@ async def set_user_override(user_id: str, override: ModerationUserOverride) -> d
     if not status_dict.get("ok"):
         error_detail = status_dict.get("error", "Failed to persist override")
         logger.error("Moderation override persist failed for user_id={} error={}", user_id, error_detail)
-        status_code = status.HTTP_400_BAD_REQUEST if "invalid" in str(error_detail).lower() else status.HTTP_500_INTERNAL_SERVER_ERROR
+        error_type = str(status_dict.get("error_type", "")).strip().lower()
+        if error_type == "validation":
+            status_code = status.HTTP_400_BAD_REQUEST
+        elif error_type == "persistence":
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+        else:
+            # Backward-compatible fallback for older service responses.
+            err_text = str(error_detail).lower()
+            is_validation_like = any(token in err_text for token in ("invalid", "dangerous", "required"))
+            status_code = status.HTTP_400_BAD_REQUEST if is_validation_like else status.HTTP_500_INTERNAL_SERVER_ERROR
         raise HTTPException(
             status_code=status_code,
             detail=error_detail if status_code == status.HTTP_400_BAD_REQUEST else "Failed to persist override",
