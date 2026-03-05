@@ -591,6 +591,120 @@ CREATE INDEX IF NOT EXISTS idx_activities_list ON kanban_activities(list_id);
 CREATE INDEX IF NOT EXISTS idx_activities_card ON kanban_activities(card_id);
 CREATE INDEX IF NOT EXISTS idx_activities_created ON kanban_activities(created_at);
 
+-- Workflow Policies
+CREATE TABLE IF NOT EXISTS board_workflow_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    board_id INTEGER NOT NULL UNIQUE REFERENCES kanban_boards(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL DEFAULT 1,
+    is_paused INTEGER NOT NULL DEFAULT 0 CHECK (is_paused IN (0, 1)),
+    is_draining INTEGER NOT NULL DEFAULT 0 CHECK (is_draining IN (0, 1)),
+    default_lease_ttl_sec INTEGER NOT NULL DEFAULT 900 CHECK (default_lease_ttl_sec > 0),
+    strict_projection INTEGER NOT NULL DEFAULT 1 CHECK (strict_projection IN (0, 1)),
+    metadata JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_policies_board ON board_workflow_policies(board_id);
+
+-- Workflow Status Catalog
+CREATE TABLE IF NOT EXISTS board_workflow_statuses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_id INTEGER NOT NULL REFERENCES board_workflow_policies(id) ON DELETE CASCADE,
+    status_key TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    is_terminal INTEGER NOT NULL DEFAULT 0 CHECK (is_terminal IN (0, 1)),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(policy_id, status_key)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_statuses_policy ON board_workflow_statuses(policy_id);
+
+-- Workflow Transition Edges
+CREATE TABLE IF NOT EXISTS board_workflow_transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_id INTEGER NOT NULL REFERENCES board_workflow_policies(id) ON DELETE CASCADE,
+    from_status_key TEXT NOT NULL,
+    to_status_key TEXT NOT NULL,
+    requires_claim INTEGER NOT NULL DEFAULT 1 CHECK (requires_claim IN (0, 1)),
+    requires_approval INTEGER NOT NULL DEFAULT 0 CHECK (requires_approval IN (0, 1)),
+    approve_to_status_key TEXT,
+    reject_to_status_key TEXT,
+    auto_move_list_id INTEGER REFERENCES kanban_lists(id) ON DELETE SET NULL,
+    max_retries INTEGER NOT NULL DEFAULT 0 CHECK(max_retries >= 0),
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(policy_id, from_status_key, to_status_key),
+    FOREIGN KEY(policy_id, from_status_key)
+        REFERENCES board_workflow_statuses(policy_id, status_key) ON DELETE CASCADE,
+    FOREIGN KEY(policy_id, to_status_key)
+        REFERENCES board_workflow_statuses(policy_id, status_key) ON DELETE CASCADE,
+    FOREIGN KEY(policy_id, approve_to_status_key)
+        REFERENCES board_workflow_statuses(policy_id, status_key) ON DELETE SET NULL,
+    FOREIGN KEY(policy_id, reject_to_status_key)
+        REFERENCES board_workflow_statuses(policy_id, status_key) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_transitions_policy ON board_workflow_transitions(policy_id);
+
+-- Card Workflow Runtime State
+CREATE TABLE IF NOT EXISTS kanban_card_workflow_state (
+    card_id INTEGER PRIMARY KEY REFERENCES kanban_cards(id) ON DELETE CASCADE,
+    policy_id INTEGER NOT NULL REFERENCES board_workflow_policies(id) ON DELETE CASCADE,
+    workflow_status_key TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_expires_at TIMESTAMP,
+    approval_state TEXT NOT NULL DEFAULT 'none'
+        CHECK (approval_state IN ('none', 'awaiting_approval', 'approved', 'rejected')),
+    pending_transition_id INTEGER REFERENCES board_workflow_transitions(id) ON DELETE SET NULL,
+    retry_counters JSON,
+    last_transition_at TIMESTAMP,
+    last_actor TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(policy_id, workflow_status_key)
+        REFERENCES board_workflow_statuses(policy_id, status_key) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_card_workflow_state_policy ON kanban_card_workflow_state(policy_id);
+CREATE INDEX IF NOT EXISTS idx_card_workflow_state_status ON kanban_card_workflow_state(workflow_status_key);
+CREATE INDEX IF NOT EXISTS idx_card_workflow_state_lease ON kanban_card_workflow_state(lease_expires_at);
+
+-- Card Workflow Events (append-only)
+CREATE TABLE IF NOT EXISTS kanban_card_workflow_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id INTEGER NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    from_status_key TEXT,
+    to_status_key TEXT,
+    actor TEXT NOT NULL,
+    reason TEXT,
+    idempotency_key TEXT NOT NULL,
+    correlation_id TEXT,
+    before_snapshot JSON,
+    after_snapshot JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(card_id, event_type, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_card_workflow_events_card_created ON kanban_card_workflow_events(card_id, created_at DESC);
+
+-- Card Workflow Approvals
+CREATE TABLE IF NOT EXISTS kanban_card_workflow_approvals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id INTEGER NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
+    transition_id INTEGER NOT NULL REFERENCES board_workflow_transitions(id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'rejected')),
+    reviewer TEXT,
+    decision_reason TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_card_workflow_approvals_card ON kanban_card_workflow_approvals(card_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_card_workflow_approvals_pending_unique
+    ON kanban_card_workflow_approvals(card_id, transition_id)
+    WHERE state = 'pending';
+
 -- Card Links
 CREATE TABLE IF NOT EXISTS kanban_card_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
