@@ -401,6 +401,8 @@ class StreamingResponseHandler:
         raw_events = save_result.get("events")
         if raw_events is None:
             raw_events = save_result.get("extra_events")
+        if raw_events is None:
+            raw_events = save_result.get("loop_events")
         if not isinstance(raw_events, list):
             return saved_message_id, extra_events
 

@@ -63,6 +63,11 @@ class ModerationUserOverridesResponse(BaseModel):
     overrides: dict[str, dict[str, Any]]
 
 
+class ModerationUserOverrideLookupResponse(BaseModel):
+    exists: bool
+    override: dict[str, Any]
+
+
 class BlocklistManagedItem(BaseModel):
     id: int
     line: str

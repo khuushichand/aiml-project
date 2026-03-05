@@ -39,7 +39,6 @@ export type ComposerToolbarProps = {
   // Row action controls (pre-rendered by parent)
   sendControl: React.ReactNode
   attachmentButton: React.ReactNode
-  generateButton?: React.ReactNode
   toolsButton: React.ReactNode
   voiceChatButton: React.ReactNode
   modelUsageBadge: React.ReactNode
@@ -117,7 +116,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     mcpControl,
     sendControl,
     attachmentButton,
-    generateButton,
     toolsButton,
     voiceChatButton,
     modelUsageBadge,
@@ -451,28 +449,24 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     [isProMode]
   )
 
-  const providerStatusItem = contextItems.find(
-    (item) => item.id === "providerStatus"
+  const hiddenContextItemIds = React.useMemo(
+    () =>
+      new Set([
+        "providerStatus",
+        "routingPolicy",
+        "modelCapabilities",
+        "summaryCheckpoint",
+        "conversationState",
+        "imageEventSync"
+      ]),
+    []
   )
-  const routingPolicyItem = contextItems.find((item) => item.id === "routingPolicy")
-  const runtimeSummary = [providerStatusItem?.value, routingPolicyItem?.value]
-    .filter((value): value is string => Boolean(value))
-    .join(" + ")
-  const runtimeTone =
-    providerStatusItem?.tone === "warning" || routingPolicyItem?.tone === "warning"
-      ? "warning"
-      : "active"
-  const handleRuntimeChipClick = () => {
-    if (providerStatusItem?.onClick) {
-      providerStatusItem.onClick()
-      return
+  const getContextItemTestId = React.useCallback((item: ComposerContextItem) => {
+    if (item.id === "sessionStatus") {
+      return "composer-session-status-chip"
     }
-    if (routingPolicyItem?.onClick) {
-      routingPolicyItem.onClick()
-      return
-    }
-    onOpenModelSettings()
-  }
+    return undefined
+  }, [])
 
   const renderContextItem = (
     item: ComposerContextItem,
@@ -536,9 +530,11 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
   const casualContextItems = contextItems.filter(
     (item) =>
       item.id !== "model" &&
-      item.id !== "providerStatus" &&
-      item.id !== "routingPolicy" &&
-      item.id !== "temporary"
+      item.id !== "temporary" &&
+      !hiddenContextItemIds.has(item.id)
+  )
+  const visibleContextItems = contextItems.filter(
+    (item) => !hiddenContextItemIds.has(item.id)
   )
   const casualModelItem: ComposerContextItem = modelContextItem
     ? {
@@ -552,16 +548,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
         tone: selectedModel ? "active" : "warning",
         onClick: onOpenModelSettings
       }
-  const casualRuntimeItem: ComposerContextItem | null = runtimeSummary
-    ? {
-        id: "runtimeStatus",
-        label: t("playground:composer.runtime", "Runtime"),
-        value: runtimeSummary,
-        tone: runtimeTone,
-        onClick: handleRuntimeChipClick
-      }
-    : null
-
   const persistenceChipClass = temporaryChat
     ? "border-warn/40 bg-warn/10 text-warn"
     : "border-border bg-surface2 text-text-muted"
@@ -611,10 +597,9 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
       ) : (
         renderContextItem(casualModelItem)
       )}
-      {casualRuntimeItem
-        ? renderContextItem(casualRuntimeItem, "composer-casual-runtime-context-chip")
-        : null}
-      {casualContextItems.map((item) => renderContextItem(item))}
+      {casualContextItems.map((item) =>
+        renderContextItem(item, getContextItemTestId(item))
+      )}
       {modelUsageBadge ? (
         <span
           data-testid="composer-casual-token-chip"
@@ -662,13 +647,15 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
   )
 
   const contextStrip =
-    contextItems.length > 0 ? (
+    visibleContextItems.length > 0 ? (
       <div
         data-testid="composer-context-strip"
         aria-label={t("playground:composer.activeContext", "Active context") as string}
         className="flex flex-wrap items-center gap-1.5 border-t border-border/50 pt-2"
       >
-        {contextItems.map((item) => renderContextItem(item))}
+        {visibleContextItems.map((item) =>
+          renderContextItem(item, getContextItemTestId(item))
+        )}
       </div>
     ) : null
 
@@ -764,7 +751,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
           />
           {voiceChatButton}
           {attachmentButton}
-          {generateButton}
           {toolsButton}
           {sendControl}
         </div>
@@ -789,7 +775,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
           {dictationButton}
           {voiceChatButton}
           {attachmentButton}
-          {generateButton}
           {toolsButton}
           {chatSettingsButton}
           {sendControl}
@@ -864,7 +849,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
             <div className="flex flex-wrap items-center justify-end gap-2">
               {voiceChatButton}
               {attachmentButton}
-              {generateButton}
               {toolsButton}
               {sendControl}
             </div>

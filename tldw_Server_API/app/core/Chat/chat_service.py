@@ -68,6 +68,7 @@ from tldw_Server_API.app.core.Chat.streaming_utils import (
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
 )
+from tldw_Server_API.app.core.Chat.chat_loop_engine import is_chat_loop_mode_enabled
 from tldw_Server_API.app.core.Chat.tool_auto_exec import execute_assistant_tool_calls
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
@@ -461,6 +462,13 @@ def should_auto_execute_tools() -> bool:
     if raw is not None:
         return _coerce_bool(raw, CHAT_AUTO_EXECUTE_TOOLS)
     return CHAT_AUTO_EXECUTE_TOOLS
+
+
+def should_run_legacy_tool_autoexec(cleaned_args: dict[str, Any] | None) -> bool:
+    """Gate legacy auto-exec when loop mode is explicitly enabled on a request."""
+    if is_chat_loop_mode_enabled(cleaned_args):
+        return False
+    return should_auto_execute_tools()
 
 
 def get_chat_max_tool_calls() -> int:
@@ -2681,6 +2689,13 @@ async def execute_streaming_call(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Provider did not return a valid stream.")
 
     stream_mod_state = {"block_logged": False, "redact_logged": False}
+    loop_compat_enabled = False
+    loop_compat_run_id = str(final_conversation_id or f"run_{_uuid.uuid4().hex[:12]}")
+    try:
+        if request is not None:
+            loop_compat_enabled = _shared_is_truthy(request.headers.get("X-TLDW-Loop-Compat"))
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        loop_compat_enabled = False
 
     async def save_callback(
         full_reply: str,
@@ -2875,7 +2890,7 @@ async def execute_streaming_call(
 
         if (
             not post_stream_blocked
-            and should_auto_execute_tools()
+            and should_run_legacy_tool_autoexec(cleaned_args)
             and isinstance(tool_calls, list)
             and tool_calls
         ):
@@ -2980,13 +2995,58 @@ async def execute_streaming_call(
         except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
         if tool_execution_payload is not None:
+            events: list[dict[str, Any]] = [
+                {
+                    "event": "tool_results",
+                    "data": {"tool_results": tool_execution_payload},
+                }
+            ]
+            if loop_compat_enabled:
+                seq = 1
+                events.append(
+                    {
+                        "event": "run_started",
+                        "data": {"run_id": loop_compat_run_id, "seq": seq},
+                    }
+                )
+                seq += 1
+                if isinstance(tool_calls, list) and tool_calls:
+                    events.append(
+                        {
+                            "event": "tool_proposed",
+                            "data": {"run_id": loop_compat_run_id, "seq": seq, "tool_calls": tool_calls},
+                        }
+                    )
+                    seq += 1
+                events.append(
+                    {
+                        "event": "tool_finished",
+                        "data": {"run_id": loop_compat_run_id, "seq": seq, "tool_results": tool_execution_payload},
+                    }
+                )
+                seq += 1
+                events.append(
+                    {
+                        "event": "run_complete",
+                        "data": {"run_id": loop_compat_run_id, "seq": seq},
+                    }
+                )
+            return {
+                "saved_message_id": saved_message_id,
+                "events": events,
+            }
+        if loop_compat_enabled:
             return {
                 "saved_message_id": saved_message_id,
                 "events": [
                     {
-                        "event": "tool_results",
-                        "data": {"tool_results": tool_execution_payload},
-                    }
+                        "event": "run_started",
+                        "data": {"run_id": loop_compat_run_id, "seq": 1},
+                    },
+                    {
+                        "event": "run_complete",
+                        "data": {"run_id": loop_compat_run_id, "seq": 2},
+                    },
                 ],
             }
         return saved_message_id
@@ -3804,7 +3864,7 @@ async def execute_non_stream_call(
             use_transaction=True,
         )
 
-    if should_auto_execute_tools() and isinstance(tool_calls_to_save, list) and tool_calls_to_save:
+    if should_run_legacy_tool_autoexec(cleaned_args) and isinstance(tool_calls_to_save, list) and tool_calls_to_save:
         try:
             req_user_id = None
             try:

@@ -352,7 +352,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     selectedKnowledge,
     ragMediaIds,
     compareAutoDisabledFlag,
-    setCompareAutoDisabledFlag
+    setCompareAutoDisabledFlag,
+    chatLoopState = {
+      status: "idle",
+      pendingApprovals: [],
+      inflightToolCallIds: []
+    }
   } = useMessageOption()
   const setRagMediaIds = useStoreMessageOption((s) => s.setRagMediaIds)
   const setRagPinnedResults = useStoreMessageOption((s) => s.setRagPinnedResults)
@@ -1180,6 +1185,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
     return t("playground:composer.providerStatusHealthy", "Healthy")
   }, [connectionUxState, isConnectionReady, t])
+  const isSessionDegraded = React.useMemo(
+    () =>
+      !isConnectionReady || connectionUxState === "connected_degraded",
+    [connectionUxState, isConnectionReady]
+  )
   const currentContextSnapshot = React.useMemo(
     () => ({
       model: selectedModel || null,
@@ -5252,6 +5262,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           </span>
           <button
             type="button"
+            onClick={() => {
+              setToolsPopoverOpen(false)
+              openImageGenerateModal()
+            }}
+            className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
+          >
+            <span>{t("playground:imageGeneration.modalTitle", "Generate image")}</span>
+            <WandSparkles className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
             onClick={() => openKnowledgePanel("context")}
             className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
           >
@@ -5524,6 +5545,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       defaultInternetSearchOn,
       handleClearContext,
       openKnowledgePanel,
+      openImageGenerateModal,
       handleVoiceChatToggle,
       history.length,
       imageProviderControl,
@@ -5882,74 +5904,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       tone: selectedModel ? "active" : "warning",
       onClick: openModelApiSelector
     })
-    const capabilityLabels: string[] = []
-    if (modelCapabilities.includes("vision")) {
-      capabilityLabels.push(t("playground:composer.context.capabilityVision", "Vision"))
-    }
-    if (modelCapabilities.includes("tools")) {
-      capabilityLabels.push(t("playground:composer.context.capabilityTools", "Tools"))
-    }
-    if (modelCapabilities.includes("streaming")) {
-      capabilityLabels.push(t("playground:composer.context.capabilityStreaming", "Streaming"))
-    }
-    if (
-      typeof modelContextLength === "number" &&
-      Number.isFinite(modelContextLength) &&
-      modelContextLength > 0
-    ) {
-      capabilityLabels.push(
-        t("playground:composer.context.capabilityContext", {
-          defaultValue: "{{count}}k ctx",
-          count: Math.max(1, Math.round(modelContextLength / 1000))
-        } as any) as string
-      )
-    }
-    if (capabilityLabels.length > 0) {
+    if (isSessionDegraded) {
       items.push({
-        id: "modelCapabilities",
-        label: t("playground:composer.context.capabilities", "Capabilities"),
-        value: capabilityLabels.slice(0, 3).join(" • "),
-        tone: "neutral",
-        onClick: () => setOpenModelSettings(true)
+        id: "sessionStatus",
+        label: t("playground:composer.context.sessionStatus", "Session status"),
+        value: connectionStatusLabel,
+        tone: "warning",
+        onClick: focusConnectionCard
       })
     }
-    items.push({
-      id: "providerStatus",
-      label: t("playground:composer.context.providerStatus", "Provider"),
-      value: connectionStatusLabel,
-      tone:
-        !isConnectionReady || connectionUxState === "connected_degraded"
-          ? "warning"
-          : "active",
-      onClick: focusConnectionCard
-    })
-    const routingPolicyValue =
-      typeof currentChatModelSettings.apiProvider === "string" &&
-      currentChatModelSettings.apiProvider.trim().length > 0
-        ? String(
-            t("playground:composer.context.routingPinned", "{{provider}} pinned", {
-              provider: getProviderDisplayName(
-                currentChatModelSettings.apiProvider.trim()
-              )
-            } as any)
-          )
-        : String(
-            t(
-              "playground:composer.context.routingAuto",
-              "Auto fallback"
-            )
-          )
-    items.push({
-      id: "routingPolicy",
-      label: t("playground:composer.context.routing", "Routing"),
-      value: routingPolicyValue,
-      tone:
-        currentChatModelSettings.apiProvider &&
-        currentChatModelSettings.apiProvider.trim().length > 0
-          ? "neutral"
-          : "active",
-      onClick: () => setOpenModelSettings(true)
-    })
 
     if (compareModeActive) {
       items.push({
@@ -6041,24 +6004,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         onClick: openSessionInsightsModal
       })
     }
-    if (messages.length >= 2) {
-      items.push({
-        id: "summaryCheckpoint",
-        label: t("playground:composer.context.checkpoint", "Checkpoint"),
-        value: summaryCheckpointSuggestion.shouldSuggest
-          ? t(
-              "playground:composer.context.checkpointSuggested",
-              "Suggested now"
-            )
-          : t(
-              "playground:composer.context.checkpointManual",
-              "Summarize thread"
-            ),
-        tone: summaryCheckpointSuggestion.shouldSuggest ? "warning" : "neutral",
-        onClick: insertSummaryCheckpointPrompt
-      })
-    }
-
     if (
       selectedSystemPrompt ||
       selectedQuickPrompt ||
@@ -6126,28 +6071,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       })
     }
 
-    if (serverChatState) {
-      items.push({
-        id: "conversationState",
-        label: t("playground:composer.context.chatState", "State"),
-        value: serverChatState,
-        tone: "neutral"
-      })
-    }
-
-    if (!temporaryChat) {
-      items.push({
-        id: "imageEventSync",
-        label: t("playground:composer.context.imageSync", "Image sync"),
-        value:
-          imageEventSyncBaselineMode === "on"
-            ? t("playground:composer.context.imageSyncOn", "Mirror on")
-            : t("playground:composer.context.imageSyncOff", "Local only"),
-        tone: imageEventSyncBaselineMode === "on" ? "active" : "neutral",
-        onClick: openImageGenerateModal
-      })
-    }
-
     if (temporaryChat) {
       items.push({
         id: "temporary",
@@ -6162,16 +6085,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     compareModeActive,
     compareSelectedModels.length,
     connectionStatusLabel,
-    connectionUxState,
     contextToolsOpen,
     currentPreset,
-    currentChatModelSettings.apiProvider,
     currentChatModelSettings.jsonMode,
     focusConnectionCard,
     handleToggleWebSearch,
-    isConnectionReady,
-    modelCapabilities,
-    modelContextLength,
+    isSessionDegraded,
     modelSummaryLabel,
     openModelApiSelector,
     openKnowledgePanel,
@@ -6184,16 +6103,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     ragPinnedResults.length,
     selectedCharacter?.name,
     selectedModel,
-    summaryCheckpointSuggestion.shouldSuggest,
     selectedQuickPrompt,
     selectedSystemPrompt,
-    serverChatState,
-    imageEventSyncBaselineMode,
     sessionUsageLabel,
     sessionUsageSummary.totalTokens,
     openSessionInsightsModal,
-    openImageGenerateModal,
-    messages.length,
     setContextToolsOpen,
     setOpenModelSettings,
     showTokenBudgetWarning,
@@ -6201,7 +6115,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     showNonMessageContextWarning,
     systemPrompt,
     t,
-    insertSummaryCheckpointPrompt,
     temporaryChat,
     updateChatModelSetting
   ])
@@ -6810,6 +6723,25 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [isMobileViewport, isSending, keepComposerBottomInView])
 
+  const toolRunStatusLabel = React.useMemo(() => {
+    if (chatLoopState.pendingApprovals.length > 0) {
+      return t("playground:composer.toolRunPending", "Pending approval")
+    }
+    if (
+      chatLoopState.inflightToolCallIds.length > 0 ||
+      chatLoopState.status === "running"
+    ) {
+      return t("playground:composer.toolRunRunning", "Running")
+    }
+    if (chatLoopState.status === "error") {
+      return t("playground:composer.toolRunFailed", "Failed")
+    }
+    if (chatLoopState.status === "complete") {
+      return t("playground:composer.toolRunDone", "Done")
+    }
+    return t("playground:composer.toolRunIdle", "Idle")
+  }, [chatLoopState, t])
+
   const mcpControlContent = (
     <div className="flex w-64 flex-col gap-2 p-2">
       <div className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
@@ -6843,6 +6775,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             {t("playground:composer.toolChoiceNone", "None")}
           </Radio.Button>
         </Radio.Group>
+        <div className="text-[11px] text-text-muted">
+          {t("playground:composer.toolRunStatus", "Tool run")}: {toolRunStatusLabel}
+        </div>
         <button
           type="button"
           onClick={() => {
@@ -6927,53 +6862,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       </button>
     </Tooltip>
   ) : null
-
-  const generateButton = (
-    <Dropdown
-      trigger={["click"]}
-      placement="topRight"
-      menu={{
-        items: [
-          {
-            key: "image",
-            label: (
-              <span className="inline-flex items-center gap-2">
-                <ImageIcon className="h-4 w-4" />
-                <span>{t("playground:generate.image", "Image")}</span>
-              </span>
-            ),
-            onClick: () => {
-              openImageGenerateModal()
-            }
-          }
-        ]
-      }}
-    >
-      <TldwButton
-        variant="outline"
-        size={isMobileViewport ? "lg" : "sm"}
-        shape={isProMode ? "rounded" : "pill"}
-        iconOnly={!isProMode}
-        ariaLabel={t("playground:generate.open", "Generate") as string}
-        title={t("playground:generate.open", "Generate") as string}
-        data-testid="composer-generate-button"
-      >
-        {isProMode ? (
-          <span className="inline-flex items-center gap-1.5">
-            <WandSparkles className="h-4 w-4" aria-hidden="true" />
-            <span>{t("playground:generate.open", "Generate")}</span>
-          </span>
-        ) : (
-          <>
-            <WandSparkles className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">
-              {t("playground:generate.open", "Generate")}
-            </span>
-          </>
-        )}
-      </TldwButton>
-    </Dropdown>
-  )
 
   const toolsButton = (
     <Popover
@@ -8069,7 +7957,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           mcpControl={mcpControl}
                           sendControl={sendControl}
                           attachmentButton={attachmentButton}
-                          generateButton={generateButton}
                           toolsButton={toolsButton}
                           voiceChatButton={voiceChatButton}
                           modelUsageBadge={modelUsageBadge}

@@ -253,21 +253,46 @@ export class TldwAuthService {
   /**
    * Test API key for single-user mode
    */
-  async testApiKey(serverUrl: string, apiKey: string): Promise<boolean> {
-    // Validate against a protected endpoint that requires auth
-    const base = String(serverUrl).replace(/\/$/, '')
+  async testApiKey(_serverUrl: string, apiKey: string): Promise<boolean> {
+    // Validate against a protected endpoint that requires auth.
+    // Keep this as a relative path so request-core does not apply
+    // absolute URL allowlist policy during onboarding validation.
     try {
       // Use /api/v1/users/me/profile which requires valid authentication
       await bgRequest<any>({
-        path: `${base}/api/v1/users/me/profile` as any,
+        path: '/api/v1/users/me/profile' as any,
         method: 'GET' as any,
         headers: { 'X-API-KEY': apiKey },
-        noAuth: true
+        noAuth: true,
+        timeoutMs: 30000
       })
       return true
     } catch (error: any) {
-      console.error('API key test failed:', error?.message || error)
-      return false
+      const status = Number(
+        error?.status ?? error?.statusCode ?? error?.response?.status ?? 0
+      )
+      const message = String(error?.message || error || "")
+      const normalized = message.toLowerCase()
+      const isAbort =
+        error?.name === "AbortError" ||
+        normalized.includes("aborted") ||
+        normalized.includes("timeout")
+
+      console.error("API key test failed:", message || error)
+
+      if (status === 401 || status === 403) {
+        return false
+      }
+
+      if (isAbort) {
+        const connectionError = new Error(
+          "API key validation timed out or was aborted. Verify server URL/connectivity and try again."
+        ) as Error & { status?: number }
+        connectionError.status = 0
+        throw connectionError
+      }
+
+      throw error
     }
   }
 

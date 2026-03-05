@@ -150,9 +150,18 @@ export const pageAssistModel = async ({
     modelId: model,
     explicitProvider: explicitProvider ?? defaultApiProvider ?? undefined
   })
-  const resolvedExtraHeaders = parseJsonObject(
+  const resolvedExtraHeadersBase = parseJsonObject(
     extraHeaders ?? currentChatModelSettings.extraHeaders
   )
+  const resolvedExtraHeaders = (() => {
+    const headers = {
+      ...(resolvedExtraHeadersBase ?? {})
+    } as Record<string, unknown>
+    if (effectiveToolChoice !== "none") {
+      headers["X-TLDW-Loop-Compat"] = "1"
+    }
+    return Object.keys(headers).length > 0 ? headers : undefined
+  })()
   const resolvedExtraBody = parseJsonObject(
     extraBody ?? currentChatModelSettings.extraBody
   )

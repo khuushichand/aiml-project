@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
+  connect: vi.fn(),
   tldwRequest: vi.fn(),
   storageGet: vi.fn(async () => null),
   storageSet: vi.fn(async () => undefined)
@@ -12,7 +13,9 @@ vi.mock("wxt/browser", () => ({
     runtime: {
       id: "test-extension",
       sendMessage: (...args: unknown[]) =>
-        (mocks.sendMessage as (...args: unknown[]) => unknown)(...args)
+        (mocks.sendMessage as (...args: unknown[]) => unknown)(...args),
+      connect: (...args: unknown[]) =>
+        (mocks.connect as (...args: unknown[]) => unknown)(...args)
     }
   }
 }))
@@ -38,6 +41,7 @@ describe("background proxy fallback safety", () => {
     vi.resetModules()
     vi.useRealTimers()
     mocks.sendMessage.mockReset()
+    mocks.connect.mockReset()
     mocks.tldwRequest.mockReset()
     mocks.storageGet.mockReset()
     mocks.storageSet.mockReset()
@@ -217,5 +221,162 @@ describe("background proxy fallback safety", () => {
 
     await assertion
     expect(mocks.tldwRequest).not.toHaveBeenCalled()
+  })
+
+  it("falls back to direct stream when port errors before first data chunk", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true })
+    const onMessageListeners = new Set<(msg: any) => void>()
+    const onDisconnectListeners = new Set<() => void>()
+    const port = {
+      onMessage: {
+        addListener: (listener: (msg: any) => void) => onMessageListeners.add(listener),
+        removeListener: (listener: (msg: any) => void) => onMessageListeners.delete(listener)
+      },
+      onDisconnect: {
+        addListener: (listener: () => void) => onDisconnectListeners.add(listener),
+        removeListener: (listener: () => void) => onDisconnectListeners.delete(listener)
+      },
+      postMessage: vi.fn(() => {
+        onMessageListeners.forEach((listener) =>
+          listener({
+            event: "error",
+            message: "Could not establish connection. Receiving end does not exist."
+          })
+        )
+      }),
+      disconnect: vi.fn(() => {
+        onDisconnectListeners.forEach((listener) => listener())
+      })
+    }
+    mocks.connect.mockReturnValue(port as any)
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "http://127.0.0.1:8000",
+          authMode: "single-user",
+          apiKey: "test-key-not-placeholder"
+        }
+      }
+      return null
+    })
+    const fetchSpy = vi.fn(async () =>
+      new Response(
+        'data: {"event":"run_started","run_id":"run_1","seq":1,"data":{}}\n\ndata: [DONE]\n\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    )
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(mocks.connect).toHaveBeenCalledTimes(1)
+    expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
+  })
+
+  it("falls back to direct stream when runtime.connect throws", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true })
+    mocks.connect.mockImplementation(() => {
+      throw new Error("Could not establish connection. Receiving end does not exist.")
+    })
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "http://127.0.0.1:8000",
+          authMode: "single-user",
+          apiKey: "test-key-not-placeholder"
+        }
+      }
+      return null
+    })
+    const fetchSpy = vi.fn(async () =>
+      new Response(
+        'data: {"event":"run_started","run_id":"run_2","seq":1,"data":{}}\n\ndata: [DONE]\n\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    )
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(mocks.connect).toHaveBeenCalledTimes(1)
+    expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
+  })
+
+  it("falls back directly when runtime ping preflight times out", async () => {
+    mocks.sendMessage.mockImplementation(() => new Promise(() => undefined))
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "http://127.0.0.1:8000",
+          authMode: "single-user",
+          apiKey: "test-key-not-placeholder"
+        }
+      }
+      return null
+    })
+    const fetchSpy = vi.fn(async () =>
+      new Response(
+        'data: {"event":"run_started","run_id":"run_3","seq":1,"data":{}}\n\ndata: [DONE]\n\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    )
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(mocks.connect).not.toHaveBeenCalled()
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
   })
 })

@@ -12,6 +12,7 @@ This guide covers the Kanban Board module for organizing tasks, research workflo
    - [Boards](#boards)
    - [Lists](#lists)
    - [Cards](#cards)
+   - [Workflow Control Plane](#workflow-control-plane)
    - [Labels](#labels)
    - [Checklists](#checklists)
    - [Comments](#comments)
@@ -35,6 +36,7 @@ This guide covers the Kanban Board module for organizing tasks, research workflo
 The Kanban Board module provides Trello-like task management integrated with tldw_server's RAG infrastructure. Key features include:
 
 - **Boards, Lists, and Cards**: Organize work visually across columns
+- **Workflow Control Plane**: Policy-enforced status transitions with lease/CAS/idempotency safeguards
 - **Rich Card Features**: Due dates, labels, checklists, comments, and markdown descriptions
 - **Full-Text Search**: FTS5-powered search across card titles and descriptions
 - **Vector Search** (optional): Semantic search via ChromaDB embeddings
@@ -128,6 +130,81 @@ curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/copy" \
   -H "Content-Type: application/json" \
   -d '{"target_list_id": 5, "include_checklists": true, "include_labels": true}'
 ```
+
+### Workflow Control Plane
+
+Workflow state is explicitly tracked independent of list placement:
+
+- Canonical orchestrator state is `card.workflow_status` (`kanban_card_workflow_state.workflow_status_key`).
+- List movement is projection side effect from transition policy (`auto_move_list_id`).
+- For automation safety, read/write workflow status directly; do not infer state from list column.
+
+#### Get board workflow policy
+```bash
+curl "http://localhost:8000/api/v1/kanban/workflow/boards/{board_id}/policy" \
+  -H "Authorization: Bearer <token>"
+```
+
+#### Transition workflow status safely
+```bash
+curl -X POST "http://localhost:8000/api/v1/kanban/workflow/cards/{card_id}/transition" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "to_status_key": "impl",
+    "actor": "builder",
+    "expected_version": 3,
+    "idempotency_key": "wf-transition-123",
+    "correlation_id": "run-2026-03-05-001",
+    "reason": "start implementation"
+  }'
+```
+
+#### Decide pending approval
+```bash
+curl -X POST "http://localhost:8000/api/v1/kanban/workflow/cards/{card_id}/approval" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reviewer": "inspector",
+    "decision": "approved",
+    "expected_version": 4,
+    "idempotency_key": "wf-approval-123",
+    "correlation_id": "run-2026-03-05-001",
+    "reason": "criteria met"
+  }'
+```
+
+#### Control and recovery endpoints (admin)
+- Pause board workflow: `POST /workflow/control/boards/{board_id}/pause`
+- Resume board workflow: `POST /workflow/control/boards/{board_id}/resume`
+- Enable draining mode: `POST /workflow/control/boards/{board_id}/drain`
+- List stale claims: `GET /workflow/recovery/stale-claims`
+- Force-reassign claim: `POST /workflow/recovery/cards/{card_id}/force-reassign`
+
+#### Stable workflow conflict codes
+
+Workflow conflicts are machine-readable:
+
+```json
+{
+  "detail": {
+    "code": "lease_required",
+    "message": "lease_required"
+  }
+}
+```
+
+Common codes:
+
+- `version_conflict`
+- `lease_required`
+- `lease_mismatch`
+- `policy_paused`
+- `transition_not_allowed`
+- `approval_required`
+- `projection_failed`
+- `idempotency_conflict`
 
 ### Labels
 
@@ -342,6 +419,27 @@ All endpoints are prefixed with `/api/v1/kanban`.
 | POST | `/cards/{id}/copy` | Copy card |
 | POST | `/lists/{list_id}/cards/reorder` | Reorder cards |
 
+#### Workflow Control
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/workflow/boards/{board_id}/policy` | Get board workflow policy |
+| PUT | `/workflow/boards/{board_id}/policy` | Upsert workflow policy |
+| GET | `/workflow/boards/{board_id}/statuses` | List workflow statuses |
+| GET | `/workflow/boards/{board_id}/transitions` | List workflow transitions |
+| GET | `/workflow/cards/{card_id}/state` | Get workflow runtime state |
+| PATCH | `/workflow/cards/{card_id}/state` | Patch workflow runtime state (CAS) |
+| POST | `/workflow/cards/{card_id}/claim` | Claim workflow lease |
+| POST | `/workflow/cards/{card_id}/release` | Release workflow lease |
+| POST | `/workflow/cards/{card_id}/transition` | Transition workflow status |
+| POST | `/workflow/cards/{card_id}/approval` | Decide pending approval |
+| GET | `/workflow/cards/{card_id}/events` | List workflow events |
+| GET | `/workflow/recovery/stale-claims` | List stale workflow claims |
+| POST | `/workflow/recovery/cards/{card_id}/force-reassign` | Force-reassign claim (admin) |
+| POST | `/workflow/control/boards/{board_id}/pause` | Pause transitions (admin) |
+| POST | `/workflow/control/boards/{board_id}/resume` | Resume transitions (admin) |
+| POST | `/workflow/control/boards/{board_id}/drain` | Enable drain mode (admin) |
+
 #### Labels
 
 | Method | Endpoint | Description |
@@ -466,6 +564,28 @@ Error response format:
 }
 ```
 
+Workflow endpoints may return structured `detail` objects with stable machine-readable conflict codes:
+
+```json
+{
+  "detail": {
+    "code": "policy_paused",
+    "message": "policy_paused"
+  }
+}
+```
+
+Workflow conflict codes:
+
+- `version_conflict`
+- `lease_required`
+- `lease_mismatch`
+- `policy_paused`
+- `transition_not_allowed`
+- `approval_required`
+- `projection_failed`
+- `idempotency_conflict`
+
 ### Code Architecture
 
 #### Key Files
@@ -475,6 +595,7 @@ Error response format:
 | `app/core/DB_Management/Kanban_DB.py` | Database layer with all CRUD operations |
 | `app/core/DB_Management/kanban_vector_search.py` | ChromaDB vector search integration |
 | `app/api/v1/endpoints/kanban_*.py` | API endpoint handlers |
+| `app/api/v1/endpoints/kanban/kanban_workflow.py` | Workflow policy/state/lease/transition/recovery endpoints |
 | `app/api/v1/schemas/kanban_schemas.py` | Pydantic models |
 | `app/api/v1/API_Deps/kanban_deps.py` | FastAPI dependencies |
 
@@ -491,6 +612,12 @@ The Kanban module uses SQLite with the following tables:
 - `kanban_comments` - Comments on cards
 - `kanban_activities` - Activity log
 - `kanban_card_links` - Card-to-card relationships (currently undocumented)
+- `board_workflow_policies` - Board-level workflow policy settings
+- `board_workflow_statuses` - Allowed workflow statuses
+- `board_workflow_transitions` - Allowed workflow edges and requirements
+- `kanban_card_workflow_state` - Canonical runtime workflow state per card
+- `kanban_card_workflow_events` - Append-only workflow audit events
+- `kanban_card_workflow_approvals` - Approval state/history for gated transitions
 
 #### Key Design Patterns
 
@@ -696,4 +823,5 @@ Expected healthy response:
 
 ## Version History
 
+- **v0.2** (2026-03): Added workflow control plane (policy/state/lease/transition/approval/recovery)
 - **v0.1** (2025-12): Initial release with full CRUD, search, and vector integration

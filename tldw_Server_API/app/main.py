@@ -901,6 +901,9 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.chat import (
         router as chat_router,
     )
+    from tldw_Server_API.app.api.v1.endpoints.chat_loop import (
+        router as chat_loop_router,
+    )
 
     # Metrics Endpoint
     from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
@@ -1052,6 +1055,7 @@ else:
         from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_links import router as kanban_links_router
         from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_lists import router as kanban_lists_router
         from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_search import router as kanban_search_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_workflow import router as kanban_workflow_router
 
         _HAS_KANBAN = True
     except ImportError as _kanban_err:
@@ -1133,6 +1137,9 @@ elif _MINIMAL_TEST_APP:
     )
     from tldw_Server_API.app.api.v1.endpoints.chat import (
         router as chat_router,
+    )
+    from tldw_Server_API.app.api.v1.endpoints.chat_loop import (
+        router as chat_loop_router,
     )
 
     # Sandbox endpoint is optional; guard import so minimal startup never fails
@@ -5185,6 +5192,7 @@ elif _MINIMAL_TEST_APP:
     include_router_idempotent(app, paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
     # Include lightweight chat/character routes needed by tests
     include_router_idempotent(app, chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    include_router_idempotent(app, chat_loop_router, prefix=f"{API_V1_PREFIX}")
     include_router_idempotent(app, conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
     include_router_idempotent(app, character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     include_router_idempotent(
@@ -5498,6 +5506,7 @@ elif _MINIMAL_TEST_APP:
         from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_links import router as kanban_links_router
         from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_lists import router as kanban_lists_router
         from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_search import router as kanban_search_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_workflow import router as kanban_workflow_router
 
         app.include_router(kanban_boards_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
         app.include_router(kanban_lists_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
@@ -5507,6 +5516,7 @@ elif _MINIMAL_TEST_APP:
         app.include_router(kanban_comments_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
         app.include_router(kanban_search_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
         app.include_router(kanban_links_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
+        app.include_router(kanban_workflow_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
     except _IMPORT_EXCEPTIONS as _kanban_min_err:
         logger.debug(f"Skipping kanban router in minimal test app: {_kanban_min_err}")
     # Auth endpoints (login/register/refresh/logout/me)
@@ -5887,6 +5897,8 @@ else:
     # Guard optional routers that may not be imported in ULTRA_MINIMAL_APP
     if "chat_router" in locals():
         _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    if "chat_loop_router" in locals():
+        _include_if_enabled("chat", chat_loop_router, prefix=f"{API_V1_PREFIX}")
     if "conversations_alias_router" in locals():
         _include_if_enabled("chat", conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
     # Tools (MCP-backed server tool execution) - include if initial guarded import succeeded
@@ -6067,6 +6079,9 @@ else:
         )
         _include_if_enabled(
             "kanban", kanban_links_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"]
+        )
+        _include_if_enabled(
+            "kanban", kanban_workflow_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"]
         )
     if _HAS_READING_HIGHLIGHTS:
         _include_if_enabled(

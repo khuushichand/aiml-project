@@ -46,6 +46,11 @@ export interface ModerationUserOverridesResponse {
   overrides: Record<string, Record<string, any>>
 }
 
+export interface ModerationUserOverrideLookupResponse {
+  exists: boolean
+  override: Record<string, any>
+}
+
 export interface BlocklistManagedItem {
   id: number
   line: string
@@ -140,8 +145,10 @@ export async function listUserOverrides(): Promise<ModerationUserOverridesRespon
   })
 }
 
-export async function getUserOverride(userId: string): Promise<Record<string, any>> {
-  return await bgRequest<Record<string, any>>({
+export async function getUserOverride(
+  userId: string
+): Promise<ModerationUserOverrideLookupResponse> {
+  return await bgRequest<ModerationUserOverrideLookupResponse>({
     path: toAllowedPath(`/api/v1/moderation/users/${encodeURIComponent(userId)}`),
     method: "GET"
   })

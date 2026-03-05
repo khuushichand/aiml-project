@@ -31,6 +31,8 @@ import {
   MESSAGE_STEERING_PROMPTS_STORAGE_KEY
 } from "@/utils/message-steering"
 import type { MessageSteeringPromptTemplates } from "@/types/message-steering"
+import { useChatLoopState } from "@/services/chat-loop/hooks"
+import { subscribeChatLoopEvents } from "@/services/chat-loop/bridge"
 
 export const useMessageOption = (
   opts: { forceCompareEnabled?: boolean } = {}
@@ -237,6 +239,11 @@ export const useMessageOption = (
       MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
       DEFAULT_MESSAGE_STEERING_PROMPTS
     )
+  const {
+    state: chatLoopState,
+    dispatch: dispatchChatLoopEvent,
+    reset: resetChatLoopState
+  } = useChatLoopState()
 
   const { ttsEnabled } = useWebUI()
 
@@ -517,8 +524,11 @@ export const useMessageOption = (
   }
 
   const clearChat = useClearChat({ textareaRef })
+  React.useEffect(() => subscribeChatLoopEvents(dispatchChatLoopEvent), [
+    dispatchChatLoopEvent
+  ])
   const {
-    onSubmit,
+    onSubmit: submitChat,
     sendPerModelReply,
     regenerateLastMessage,
     stopStreamingRequest,
@@ -600,6 +610,13 @@ export const useMessageOption = (
     invalidateServerChatHistory,
     selectedCharacter
   })
+  const onSubmit = React.useCallback(
+    async (...args: Parameters<typeof submitChat>) => {
+      resetChatLoopState()
+      return submitChat(...args)
+    },
+    [resetChatLoopState, submitChat]
+  )
 
   return {
     editMessage,
@@ -690,6 +707,7 @@ export const useMessageOption = (
     setServerChatSource,
     serverChatExternalRef,
     setServerChatExternalRef,
+    chatLoopState,
     ragMediaIds,
     setRagMediaIds,
     ragSearchMode,
