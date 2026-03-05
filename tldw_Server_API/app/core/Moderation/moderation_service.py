@@ -85,10 +85,19 @@ class ModerationPolicy:
                             "pattern": p.regex.pattern,
                             "action": p.action or "",
                             "replacement": p.replacement or "",
+                            "phase": p.phase or "both",
                             "categories": ",".join(sorted(cats)) if cats else "",
                         })
                     else:
-                        rules.append({"pattern": getattr(p, 'pattern', ''), "action": "", "replacement": "", "categories": ""})
+                        rules.append(
+                            {
+                                "pattern": getattr(p, 'pattern', ''),
+                                "action": "",
+                                "replacement": "",
+                                "phase": "both",
+                                "categories": "",
+                            }
+                        )
         except _MODERATION_NONCRITICAL_EXCEPTIONS:
             rules = []
         return {
@@ -642,6 +651,15 @@ class ModerationService:
             block_patterns=list(p.block_patterns or []),  # avoid mutating shared list
             categories_enabled=self._resolve_categories_override(u, p.categories_enabled),
         )
+        rules_raw = u.get("rules")
+        if isinstance(rules_raw, list):
+            compiled_rules: list[PatternRule] = []
+            for raw_rule in rules_raw:
+                compiled = self._compile_user_rule(raw_rule)
+                if compiled is not None:
+                    compiled_rules.append(compiled)
+            if compiled_rules:
+                policy.block_patterns.extend(compiled_rules)
         return policy
 
     def _resolve_categories_override(
@@ -767,6 +785,41 @@ class ModerationService:
             logger.warning("Dropped invalid moderation override rules during sanitize")
         out["rules"] = normalized_rules
         return out
+
+    def _compile_user_rule(self, raw_rule: object) -> PatternRule | None:
+        """Compile a per-user override rule into a PatternRule."""
+        if not isinstance(raw_rule, dict):
+            return None
+        rule_id = str(raw_rule.get("id", "")).strip()
+        pattern = str(raw_rule.get("pattern", "")).strip()
+        action = str(raw_rule.get("action", "")).strip().lower()
+        phase = str(raw_rule.get("phase", "both")).strip().lower()
+        is_regex = bool(raw_rule.get("is_regex", False))
+
+        if not pattern or action not in {"block", "warn"}:
+            return None
+        if phase not in {"input", "output", "both"}:
+            phase = "both"
+
+        try:
+            if is_regex:
+                if self._is_regex_dangerous(pattern):
+                    logger.warning(f"Skipped dangerous per-user regex rule: {rule_id or '<unknown>'}")
+                    return None
+                compiled = re.compile(pattern, flags=re.IGNORECASE)
+            else:
+                compiled = re.compile(re.escape(pattern), flags=re.IGNORECASE)
+        except re.error:
+            logger.warning(f"Skipped invalid per-user regex rule: {rule_id or '<unknown>'}")
+            return None
+
+        return PatternRule(
+            regex=compiled,
+            action=action,
+            replacement=None,
+            categories=None,
+            phase=phase,
+        )
 
     @classmethod
     def _effective_rule_categories(cls, rule: PatternRule) -> set[str]:
