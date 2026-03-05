@@ -55,6 +55,7 @@ import {
   type BlocklistLintItem,
   type BlocklistLintResponse,
   type BlocklistManagedItem,
+  type ModerationOverrideRule,
   type ModerationSettingsResponse,
   type ModerationTestResponse,
   type ModerationUserOverride
@@ -98,6 +99,53 @@ const formatJson = (value: unknown) => {
   }
 }
 
+const normalizeOverrideRules = (value: unknown): ModerationOverrideRule[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((raw) => {
+      if (!raw || typeof raw !== "object") return null
+      const candidate = raw as Record<string, unknown>
+      const id = String(candidate.id ?? "").trim()
+      const pattern = String(candidate.pattern ?? "").trim()
+      const isRegex = Boolean(candidate.is_regex)
+      const action = String(candidate.action ?? "").trim().toLowerCase()
+      const phaseRaw = String(candidate.phase ?? "both").trim().toLowerCase()
+      const phase: ModerationOverrideRule["phase"] =
+        phaseRaw === "input" || phaseRaw === "output" || phaseRaw === "both"
+          ? phaseRaw
+          : "both"
+      if (!id || !pattern) return null
+      if (action !== "block" && action !== "warn") return null
+      return {
+        id,
+        pattern,
+        is_regex: isRegex,
+        action,
+        phase
+      } as ModerationOverrideRule
+    })
+    .filter((rule): rule is ModerationOverrideRule => Boolean(rule))
+}
+
+const sortOverrideRules = (rules: ModerationOverrideRule[]): ModerationOverrideRule[] =>
+  [...rules].sort((left, right) => left.id.localeCompare(right.id))
+
+const areRulesEquivalent = (
+  left: ModerationOverrideRule,
+  right: ModerationOverrideRule
+): boolean =>
+  left.pattern.toLowerCase() === right.pattern.toLowerCase() &&
+  left.is_regex === right.is_regex &&
+  left.action === right.action &&
+  left.phase === right.phase
+
+const createRuleId = (): string => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  return `rule-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
 const buildOverridePayload = (draft: ModerationUserOverride): ModerationUserOverride => {
   const payload: ModerationUserOverride = {}
   if (draft.enabled !== undefined) payload.enabled = draft.enabled
@@ -108,6 +156,9 @@ const buildOverridePayload = (draft: ModerationUserOverride): ModerationUserOver
   if (draft.redact_replacement) payload.redact_replacement = draft.redact_replacement
   if (draft.categories_enabled !== undefined) {
     payload.categories_enabled = normalizeCategories(draft.categories_enabled)
+  }
+  if (draft.rules !== undefined) {
+    payload.rules = normalizeOverrideRules(draft.rules)
   }
   return payload
 }
@@ -188,6 +239,9 @@ const normalizeOverrideForCompare = (draft: ModerationUserOverride) => {
   if (payload.categories_enabled !== undefined) {
     payload.categories_enabled = stableSort(normalizeCategories(payload.categories_enabled))
   }
+  if (payload.rules !== undefined) {
+    payload.rules = sortOverrideRules(normalizeOverrideRules(payload.rules))
+  }
   return payload
 }
 
@@ -245,6 +299,9 @@ export const ModerationPlayground: React.FC = () => {
   const [overrideSearchFilter, setOverrideSearchFilter] = React.useState("")
   const [userIdError, setUserIdError] = React.useState<string | null>(null)
   const [selectedOverrideIds, setSelectedOverrideIds] = React.useState<React.Key[]>([])
+  const [quickPhrase, setQuickPhrase] = React.useState("")
+  const [quickListType, setQuickListType] = React.useState<"ban" | "notify">("ban")
+  const [quickRegex, setQuickRegex] = React.useState(false)
 
   // Refs
   const userIdInputRef = React.useRef<InputRef>(null)
@@ -326,7 +383,8 @@ export const ModerationPlayground: React.FC = () => {
           input_action: data.input_action,
           output_action: data.output_action,
           redact_replacement: data.redact_replacement,
-          categories_enabled: normalizedCategories
+          categories_enabled: normalizedCategories,
+          rules: normalizeOverrideRules(data.rules)
         }
         setOverrideDraft(normalized)
         setOverrideLoaded(true)
@@ -383,6 +441,18 @@ export const ModerationPlayground: React.FC = () => {
   const normalizedOverrideBaseline = normalizeOverrideForCompare(overrideBaseline ?? {})
   const overrideDirty =
     Boolean(activeUserId) && !isEqualJson(normalizedOverrideDraft, normalizedOverrideBaseline)
+  const overrideRules = React.useMemo(
+    () => normalizeOverrideRules(overrideDraft.rules),
+    [overrideDraft.rules]
+  )
+  const bannedRules = React.useMemo(
+    () => overrideRules.filter((rule) => rule.action === "block"),
+    [overrideRules]
+  )
+  const notifyRules = React.useMemo(
+    () => overrideRules.filter((rule) => rule.action === "warn"),
+    [overrideRules]
+  )
   const hasUnsavedChanges = settingsDirty || overrideDirty
 
   React.useEffect(() => {
@@ -401,6 +471,50 @@ export const ModerationPlayground: React.FC = () => {
       return
     }
     setActiveUserId(userIdDraft.trim())
+  }
+
+  const handleAddQuickRule = () => {
+    if (!activeUserId) {
+      messageApi.warning("Load a user before adding phrase rules")
+      return
+    }
+    const pattern = quickPhrase.trim()
+    if (!pattern) {
+      messageApi.warning("Enter a word or phrase")
+      return
+    }
+    if (quickRegex) {
+      try {
+        // Validate user-provided regex syntax in the browser before adding.
+        new RegExp(pattern)
+      } catch {
+        messageApi.warning("Invalid regex pattern")
+        return
+      }
+    }
+    const nextRule: ModerationOverrideRule = {
+      id: createRuleId(),
+      pattern,
+      is_regex: quickRegex,
+      action: quickListType === "ban" ? "block" : "warn",
+      phase: "both"
+    }
+    if (overrideRules.some((rule) => areRulesEquivalent(rule, nextRule))) {
+      messageApi.warning("Phrase already exists in this list")
+      return
+    }
+    setOverrideDraft((prev) => ({
+      ...prev,
+      rules: [...normalizeOverrideRules(prev.rules), nextRule]
+    }))
+    setQuickPhrase("")
+  }
+
+  const handleRemoveQuickRule = (ruleId: string) => {
+    setOverrideDraft((prev) => ({
+      ...prev,
+      rules: normalizeOverrideRules(prev.rules).filter((rule) => rule.id !== ruleId)
+    }))
   }
 
   const handleSaveSettings = async () => {
@@ -476,7 +590,8 @@ export const ModerationPlayground: React.FC = () => {
       categories_enabled:
         baseline.categories_enabled !== undefined
           ? normalizeCategories(baseline.categories_enabled)
-          : undefined
+          : undefined,
+      rules: normalizeOverrideRules(baseline.rules)
     }
     setOverrideDraft(normalized)
   }
@@ -1150,6 +1265,110 @@ export const ModerationPlayground: React.FC = () => {
             </div>
           ) : (
             <Space orientation="vertical" size="middle" className="w-full">
+              <div>
+                <Text strong>User Phrase Lists</Text>
+                <div className="text-text-muted text-xs mb-2">
+                  Add individual phrases to a Banlist (block) or Notify list (warn).
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto_auto] sm:items-center">
+                  <Input
+                    placeholder="Add a word or phrase"
+                    value={quickPhrase}
+                    onChange={(event) => setQuickPhrase(event.target.value)}
+                    disabled={!activeUserId}
+                    onPressEnter={handleAddQuickRule}
+                  />
+                  <Segmented
+                    value={quickListType}
+                    onChange={(value) => setQuickListType(value as "ban" | "notify")}
+                    options={[
+                      { label: "Banlist", value: "ban" },
+                      { label: "Notify list", value: "notify" }
+                    ]}
+                    disabled={!activeUserId}
+                  />
+                  <Checkbox
+                    checked={quickRegex}
+                    onChange={(event) => setQuickRegex(event.target.checked)}
+                    disabled={!activeUserId}
+                  >
+                    Regex
+                  </Checkbox>
+                  <Button type="primary" onClick={handleAddQuickRule} disabled={!activeUserId}>
+                    Add
+                  </Button>
+                </div>
+                {!activeUserId && (
+                  <div className="text-text-muted text-xs mt-2">
+                    Load a user to add phrase rules.
+                  </div>
+                )}
+                <div className="grid gap-3 sm:grid-cols-2 mt-3">
+                  <Card size="small" title="Banned phrases">
+                    <Space orientation="vertical" size="small" className="w-full">
+                      {bannedRules.length === 0 ? (
+                        <Text className="text-text-muted text-xs">No phrases yet</Text>
+                      ) : (
+                        bannedRules.map((rule) => (
+                          <div
+                            key={rule.id}
+                            className="flex items-center justify-between gap-2 border border-border rounded-md px-2 py-1"
+                          >
+                            <div className="min-w-0">
+                              <Text>{rule.pattern}</Text>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                <Tag>{rule.is_regex ? "Regex" : "Literal"}</Tag>
+                                <Tag>Both phases</Tag>
+                              </div>
+                            </div>
+                            <Button
+                              size="small"
+                              type="text"
+                              danger
+                              onClick={() => handleRemoveQuickRule(rule.id)}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        ))
+                      )}
+                    </Space>
+                  </Card>
+                  <Card size="small" title="Notify phrases">
+                    <Space orientation="vertical" size="small" className="w-full">
+                      {notifyRules.length === 0 ? (
+                        <Text className="text-text-muted text-xs">No phrases yet</Text>
+                      ) : (
+                        notifyRules.map((rule) => (
+                          <div
+                            key={rule.id}
+                            className="flex items-center justify-between gap-2 border border-border rounded-md px-2 py-1"
+                          >
+                            <div className="min-w-0">
+                              <Text>{rule.pattern}</Text>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                <Tag>{rule.is_regex ? "Regex" : "Literal"}</Tag>
+                                <Tag>Both phases</Tag>
+                              </div>
+                            </div>
+                            <Button
+                              size="small"
+                              type="text"
+                              danger
+                              onClick={() => handleRemoveQuickRule(rule.id)}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        ))
+                      )}
+                    </Space>
+                  </Card>
+                </div>
+              </div>
+
+              <Divider className="!my-2" />
+
               <div>
                 <Text strong>Quick Presets</Text>
                 <div className="text-text-muted text-xs mb-2">
