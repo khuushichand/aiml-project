@@ -112,6 +112,7 @@ class PatternRule:
     action: str | None = None  # block | redact | warn | None
     replacement: str | None = None  # only used when action=redact
     categories: set[str] | None = None  # e.g., {"pii", "confidential"}
+    phase: str = "both"  # input | output | both
 
 
 class ModerationService:
@@ -689,6 +690,36 @@ class ModerationService:
                     return f"invalid {key}: {override.get(key)}"
         return None
 
+    def _validate_override_rules_strict(self, override: dict[str, object]) -> str | None:
+        rules_raw = (override or {}).get("rules")
+        if rules_raw is None:
+            return None
+        if not isinstance(rules_raw, list):
+            return "invalid rules: expected a list"
+        for idx, raw in enumerate(rules_raw):
+            if not isinstance(raw, dict):
+                return f"invalid rule at index {idx}: expected object"
+            rule_id = str(raw.get("id", "")).strip()
+            pattern = str(raw.get("pattern", "")).strip()
+            action = str(raw.get("action", "")).strip().lower()
+            phase = str(raw.get("phase", "both")).strip().lower()
+            if not rule_id:
+                return f"invalid rule id at index {idx}"
+            if not pattern:
+                return f"invalid rule pattern at index {idx}"
+            if action not in {"block", "warn"}:
+                return f"invalid rule action: {raw.get('action')}"
+            if phase not in {"input", "output", "both"}:
+                return f"invalid rule phase: {raw.get('phase')}"
+            if bool(raw.get("is_regex", False)):
+                if self._is_regex_dangerous(pattern):
+                    return f"dangerous regex in rule: {rule_id}"
+                try:
+                    re.compile(pattern, flags=re.IGNORECASE)
+                except re.error:
+                    return f"invalid regex in rule: {rule_id}"
+        return None
+
     def _sanitize_user_override(self, override: dict[str, object]) -> dict[str, object]:
         out = self._normalize_override_actions(override)
         for key in ("input_action", "output_action"):
@@ -697,6 +728,44 @@ class ModerationService:
                 if val not in self._ALLOWED_ACTIONS:
                     logger.warning(f"Invalid moderation override action '{out.get(key)}' for {key}; dropping value")
                     out.pop(key, None)
+        rules_raw = out.get("rules")
+        if rules_raw is None:
+            return out
+        if not isinstance(rules_raw, list):
+            out.pop("rules", None)
+            return out
+        normalized_rules: list[dict[str, object]] = []
+        for idx, raw in enumerate(rules_raw):
+            if not isinstance(raw, dict):
+                continue
+            rule_id = str(raw.get("id", "")).strip()
+            pattern = str(raw.get("pattern", "")).strip()
+            action = str(raw.get("action", "")).strip().lower()
+            phase = str(raw.get("phase", "both")).strip().lower()
+            is_regex = bool(raw.get("is_regex", False))
+            if not rule_id or not pattern or action not in {"block", "warn"}:
+                continue
+            if phase not in {"input", "output", "both"}:
+                continue
+            if is_regex:
+                if self._is_regex_dangerous(pattern):
+                    continue
+                try:
+                    re.compile(pattern, flags=re.IGNORECASE)
+                except re.error:
+                    continue
+            normalized_rules.append(
+                {
+                    "id": rule_id,
+                    "pattern": pattern,
+                    "is_regex": is_regex,
+                    "action": action,
+                    "phase": phase,
+                }
+            )
+        if not normalized_rules and rules_raw:
+            logger.warning("Dropped invalid moderation override rules during sanitize")
+        out["rules"] = normalized_rules
         return out
 
     @classmethod
@@ -704,6 +773,15 @@ class ModerationService:
         cats = rule.categories or set()
         normalized = {str(c).strip().lower() for c in cats if str(c).strip()}
         return normalized if normalized else {cls._UNCATEGORIZED_CATEGORY}
+
+    @staticmethod
+    def _rule_applies_to_phase(rule: PatternRule, phase: str | None) -> bool:
+        if phase not in {"input", "output"}:
+            return True
+        rule_phase = str(getattr(rule, "phase", "both") or "both").strip().lower()
+        if rule_phase not in {"input", "output", "both"}:
+            rule_phase = "both"
+        return rule_phase in {"both", phase}
 
     def effective_policy_snapshot(self, user_id: str | None) -> dict[str, object]:
         """Return a serializable dict of the effective policy for inspection."""
@@ -755,6 +833,8 @@ class ModerationService:
         best_match_pos: int | None = None
         best_replacement: str | None = None
         for rule in policy.block_patterns:
+            if isinstance(rule, PatternRule) and not self._rule_applies_to_phase(rule, phase):
+                continue
             # Category gating mirrors evaluate_action() behavior
             if isinstance(rule, PatternRule) and policy.categories_enabled:
                 rcats = self._effective_rule_categories(rule)
@@ -928,6 +1008,8 @@ class ModerationService:
         best_match_span: tuple[int, int] | None = None
         for rule in policy.block_patterns or []:
             pat = rule.regex if isinstance(rule, PatternRule) else rule
+            if isinstance(rule, PatternRule) and not self._rule_applies_to_phase(rule, phase):
+                continue
             # Category gating
             if isinstance(rule, PatternRule) and policy.categories_enabled:
                 rcats = self._effective_rule_categories(rule)
@@ -1090,8 +1172,11 @@ class ModerationService:
         err = self._validate_override_actions(override)
         if err:
             return {"ok": False, "persisted": False, "error": err}
+        rule_err = self._validate_override_rules_strict(override)
+        if rule_err:
+            return {"ok": False, "persisted": False, "error": rule_err}
         with self._lock:
-            normalized = self._normalize_override_actions(override)
+            normalized = self._sanitize_user_override(self._normalize_override_actions(override))
             self._user_overrides[str(user_id)] = {str(k): v for k, v in normalized.items()}
             path = getattr(self, "_user_overrides_path", None)
             if not path:

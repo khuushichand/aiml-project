@@ -34,6 +34,74 @@ def test_load_user_overrides_sanitizes_invalid_action(tmp_path):
 
 
 @pytest.mark.unit
+def test_set_user_override_rejects_invalid_rule_action(tmp_path):
+    svc = ModerationService()
+    overrides_path = tmp_path / "overrides.json"
+    svc._user_overrides_path = str(overrides_path)
+
+    res = svc.set_user_override(
+        "user1",
+        {
+            "rules": [
+                {
+                    "id": "bad",
+                    "pattern": "x",
+                    "is_regex": False,
+                    "action": "redact",
+                    "phase": "both",
+                }
+            ]
+        },
+    )
+    assert res["ok"] is False
+    assert "invalid rule action" in (res.get("error") or "")
+    assert overrides_path.exists() is False
+
+
+@pytest.mark.unit
+def test_load_user_overrides_drops_invalid_rules_but_keeps_valid_entries(tmp_path):
+    overrides_path = tmp_path / "overrides.json"
+    overrides_path.write_text(
+        json.dumps(
+            {
+                "alice": {
+                    "rules": [
+                        {
+                            "id": "bad",
+                            "pattern": "(",
+                            "is_regex": True,
+                            "action": "block",
+                            "phase": "both",
+                        },
+                        {
+                            "id": "ok",
+                            "pattern": "safe",
+                            "is_regex": False,
+                            "action": "warn",
+                            "phase": "both",
+                        },
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    svc = ModerationService()
+    svc._user_overrides_path = str(overrides_path)
+    loaded = svc._load_user_overrides()
+
+    assert loaded["alice"]["rules"] == [
+        {
+            "id": "ok",
+            "pattern": "safe",
+            "is_regex": False,
+            "action": "warn",
+            "phase": "both",
+        }
+    ]
+
+
+@pytest.mark.unit
 def test_user_override_rules_schema_accepts_block_and_warn_with_phase():
     model = ModerationUserOverride(
         enabled=True,
