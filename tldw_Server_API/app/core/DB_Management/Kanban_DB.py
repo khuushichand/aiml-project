@@ -1652,9 +1652,19 @@ END;
             try:
                 state_row = self._ensure_card_workflow_state(conn, card_id)
                 current_state = self._row_to_card_workflow_state_dict(state_row)
+                card_row = conn.execute(
+                    """
+                    SELECT id, board_id, list_id
+                    FROM kanban_cards
+                    WHERE id = ? AND deleted = 0
+                    """,
+                    (card_id,),
+                ).fetchone()
+                if not card_row:
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 policy_row = conn.execute(
-                    "SELECT is_paused FROM board_workflow_policies WHERE id = ?",
+                    "SELECT is_paused, strict_projection FROM board_workflow_policies WHERE id = ?",
                     (current_state["policy_id"],),
                 ).fetchone()
                 if policy_row and bool(policy_row["is_paused"]):
@@ -1664,7 +1674,9 @@ END;
                     """
                     SELECT id
                     FROM kanban_card_workflow_events
-                    WHERE card_id = ? AND event_type = 'workflow_transitioned' AND idempotency_key = ?
+                    WHERE card_id = ?
+                      AND event_type IN ('workflow_transitioned', 'workflow_approval_requested')
+                      AND idempotency_key = ?
                     """,
                     (card_id, idempotency_key.strip()),
                 ).fetchone()
@@ -1677,7 +1689,7 @@ END;
 
                 transition_row = conn.execute(
                     """
-                    SELECT id, requires_claim, requires_approval, is_active
+                    SELECT id, requires_claim, requires_approval, is_active, auto_move_list_id
                     FROM board_workflow_transitions
                     WHERE policy_id = ? AND from_status_key = ? AND to_status_key = ? AND is_active = 1
                     """,
@@ -1694,6 +1706,21 @@ END;
                         raise ConflictError("lease_required", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
                     if not lease_expires_at or str(lease_expires_at) <= now:
                         raise ConflictError("lease_required", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                projected_list_id: int | None = None
+                if transition_row["auto_move_list_id"] is not None:
+                    projected_row = conn.execute(
+                        """
+                        SELECT id
+                        FROM kanban_lists
+                        WHERE id = ? AND board_id = ? AND deleted = 0 AND archived = 0
+                        """,
+                        (transition_row["auto_move_list_id"], card_row["board_id"]),
+                    ).fetchone()
+                    if not projected_row and bool(policy_row["strict_projection"]):
+                        raise ConflictError("projection_failed", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+                    if projected_row:
+                        projected_list_id = int(projected_row["id"])
 
                 if bool(transition_row["requires_approval"]):
                     update_cur = conn.execute(
@@ -1774,6 +1801,18 @@ END;
                 if update_cur.rowcount != 1:
                     raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
 
+                if projected_list_id is not None and int(card_row["list_id"]) != projected_list_id:
+                    projected_update = conn.execute(
+                        """
+                        UPDATE kanban_cards
+                        SET list_id = ?, version = version + 1, updated_at = ?
+                        WHERE id = ? AND board_id = ? AND deleted = 0 AND archived = 0
+                        """,
+                        (projected_list_id, now, card_id, card_row["board_id"]),
+                    )
+                    if projected_update.rowcount != 1 and bool(policy_row["strict_projection"]):
+                        raise ConflictError("projection_failed", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
                 updated_row = self._get_card_workflow_state_row(conn, card_id)
                 if not updated_row:
                     raise KanbanDBError("Updated workflow state could not be loaded")  # noqa: TRY003
@@ -1853,7 +1892,7 @@ END;
 
                 transition_row = conn.execute(
                     """
-                    SELECT id, to_status_key, approve_to_status_key, reject_to_status_key
+                    SELECT id, to_status_key, approve_to_status_key, reject_to_status_key, auto_move_list_id
                     FROM board_workflow_transitions
                     WHERE id = ?
                     """,
@@ -1870,6 +1909,35 @@ END;
                     approval_state = "rejected"
 
                 now = _utcnow_iso()
+                card_row = conn.execute(
+                    """
+                    SELECT id, board_id, list_id
+                    FROM kanban_cards
+                    WHERE id = ? AND deleted = 0
+                    """,
+                    (card_id,),
+                ).fetchone()
+                if not card_row:
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
+                policy_row = conn.execute(
+                    "SELECT strict_projection FROM board_workflow_policies WHERE id = ?",
+                    (current_state["policy_id"],),
+                ).fetchone()
+                projected_list_id: int | None = None
+                if decision == "approved" and transition_row["auto_move_list_id"] is not None:
+                    projected_row = conn.execute(
+                        """
+                        SELECT id
+                        FROM kanban_lists
+                        WHERE id = ? AND board_id = ? AND deleted = 0 AND archived = 0
+                        """,
+                        (transition_row["auto_move_list_id"], card_row["board_id"]),
+                    ).fetchone()
+                    if not projected_row and bool(policy_row and policy_row["strict_projection"]):
+                        raise ConflictError("projection_failed", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+                    if projected_row:
+                        projected_list_id = int(projected_row["id"])
+
                 conn.execute(
                     """
                     UPDATE kanban_card_workflow_approvals
@@ -1895,6 +1963,18 @@ END;
                 )
                 if update_cur.rowcount != 1:
                     raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                if projected_list_id is not None and int(card_row["list_id"]) != projected_list_id:
+                    projected_update = conn.execute(
+                        """
+                        UPDATE kanban_cards
+                        SET list_id = ?, version = version + 1, updated_at = ?
+                        WHERE id = ? AND board_id = ? AND deleted = 0 AND archived = 0
+                        """,
+                        (projected_list_id, now, card_id, card_row["board_id"]),
+                    )
+                    if projected_update.rowcount != 1 and bool(policy_row and policy_row["strict_projection"]):
+                        raise ConflictError("projection_failed", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
 
                 updated_row = self._get_card_workflow_state_row(conn, card_id)
                 if not updated_row:
