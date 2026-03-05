@@ -42,43 +42,195 @@ def _build_app() -> FastAPI:
         return principal
 
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
+    moderation_mod.get_moderation_service = lambda: stub  # type: ignore[assignment]
     return app
 
 
-class _Svc:
-    def __init__(self, overrides: dict[str, dict[str, object]]) -> None:
-        self._overrides = overrides
+class _StubModerationService:
+    def __init__(self, overrides: dict[str, dict] | None = None, set_result: dict | None = None):
+        self.overrides = dict(overrides or {})
+        self.last_set: tuple[str, dict] | None = None
+        self.set_result = dict(set_result) if set_result is not None else None
 
-    def list_user_overrides(self) -> dict[str, dict[str, object]]:
-        return dict(self._overrides)
+    def list_user_overrides(self) -> dict[str, dict]:
+        return self.overrides
+
+    def set_user_override(self, user_id: str, override: dict) -> dict:
+        self.last_set = (user_id, dict(override))
+        if self.set_result is not None:
+            return dict(self.set_result)
+        self.overrides[str(user_id)] = dict(override)
+        return {"ok": True, "persisted": True, **dict(override)}
+
+    def delete_user_override(self, user_id: str) -> dict:
+        if str(user_id) not in self.overrides:
+            return {"ok": False, "persisted": False, "error": "not found"}
+        self.overrides.pop(str(user_id), None)
+        return {"ok": True, "persisted": True}
 
 
 @pytest.mark.unit
-def test_get_user_override_returns_exists_false_for_missing_override(monkeypatch):
-    monkeypatch.setattr(moderation_mod, "get_moderation_service", lambda: _Svc({}))
-    app = _build_app()
-
-    with TestClient(app) as client:
-        resp = client.get("/api/v1/moderation/users/new-user")
-
-    assert resp.status_code == 200
-    assert resp.json() == {"exists": False, "override": {}}
-
-
-@pytest.mark.unit
-def test_get_user_override_returns_exists_true_with_override_payload(monkeypatch):
-    monkeypatch.setattr(
-        moderation_mod,
-        "get_moderation_service",
-        lambda: _Svc({"alice": {"enabled": True, "input_action": "warn"}}),
+def test_get_user_override_returns_rules_payload():
+    stub = _StubModerationService(
+        {
+            "alice": {
+                "enabled": True,
+                "rules": [
+                    {
+                        "id": "r1",
+                        "pattern": "bad",
+                        "is_regex": False,
+                        "action": "block",
+                        "phase": "both",
+                    }
+                ],
+            }
+        }
     )
-    app = _build_app()
+    app = _build_app(stub)
 
     with TestClient(app) as client:
         resp = client.get("/api/v1/moderation/users/alice")
 
     assert resp.status_code == 200
-    assert resp.json() == {
-        "exists": True,
-        "override": {"enabled": True, "input_action": "warn"},
+    body = resp.json()
+    assert body["enabled"] is True
+    assert body["rules"][0]["action"] == "block"
+
+
+@pytest.mark.unit
+def test_put_user_override_persists_rules_payload():
+    stub = _StubModerationService()
+    app = _build_app(stub)
+
+    payload = {
+        "enabled": True,
+        "rules": [
+            {
+                "id": "n1",
+                "pattern": "heads up",
+                "is_regex": False,
+                "action": "warn",
+                "phase": "both",
+            }
+        ],
     }
+
+    with TestClient(app) as client:
+        resp = client.put("/api/v1/moderation/users/alice", json=payload)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["persisted"] is True
+    assert body["rules"][0]["pattern"] == "heads up"
+    assert body["rules"][0]["action"] == "warn"
+    assert stub.last_set is not None
+    assert stub.last_set[0] == "alice"
+    assert stub.last_set[1]["rules"][0]["phase"] == "both"
+
+
+@pytest.mark.unit
+def test_put_user_override_returns_400_for_validation_error():
+    stub = _StubModerationService(
+        set_result={
+            "ok": False,
+            "persisted": False,
+            "error": "dangerous regex in rule: r1",
+            "error_type": "validation",
+        }
+    )
+    app = _build_app(stub)
+
+    payload = {
+        "enabled": True,
+        "rules": [
+            {
+                "id": "r1",
+                "pattern": "(",
+                "is_regex": True,
+                "action": "block",
+                "phase": "both",
+            }
+        ],
+    }
+
+    with TestClient(app) as client:
+        resp = client.put("/api/v1/moderation/users/alice", json=payload)
+
+    assert resp.status_code == 400
+    assert resp.json().get("detail") == "dangerous regex in rule: r1"
+
+
+@pytest.mark.unit
+def test_put_user_override_returns_500_for_persistence_error():
+    stub = _StubModerationService(
+        set_result={
+            "ok": False,
+            "persisted": False,
+            "error": "disk full",
+            "error_type": "persistence",
+        }
+    )
+    app = _build_app(stub)
+
+    payload = {
+        "enabled": True,
+        "rules": [
+            {
+                "id": "r1",
+                "pattern": "hello",
+                "is_regex": False,
+                "action": "warn",
+                "phase": "both",
+            }
+        ],
+    }
+
+    with TestClient(app) as client:
+        resp = client.put("/api/v1/moderation/users/alice", json=payload)
+
+    assert resp.status_code == 500
+    assert resp.json().get("detail") == "Failed to persist override"
+
+
+@pytest.mark.unit
+def test_put_user_override_returns_400_for_legacy_dangerous_error_message():
+    stub = _StubModerationService(
+        set_result={
+            "ok": False,
+            "persisted": False,
+            "error": "dangerous regex in rule: r1",
+        }
+    )
+    app = _build_app(stub)
+
+    payload = {
+        "enabled": True,
+        "rules": [
+            {
+                "id": "r1",
+                "pattern": "(",
+                "is_regex": True,
+                "action": "block",
+                "phase": "both",
+            }
+        ],
+    }
+
+    with TestClient(app) as client:
+        resp = client.put("/api/v1/moderation/users/alice", json=payload)
+
+    assert resp.status_code == 400
+    assert resp.json().get("detail") == "dangerous regex in rule: r1"
+
+
+@pytest.mark.unit
+def test_get_user_override_missing_returns_404():
+    stub = _StubModerationService()
+    app = _build_app(stub)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/moderation/users/missing")
+
+    assert resp.status_code == 404
+    assert resp.json().get("detail") == "Override not found"

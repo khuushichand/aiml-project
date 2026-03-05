@@ -84,3 +84,74 @@ def test_moderation_test_sample_matches_selected_rule(monkeypatch):
     assert "[REDACTED]" in sample
     assert "alpha" not in sample.lower()
     assert "beta" not in sample.lower()
+
+
+@pytest.mark.unit
+def test_effective_policy_merges_user_rules_and_returns_warn_action():
+    svc = ModerationService()
+    svc._global_policy = ModerationPolicy(
+        enabled=True,
+        input_enabled=True,
+        output_enabled=True,
+        input_action="warn",
+        output_action="warn",
+        redact_replacement="[REDACTED]",
+        per_user_overrides=True,
+        block_patterns=[],
+        categories_enabled=None,
+    )
+    svc._user_overrides = {
+        "alice": {
+            "rules": [
+                {
+                    "id": "r1",
+                    "pattern": "heads up",
+                    "is_regex": False,
+                    "action": "warn",
+                    "phase": "both",
+                }
+            ]
+        }
+    }
+
+    policy = svc.get_effective_policy("alice")
+    action, _, sample, _ = svc.evaluate_action("please heads up now", policy, "output")
+    assert action == "warn"
+    assert sample
+
+
+@pytest.mark.unit
+def test_effective_policy_user_rules_apply_with_category_filter_enabled():
+    svc = ModerationService()
+    svc._global_policy = ModerationPolicy(
+        enabled=True,
+        input_enabled=True,
+        output_enabled=True,
+        input_action="warn",
+        output_action="warn",
+        redact_replacement="[REDACTED]",
+        per_user_overrides=True,
+        block_patterns=[],
+        categories_enabled={"pii"},
+    )
+    svc._user_overrides = {
+        "alice": {
+            "rules": [
+                {
+                    "id": "r1",
+                    "pattern": "heads up",
+                    "is_regex": False,
+                    "action": "block",
+                    "phase": "both",
+                }
+            ]
+        }
+    }
+
+    policy = svc.get_effective_policy("alice")
+    action, category, _, _ = svc.evaluate_action("please heads up now", policy, "input")
+    flagged, _ = svc.check_text("please heads up now", policy, phase="input")
+
+    assert action == "block"
+    assert flagged is True
+    assert category is None
