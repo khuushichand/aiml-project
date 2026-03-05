@@ -1,7 +1,9 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 
+from tldw_Server_API.app.api.v1.schemas.moderation_schemas import ModerationUserOverride
 from tldw_Server_API.app.core.Moderation.moderation_service import ModerationService
 
 
@@ -29,3 +31,43 @@ def test_load_user_overrides_sanitizes_invalid_action(tmp_path):
     user_override = loaded.get("user1") or {}
     assert "input_action" not in user_override
     assert user_override.get("output_action") == "warn"
+
+
+@pytest.mark.unit
+def test_user_override_rules_schema_accepts_block_and_warn_with_phase():
+    model = ModerationUserOverride(
+        enabled=True,
+        rules=[
+            {
+                "id": "r1",
+                "pattern": "bad phrase",
+                "is_regex": False,
+                "action": "block",
+                "phase": "both",
+            },
+            {
+                "id": "r2",
+                "pattern": "warn\\s+me",
+                "is_regex": True,
+                "action": "warn",
+                "phase": "input",
+            },
+        ],
+    )
+    assert len(model.rules or []) == 2
+
+
+@pytest.mark.unit
+def test_user_override_rules_schema_rejects_invalid_phase():
+    with pytest.raises(ValidationError):
+        ModerationUserOverride(
+            rules=[
+                {
+                    "id": "r1",
+                    "pattern": "x",
+                    "is_regex": False,
+                    "action": "block",
+                    "phase": "sideways",
+                }
+            ]
+        )
