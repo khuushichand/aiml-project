@@ -24,6 +24,9 @@ type TldwRequestRuntime = {
 
 const ABSOLUTE_URL_BLOCK_ERROR =
   "Absolute URL requests are blocked unless the request origin is explicitly allowlisted."
+const REQUEST_LOG_PREFIX = "[tldw:request]"
+const malformedConfigServerUrlWarnings = new Set<string>()
+const malformedAllowlistEntryWarnings = new Set<string>()
 
 const normalizeKnownPathQuirks = (path: PathOrUrl): PathOrUrl => {
   if (typeof path !== "string") return path
@@ -106,6 +109,41 @@ const toAllowlistEntries = (value: unknown): string[] => {
   return []
 }
 
+const warnMalformedServerUrl = (raw: string, error: unknown) => {
+  const key = raw.trim()
+  if (!key || malformedConfigServerUrlWarnings.has(key)) return
+  malformedConfigServerUrlWarnings.add(key)
+  console.warn(
+    `${REQUEST_LOG_PREFIX} Invalid configured serverUrl: ${key}`,
+    error
+  )
+}
+
+const warnMalformedAllowlistEntry = (raw: string, error: unknown) => {
+  const key = raw.trim()
+  if (!key || malformedAllowlistEntryWarnings.has(key)) return
+  malformedAllowlistEntryWarnings.add(key)
+  console.warn(
+    `${REQUEST_LOG_PREFIX} Invalid absoluteUrlAllowlist entry: ${key}`,
+    error
+  )
+}
+
+const parseConfiguredServerOrigin = (cfg: TldwConfigLike): string | null => {
+  const configuredServerUrl = String(
+    (cfg as Record<string, unknown> | null)?.serverUrl || ""
+  ).trim()
+  if (!configuredServerUrl) return null
+  try {
+    const serverParsed = new URL(configuredServerUrl)
+    if (!/^https?:$/i.test(serverParsed.protocol)) return null
+    return serverParsed.origin.toLowerCase()
+  } catch (error) {
+    warnMalformedServerUrl(configuredServerUrl, error)
+    return null
+  }
+}
+
 const absoluteOriginAllowlistFromConfig = (cfg: TldwConfigLike): Set<string> => {
   const out = new Set<string>()
   const configuredServerUrl = String((cfg as Record<string, unknown> | null)?.serverUrl || "").trim()
@@ -126,11 +164,26 @@ const absoluteOriginAllowlistFromConfig = (cfg: TldwConfigLike): Set<string> => 
       if (/^https?:$/i.test(parsed.protocol)) {
         out.add(parsed.origin.toLowerCase())
       }
-    } catch {
-      // Ignore malformed allowlist entries.
+    } catch (error) {
+      warnMalformedAllowlistEntry(entry, error)
     }
   }
   return out
+}
+
+const isSameOriginAbsoluteUrlForConfiguredServer = (
+  absoluteUrl: string,
+  cfg: TldwConfigLike
+): boolean => {
+  const configuredServerOrigin = parseConfiguredServerOrigin(cfg)
+  if (!configuredServerOrigin) return false
+  try {
+    const target = new URL(absoluteUrl)
+    if (!/^https?:$/i.test(target.protocol)) return false
+    return target.origin.toLowerCase() === configuredServerOrigin
+  } catch {
+    return false
+  }
 }
 
 const isAbsoluteUrlAllowlisted = (
@@ -165,7 +218,8 @@ export const tldwRequest = async (
   const fetchFn = runtime.fetchFn || fetch
   const cfg = await runtime.getConfig()
   const isAbsolute = typeof normalizedPath === "string" && /^https?:/i.test(normalizedPath)
-  if (isAbsolute && !isAbsoluteUrlAllowlisted(String(normalizedPath), cfg)) {
+  const absolutePath = isAbsolute ? String(normalizedPath) : ""
+  if (isAbsolute && !isAbsoluteUrlAllowlisted(absolutePath, cfg)) {
     return {
       ok: false,
       status: 400,
@@ -182,7 +236,9 @@ export const tldwRequest = async (
   const url = isAbsolute
     ? normalizedPath
     : `${baseUrl}${normalizedPath.startsWith("/") ? "" : "/"}${normalizedPath}`
-  const shouldSkipAuth = noAuth || isAbsolute
+  const sameOriginAbsoluteUrl =
+    isAbsolute && isSameOriginAbsoluteUrlForConfiguredServer(absolutePath, cfg)
+  const shouldSkipAuth = noAuth || (isAbsolute && !sameOriginAbsoluteUrl)
   const h: Record<string, string> = { ...(headers || {}) }
   const hasContentType = Object.keys(h).some(
     (key) => key.toLowerCase() === "content-type"
