@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class ModerationOverrideRule(BaseModel):
+    """A single phrase rule that can block or warn during input/output moderation."""
+
     id: str = Field(..., min_length=1, description="Stable rule identifier")
     pattern: str = Field(..., min_length=1, description="Literal phrase or regex source")
     is_regex: bool = Field(False, description="Whether pattern should be treated as regex")

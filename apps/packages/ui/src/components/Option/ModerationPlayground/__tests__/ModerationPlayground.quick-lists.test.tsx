@@ -130,7 +130,7 @@ describe("ModerationPlayground quick phrase lists", () => {
     expect(screen.getAllByText("duplicate phrase")).toHaveLength(1)
   })
 
-  it("blocks invalid regex quick rule", async () => {
+  it("allows regex quick rule without browser syntax validation", async () => {
     render(<ModerationPlayground />)
     await switchToUserScopeAndLoadUser()
 
@@ -140,7 +140,33 @@ describe("ModerationPlayground quick phrase lists", () => {
     })
     fireEvent.click(screen.getByRole("button", { name: "Add" }))
 
-    expect(screen.queryByText("(")).not.toBeInTheDocument()
+    expect(screen.getByText("(")).toBeInTheDocument()
+  })
+
+  it("renders phase labels from loaded override rules", async () => {
+    vi.spyOn(moderationService, "getUserOverride").mockResolvedValue({
+      rules: [
+        { id: "r1", pattern: "alpha", is_regex: false, action: "block", phase: "input" },
+        { id: "r2", pattern: "beta", is_regex: false, action: "warn", phase: "output" }
+      ]
+    } as any)
+
+    render(<ModerationPlayground />)
+    await switchToUserScopeAndLoadUser()
+
+    expect(screen.getByText("Input phase")).toBeInTheDocument()
+    expect(screen.getByText("Output phase")).toBeInTheDocument()
+  })
+
+  it("drops loaded rules with non-boolean is_regex values", async () => {
+    vi.spyOn(moderationService, "getUserOverride").mockResolvedValue({
+      rules: [{ id: "r1", pattern: "alpha", is_regex: "false", action: "block", phase: "both" }]
+    } as any)
+
+    render(<ModerationPlayground />)
+    await switchToUserScopeAndLoadUser()
+
+    expect(screen.queryByText("alpha")).not.toBeInTheDocument()
   })
 
   it("includes rules in setUserOverride payload on save", async () => {

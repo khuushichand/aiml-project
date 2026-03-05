@@ -99,6 +99,15 @@ const formatJson = (value: unknown) => {
   }
 }
 
+const normalizeRuleIsRegex = (value: unknown): boolean | null => {
+  if (typeof value === "boolean") return value
+  if (value === undefined || value === null) return false
+  return null
+}
+
+const formatRulePhase = (phase: ModerationOverrideRule["phase"]): string =>
+  phase === "both" ? "Both phases" : `${phase.charAt(0).toUpperCase() + phase.slice(1)} phase`
+
 const normalizeOverrideRules = (value: unknown): ModerationOverrideRule[] => {
   if (!Array.isArray(value)) return []
   return value
@@ -107,7 +116,7 @@ const normalizeOverrideRules = (value: unknown): ModerationOverrideRule[] => {
       const candidate = raw as Record<string, unknown>
       const id = String(candidate.id ?? "").trim()
       const pattern = String(candidate.pattern ?? "").trim()
-      const isRegex = Boolean(candidate.is_regex)
+      const isRegex = normalizeRuleIsRegex(candidate.is_regex)
       const action = String(candidate.action ?? "").trim().toLowerCase()
       const phaseRaw = String(candidate.phase ?? "both").trim().toLowerCase()
       const phase: ModerationOverrideRule["phase"] =
@@ -115,6 +124,7 @@ const normalizeOverrideRules = (value: unknown): ModerationOverrideRule[] => {
           ? phaseRaw
           : "both"
       if (!id || !pattern) return null
+      if (isRegex === null) return null
       if (action !== "block" && action !== "warn") return null
       return {
         id,
@@ -124,7 +134,7 @@ const normalizeOverrideRules = (value: unknown): ModerationOverrideRule[] => {
         phase
       } as ModerationOverrideRule
     })
-    .filter((rule): rule is ModerationOverrideRule => Boolean(rule))
+    .filter((rule): rule is ModerationOverrideRule => rule !== null)
 }
 
 const sortOverrideRules = (rules: ModerationOverrideRule[]): ModerationOverrideRule[] =>
@@ -482,15 +492,6 @@ export const ModerationPlayground: React.FC = () => {
     if (!pattern) {
       messageApi.warning("Enter a word or phrase")
       return
-    }
-    if (quickRegex) {
-      try {
-        // Validate user-provided regex syntax in the browser before adding.
-        new RegExp(pattern)
-      } catch {
-        messageApi.warning("Invalid regex pattern")
-        return
-      }
     }
     const nextRule: ModerationOverrideRule = {
       id: createRuleId(),
@@ -1325,7 +1326,7 @@ export const ModerationPlayground: React.FC = () => {
                               <Text>{rule.pattern}</Text>
                               <div className="mt-1 flex flex-wrap gap-1">
                                 <Tag>{rule.is_regex ? "Regex" : "Literal"}</Tag>
-                                <Tag>Both phases</Tag>
+                                <Tag>{formatRulePhase(rule.phase)}</Tag>
                               </div>
                             </div>
                             <Button
@@ -1355,7 +1356,7 @@ export const ModerationPlayground: React.FC = () => {
                               <Text>{rule.pattern}</Text>
                               <div className="mt-1 flex flex-wrap gap-1">
                                 <Tag>{rule.is_regex ? "Regex" : "Literal"}</Tag>
-                                <Tag>Both phases</Tag>
+                                <Tag>{formatRulePhase(rule.phase)}</Tag>
                               </div>
                             </div>
                             <Button

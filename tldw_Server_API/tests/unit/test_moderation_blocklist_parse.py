@@ -311,6 +311,7 @@ def test_compile_user_rule_sets_phase_and_action():
     assert compiled is not None
     assert compiled.action == "warn"
     assert compiled.phase == "input"
+    assert compiled.categories == {"*"}
     assert compiled.regex.search("please heads up now")
 
 

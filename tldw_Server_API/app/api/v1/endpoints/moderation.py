@@ -87,7 +87,16 @@ async def set_user_override(user_id: str, override: ModerationUserOverride) -> d
     if not status_dict.get("ok"):
         error_detail = status_dict.get("error", "Failed to persist override")
         logger.error("Moderation override persist failed for user_id={} error={}", user_id, error_detail)
-        status_code = status.HTTP_400_BAD_REQUEST if "invalid" in str(error_detail).lower() else status.HTTP_500_INTERNAL_SERVER_ERROR
+        error_type = str(status_dict.get("error_type", "")).strip().lower()
+        if error_type == "validation":
+            status_code = status.HTTP_400_BAD_REQUEST
+        elif error_type == "persistence":
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+        else:
+            # Backward-compatible fallback for older service responses.
+            err_text = str(error_detail).lower()
+            is_validation_like = any(token in err_text for token in ("invalid", "dangerous", "required"))
+            status_code = status.HTTP_400_BAD_REQUEST if is_validation_like else status.HTTP_500_INTERNAL_SERVER_ERROR
         raise HTTPException(
             status_code=status_code,
             detail=error_detail if status_code == status.HTTP_400_BAD_REQUEST else "Failed to persist override",
