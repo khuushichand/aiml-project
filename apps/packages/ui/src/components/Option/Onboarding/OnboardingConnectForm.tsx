@@ -430,7 +430,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       case "cors_blocked":
         return t(
           "settings:onboarding.errors.cors",
-          "Browser blocked the request (CORS). Add this app origin to ALLOWED_ORIGINS on your server, or disable CORS for local development."
+          "Browser could not complete the request (CORS or network). Verify the server URL is reachable from this browser and add this app origin to ALLOWED_ORIGINS."
         )
       case "ssl_error":
         return t(

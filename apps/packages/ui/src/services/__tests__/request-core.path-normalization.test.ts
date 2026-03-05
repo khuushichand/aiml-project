@@ -136,4 +136,32 @@ describe("request-core absolute URL policy", () => {
     expect(response.ok).toBe(true)
     expect(authHeader).toBeUndefined()
   })
+
+  it("allows absolute URLs that match configured server origin", async () => {
+    const fetchFn = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    )
+
+    const response = await tldwRequest(
+      {
+        path: "http://127.0.0.1:8000/openapi.json",
+        method: "GET"
+      },
+      {
+        getConfig: async () => ({
+          serverUrl: "http://127.0.0.1:8000",
+          authMode: "single-user",
+          apiKey: "test-key-not-placeholder"
+        }),
+        fetchFn
+      }
+    )
+
+    expect(response.ok).toBe(true)
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+    expect(fetchFn.mock.calls[0]?.[0]).toBe("http://127.0.0.1:8000/openapi.json")
+  })
 })

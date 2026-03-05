@@ -194,6 +194,14 @@ const normalizeOverrideForCompare = (draft: ModerationUserOverride) => {
 const isEqualJson = (left: unknown, right: unknown) =>
   JSON.stringify(left) === JSON.stringify(right)
 
+const getErrorStatus = (error: unknown): number | null => {
+  if (!error || typeof error !== "object") return null
+  const maybeError = error as { status?: unknown; response?: { status?: unknown } }
+  if (typeof maybeError.status === "number") return maybeError.status
+  if (typeof maybeError.response?.status === "number") return maybeError.response.status
+  return null
+}
+
 export const ModerationPlayground: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const online = useServerOnline()
@@ -313,8 +321,16 @@ export const ModerationPlayground: React.FC = () => {
       setOverrideLoading(true)
       setUserIdError(null)
       try {
-        const data = await getUserOverride(activeUserId)
+        const result = await getUserOverride(activeUserId)
         if (cancelled) return
+        const data = result.override ?? {}
+        if (!result.exists) {
+          setOverrideDraft({})
+          setOverrideLoaded(false)
+          setUserIdError(`No override found for "${activeUserId}". You can create a new one.`)
+          setOverrideBaseline({})
+          return
+        }
         const normalizedCategories =
           typeof data.categories_enabled === "undefined"
             ? undefined
@@ -330,19 +346,11 @@ export const ModerationPlayground: React.FC = () => {
         }
         setOverrideDraft(normalized)
         setOverrideLoaded(true)
+        setUserIdError(null)
         setOverrideBaseline(normalized)
       } catch (err: any) {
         if (cancelled) return
-        if (err?.status === 404) {
-          // User has no existing override - this is OK, they can create one
-          setOverrideDraft({})
-          setOverrideLoaded(false)
-          // Show informational message instead of error
-          setUserIdError(`No override found for "${activeUserId}". You can create a new one.`)
-          setOverrideBaseline({})
-        } else {
-          messageApi.error("Failed to load user override")
-        }
+        messageApi.error("Failed to load user override")
       } finally {
         if (!cancelled) setOverrideLoading(false)
       }
@@ -429,8 +437,18 @@ export const ModerationPlayground: React.FC = () => {
       const preset = presetProfiles[key]
       const payload = buildOverridePayload(preset.payload)
       await setUserOverride(activeUserId, payload)
+      const normalizedPayload: ModerationUserOverride = {
+        ...payload,
+        categories_enabled:
+          payload.categories_enabled !== undefined
+            ? normalizeCategories(payload.categories_enabled)
+            : undefined
+      }
       messageApi.success(`Applied ${preset.label} profile`)
-      setOverrideDraft((prev) => ({ ...prev, ...preset.payload }))
+      setOverrideDraft(normalizedPayload)
+      setOverrideLoaded(true)
+      setUserIdError(null)
+      setOverrideBaseline(normalizeOverrideForCompare(normalizedPayload))
       await policyQuery.refetch()
       if (showAdvanced) {
         await overridesQuery.refetch()
@@ -839,6 +857,24 @@ export const ModerationPlayground: React.FC = () => {
     }
   ]
 
+  const hasPermissionError = [settingsQuery.error, policyQuery.error, overridesQuery.error]
+    .map(getErrorStatus)
+    .some((statusCode) => statusCode === 401 || statusCode === 403)
+
+  if (hasPermissionError) {
+    return (
+      <div className="space-y-4">
+        {contextHolder}
+        <Alert
+          type="error"
+          showIcon
+          title="Admin moderation access required"
+          description="Moderation controls require an admin account with SYSTEM_CONFIGURE permission."
+        />
+      </div>
+    )
+  }
+
   const policySnapshot = policyQuery.data || {}
   const policyCategories = normalizeCategories(policySnapshot.categories_enabled)
   const blocklistCount = policySnapshot.blocklist_count ?? 0
@@ -1111,44 +1147,24 @@ export const ModerationPlayground: React.FC = () => {
           </Space>
         </Card>
 
-        <Card
-          title={
-            <Space>
-              <span>Per-User Safety Rules</span>
-              <Tooltip title="Override server rules for specific users">
-                <QuestionCircleOutlined className="text-text-muted" />
-              </Tooltip>
-            </Space>
-          }
-          className="shadow-sm order-1 lg:order-1"
-          extra={
-            <Space size="small">
-              <Tag color="purple">User overrides</Tag>
-              {overrideDirty && <Tag color="orange">Unsaved changes</Tag>}
-            </Space>
-          }
-        >
-          {scope !== "user" ? (
-            <div className="space-y-4">
-              <Alert
-                type="info"
-                showIcon
-                title="Switch to User scope to configure individual safety rules."
-                description="User-specific rules override server defaults for that user only."
-              />
-              {/* Show disabled preview of controls */}
-              <div className="opacity-50 pointer-events-none">
-                <Text strong className="block mb-2">Quick Presets (Preview)</Text>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(presetProfiles).map(([key, preset]) => (
-                    <Tooltip key={key} title={preset.description}>
-                      <Button disabled>{preset.label}</Button>
-                    </Tooltip>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : (
+        {scope === "user" && (
+          <Card
+            title={
+              <Space>
+                <span>Per-User Safety Rules</span>
+                <Tooltip title="Override server rules for specific users">
+                  <QuestionCircleOutlined className="text-text-muted" />
+                </Tooltip>
+              </Space>
+            }
+            className="shadow-sm order-1 lg:order-1"
+            extra={
+              <Space size="small">
+                <Tag color="purple">User overrides</Tag>
+                {overrideDirty && <Tag color="orange">Unsaved changes</Tag>}
+              </Space>
+            }
+          >
             <Space orientation="vertical" size="middle" className="w-full">
               <div>
                 <Text strong>Quick Presets</Text>
@@ -1310,8 +1326,8 @@ export const ModerationPlayground: React.FC = () => {
                 </Button>
               </Space>
             </Space>
-          )}
-        </Card>
+          </Card>
+        )}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">

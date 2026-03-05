@@ -20,10 +20,14 @@ const ERROR_LOG_THROTTLE_MS = 15_000
 const RATE_LIMIT_LOG_THROTTLE_MS = 60_000
 const ERROR_LOG_MAX_ENTRIES = 200
 const BACKEND_UNREACHABLE_EVENT_THROTTLE_MS = 5_000
+const STREAM_RUNTIME_PING_TIMEOUT_MS = 400
+const STREAM_RUNTIME_HEALTH_TTL_MS = 30_000
 const BACKEND_UNREACHABLE_PATTERN =
   /(networkerror|failed to fetch|network error|load failed|err_connection|could not establish connection|receiving end does not exist)/i
 const errorLogHistory = new Map<string, number>()
 let lastBackendUnreachableEventAt = 0
+let lastStreamRuntimeHealthCheckAt = 0
+let streamRuntimePortUsable: boolean | null = null
 
 const normalizeKnownPathQuirks = <P extends PathOrUrl>(rawPath: P): P => {
   if (typeof rawPath !== "string") return rawPath
@@ -160,7 +164,10 @@ const isExtensionTransportFailure = (error: unknown): boolean => {
     normalized.includes("could not establish connection") ||
     normalized.includes("receiving end does not exist") ||
     normalized.includes("message port closed before a response was received") ||
-    normalized.includes("extension context invalidated")
+    normalized.includes("extension context invalidated") ||
+    normalized.includes("stream disconnected") ||
+    normalized.includes("failed to fetch") ||
+    normalized.includes("network error")
   )
 }
 
@@ -838,14 +845,62 @@ export async function* bgStream<
 >(
   { path, method = 'POST' as UpperLower<M>, headers = {}, body, streamIdleTimeoutMs, abortSignal }: BgStreamInit<P, M>
 ): AsyncGenerator<string> {
-  const hasRuntimePort = Boolean(browser?.runtime?.connect && browser?.runtime?.id)
+  const hasHttpStatusInMessage = (value: unknown): boolean => {
+    const message = value instanceof Error ? value.message : String(value || "")
+    return /\bhttp\s+\d{3}\b/i.test(message)
+  }
+
+  const canUseRuntimePortTransport = async (): Promise<boolean> => {
+    const hasRuntimePort = Boolean(browser?.runtime?.connect && browser?.runtime?.id)
+    if (!hasRuntimePort) return false
+
+    const now = Date.now()
+    if (
+      streamRuntimePortUsable !== null &&
+      now - lastStreamRuntimeHealthCheckAt < STREAM_RUNTIME_HEALTH_TTL_MS
+    ) {
+      return streamRuntimePortUsable
+    }
+
+    if (!browser?.runtime?.sendMessage) {
+      streamRuntimePortUsable = true
+      lastStreamRuntimeHealthCheckAt = now
+      return true
+    }
+
+    try {
+      const pingResult = await Promise.race([
+        browser.runtime.sendMessage({ type: "tldw:ping" }),
+        new Promise<null>((resolve) =>
+          setTimeout(() => resolve(null), STREAM_RUNTIME_PING_TIMEOUT_MS)
+        )
+      ])
+      streamRuntimePortUsable =
+        Boolean(pingResult) && Boolean((pingResult as any)?.ok)
+    } catch {
+      streamRuntimePortUsable = false
+    }
+    lastStreamRuntimeHealthCheckAt = now
+    return Boolean(streamRuntimePortUsable)
+  }
+
+  const hasRuntimePort = await canUseRuntimePortTransport()
   if (!hasRuntimePort) {
     yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
     return
   }
 
-  // Extension port-based streaming with connection timeout fallback
-  const port = browser.runtime.connect({ name: 'tldw:stream' })
+  // Extension port-based streaming with connection-time and connection-establish fallback.
+  let port: ReturnType<typeof browser.runtime.connect>
+  try {
+    port = browser.runtime.connect({ name: 'tldw:stream' })
+  } catch (connectError) {
+    if (!abortSignal?.aborted) {
+      yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
+      return
+    }
+    throw connectError
+  }
   const queue: string[] = []
   let done = false
   let error: any = null
@@ -863,11 +918,11 @@ export async function* bgStream<
   }, CONNECTION_TIMEOUT_MS)
 
   const onMessage = (msg: any) => {
-    if (!firstDataReceived) {
-      firstDataReceived = true
-      clearTimeout(connectionTimer)
-    }
     if (msg?.event === 'data') {
+      if (!firstDataReceived) {
+        firstDataReceived = true
+        clearTimeout(connectionTimer)
+      }
       queue.push(msg.data as string)
     } else if (msg?.event === 'done') {
       done = true
@@ -915,6 +970,15 @@ export async function* bgStream<
     }
     // If connection timed out before receiving any data, fall back to direct fetch
     if (connectionTimedOut) {
+      yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
+      return
+    }
+    const shouldFallbackAfterEarlyError =
+      !firstDataReceived &&
+      !abortSignal?.aborted &&
+      Boolean(error) &&
+      (isExtensionTransportFailure(error) || !hasHttpStatusInMessage(error))
+    if (shouldFallbackAfterEarlyError) {
       yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
       return
     }

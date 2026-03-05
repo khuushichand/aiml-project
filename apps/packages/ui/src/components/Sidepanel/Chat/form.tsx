@@ -511,6 +511,11 @@ export const SidepanelForm = ({
     setTemporaryChat,
     toolChoice,
     setToolChoice,
+    chatLoopState = {
+      status: "idle",
+      pendingApprovals: [],
+      inflightToolCallIds: []
+    },
     messages,
     clearChat,
     queuedMessages,
@@ -2473,6 +2478,9 @@ export const SidepanelForm = ({
                               isConnected={isConnectionReady}
                               toolChoice={toolChoice}
                               setToolChoice={setToolChoice}
+                              chatLoopStatus={chatLoopState.status}
+                              pendingApprovalsCount={chatLoopState.pendingApprovals.length}
+                              runningToolCount={chatLoopState.inflightToolCallIds.length}
                             />
                           )}
                           <div className="flex flex-wrap items-center justify-end gap-2">

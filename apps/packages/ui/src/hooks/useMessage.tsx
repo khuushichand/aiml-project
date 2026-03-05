@@ -79,6 +79,9 @@ import {
   collectGreetings,
   isGreetingMessageType
 } from "@/utils/character-greetings"
+import { useChatLoopState } from "@/services/chat-loop/hooks"
+import { subscribeChatLoopEvents } from "@/services/chat-loop/bridge"
+import { extractChatLoopEvent } from "@/services/chat-loop/stream"
 
 const extractToolCalls = (generationInfo: unknown): ToolCall[] | undefined => {
   if (!generationInfo || typeof generationInfo !== "object") return undefined
@@ -196,6 +199,15 @@ export const useMessage = () => {
     "speechToTextLanguage",
     "en-US"
   )
+  const {
+    state: chatLoopState,
+    dispatch: dispatchChatLoopEvent,
+    reset: resetChatLoopState
+  } = useChatLoopState()
+
+  React.useEffect(() => subscribeChatLoopEvents(dispatchChatLoopEvent), [
+    dispatchChatLoopEvent
+  ])
 
   const ensureSelectedChatModelIsAvailable = React.useCallback(
     async (selectedModelId: string): Promise<boolean> => {
@@ -1489,6 +1501,10 @@ export const useMessage = () => {
         },
         { signal }
       )) {
+        const loopEvent = extractChatLoopEvent(chunk)
+        if (loopEvent) {
+          dispatchChatLoopEvent(loopEvent)
+        }
         const chunkState = consumeStreamingChunk(
           { fullText, contentToSave, apiReasoning },
           chunk
@@ -2085,6 +2101,7 @@ export const useMessage = () => {
     imageBackendOverride?: string
     serverChatIdOverride?: string | null
   }) => {
+    resetChatLoopState()
     const trimmedImageBackendOverride =
       typeof imageBackendOverride === "string"
         ? imageBackendOverride.trim()
@@ -2626,6 +2643,7 @@ export const useMessage = () => {
     setServerChatSource,
     serverChatExternalRef,
     setServerChatExternalRef,
+    chatLoopState,
     history,
     createChatBranch,
     temporaryChat,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { PlaygroundForm } from "../PlaygroundForm"
@@ -325,7 +325,18 @@ vi.mock("antd", () => {
       />
     ),
     Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    Popover: ({
+      children,
+      content
+    }: {
+      children: React.ReactNode
+      content?: React.ReactNode
+    }) => (
+      <>
+        {children}
+        {content}
+      </>
+    ),
     Modal: ModalComponent,
     Button: ButtonComponent,
     Space: {
@@ -635,14 +646,14 @@ vi.mock("../ComposerTextarea", () => ({
 
 vi.mock("../ComposerToolbar", () => ({
   ComposerToolbar: ({
-    generateButton,
+    toolsButton,
     speechAvailable,
     speechUsesServer,
     isListening,
     isServerDictating,
     onDictationToggle
   }: {
-    generateButton?: React.ReactNode
+    toolsButton?: React.ReactNode
     speechAvailable?: boolean
     speechUsesServer?: boolean
     isListening?: boolean
@@ -659,7 +670,7 @@ vi.mock("../ComposerToolbar", () => ({
         : "Start dictation"
     return (
       <div data-testid="composer-toolbar">
-        {generateButton}
+        {toolsButton}
         <button
           type="button"
           data-testid="dictation-button"
@@ -958,6 +969,9 @@ vi.mock("@/hooks/playground", () => ({
     expandLargeMessage: vi.fn(),
     restoreMessageValue: vi.fn()
   }),
+  useDeferredComposerInput: (value: string) => ({
+    deferredInput: value
+  }),
   useMcpToolsControl: () => ({
     mcpSettingsOpen: false,
     setMcpSettingsOpen: vi.fn(),
@@ -1016,7 +1030,7 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
     const user = userEvent.setup()
     render(<PlaygroundForm droppedFiles={[]} />)
 
-    await user.click(screen.getByRole("button", { name: "Image" }))
+    await user.click(screen.getByRole("button", { name: "Generate image" }))
     expect(
       screen.getByRole("heading", { name: "Generate image" })
     ).toBeInTheDocument()
@@ -1039,7 +1053,12 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
     })
     expect(promptArea.value).toContain("cinematic portrait of Lana")
 
-    await user.click(screen.getByRole("button", { name: "Generate image" }))
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Generate image" })).getByRole(
+        "button",
+        { name: "Generate image" }
+      )
+    )
     await waitFor(() => {
       expect(onSubmitMock).toHaveBeenCalled()
     })
@@ -1063,7 +1082,7 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
     const user = userEvent.setup()
     render(<PlaygroundForm droppedFiles={[]} />)
 
-    await user.click(screen.getByRole("button", { name: "Image" }))
+    await user.click(screen.getByRole("button", { name: "Generate image" }))
     await user.click(screen.getByRole("button", { name: "Create prompt" }))
 
     const promptArea = screen.getByPlaceholderText(
@@ -1083,7 +1102,12 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
     })
     expect(promptArea.value).toBe(originalPrompt)
 
-    await user.click(screen.getByRole("button", { name: "Generate image" }))
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Generate image" })).getByRole(
+        "button",
+        { name: "Generate image" }
+      )
+    )
     await waitFor(() => {
       expect(onSubmitMock).toHaveBeenCalled()
     })
@@ -1096,7 +1120,7 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
     const user = userEvent.setup()
     render(<PlaygroundForm droppedFiles={[]} />)
 
-    await user.click(screen.getByRole("button", { name: "Image" }))
+    await user.click(screen.getByRole("button", { name: "Generate image" }))
     await user.click(screen.getByRole("button", { name: "Create prompt" }))
     await user.click(screen.getByTestId("image-refine-with-llm"))
     expect(await screen.findByTestId("image-prompt-refine-diff")).toBeInTheDocument()
@@ -1111,7 +1135,12 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
       expect(screen.queryByTestId("image-prompt-refine-diff")).toBeNull()
     })
 
-    await user.click(screen.getByRole("button", { name: "Generate image" }))
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Generate image" })).getByRole(
+        "button",
+        { name: "Generate image" }
+      )
+    )
     await waitFor(() => {
       expect(onSubmitMock).toHaveBeenCalled()
     })
