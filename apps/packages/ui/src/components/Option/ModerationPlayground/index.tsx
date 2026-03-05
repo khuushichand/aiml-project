@@ -967,6 +967,13 @@ export const ModerationPlayground: React.FC = () => {
     selectedRowKeys: selectedOverrideIds,
     onChange: (keys: React.Key[]) => setSelectedOverrideIds(keys)
   }
+  const userIdSuffixVisible = scope === "user" && Boolean(userIdDraft)
+  const userIdInputSuffix = (
+    <SearchOutlined
+      className="text-text-muted"
+      style={{ visibility: userIdSuffixVisible ? "visible" : "hidden" }}
+    />
+  )
 
   return (
     <div className="space-y-6">
@@ -1067,7 +1074,7 @@ export const ModerationPlayground: React.FC = () => {
               disabled={scope !== "user"}
               style={{ width: 220 }}
               status={userIdError ? "warning" : undefined}
-              suffix={scope === "user" && userIdDraft && <SearchOutlined className="text-text-muted" />}
+              suffix={userIdInputSuffix}
             />
             <Button disabled={scope !== "user"} onClick={handleLoadUser} loading={overrideLoading}>
               Load user
