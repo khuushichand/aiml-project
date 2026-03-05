@@ -149,5 +149,5 @@ Approval decision:
 ## Notes
 
 - Prefer explicit transitions over direct state patching for normal lifecycle flow.
-- Use `task.state.patch` only for controlled repair/administrative corrections.
+- Use `task.state.patch` only for controlled admin repair operations.
 - Keep admin-only tools out of general-purpose agent catalogs.

@@ -530,6 +530,23 @@ class FakeKanbanDB:
         policy = self._workflow_policies.get(board_id)
         return dict(policy) if policy else None
 
+    def update_workflow_policy_flags(
+        self,
+        *,
+        board_id: int,
+        is_paused: Optional[bool] = None,
+        is_draining: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        policy = self._ensure_workflow_policy_for_board(board_id)
+        policy["version"] = int(policy.get("version", 1)) + 1
+        if is_paused is not None:
+            policy["is_paused"] = bool(is_paused)
+        if is_draining is not None:
+            policy["is_draining"] = bool(is_draining)
+        policy["updated_at"] = self._now()
+        self._workflow_policies[board_id] = policy
+        return dict(policy)
+
     def list_workflow_statuses(self, board_id: int) -> List[Dict[str, Any]]:
         policy = self._ensure_workflow_policy_for_board(board_id)
         return [dict(status) for status in policy.get("statuses", [])]
@@ -1105,3 +1122,46 @@ async def test_kanban_workflow_tool_roundtrip(tmp_path):
         context=admin_ctx,
     )
     assert events["events"][0]["correlation_id"] == "corr-mcp-transition-1"
+
+
+@pytest.mark.asyncio
+async def test_kanban_workflow_policy_upsert_omits_metadata_when_not_supplied(tmp_path):
+    mod = KanbanModule(ModuleConfig(name="kanban"))
+
+    class SpyDB:
+        def __init__(self) -> None:
+            self.last_kwargs: Dict[str, Any] | None = None
+
+        def upsert_workflow_policy(self, **kwargs: Any) -> Dict[str, Any]:
+            self.last_kwargs = dict(kwargs)
+            return {
+                "id": 1,
+                "board_id": int(kwargs["board_id"]),
+                "version": 1,
+                "is_paused": bool(kwargs.get("is_paused", False)),
+                "is_draining": bool(kwargs.get("is_draining", False)),
+                "default_lease_ttl_sec": int(kwargs.get("default_lease_ttl_sec", 900)),
+                "strict_projection": bool(kwargs.get("strict_projection", True)),
+                "metadata": {"persisted": True},
+                "statuses": [],
+                "transitions": [],
+                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            }
+
+    spy_db = SpyDB()
+    mod._open_db = lambda ctx: spy_db  # type: ignore[assignment]
+    ctx = SimpleNamespace(user_id="1", db_paths={"kanban": tmp_path / "kanban.db"}, metadata={"roles": ["admin"]})
+
+    out = await mod.execute_tool(
+        "kanban.workflow.policy.upsert",
+        {
+            "board_id": 42,
+            "default_lease_ttl_sec": 1800,
+        },
+        context=ctx,
+    )
+
+    assert out["policy"]["board_id"] == 42
+    assert spy_db.last_kwargs is not None
+    assert "metadata" not in spy_db.last_kwargs

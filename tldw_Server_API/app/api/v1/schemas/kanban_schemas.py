@@ -956,6 +956,67 @@ class WorkflowPolicyUpsertRequest(BaseModel):
     metadata: Optional[dict[str, Any]] = None
 
 
+class WorkflowPolicyStatusResponse(BaseModel):
+    """Workflow status response item."""
+
+    id: int
+    policy_id: int
+    status_key: str
+    display_name: str
+    is_terminal: bool
+    sort_order: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkflowPolicyTransitionResponse(BaseModel):
+    """Workflow transition response item."""
+
+    id: int
+    policy_id: int
+    from_status_key: str
+    to_status_key: str
+    requires_claim: bool
+    requires_approval: bool
+    approve_to_status_key: Optional[str] = None
+    reject_to_status_key: Optional[str] = None
+    auto_move_list_id: Optional[int] = None
+    max_retries: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkflowPolicyResponse(BaseModel):
+    """Workflow policy response payload."""
+
+    id: int
+    board_id: int
+    version: int
+    is_paused: bool
+    is_draining: bool
+    default_lease_ttl_sec: int
+    strict_projection: bool
+    metadata: Optional[dict[str, Any]] = None
+    created_at: datetime
+    updated_at: datetime
+    statuses: list[WorkflowPolicyStatusResponse]
+    transitions: list[WorkflowPolicyTransitionResponse]
+
+
+class WorkflowStatusesListResponse(BaseModel):
+    """Workflow statuses list response."""
+
+    statuses: list[WorkflowPolicyStatusResponse]
+
+
+class WorkflowTransitionsListResponse(BaseModel):
+    """Workflow transitions list response."""
+
+    transitions: list[WorkflowPolicyTransitionResponse]
+
+
 class WorkflowStateResponse(BaseModel):
     """Workflow runtime state response."""
 
@@ -1037,7 +1098,7 @@ class WorkflowControlResponse(BaseModel):
     """Simple success response for workflow controls."""
 
     success: bool = Field(True)
-    policy: dict[str, Any]
+    policy: WorkflowPolicyResponse
 
 
 class WorkflowEventResponse(BaseModel):

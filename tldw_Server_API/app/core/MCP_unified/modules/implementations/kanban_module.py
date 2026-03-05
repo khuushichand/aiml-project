@@ -1564,15 +1564,20 @@ class KanbanModule(BaseModule):
 
     def _workflow_policy_upsert_sync(self, context: Any | None, board_id: int, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
+        upsert_kwargs: dict[str, Any] = {
+            "board_id": board_id,
+            "statuses": args.get("statuses"),
+            "transitions": args.get("transitions"),
+            "is_paused": bool(args.get("is_paused", False)),
+            "is_draining": bool(args.get("is_draining", False)),
+            "default_lease_ttl_sec": int(args.get("default_lease_ttl_sec", 900)),
+            "strict_projection": bool(args.get("strict_projection", True)),
+        }
+        if "metadata" in args:
+            upsert_kwargs["metadata"] = args.get("metadata")
+
         policy = db.upsert_workflow_policy(
-            board_id=board_id,
-            statuses=args.get("statuses"),
-            transitions=args.get("transitions"),
-            is_paused=bool(args.get("is_paused", False)),
-            is_draining=bool(args.get("is_draining", False)),
-            default_lease_ttl_sec=int(args.get("default_lease_ttl_sec", 900)),
-            strict_projection=bool(args.get("strict_projection", True)),
-            metadata=args.get("metadata"),
+            **upsert_kwargs,
         )
         return {"policy": policy}
 
@@ -1699,19 +1704,7 @@ class KanbanModule(BaseModule):
     def _workflow_control_pause_sync(self, context: Any | None, board_id: int) -> dict[str, Any]:
         self._require_admin(context)
         db = self._open_db(context)
-        policy = db.get_workflow_policy(board_id)
-        if not policy:
-            raise NotFoundError("Workflow policy not found", entity="workflow_policy", entity_id=board_id)
-        updated = db.upsert_workflow_policy(
-            board_id=board_id,
-            statuses=policy.get("statuses"),
-            transitions=policy.get("transitions"),
-            is_paused=True,
-            is_draining=bool(policy.get("is_draining", False)),
-            default_lease_ttl_sec=int(policy.get("default_lease_ttl_sec", 900)),
-            strict_projection=bool(policy.get("strict_projection", True)),
-            metadata=policy.get("metadata"),
-        )
+        updated = db.update_workflow_policy_flags(board_id=board_id, is_paused=True)
         return {"success": True, "policy": updated}
 
     async def _workflow_control_resume(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
@@ -1721,19 +1714,7 @@ class KanbanModule(BaseModule):
     def _workflow_control_resume_sync(self, context: Any | None, board_id: int) -> dict[str, Any]:
         self._require_admin(context)
         db = self._open_db(context)
-        policy = db.get_workflow_policy(board_id)
-        if not policy:
-            raise NotFoundError("Workflow policy not found", entity="workflow_policy", entity_id=board_id)
-        updated = db.upsert_workflow_policy(
-            board_id=board_id,
-            statuses=policy.get("statuses"),
-            transitions=policy.get("transitions"),
-            is_paused=False,
-            is_draining=bool(policy.get("is_draining", False)),
-            default_lease_ttl_sec=int(policy.get("default_lease_ttl_sec", 900)),
-            strict_projection=bool(policy.get("strict_projection", True)),
-            metadata=policy.get("metadata"),
-        )
+        updated = db.update_workflow_policy_flags(board_id=board_id, is_paused=False)
         return {"success": True, "policy": updated}
 
     async def _workflow_control_drain(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
@@ -1743,19 +1724,7 @@ class KanbanModule(BaseModule):
     def _workflow_control_drain_sync(self, context: Any | None, board_id: int) -> dict[str, Any]:
         self._require_admin(context)
         db = self._open_db(context)
-        policy = db.get_workflow_policy(board_id)
-        if not policy:
-            raise NotFoundError("Workflow policy not found", entity="workflow_policy", entity_id=board_id)
-        updated = db.upsert_workflow_policy(
-            board_id=board_id,
-            statuses=policy.get("statuses"),
-            transitions=policy.get("transitions"),
-            is_paused=bool(policy.get("is_paused", False)),
-            is_draining=True,
-            default_lease_ttl_sec=int(policy.get("default_lease_ttl_sec", 900)),
-            strict_projection=bool(policy.get("strict_projection", True)),
-            metadata=policy.get("metadata"),
-        )
+        updated = db.update_workflow_policy_flags(board_id=board_id, is_draining=True)
         return {"success": True, "policy": updated}
 
     async def _workflow_recovery_list_stale_claims(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:

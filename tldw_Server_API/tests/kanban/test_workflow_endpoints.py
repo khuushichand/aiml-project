@@ -152,3 +152,55 @@ def test_transition_endpoint_returns_policy_paused_code(workflow_client_with_kan
     assert isinstance(payload.get("detail"), dict)
     assert payload["detail"]["code"] == "policy_paused"
     assert "policy_paused" in payload["detail"]["message"]
+
+
+def test_patch_state_version_conflict_returns_stable_code(workflow_client_with_kanban_db):
+    """State patch should return stable version_conflict code on CAS mismatch."""
+    client, _db = workflow_client_with_kanban_db
+    _board_id, _list_id, card_id = _create_board_list_card(client)
+
+    state_resp = client.get(f"/api/v1/kanban/workflow/cards/{card_id}/state")
+    assert state_resp.status_code == 200, state_resp.text
+    state = state_resp.json()
+
+    patch_resp = client.patch(
+        f"/api/v1/kanban/workflow/cards/{card_id}/state",
+        json={
+            "workflow_status_key": state["workflow_status_key"],
+            "expected_version": state["version"] + 10,
+            "idempotency_key": "api-patch-version-conflict",
+            "correlation_id": "corr-api-patch-version-conflict",
+            "actor": "repair-admin",
+        },
+    )
+
+    assert patch_resp.status_code == 409, patch_resp.text
+    payload: dict[str, Any] = patch_resp.json()
+    assert isinstance(payload.get("detail"), dict)
+    assert payload["detail"]["code"] == "version_conflict"
+
+
+def test_policy_upsert_preserves_metadata_when_omitted(workflow_client_with_kanban_db):
+    """Policy metadata should be preserved when omitted from upsert payload."""
+    client, _db = workflow_client_with_kanban_db
+    board_id, _list_id, _card_id = _create_board_list_card(client)
+
+    first = client.put(
+        f"/api/v1/kanban/workflow/boards/{board_id}/policy",
+        json={
+            "default_lease_ttl_sec": 900,
+            "metadata": {"owner": "workflow-team"},
+        },
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["metadata"] == {"owner": "workflow-team"}
+
+    second = client.put(
+        f"/api/v1/kanban/workflow/boards/{board_id}/policy",
+        json={
+            "default_lease_ttl_sec": 1200,
+        },
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["default_lease_ttl_sec"] == 1200
+    assert second.json()["metadata"] == {"owner": "workflow-team"}

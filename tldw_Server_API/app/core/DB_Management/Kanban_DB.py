@@ -197,10 +197,18 @@ class ConflictError(KanbanDBError):
     an update/delete operation (optimistic locking), or if an insert/update
     violates a unique constraint (e.g., duplicate client_id).
     """
-    def __init__(self, message: str = "Conflict detected.", entity: str | None = None, entity_id: Any = None):
+    def __init__(
+        self,
+        message: str = "Conflict detected.",
+        entity: str | None = None,
+        entity_id: Any = None,
+        *,
+        code: str | None = None,
+    ):
         super().__init__(message)
         self.entity = entity
         self.entity_id = entity_id
+        self.code = code
 
     def __str__(self):
         base = super().__str__()
@@ -1236,6 +1244,49 @@ END;
             finally:
                 conn.close()
 
+    def update_workflow_policy_flags(
+        self,
+        *,
+        board_id: int,
+        is_paused: bool | None = None,
+        is_draining: bool | None = None,
+    ) -> dict[str, Any]:
+        """Update policy control flags without rewriting statuses/transitions."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                policy = self._ensure_workflow_policy_for_board(conn, board_id)
+                policy_row = self._get_workflow_policy_row(conn, board_id)
+                if not policy_row:
+                    raise NotFoundError("Workflow policy not found", entity="workflow_policy", entity_id=board_id)  # noqa: TRY003
+
+                next_paused = bool(policy["is_paused"]) if is_paused is None else bool(is_paused)
+                next_draining = bool(policy["is_draining"]) if is_draining is None else bool(is_draining)
+                now = _utcnow_iso()
+                conn.execute(
+                    """
+                    UPDATE board_workflow_policies
+                    SET version = version + 1,
+                        is_paused = ?,
+                        is_draining = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        self._coerce_bool_int(next_paused),
+                        self._coerce_bool_int(next_draining),
+                        now,
+                        int(policy_row["id"]),
+                    ),
+                )
+                updated = self._get_workflow_policy_internal(conn, board_id)
+                if not updated:
+                    raise KanbanDBError("workflow_policy_update_failed")  # noqa: TRY003
+                conn.commit()
+                return updated
+            finally:
+                conn.close()
+
     def get_workflow_policy(self, board_id: int) -> dict[str, Any] | None:
         with self._lock:
             conn = self._connect()
@@ -1378,9 +1429,10 @@ END;
 
                 if int(current_state["version"]) != int(expected_version):
                     raise ConflictError(  # noqa: TRY003
-                        f"Version mismatch: expected {expected_version}, got {current_state['version']}",
+                        f"version_conflict: expected {expected_version}, got {current_state['version']}",
                         entity="card_workflow_state",
                         entity_id=card_id,
+                        code="version_conflict",
                     )
 
                 next_status_key = workflow_status_key.strip() if workflow_status_key else current_state["workflow_status_key"]
@@ -1418,7 +1470,12 @@ END;
                     ),
                 )
                 if update_cur.rowcount != 1:
-                    raise ConflictError("Workflow state update conflict", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+                    raise ConflictError(  # noqa: TRY003
+                        "version_conflict: workflow state update conflict",
+                        entity="card_workflow_state",
+                        entity_id=card_id,
+                        code="version_conflict",
+                    )
 
                 updated_row = self._get_card_workflow_state_row(conn, card_id)
                 if not updated_row:
@@ -1494,6 +1551,17 @@ END;
 
                 now = _utcnow_iso()
                 lease_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=lease_ttl_sec)).strftime("%Y-%m-%d %H:%M:%S")
+                lease_owner = current_state["lease_owner"]
+                lease_expiry = current_state["lease_expires_at"]
+                owner_name = owner.strip()
+
+                if lease_owner and lease_owner != owner_name and lease_expiry and str(lease_expiry) > now:
+                    raise ConflictError(  # noqa: TRY003
+                        "lease_mismatch",
+                        entity="card_workflow_state",
+                        entity_id=card_id,
+                        code="lease_mismatch",
+                    )
 
                 update_cur = conn.execute(
                     """
@@ -1504,11 +1572,29 @@ END;
                         version = version + 1,
                         updated_at = ?
                     WHERE card_id = ? AND version = ?
+                      AND (
+                        lease_owner IS NULL
+                        OR lease_expires_at IS NULL
+                        OR lease_expires_at <= ?
+                        OR lease_owner = ?
+                      )
                     """,
-                    (owner.strip(), lease_expires_at, owner.strip(), now, card_id, current_state["version"]),
+                    (owner_name, lease_expires_at, owner_name, now, card_id, current_state["version"], now, owner_name),
                 )
                 if update_cur.rowcount != 1:
-                    raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+                    latest_row = self._get_card_workflow_state_row(conn, card_id)
+                    latest_state = self._row_to_card_workflow_state_dict(latest_row) if latest_row else None
+                    if latest_state:
+                        latest_owner = latest_state["lease_owner"]
+                        latest_expiry = latest_state["lease_expires_at"]
+                        if latest_owner and latest_owner != owner_name and latest_expiry and str(latest_expiry) > now:
+                            raise ConflictError(  # noqa: TRY003
+                                "lease_mismatch",
+                                entity="card_workflow_state",
+                                entity_id=card_id,
+                                code="lease_mismatch",
+                            )
+                    raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id, code="version_conflict")  # noqa: TRY003
 
                 updated_row = self._get_card_workflow_state_row(conn, card_id)
                 if not updated_row:
@@ -1717,7 +1803,7 @@ END;
                         """,
                         (transition_row["auto_move_list_id"], card_row["board_id"]),
                     ).fetchone()
-                    if not projected_row and bool(policy_row["strict_projection"]):
+                    if not projected_row and bool(policy_row and policy_row["strict_projection"]):
                         raise ConflictError("projection_failed", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
                     if projected_row:
                         projected_list_id = int(projected_row["id"])

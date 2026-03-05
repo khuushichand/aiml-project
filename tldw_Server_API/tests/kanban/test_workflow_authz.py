@@ -100,3 +100,46 @@ def test_force_reassign_workflow_claim_forbidden_for_non_admin(non_admin_workflo
     payload: dict[str, Any] = reassign_resp.json()
     assert isinstance(payload.get("detail"), dict)
     assert payload["detail"]["code"] == "forbidden"
+
+
+def test_patch_workflow_state_forbidden_for_non_admin(non_admin_workflow_client):
+    """Non-admin callers should be blocked from direct workflow state patching."""
+    client, _db = non_admin_workflow_client
+    board_resp = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Authz Workflow Board 3", "client_id": "authz-workflow-board-3"},
+    )
+    assert board_resp.status_code == 201, board_resp.text
+    board_id = board_resp.json()["id"]
+
+    list_resp = client.post(
+        f"/api/v1/kanban/boards/{board_id}/lists",
+        json={"name": "Authz Workflow List 3", "client_id": "authz-workflow-list-3"},
+    )
+    assert list_resp.status_code == 201, list_resp.text
+    list_id = list_resp.json()["id"]
+
+    card_resp = client.post(
+        f"/api/v1/kanban/lists/{list_id}/cards",
+        json={"title": "Authz Workflow Card 3", "client_id": "authz-workflow-card-3"},
+    )
+    assert card_resp.status_code == 201, card_resp.text
+    card_id = card_resp.json()["id"]
+
+    state_resp = client.get(f"/api/v1/kanban/workflow/cards/{card_id}/state")
+    assert state_resp.status_code == 200, state_resp.text
+    state = state_resp.json()
+
+    patch_resp = client.patch(
+        f"/api/v1/kanban/workflow/cards/{card_id}/state",
+        json={
+            "workflow_status_key": state["workflow_status_key"],
+            "expected_version": state["version"],
+            "idempotency_key": "authz-state-patch",
+            "actor": "non-admin-user",
+        },
+    )
+    assert patch_resp.status_code == 403, patch_resp.text
+    payload: dict[str, Any] = patch_resp.json()
+    assert isinstance(payload.get("detail"), dict)
+    assert payload["detail"]["code"] == "forbidden"

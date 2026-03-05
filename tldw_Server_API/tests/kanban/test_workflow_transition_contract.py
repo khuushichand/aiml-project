@@ -200,3 +200,25 @@ def test_stale_claim_listing_and_force_reassign(
     )
     assert reassigned["lease_owner"] == "inspector"
     assert reassigned["version"] > state["version"]
+
+
+def test_claim_rejects_lease_theft_when_active_lease_exists(
+    kanban_db: KanbanDB,
+    sample_card: dict[str, Any],
+) -> None:
+    """Claims from a different owner must fail while an active lease exists."""
+    first_claim = kanban_db.claim_card_workflow(
+        card_id=sample_card["id"],
+        owner="builder-a",
+        lease_ttl_sec=300,
+        idempotency_key="claim-owner-a",
+    )
+    assert first_claim["lease_owner"] == "builder-a"
+
+    with pytest.raises(ConflictError, match="lease_mismatch"):
+        kanban_db.claim_card_workflow(
+            card_id=sample_card["id"],
+            owner="builder-b",
+            lease_ttl_sec=300,
+            idempotency_key="claim-owner-b",
+        )
