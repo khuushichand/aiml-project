@@ -112,7 +112,7 @@ def test_schema_v1_migrates_to_v2_with_collections(tmp_path):
     try:
         conn = migrated_db.get_connection()
         version_row = conn.execute("SELECT version FROM schema_version").fetchone()
-        assert version_row["version"] == 2
+        assert version_row["version"] == PromptsDatabase._CURRENT_SCHEMA_VERSION
         assert conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='PromptCollections'"
         ).fetchone() is not None

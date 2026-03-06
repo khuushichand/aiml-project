@@ -1154,7 +1154,7 @@ export const PlaygroundChat = ({
           return (
             <div
               key={`c-${blockIndex}`}
-              className="w-full max-w-3xl md:px-4 mb-4 space-y-2">
+              className="w-full max-w-5xl md:px-4 mb-4 space-y-2">
               <PlaygroundMessage
                 isBot={userMessage.isBot}
                 message={userMessage.message}

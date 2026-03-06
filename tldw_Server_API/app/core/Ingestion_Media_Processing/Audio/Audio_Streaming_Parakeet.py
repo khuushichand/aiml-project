@@ -24,12 +24,18 @@ from typing import Any, Callable, Optional
 import numpy as np
 from loguru import logger
 
-# Keep streaming importable even when optional transcription dependencies
-# (e.g. soundfile pulled by transformers) are intentionally unavailable in tests.
-try:
-    from .Audio_Transcription_Lib import is_transcription_error_message
-except ImportError:
-    def is_transcription_error_message(_: str) -> bool:
+
+def is_transcription_error_message(text: str) -> bool:
+    """Lazily resolve STT sentinel detection to avoid heavy imports at module load."""
+    try:
+        from .Audio_Transcription_Lib import (
+            is_transcription_error_message as _impl,
+        )
+    except Exception:
+        return False
+    try:
+        return bool(_impl(text))
+    except Exception:
         return False
 
 # Import transcription functions

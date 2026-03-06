@@ -122,7 +122,6 @@ async def test_mcp_http_requests_use_single_api_key_validation(monkeypatch):
 
     # Force multi-user API key path so compat token resolution uses APIKeyManager instead of
     # the single-user shortcut.
-    monkeypatch.setattr(mcp_ep, "_authnz_is_single_user_mode", lambda: False)
     monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: False)
 
     calls: List[Dict[str, Any]] = []
@@ -186,7 +185,6 @@ def test_http_api_key_scopes_enforced(monkeypatch):
     """
     # Force multi-user API key path (no single-user shim).
     monkeypatch.setenv("MCP_SINGLE_USER_COMPAT_SHIM", "0")
-    monkeypatch.setattr(mcp_ep, "_authnz_is_single_user_mode", lambda: False)
     monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: False)
 
     class _DummyApiManager:
@@ -220,7 +218,6 @@ def test_tools_list_attaches_api_key_metadata(monkeypatch):
     Ensure /mcp/tools attaches API key metadata (org/team/scopes) for convenience endpoints.
     """
     monkeypatch.setenv("MCP_SINGLE_USER_COMPAT_SHIM", "0")
-    monkeypatch.setattr(mcp_ep, "_authnz_is_single_user_mode", lambda: False)
     monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: False)
 
     class _DummyApiManager:
@@ -248,7 +245,6 @@ def test_tools_execute_api_key_scopes_enforced(monkeypatch):
     Ensure /mcp/tools/execute respects API key scopes.
     """
     monkeypatch.setenv("MCP_SINGLE_USER_COMPAT_SHIM", "0")
-    monkeypatch.setattr(mcp_ep, "_authnz_is_single_user_mode", lambda: False)
     monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: False)
 
     class _DummyApiManager:
@@ -389,7 +385,6 @@ async def test_mcp_single_user_api_key_flag_enabled_uses_compat_shim(monkeypatch
     """
     # Enable shim and force single-user runtime.
     monkeypatch.setenv("MCP_SINGLE_USER_COMPAT_SHIM", "1")
-    monkeypatch.setattr(mcp_ep, "_authnz_is_single_user_mode", lambda: True)
     monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: True)
 
     # Provide minimal settings for the shim.
@@ -464,7 +459,6 @@ async def test_mcp_single_user_api_key_flag_disabled_uses_api_key_manager(monkey
     the API key should be validated via the multi-user API key manager path.
     """
     monkeypatch.setenv("MCP_SINGLE_USER_COMPAT_SHIM", "0")
-    monkeypatch.setattr(mcp_ep, "_authnz_is_single_user_mode", lambda: True)
     monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: True)
 
     calls: list[dict[str, Any]] = []

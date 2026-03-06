@@ -28,6 +28,10 @@ def _apply_test_env_defaults() -> None:
     os.environ["MINIMAL_TEST_APP"] = "1"
     os.environ["TEST_MODE"] = "1"
     os.environ["OTEL_SDK_DISABLED"] = "true"
+    # Route inclusion in app startup now keys off explicit pytest runtime, not
+    # only TEST_MODE. Mirror pytest's runtime signal so this helper produces
+    # the same snapshot shape as tests.
+    os.environ.setdefault("PYTEST_CURRENT_TEST", "snapshot_regen::helper (call)")
     logger.debug("Set test environment flags: MINIMAL_TEST_APP, TEST_MODE, OTEL_SDK_DISABLED")
     existing_disable = os.getenv("ROUTES_DISABLE", "")
     disable_parts = [p for p in existing_disable.replace(" ", ",").split(",") if p]

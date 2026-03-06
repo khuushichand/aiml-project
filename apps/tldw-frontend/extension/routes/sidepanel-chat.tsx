@@ -1832,7 +1832,7 @@ const SidepanelChat = () => {
                 className="relative flex w-full flex-col items-center pt-16 pb-4"
                 aria-busy="true"
                 aria-label={t("sidepanel:chat.restoringChat", "Restoring previous chat")}>
-                <div className="w-full max-w-3xl space-y-4">
+                <div className="w-full max-w-5xl space-y-4">
                   {[1, 2, 3].map((i) => (
                     <div key={i} className="flex gap-4 animate-pulse">
                       <div className="w-8 h-8 rounded-full bg-surface2 flex-shrink-0"></div>

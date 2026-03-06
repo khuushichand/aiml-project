@@ -7147,7 +7147,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       <div
         data-checkwidemode={checkWideMode}
         data-ui-mode={uiMode}
-        className="relative z-10 flex w-full max-w-[52rem] flex-col items-center justify-center gap-2 text-base data-[checkwidemode='true']:max-w-none">
+        className="relative z-10 flex w-full max-w-[64rem] flex-col items-center justify-center gap-2 text-base data-[checkwidemode='true']:max-w-none">
         <div className="relative flex w-full flex-row justify-center">
           <div
             ref={composerShellRef}

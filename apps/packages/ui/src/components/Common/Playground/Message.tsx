@@ -1684,7 +1684,7 @@ export const PlaygroundMessage = (props: Props) => {
   }
 
   const MARKDOWN_BASE_CLASSES =
-    "prose break-words text-message dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark"
+    "prose break-words text-message dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark max-w-none"
   const hasSources = props.isBot && Boolean(props?.sources?.length)
   const messageSpacing = isProMode
     ? `gap-2 px-4 pt-3 ${hasSources ? "pb-4" : "pb-2.5"}`
@@ -1772,7 +1772,7 @@ export const PlaygroundMessage = (props: Props) => {
       aria-busy={props.isStreaming && isLastMessage ? true : undefined}
       tabIndex={hasMessageKeyboardShortcuts ? 0 : undefined}
       onKeyDown={hasMessageKeyboardShortcuts ? handleMessageShortcut : undefined}
-      className={`group relative flex w-full max-w-3xl flex-col items-end justify-center text-text ${
+      className={`group relative flex w-full max-w-5xl flex-col items-end justify-center text-text ${
         isProMode ? "pb-3 md:px-5" : "pb-2 md:px-4"
       } ${checkWideMode ? "max-w-none" : ""} ${
         props.searchMatch === "active"
@@ -2307,11 +2307,10 @@ export const PlaygroundMessage = (props: Props) => {
                 )
               ) : (
                 <p
-                  className={`prose dark:prose-invert whitespace-pre-line prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark ${chatTextClass} ${
+                  className={`prose max-w-none dark:prose-invert whitespace-pre-line prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark ${chatTextClass} ${
                     props.message_type &&
                     "italic text-text-muted text-body"
                   }
-                  ${checkWideMode ? "max-w-none" : ""}
                   `}>
                   {props.searchQuery
                     ? highlightText(props.message, props.searchQuery)

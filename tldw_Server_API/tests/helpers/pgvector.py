@@ -9,6 +9,10 @@ How DSN is resolved (tests only)
   1) `PG_TEST_DSN`
   2) `PGVECTOR_DSN`
   3) `JOBS_DB_URL`
+  4) `POSTGRES_TEST_DSN`
+  5) `TEST_DATABASE_URL`
+  6) `DATABASE_URL`
+  7) container-style vars via `tests.helpers.pg_env` (`POSTGRES_TEST_*`, `POSTGRES_*`, `TEST_DB_*`)
   If none are set, tests that depend on pgvector are skipped. Tests do NOT read user-facing config files.
 
 Example DSN values
@@ -30,17 +34,61 @@ Troubleshooting
 
 import os
 from typing import Optional
+from urllib.parse import urlparse
 
 import pytest
 
 
 def _resolve_pgvector_dsn() -> Optional[str]:
     # Tests rely on environment variables only; do not read user-facing config.
-    return (
-        os.getenv("PG_TEST_DSN")
-        or os.getenv("PGVECTOR_DSN")
-        or os.getenv("JOBS_DB_URL")
+
+    def _postgres_dsn(value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+        candidate = value.strip()
+        try:
+            return candidate if urlparse(candidate).scheme.startswith("postgres") else None
+        except Exception:
+            return None
+
+    for key in (
+        "PG_TEST_DSN",
+        "PGVECTOR_DSN",
+        "JOBS_DB_URL",
+        "POSTGRES_TEST_DSN",
+        "TEST_DATABASE_URL",
+        "DATABASE_URL",
+    ):
+        dsn = _postgres_dsn(os.getenv(key))
+        if dsn:
+            return dsn
+
+    # Fall back to shared DSN builder only when container-style env vars are present.
+    env_style_keys = (
+        "POSTGRES_TEST_HOST",
+        "POSTGRES_TEST_PORT",
+        "POSTGRES_TEST_USER",
+        "POSTGRES_TEST_PASSWORD",
+        "POSTGRES_TEST_DB",
+        "POSTGRES_HOST",
+        "POSTGRES_PORT",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_DB",
+        "TEST_DB_HOST",
+        "TEST_DB_PORT",
+        "TEST_DB_USER",
+        "TEST_DB_PASSWORD",
+        "TEST_DB_NAME",
     )
+    if not any((os.getenv(key) or "").strip() for key in env_style_keys):
+        return None
+
+    try:
+        from tldw_Server_API.tests.helpers.pg_env import pg_dsn
+    except Exception:
+        return None
+    return _postgres_dsn(pg_dsn())
 
 
 def _ensure_extension(conn) -> None:
@@ -61,7 +109,10 @@ def pgvector_dsn() -> Optional[str]:
         pytest.skip("psycopg not installed; skipping pgvector tests")
     dsn = _resolve_pgvector_dsn()
     if not dsn:
-        pytest.skip("No pgvector DSN found (PG_TEST_DSN/PGVECTOR_DSN/JOBS_DB_URL or config)")
+        pytest.skip(
+            "No pgvector DSN found "
+            "(PG_TEST_DSN/PGVECTOR_DSN/JOBS_DB_URL/POSTGRES_TEST_DSN/TEST_DATABASE_URL/DATABASE_URL or container-style PG env)"
+        )
     # Try a quick connectivity check
     try:
         with psycopg.connect(dsn) as conn:

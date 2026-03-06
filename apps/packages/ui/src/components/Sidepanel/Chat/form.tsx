@@ -2196,7 +2196,7 @@ export const SidepanelForm = ({
         <div className="relative flex w-full flex-row justify-center gap-2">
           <div
             aria-disabled={!isConnectionReady}
-            className={`relative w-full max-w-[48rem] rounded-3xl border border-border/80 bg-surface/95 shadow-card backdrop-blur-lg duration-100 ${cardPadding}`}>
+            className={`relative w-full max-w-[64rem] rounded-3xl border border-border/80 bg-surface/95 shadow-card backdrop-blur-lg duration-100 ${cardPadding}`}>
             <div>
               {/* Inline Model Parameters Panel (Pro mode only) */}
               {wrapComposerProfile(

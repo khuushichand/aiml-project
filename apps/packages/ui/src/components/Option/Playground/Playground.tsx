@@ -935,7 +935,7 @@ export const Playground = () => {
             </div>
           )}
           <div className="px-4 pt-2">
-            <div className="mx-auto flex w-full max-w-[52rem] items-center justify-between text-[11px] text-text-muted">
+            <div className="mx-auto flex w-full max-w-[64rem] items-center justify-between text-[11px] text-text-muted">
               <span className="inline-flex items-center rounded-full border border-border bg-surface2 px-2 py-0.5">
                 {t("playground:regions.timeline", "Conversation timeline")}
               </span>
@@ -1019,7 +1019,7 @@ export const Playground = () => {
                 role="dialog"
                 aria-modal="false"
                 aria-label={t("playground:shortcuts.title", "Shortcuts")}
-                className="mx-auto mt-1 w-full max-w-[52rem] rounded-md border border-border bg-surface2 px-2 py-1.5 text-[11px] text-text"
+                className="mx-auto mt-1 w-full max-w-[64rem] rounded-md border border-border bg-surface2 px-2 py-1.5 text-[11px] text-text"
               >
                 <div className="mb-1 flex items-center justify-between gap-2">
                   <span className="font-semibold">
@@ -1053,7 +1053,7 @@ export const Playground = () => {
               </div>
             )}
             {threadSearchOpen && (
-              <div className="mx-auto mt-1 flex w-full max-w-[52rem] flex-wrap items-center gap-2 rounded-md border border-border bg-surface2 px-2 py-1">
+              <div className="mx-auto mt-1 flex w-full max-w-[64rem] flex-wrap items-center gap-2 rounded-md border border-border bg-surface2 px-2 py-1">
                 <div className="relative min-w-[200px] flex-1">
                   <Search
                     className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-subtle"
@@ -1135,7 +1135,7 @@ export const Playground = () => {
             {compactFeatureNoticeVisible && (
               <div
                 data-testid="playground-mobile-parity-notice"
-                className="mx-auto mt-1 w-full max-w-[52rem] rounded-md border border-warn/30 bg-warn/10 px-2 py-1 text-[10px] text-warn"
+                className="mx-auto mt-1 w-full max-w-[64rem] rounded-md border border-warn/30 bg-warn/10 px-2 py-1 text-[10px] text-warn"
               >
                 {t(
                   "playground:regions.compactFeatureNotice",
@@ -1151,7 +1151,7 @@ export const Playground = () => {
             aria-relevant="additions"
             aria-label={t("playground:aria.chatTranscript", "Chat messages")}
             className="custom-scrollbar flex-1 min-h-0 w-full overflow-x-hidden overflow-y-auto px-4">
-            <div className="mx-auto w-full max-w-[52rem] pb-6">
+            <div className="mx-auto w-full max-w-[64rem] pb-6">
               <PlaygroundChat
                 searchQuery={threadSearchQuery.trim()}
                 matchedMessageIndices={threadSearchMatchSet}
@@ -1166,7 +1166,7 @@ export const Playground = () => {
                 : ""
             }`}
           >
-            <div className="mx-auto w-full max-w-[52rem] px-4 pt-2 text-[11px] text-text-muted">
+            <div className="mx-auto w-full max-w-[64rem] px-4 pt-2 text-[11px] text-text-muted">
               <span className="inline-flex items-center rounded-full border border-border bg-surface2 px-2 py-0.5">
                 {t("playground:regions.composer", "Composer")}
               </span>
