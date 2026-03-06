@@ -409,7 +409,12 @@ describe("background proxy fallback safety", () => {
       vi.unstubAllGlobals()
     }
 
-    expect(chunks).toEqual(['{"choices":[{"delta":{"content":"H"}}]}'])
+    expect(chunks).toContain('{"choices":[{"delta":{"content":"H"}}]}')
+    expect(
+      chunks.some((chunk) =>
+        chunk.includes('"event":"stream_transport_interrupted"')
+      )
+    ).toBe(true)
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 

@@ -1264,6 +1264,8 @@ export const useChatActions = ({
       let reasoningEndTime: Date | null = null
       let timetaken = 0
       let apiReasoning = false
+      let streamTransportInterrupted = false
+      let streamTransportInterruptionReason: string | null = null
 
       const resolvedApiProvider = await resolveApiProviderForModel({
         modelId: resolvedModel,
@@ -1291,6 +1293,24 @@ export const useChatActions = ({
         },
         { signal }
       )) {
+        const interruptionEvent =
+          chunk && typeof chunk === "object" && !Array.isArray(chunk)
+            ? (chunk as Record<string, unknown>)
+            : null
+        if (
+          typeof interruptionEvent?.event === "string" &&
+          interruptionEvent.event.toLowerCase() ===
+            "stream_transport_interrupted"
+        ) {
+          streamTransportInterrupted = true
+          const detail =
+            typeof interruptionEvent.detail === "string"
+              ? interruptionEvent.detail.trim()
+              : ""
+          streamTransportInterruptionReason =
+            detail.length > 0 ? detail : streamTransportInterruptionReason
+          continue
+        }
         const chunkState = consumeStreamingChunk(
           { fullText, contentToSave, apiReasoning },
           chunk
@@ -1343,10 +1363,29 @@ export const useChatActions = ({
       setMessages((prev) =>
         prev.map((m) =>
           m.id === generateMessageId
-            ? updateActiveVariant(m, {
-                message: fullText,
-                reasoning_time_taken: timetaken
-              })
+            ? (() => {
+                const nextVariantPayload: Record<string, unknown> = {
+                  message: fullText,
+                  reasoning_time_taken: timetaken
+                }
+                if (streamTransportInterrupted) {
+                  const existingGenerationInfo =
+                    m.generationInfo &&
+                    typeof m.generationInfo === "object" &&
+                    !Array.isArray(m.generationInfo)
+                      ? (m.generationInfo as Record<string, unknown>)
+                      : {}
+                  nextVariantPayload.generationInfo = {
+                    ...existingGenerationInfo,
+                    streamTransportInterrupted: true,
+                    partialResponseSaved: true,
+                    streamTransportInterruptionReason:
+                      streamTransportInterruptionReason ||
+                      "Stream transport interrupted; partial response saved."
+                  }
+                }
+                return updateActiveVariant(m, nextVariantPayload)
+              })()
             : m
         )
       )

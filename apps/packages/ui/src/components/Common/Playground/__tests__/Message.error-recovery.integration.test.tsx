@@ -363,6 +363,24 @@ describe("PlaygroundMessage error recovery integration", () => {
     expect(onContinue).toHaveBeenCalledTimes(1)
   })
 
+  it("renders a compact partial-save marker when stream transport drops after partial output", () => {
+    render(
+      <PlaygroundMessage
+        {...baseProps}
+        generationInfo={{
+          streamTransportInterrupted: true,
+          partialResponseSaved: true,
+          streamTransportInterruptionReason:
+            "Could not establish connection. Receiving end does not exist."
+        }}
+      />
+    )
+
+    expect(
+      screen.getByText("Connection dropped. Partial response saved.")
+    ).toBeInTheDocument()
+  })
+
   it("renders an image artifact event card with prompt and runtime metadata", () => {
     render(
       <PlaygroundMessage

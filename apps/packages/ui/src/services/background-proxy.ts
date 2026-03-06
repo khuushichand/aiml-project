@@ -1107,6 +1107,13 @@ export async function* bgStream<
     if (shouldGracefullyEndAfterPartialStreamError) {
       // We already delivered data to the caller; avoid replaying non-idempotent
       // streamed requests after transport loss and let caller finalize partial output.
+      const interruptionDetail =
+        error instanceof Error ? error.message : String(error || "Stream transport interrupted")
+      yield JSON.stringify({
+        event: "stream_transport_interrupted",
+        detail: interruptionDetail,
+        partial_response_saved: true
+      })
       return
     }
     if (error) throw error

@@ -12728,13 +12728,15 @@ class MediaDatabase:
         if cleaned_must_have:
             kw_mh_placeholders = ','.join('?' * len(cleaned_must_have))
             # Subquery to ensure media_id is linked to ALL provided keywords
-            conditions.append("""
+            conditions.append(
+                """
                 (SELECT COUNT(DISTINCT k_mh.id)
                  FROM MediaKeywords mk_mh
                  JOIN Keywords k_mh ON mk_mh.keyword_id = k_mh.id
                  WHERE mk_mh.media_id = m.id AND k_mh.deleted = 0 AND LOWER(k_mh.keyword) IN ({kw_mh_placeholders})
                 ) = ?
-            """).format_map(locals())  # nosec B608
+            """.format_map(locals())  # nosec B608
+            )
             params.extend(cleaned_must_have)
             params.append(len(cleaned_must_have))
 
@@ -12742,14 +12744,16 @@ class MediaDatabase:
         cleaned_must_not_have = [k.strip().lower() for k in must_not_have_keywords if k and k.strip()] if must_not_have_keywords else []
         if cleaned_must_not_have:
             kw_mnh_placeholders = ','.join('?' * len(cleaned_must_not_have))
-            conditions.append("""
+            conditions.append(
+                """
                 NOT EXISTS (
                     SELECT 1
                     FROM MediaKeywords mk_mnh
                     JOIN Keywords k_mnh ON mk_mnh.keyword_id = k_mnh.id
                     WHERE mk_mnh.media_id = m.id AND k_mnh.deleted = 0 AND LOWER(k_mnh.keyword) IN ({kw_mnh_placeholders})
                 )
-            """).format_map(locals())  # nosec B608
+            """.format_map(locals())  # nosec B608
+            )
             params.extend(cleaned_must_not_have)
 
         # Text Search Logic (FTS or LIKE)

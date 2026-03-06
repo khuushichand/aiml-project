@@ -378,6 +378,25 @@ export const PlaygroundMessage = (props: Props) => {
     if (typeof raw !== "string" || raw.trim().length === 0) return null
     return raw.trim()
   }, [props.generationInfo])
+  const streamTransportInterrupted = Boolean(
+    (props.generationInfo as Record<string, unknown> | undefined)
+      ?.streamTransportInterrupted
+  )
+  const partialResponseSaved = Boolean(
+    (props.generationInfo as Record<string, unknown> | undefined)
+      ?.partialResponseSaved
+  )
+  const streamTransportInterruptionReason = React.useMemo(() => {
+    const raw = (props.generationInfo as Record<string, unknown> | undefined)
+      ?.streamTransportInterruptionReason
+    if (typeof raw !== "string" || raw.trim().length === 0) return null
+    return raw.trim()
+  }, [props.generationInfo])
+  const showPartialSaveMarker =
+    streamTransportInterrupted &&
+    partialResponseSaved &&
+    !interruptedGeneration &&
+    !errorPayload
   const messageTimestamp = React.useMemo(() => {
     const info = props.generationInfo as
       | { created_at?: string | number; createdAt?: string | number; timestamp?: string | number }
@@ -2193,6 +2212,19 @@ export const PlaygroundMessage = (props: Props) => {
                     </div>
                   )}
                 </div>
+              )}
+            </div>
+          )}
+          {showPartialSaveMarker && (
+            <div
+              role="status"
+              aria-live="polite"
+              title={streamTransportInterruptionReason || undefined}
+              className="inline-flex items-center rounded-md border border-border/60 bg-surface px-2 py-1 text-[11px] font-medium text-text-muted"
+            >
+              {t(
+                "playground:errorRecovery.partialSavedMarker",
+                "Connection dropped. Partial response saved."
               )}
             </div>
           )}
