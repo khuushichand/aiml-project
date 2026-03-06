@@ -17,6 +17,7 @@ https://github.com/cyanluna-git/cyanluna.skills/blob/main/kanban/SKILL.md
 https://github.com/9cb14c1ec0/vibe-manager
 https://github.com/slopus/happy
 https://github.com/samuelclay/crabigator
+https://github.com/googleworkspace/cli
 
 
 https://www.productcurious.com/p/a-pms-guide-to-ai-agent-architecture

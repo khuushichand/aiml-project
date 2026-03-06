@@ -1,0 +1,44 @@
+# VCS and local tooling state
+.git/
+.github/
+.worktrees/
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.cache/
+.tmp/
+.uv-cache/
+.idea/
+.claude/
+.codex/
+
+# Python/build outputs
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+
+# Frontend/build artifacts
+**/node_modules/
+**/test-results/
+**/playwright-report/
+apps/tldw-frontend/.next/
+apps/tldw-frontend/cdp-artifacts/
+apps/extension/tmp-playwright-profile/
+apps/extension/.playwright-home/
+apps/extension/.output/
+apps/extension/.wxt/
+
+# Runtime/local data (never bake into images)
+Databases/
+cache/
+dlq/
+models/
+tldw_Server_API/models/
+tldw_Server_API/tests/
+
+# Misc local files
+.DS_Store
+*.log

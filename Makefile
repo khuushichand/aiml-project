@@ -11,6 +11,8 @@ TLDW_ENV_TEMPLATE ?= tldw_Server_API/Config_Files/.env.example
 DOCKER_BASE_COMPOSE ?= Dockerfiles/docker-compose.yml
 DOCKER_WEBUI_COMPOSE ?= Dockerfiles/docker-compose.webui.yml
 NEXT_PUBLIC_API_URL ?= http://localhost:8000
+DOCKER_BUILD ?= false
+DOCKER_BUILD_FLAG = $(if $(filter true TRUE 1 yes YES,$(DOCKER_BUILD)),--build,)
 PYPI_BUILD_ARGS ?= --no-isolation
 MODEL_CYCLE_FIRST ?=
 MODEL_CYCLE_SECOND ?=
@@ -83,7 +85,7 @@ quickstart-docker-bootstrap:
 quickstart-docker: quickstart-docker-bootstrap
 	@echo "[quickstart-docker] Starting tldw_server via Docker Compose..."
 	@command -v docker >/dev/null 2>&1 || (echo "[quickstart-docker] docker not found. Install Docker and retry." && exit 1)
-	docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) up -d --build
+	docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) up -d $(DOCKER_BUILD_FLAG)
 	@echo "[quickstart-docker] First-use auth initialization is handled automatically by the app entrypoint."
 	@echo "[quickstart-docker] Server running at http://localhost:8000"
 	@echo "[quickstart-docker] Verify with: curl http://localhost:8000/health"
@@ -93,7 +95,7 @@ quickstart-docker-webui: quickstart-docker-bootstrap
 	@echo "[quickstart-docker-webui] Starting API + WebUI via Docker Compose..."
 	@command -v docker >/dev/null 2>&1 || (echo "[quickstart-docker-webui] docker not found. Install Docker and retry." && exit 1)
 	@echo "[quickstart-docker-webui] Using NEXT_PUBLIC_API_URL=$(NEXT_PUBLIC_API_URL)"
-	NEXT_PUBLIC_API_URL="$(NEXT_PUBLIC_API_URL)" docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) -f $(DOCKER_WEBUI_COMPOSE) up -d --build
+	NEXT_PUBLIC_API_URL="$(NEXT_PUBLIC_API_URL)" docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) -f $(DOCKER_WEBUI_COMPOSE) up -d $(DOCKER_BUILD_FLAG)
 	@echo "[quickstart-docker-webui] First-use auth initialization is handled automatically by the app entrypoint."
 	@echo "[quickstart-docker-webui] API:   http://localhost:8000"
 	@echo "[quickstart-docker-webui] WebUI: http://localhost:8080"

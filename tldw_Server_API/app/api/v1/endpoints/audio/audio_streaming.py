@@ -148,24 +148,66 @@ def _audio_shim_attr(name: str):
         "increment_jobs_started": increment_jobs_started,
         "finish_job": finish_job,
     }
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_module_shim
+    default_value = defaults.get(name)
+    package_candidate: Any = None
+    module_candidate: Any = None
 
-        if hasattr(audio_module_shim, name):
-            return getattr(audio_module_shim, name)
-    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-        logger.debug("audio_streaming shim module lookup failed for {}", name, exc_info=True)
-    except Exception:
-        logger.debug("audio_streaming shim module lookup raised unexpected error for {}", name, exc_info=True)
+    def _is_test_override(value: Any) -> bool:
+        try:
+            module_name = str(getattr(value, "__module__", "") or "")
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+            module_name = ""
+        if module_name.startswith("tldw_Server_API.tests") or module_name.startswith("tests."):
+            return True
+        if module_name == "__main__":
+            return True
+        try:
+            class_module = str(getattr(getattr(value, "__class__", object), "__module__", "") or "")
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+            class_module = ""
+        return class_module.startswith("tldw_Server_API.tests") or class_module.startswith("tests.")
+
     try:
         from tldw_Server_API.app.api.v1.endpoints import audio as audio_pkg_shim
 
         if hasattr(audio_pkg_shim, name):
-            return getattr(audio_pkg_shim, name)
+            package_candidate = getattr(audio_pkg_shim, name)
     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         logger.debug("audio_streaming shim package lookup failed for {}", name, exc_info=True)
     except Exception:
         logger.debug("audio_streaming shim package lookup raised unexpected error for {}", name, exc_info=True)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_module_shim
+
+        if hasattr(audio_module_shim, name):
+            module_candidate = getattr(audio_module_shim, name)
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        logger.debug("audio_streaming shim module lookup failed for {}", name, exc_info=True)
+    except Exception:
+        logger.debug("audio_streaming shim module lookup raised unexpected error for {}", name, exc_info=True)
+
+    if package_candidate is not None and module_candidate is not None:
+        if package_candidate is module_candidate:
+            return package_candidate
+        package_is_test_override = _is_test_override(package_candidate)
+        module_is_test_override = _is_test_override(module_candidate)
+        if package_is_test_override != module_is_test_override:
+            return package_candidate if package_is_test_override else module_candidate
+        if default_value is not None:
+            package_changed = package_candidate is not default_value
+            module_changed = module_candidate is not default_value
+            if package_changed != module_changed:
+                return package_candidate if package_changed else module_candidate
+            if package_changed and module_changed:
+                # Prefer package-level shim when both are intentionally overridden.
+                return package_candidate
+        # Preserve historical behavior when no clear override signal is present.
+        return module_candidate
+
+    if package_candidate is not None:
+        return package_candidate
+    if module_candidate is not None:
+        return module_candidate
     if name in defaults:
         return defaults[name]
     raise NameError(name)

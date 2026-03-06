@@ -11,8 +11,8 @@ WORKDIR /app/apps
 # Copy monorepo frontend workspace
 COPY apps /app/apps
 
-# Install all workspace dependencies needed by tldw-frontend and @tldw/ui
-RUN npm install --workspaces --include-workspace-root
+# Install only WebUI + shared UI workspaces to avoid extension dependency conflicts.
+RUN npm install --workspace tldw-frontend --workspace packages/ui --include-workspace-root
 
 # Build-time API config baked into client bundle
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
@@ -35,13 +35,12 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-# Standalone output contains server.js plus traced runtime deps
-COPY --from=builder /app/apps/tldw-frontend/.next/standalone /app
-COPY --from=builder /app/apps/tldw-frontend/.next/static /app/apps/tldw-frontend/.next/static
-COPY --from=builder /app/apps/tldw-frontend/public /app/apps/tldw-frontend/public
+RUN useradd -m -u 10002 webui
 
-RUN useradd -m -u 10002 webui && \
-    chown -R webui:webui /app
+# Standalone output contains server.js plus traced runtime deps
+COPY --from=builder --chown=webui:webui /app/apps/tldw-frontend/.next/standalone /app
+COPY --from=builder --chown=webui:webui /app/apps/tldw-frontend/.next/static /app/apps/tldw-frontend/.next/static
+COPY --from=builder --chown=webui:webui /app/apps/tldw-frontend/public /app/apps/tldw-frontend/public
 USER webui
 
 WORKDIR /app/apps/tldw-frontend

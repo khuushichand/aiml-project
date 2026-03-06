@@ -166,6 +166,11 @@ def _load_env_files_early() -> None:
         pass
 
 
+# Load .env files immediately so module-level os.getenv(...) constants
+# (including CORS allowlists) reflect Config_Files/.env values.
+_load_env_files_early()
+
+
 def _record_config_source(path: Optional[Path], loaded: bool) -> None:
     _CONFIG_SOURCE_METADATA.update(
         {

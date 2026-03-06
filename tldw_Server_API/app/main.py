@@ -4480,7 +4480,7 @@ def _resolve_cors_origins_or_raise(allowed_origins: list[str] | None) -> list[st
     message = (
         "CORS is enabled but ALLOWED_ORIGINS is empty. "
         "Set ALLOWED_ORIGINS to a non-empty list (for example: ['http://localhost:3000']) "
-        "or disable CORS explicitly via DISABLE_CORS=true."
+        "or set ALLOWED_ORIGINS='*' with CORS_ALLOW_CREDENTIALS=false for local development."
     )
     logger.critical(message)
     raise RuntimeError(message)
@@ -4508,6 +4508,28 @@ def _validate_cors_configuration_or_raise(
         )
         logger.critical(message)
         raise RuntimeError(message)
+
+
+_DEV_PRIVATE_NETWORK_ORIGIN_REGEX = (
+    r"^https?://("
+    r"localhost"
+    r"|127(?:\.\d{1,3}){3}"
+    r"|10(?:\.\d{1,3}){3}"
+    r"|192\.168(?:\.\d{1,3}){2}"
+    r"|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}"
+    r")(?::\d{1,5})?$"
+)
+
+
+def _compute_dev_cors_origin_regex(
+    origins: list[str],
+    *,
+    enforce_explicit_origins: bool,
+) -> str | None:
+    """Allow common localhost/private-LAN web UIs in non-production without widening prod CORS."""
+    if enforce_explicit_origins or "*" in origins:
+        return None
+    return _DEV_PRIVATE_NETWORK_ORIGIN_REGEX
 
 
 def _compute_openapi_cors_allow_origin(
@@ -4816,17 +4838,23 @@ if should_disable_cors():
 else:
     origins = _resolve_cors_origins_or_raise(ALLOWED_ORIGINS)
     _cors_allow_credentials = should_allow_cors_credentials()
+    _cors_enforce_explicit_origins = is_production_environment()
     _validate_cors_configuration_or_raise(
         origins,
         allow_credentials=_cors_allow_credentials,
-        enforce_explicit_origins=is_production_environment(),
+        enforce_explicit_origins=_cors_enforce_explicit_origins,
     )
     _cors_allow_all_origins = "*" in origins
+    _cors_allow_origin_regex = _compute_dev_cors_origin_regex(
+        origins,
+        enforce_explicit_origins=_cors_enforce_explicit_origins,
+    )
     _cors_allowed_openapi_origins = {str(o).rstrip("/") for o in origins if isinstance(o, str)}
     # # -- If you have any global middleware, add it here --
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
+        allow_origin_regex=_cors_allow_origin_regex,
         allow_credentials=_cors_allow_credentials,
         allow_methods=["*"],  # Must include OPTIONS, GET, POST, DELETE etc.
         allow_headers=["*"],

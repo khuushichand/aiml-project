@@ -9,6 +9,7 @@ Provides CRUD operations and query methods for:
 """
 
 import json
+import importlib.util
 import os
 import sqlite3
 import uuid
@@ -34,6 +35,8 @@ from tldw_Server_API.app.core.DB_Management.content_backend import get_content_b
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 _EVAL_DB_NONCRITICAL_EXCEPTIONS = (
+    ImportError,
+    ModuleNotFoundError,
     OSError,
     ValueError,
     TypeError,
@@ -45,6 +48,31 @@ _EVAL_DB_NONCRITICAL_EXCEPTIONS = (
     sqlite3.Error,
     json.JSONDecodeError,
 )
+
+
+def _normalize_sqlalchemy_postgres_url(db_url: str) -> str:
+    """Prefer psycopg3 SQLAlchemy URLs when psycopg2 is unavailable."""
+    if not isinstance(db_url, str):
+        return db_url
+
+    lowered = db_url.lower()
+    if not (lowered.startswith("postgresql://") or lowered.startswith("postgres://")):
+        return db_url
+    if lowered.startswith("postgresql+"):
+        return db_url
+
+    try:
+        has_psycopg = importlib.util.find_spec("psycopg") is not None
+        has_psycopg2 = importlib.util.find_spec("psycopg2") is not None
+    except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
+        return db_url
+
+    if has_psycopg and not has_psycopg2:
+        if lowered.startswith("postgresql://"):
+            return f"postgresql+psycopg://{db_url[len('postgresql://') :]}"
+        if lowered.startswith("postgres://"):
+            return f"postgresql+psycopg://{db_url[len('postgres://') :]}"
+    return db_url
 
 
 class _BackendCursorAdapter:
@@ -916,6 +944,7 @@ class EvaluationsDatabase:
         if not db_url:
             self._abtest_store = None
             return
+        db_url = _normalize_sqlalchemy_postgres_url(db_url)
         try:
             from tldw_Server_API.app.core.Evaluations.embeddings_abtest_repository import (
                 get_embeddings_abtest_store,

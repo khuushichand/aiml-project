@@ -3831,7 +3831,19 @@ END;
             if self._vector_search_initialized:
                 return self._vector_search
             embedding_config = dict(settings.get("EMBEDDING_CONFIG") or {})
-            user_db_base_dir = settings.get("USER_DB_BASE_DIR")
+            user_db_base_dir = None
+            if not self._is_memory_db:
+                try:
+                    # Keep vector storage colocated with the active Kanban DB root
+                    # so tests and runtime do not drift to stale persisted stores.
+                    user_db_base_dir = str(Path(self.db_path).expanduser().resolve().parent.parent)
+                except (OSError, RuntimeError) as exc:
+                    logger.debug(
+                        f"Failed to derive USER_DB_BASE_DIR from db_path={self.db_path}: {exc}; "
+                        "falling back to settings."
+                    )
+            if not user_db_base_dir:
+                user_db_base_dir = settings.get("USER_DB_BASE_DIR")
             if user_db_base_dir:
                 embedding_config["USER_DB_BASE_DIR"] = user_db_base_dir
             self._vector_search = create_kanban_vector_search(self.user_id, embedding_config)
