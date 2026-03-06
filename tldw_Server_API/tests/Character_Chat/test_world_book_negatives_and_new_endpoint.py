@@ -322,7 +322,12 @@ async def test_complete_v2_operational_and_persists():
             chat_id = r.json()["id"]
 
             # Call complete-v2
-            payload = {"append_user_message": "Hello there", "save_to_db": True}
+            payload = {
+                "append_user_message": "Hello there",
+                "save_to_db": True,
+                "provider": "local-llm",
+                "model": "local-test",
+            }
             r = await client.post(f"/api/v1/chats/{chat_id}/complete-v2", headers=headers, json=payload)
             assert r.status_code == 200
             data = r.json()

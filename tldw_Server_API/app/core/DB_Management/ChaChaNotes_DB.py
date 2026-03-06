@@ -8265,7 +8265,24 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         alt_greetings_json = get_json_field_as_string(card_data.get('alternate_greetings'))
         tags_field_value = card_data.get("tags")
         if tags_field_value is not None:
-            tags_field_value = self._normalize_character_tags_for_operation(tags_field_value)
+            if isinstance(tags_field_value, str):
+                raw_tags_value = tags_field_value
+                stripped_tags_value = raw_tags_value.strip()
+                if not stripped_tags_value:
+                    tags_field_value = []
+                else:
+                    try:
+                        parsed_tags = json.loads(stripped_tags_value)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        # Preserve legacy behavior for invalid JSON tag strings.
+                        tags_field_value = raw_tags_value
+                    else:
+                        if isinstance(parsed_tags, list):
+                            tags_field_value = self._normalize_character_tags_for_operation(parsed_tags)
+                        else:
+                            tags_field_value = raw_tags_value
+            else:
+                tags_field_value = self._normalize_character_tags_for_operation(tags_field_value)
         tags_json = get_json_field_as_string(tags_field_value)
         extensions_json = get_json_field_as_string(card_data.get('extensions'))
 
@@ -8626,25 +8643,27 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return []
 
         raw_tags: list[Any]
-        if isinstance(tags_value, list):
-            raw_tags = tags_value
+        if isinstance(tags_value, (list, set, tuple)):
+            raw_tags = list(tags_value)
         elif isinstance(tags_value, str):
-            stripped = tags_value.strip()
-            if not stripped:
+            if not tags_value.strip():
                 return []
             try:
-                parsed = json.loads(stripped)
-                raw_tags = parsed if isinstance(parsed, list) else [stripped]
+                parsed = json.loads(tags_value)
+                if isinstance(parsed, list):
+                    raw_tags = parsed
+                else:
+                    raw_tags = [tags_value]
             except (TypeError, ValueError, json.JSONDecodeError):
-                raw_tags = [stripped]
+                raw_tags = [tags_value]
         else:
             raw_tags = [tags_value]
 
         normalized: list[str] = []
         seen: set[str] = set()
         for tag in raw_tags:
-            tag_str = str(tag).strip()
-            if not tag_str or tag_str in seen:
+            tag_str = str(tag)
+            if not tag_str.strip() or tag_str in seen:
                 continue
             seen.add(tag_str)
             normalized.append(tag_str)

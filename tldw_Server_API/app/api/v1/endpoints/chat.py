@@ -2497,14 +2497,6 @@ async def create_chat_completion(
         if override_error:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
-        if strict_model_selection and explicit_model_requested:
-            availability_error = _validate_explicit_model_availability(provider, model)
-            if availability_error:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=availability_error,
-                )
-
         persona_alias_used = _resolve_character_id_from_persona_alias(request_data)
 
         user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
@@ -2613,6 +2605,13 @@ async def create_chat_completion(
                         "message": f"Provider '{target_api_provider}' requires an API key. Please configure credentials.",
                     },
                 )
+            if strict_model_selection and explicit_model_requested:
+                availability_error = _validate_explicit_model_availability(target_api_provider, model)
+                if availability_error:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=availability_error,
+                    )
             # Additional deterministic behavior for tests: if a clearly invalid key is provided, fail fast with 401.
             # This avoids depending on external network calls in CI and matches integration test expectations.
             if _test_mode_flag and provider_api_key and provider_requires_api_key(target_api_provider):

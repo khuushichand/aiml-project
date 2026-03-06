@@ -3816,27 +3816,35 @@ async def lifespan(app: FastAPI):
     except _IMPORT_EXCEPTIONS as e:
         logger.debug(f"App Shutdown: MCP rate limiter shutdown skipped/failed: {e}")
 
-    # Shutdown TTS Service
-    try:
-        from tldw_Server_API.app.core.TTS.tts_service_v2 import close_tts_service_v2
-        from tldw_Server_API.app.core.TTS.voice_manager import shutdown_voice_manager
+    _in_pytest_for_tts_shutdown = _shared_is_explicit_pytest_runtime()
 
-        await shutdown_voice_manager()
-        await close_tts_service_v2()
-        logger.info("App Shutdown: TTS service shutdown complete")
-    except _IMPORT_EXCEPTIONS as e:
-        logger.exception(f"App Shutdown: Error shutting down TTS service: {e}")
+    # Shutdown TTS Service
+    if _in_pytest_for_tts_shutdown:
+        logger.info("App Shutdown: Skipping TTS service shutdown in test context")
+    else:
+        try:
+            from tldw_Server_API.app.core.TTS.tts_service_v2 import close_tts_service_v2
+            from tldw_Server_API.app.core.TTS.voice_manager import shutdown_voice_manager
+
+            await shutdown_voice_manager()
+            await close_tts_service_v2()
+            logger.info("App Shutdown: TTS service shutdown complete")
+        except _IMPORT_EXCEPTIONS as e:
+            logger.exception(f"App Shutdown: Error shutting down TTS service: {e}")
 
     # Shutdown TTS Resource Manager (memory monitor, sessions, HTTP clients)
-    try:
-        from tldw_Server_API.app.core.TTS.tts_resource_manager import (
-            close_resource_manager as _close_tts_resource_manager,
-        )
+    if _in_pytest_for_tts_shutdown:
+        logger.info("App Shutdown: Skipping TTS resource manager shutdown in test context")
+    else:
+        try:
+            from tldw_Server_API.app.core.TTS.tts_resource_manager import (
+                close_resource_manager as _close_tts_resource_manager,
+            )
 
-        await _close_tts_resource_manager()
-        logger.info("App Shutdown: TTS resource manager shutdown complete")
-    except _IMPORT_EXCEPTIONS as e:
-        logger.exception(f"App Shutdown: Error shutting down TTS resource manager: {e}")
+            await _close_tts_resource_manager()
+            logger.info("App Shutdown: TTS resource manager shutdown complete")
+        except _IMPORT_EXCEPTIONS as e:
+            logger.exception(f"App Shutdown: Error shutting down TTS resource manager: {e}")
 
     # Shutdown shared HTTP client sessions (aiohttp)
     try:

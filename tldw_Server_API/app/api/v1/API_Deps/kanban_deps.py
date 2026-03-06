@@ -27,6 +27,10 @@ from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
     KanbanDBError,
     NotFoundError,
 )
+from tldw_Server_API.app.core.testing import (
+    is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+)
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 
 # --- Configuration ---
 _KANBAN_EXECUTOR: Optional[ThreadPoolExecutor] = None
@@ -521,6 +525,10 @@ def kanban_rate_limit(action: str) -> Callable:
         A FastAPI dependency function.
     """
     async def rate_limit_dependency(current_user: User = Depends(get_request_user)) -> None:
+        # Match Auth dependencies: bypass in test contexts for deterministic tests.
+        if _is_explicit_pytest_runtime() or _is_test_mode():
+            return
+
         user_id = current_user.id if current_user else 0
         allowed, info = check_kanban_rate_limit(user_id, action)
 

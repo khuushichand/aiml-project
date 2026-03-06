@@ -559,6 +559,15 @@ def _sync_exemplar_embeddings_best_effort(
             character_id=character_id,
             exemplars=exemplars,
         )
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        logger.warning(
+            "Failed to sync exemplar embeddings for character {} user {} with non-fatal base exception: {}",
+            character_id,
+            user_id,
+            exc,
+        )
     except _CHARACTERS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(
             "Failed to sync exemplar embeddings for character {} user {}: {}",
@@ -582,6 +591,15 @@ def _delete_exemplar_embeddings_best_effort(
             user_id=user_id,
             character_id=character_id,
             exemplar_ids=exemplar_ids,
+        )
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        logger.warning(
+            "Failed to delete exemplar embeddings for character {} user {} with non-fatal base exception: {}",
+            character_id,
+            user_id,
+            exc,
         )
     except _CHARACTERS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(
@@ -1201,7 +1219,7 @@ async def create_character_exemplars_endpoint(
 
 
 @router.get(
-    "/{character_id:int}/exemplars/{exemplar_id:int}",
+    "/{character_id:int}/exemplars/{exemplar_id}",
     response_model=CharacterExemplarResponse,
     summary="Get character exemplar by ID",
     tags=["characters"],
@@ -1237,7 +1255,7 @@ async def get_character_exemplar_endpoint(
 
 
 @router.put(
-    "/{character_id:int}/exemplars/{exemplar_id:int}",
+    "/{character_id:int}/exemplars/{exemplar_id}",
     response_model=CharacterExemplarResponse,
     summary="Update character exemplar",
     tags=["characters"],
@@ -1287,7 +1305,7 @@ async def update_character_exemplar_endpoint(
 
 
 @router.delete(
-    "/{character_id:int}/exemplars/{exemplar_id:int}",
+    "/{character_id:int}/exemplars/{exemplar_id}",
     response_model=CharacterExemplarDeletionResponse,
     summary="Delete character exemplar",
     tags=["characters"],

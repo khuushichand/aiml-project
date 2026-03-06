@@ -16,6 +16,11 @@ GetEmbeddingConfigFn = Callable[[], dict[str, Any]]
 VectorScoreFn = Callable[..., dict[str, float]]
 
 
+def _is_fatal_base_exception(exc: BaseException) -> bool:
+    """Return True for process-control exceptions that must not be swallowed."""
+    return isinstance(exc, (KeyboardInterrupt, SystemExit))
+
+
 @lru_cache(maxsize=1)
 def _load_embedding_helpers() -> tuple[CreateEmbeddingsFn | None, GetEmbeddingConfigFn | None]:
     """Lazy-load embedding helpers and guard against missing optional deps."""
@@ -118,7 +123,9 @@ def _create_chroma_manager(
             user_id=str(user_id),
             user_embedding_config=_build_chroma_user_embedding_config(embedding_config),
         )
-    except Exception as exc:  # noqa: BLE001
+    except BaseException as exc:  # noqa: BLE001
+        if _is_fatal_base_exception(exc):
+            raise
         logger.warning("Failed to initialize persona exemplar Chroma manager: {}", exc)
         return None
 
@@ -214,7 +221,9 @@ def score_exemplars_with_vector_index(
             embedding_model_id_override=model_id_override,
             where_filter={"character_id": str(character_id)},
         )
-    except Exception as exc:  # noqa: BLE001
+    except BaseException as exc:  # noqa: BLE001
+        if _is_fatal_base_exception(exc):
+            raise
         logger.warning("Persona exemplar vector search failed: {}", exc)
         return {}
 
@@ -317,7 +326,9 @@ def upsert_character_exemplar_embeddings(
             embedding_model_id_for_dim_check=model_id_override or default_model_id,
         )
         return len(exemplar_ids)
-    except Exception as exc:  # noqa: BLE001
+    except BaseException as exc:  # noqa: BLE001
+        if _is_fatal_base_exception(exc):
+            raise
         logger.warning("Persona exemplar embedding upsert failed: {}", exc)
         return 0
 
@@ -353,7 +364,9 @@ def delete_character_exemplar_embeddings(
             collection_name=build_character_exemplar_collection_name(str(user_id), int(character_id)),
         )
         return len(normalized_ids)
-    except Exception as exc:  # noqa: BLE001
+    except BaseException as exc:  # noqa: BLE001
+        if _is_fatal_base_exception(exc):
+            raise
         logger.warning("Persona exemplar embedding delete failed: {}", exc)
         return 0
 
@@ -405,7 +418,9 @@ def score_exemplars_with_embeddings(
                     exemplar_id_normalized = str(exemplar_id).strip()
                     if exemplar_id_normalized:
                         scores[exemplar_id_normalized] = round(max(0.0, min(1.0, float(score_value))), 6)
-        except Exception as exc:  # noqa: BLE001
+        except BaseException as exc:  # noqa: BLE001
+            if _is_fatal_base_exception(exc):
+                raise
             logger.warning("Persona exemplar vector scoring callback failed: {}", exc)
 
         if len(scores) >= len(candidate_ids):
@@ -422,7 +437,9 @@ def score_exemplars_with_embeddings(
             config,
             model_id_override,
         )
-    except Exception as exc:  # noqa: BLE001
+    except BaseException as exc:  # noqa: BLE001
+        if _is_fatal_base_exception(exc):
+            raise
         logger.warning("Embedding scoring failed for persona exemplars: {}", exc)
         return {}
 

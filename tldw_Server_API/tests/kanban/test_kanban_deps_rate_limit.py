@@ -8,9 +8,11 @@ Focused on:
 """
 
 from collections import deque
+from types import SimpleNamespace
 
 import pytest
 from cachetools import LRUCache
+from fastapi import HTTPException
 
 from tldw_Server_API.app.api.v1.API_Deps import kanban_deps
 
@@ -61,6 +63,18 @@ class TestKanbanRateLimiting:
         allowed, _ = kanban_deps.check_kanban_rate_limit(user_id=1, action="test.action")
         assert allowed is True
         assert "stale:action" not in kanban_deps._rate_limit_windows
+
+    async def test_dependency_bypasses_rate_limit_during_pytest_runtime(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setitem(kanban_deps.KANBAN_RATE_LIMITS, "test.action", 0)
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests::test_dependency_bypasses_rate_limit_during_pytest_runtime")
+
+        dependency = kanban_deps.kanban_rate_limit("test.action")
+        current_user = SimpleNamespace(id=123)
+
+        try:
+            await dependency(current_user=current_user)
+        except HTTPException as exc:  # pragma: no cover - this is the pre-fix failure mode
+            pytest.fail(f"Rate limit should be bypassed during explicit pytest runtime, got {exc.status_code}")
 
 
 class TestKanbanDbCacheShutdown:

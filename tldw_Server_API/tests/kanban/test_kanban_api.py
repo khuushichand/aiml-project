@@ -23,6 +23,8 @@ pytestmark = pytest.mark.integration
 def client_with_kanban_db(tmp_path, monkeypatch):
     """Create a test client with a temporary Kanban database."""
     monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+    auth_db_path = (tmp_path / "auth_users.db").resolve()
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:////{auth_db_path}")
     db_path = DatabasePaths.get_kanban_db_path("integration_test_user")
     db = KanbanDB(str(db_path), user_id="integration_test_user")
 
@@ -1260,33 +1262,46 @@ def test_search_with_board_filter(client_with_kanban_db):
     client, db = client_with_kanban_db
 
     # Create two boards
-    board1 = client.post(
+    board1_resp = client.post(
         "/api/v1/kanban/boards",
         json={"name": "Board One", "client_id": "board-filter-1"}
-    ).json()
-    board2 = client.post(
+    )
+    assert board1_resp.status_code == 201, board1_resp.text
+    board1 = board1_resp.json()
+
+    board2_resp = client.post(
         "/api/v1/kanban/boards",
         json={"name": "Board Two", "client_id": "board-filter-2"}
-    ).json()
+    )
+    assert board2_resp.status_code == 201, board2_resp.text
+    board2 = board2_resp.json()
 
-    lst1 = client.post(
+    lst1_resp = client.post(
         f"/api/v1/kanban/boards/{board1['id']}/lists",
         json={"name": "List One", "client_id": "list-filter-1"}
-    ).json()
-    lst2 = client.post(
+    )
+    assert lst1_resp.status_code == 201, lst1_resp.text
+    lst1 = lst1_resp.json()
+
+    lst2_resp = client.post(
         f"/api/v1/kanban/boards/{board2['id']}/lists",
         json={"name": "List Two", "client_id": "list-filter-2"}
-    ).json()
+    )
+    assert lst2_resp.status_code == 201, lst2_resp.text
+    lst2 = lst2_resp.json()
 
     # Create cards with same searchable term in both boards
-    client.post(
+    card1_resp = client.post(
         f"/api/v1/kanban/lists/{lst1['id']}/cards",
         json={"title": "Testing feature in board one", "client_id": "filter-card-1"}
     )
-    client.post(
+    assert card1_resp.status_code == 201, card1_resp.text
+
+    card2_resp = client.post(
         f"/api/v1/kanban/lists/{lst2['id']}/cards",
         json={"title": "Testing feature in board two", "client_id": "filter-card-2"}
     )
+    assert card2_resp.status_code == 201, card2_resp.text
 
     # Search with board filter
     search_resp = client.get(
@@ -1307,23 +1322,31 @@ def test_search_with_priority_filter(client_with_kanban_db):
     client, db = client_with_kanban_db
 
     # Setup
-    board = client.post(
+    board_resp = client.post(
         "/api/v1/kanban/boards",
         json={"name": "Priority Search Board", "client_id": "board-priority-search-1"}
-    ).json()
-    lst = client.post(
+    )
+    assert board_resp.status_code == 201, board_resp.text
+    board = board_resp.json()
+
+    lst_resp = client.post(
         f"/api/v1/kanban/boards/{board['id']}/lists",
         json={"name": "Priority Search List", "client_id": "list-priority-search-1"}
-    ).json()
+    )
+    assert lst_resp.status_code == 201, lst_resp.text
+    lst = lst_resp.json()
 
-    client.post(
+    high_card_resp = client.post(
         f"/api/v1/kanban/lists/{lst['id']}/cards",
         json={"title": "Critical bug fix", "client_id": "priority-card-1", "priority": "high"}
     )
-    client.post(
+    assert high_card_resp.status_code == 201, high_card_resp.text
+
+    low_card_resp = client.post(
         f"/api/v1/kanban/lists/{lst['id']}/cards",
         json={"title": "Minor bug fix", "client_id": "priority-card-2", "priority": "low"}
     )
+    assert low_card_resp.status_code == 201, low_card_resp.text
 
     # Search with priority filter
     search_resp = client.get(
@@ -1344,31 +1367,43 @@ def test_search_with_label_filter(client_with_kanban_db):
     client, db = client_with_kanban_db
 
     # Setup
-    board = client.post(
+    board_resp = client.post(
         "/api/v1/kanban/boards",
         json={"name": "Label Search Board", "client_id": "board-label-search-1"}
-    ).json()
-    lst = client.post(
+    )
+    assert board_resp.status_code == 201, board_resp.text
+    board = board_resp.json()
+
+    lst_resp = client.post(
         f"/api/v1/kanban/boards/{board['id']}/lists",
         json={"name": "Label Search List", "client_id": "list-label-search-1"}
-    ).json()
+    )
+    assert lst_resp.status_code == 201, lst_resp.text
+    lst = lst_resp.json()
 
-    label = client.post(
+    label_resp = client.post(
         f"/api/v1/kanban/boards/{board['id']}/labels",
         json={"name": "Bug", "color": "red"}
-    ).json()
+    )
+    assert label_resp.status_code == 201, label_resp.text
+    label = label_resp.json()
 
-    card1 = client.post(
+    card1_resp = client.post(
         f"/api/v1/kanban/lists/{lst['id']}/cards",
         json={"title": "Feature request alpha", "client_id": "label-search-card-1"}
-    ).json()
-    client.post(
+    )
+    assert card1_resp.status_code == 201, card1_resp.text
+    card1 = card1_resp.json()
+
+    card2_resp = client.post(
         f"/api/v1/kanban/lists/{lst['id']}/cards",
         json={"title": "Feature request beta", "client_id": "label-search-card-2"}
     )
+    assert card2_resp.status_code == 201, card2_resp.text
 
     # Assign label to card1
-    client.post(f"/api/v1/kanban/cards/{card1['id']}/labels/{label['id']}")
+    assign_resp = client.post(f"/api/v1/kanban/cards/{card1['id']}/labels/{label['id']}")
+    assert assign_resp.status_code == 200, assign_resp.text
 
     # Search with label filter
     search_resp = client.get(

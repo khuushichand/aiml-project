@@ -19,6 +19,8 @@ pytestmark = pytest.mark.integration
 def workflow_client_with_kanban_db(tmp_path, monkeypatch):
     """Create a workflow-aware test client with a temporary Kanban database."""
     monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+    auth_db_path = (tmp_path / "auth_users.db").resolve()
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:////{auth_db_path}")
     db_path = DatabasePaths.get_kanban_db_path("integration_workflow_user")
     db = KanbanDB(str(db_path), user_id="integration_workflow_user")
 

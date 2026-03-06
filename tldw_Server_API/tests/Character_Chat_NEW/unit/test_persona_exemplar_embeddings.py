@@ -213,3 +213,33 @@ def test_delete_character_exemplar_embeddings_deletes_ids_from_collection():
     call = manager.calls[0]
     assert call["collection_name"] == build_character_exemplar_collection_name("1", 10)
     assert call["ids"] == ["e1", "e2"]
+
+
+@pytest.mark.unit
+def test_upsert_character_exemplar_embeddings_handles_nonfatal_base_exception(monkeypatch):
+    class _NonFatalPanic(BaseException):
+        pass
+
+    class _PanicManager:
+        def __init__(self, **kwargs):  # noqa: ANN003, ARG002
+            raise _NonFatalPanic("panic during manager init")
+
+    def _fake_embeddings_batch(texts, config, model_id_override):  # noqa: ARG001
+        return [[0.1, 0.2] for _ in texts]
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_embeddings._load_chroma_manager_class",
+        lambda: _PanicManager,
+    )
+
+    count = upsert_character_exemplar_embeddings(
+        user_id="1",
+        character_id=10,
+        exemplars=[
+            {"id": "e1", "text": "first exemplar", "emotion": "neutral", "scenario": "press_challenge"},
+        ],
+        create_embeddings_fn=_fake_embeddings_batch,
+        embedding_config={"embedding_config": {"default_model_id": "stub:model"}},
+    )
+
+    assert count == 0

@@ -514,6 +514,10 @@ async def import_chatbook(
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
 
+        normalized_filename = file.filename.replace("\\", "/")
+        if Path(normalized_filename).name != normalized_filename or ChatbookValidator._is_path_traversal(normalized_filename):
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
         # Validate and sanitize filename
         valid, error, safe_filename = ChatbookValidator.validate_filename(file.filename)
         if not valid:
@@ -704,6 +708,10 @@ async def preview_chatbook(
         # Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
+
+        normalized_filename = file.filename.replace("\\", "/")
+        if Path(normalized_filename).name != normalized_filename or ChatbookValidator._is_path_traversal(normalized_filename):
+            raise HTTPException(status_code=400, detail="Invalid filename")
 
         # Validate and sanitize filename
         valid, error, safe_filename = ChatbookValidator.validate_filename(file.filename)
