@@ -148,6 +148,42 @@ type TldwChatMeta =
   | null
   | undefined
 
+const isAbortLikeError = (error: unknown): boolean => {
+  if (error instanceof Error) {
+    if (error.name === "AbortError") return true
+    return error.message.toLowerCase().includes("abort")
+  }
+  return String(error || "")
+    .toLowerCase()
+    .includes("abort")
+}
+
+const attemptCharacterStreamRecoveryPersist = async ({
+  chatId,
+  temporaryChat,
+  assistantContent,
+  alreadyPersisted,
+  error,
+  persist
+}: {
+  chatId: string | null
+  temporaryChat: boolean
+  assistantContent: string
+  alreadyPersisted: boolean
+  error: unknown
+  persist: (content: string) => Promise<boolean>
+}): Promise<boolean> => {
+  if (alreadyPersisted || temporaryChat) return false
+  if (!chatId || isAbortLikeError(error)) return false
+  const trimmedContent = assistantContent.trim()
+  if (!trimmedContent) return false
+  try {
+    return await persist(trimmedContent)
+  } catch {
+    return false
+  }
+}
+
 type UseChatActionsOptions = {
   t: TFunction
   notification: NotificationInstance
@@ -922,6 +958,8 @@ export const useChatActions = ({
     const resolvedAssistantMessageId = generateID()
     const resolvedUserMessageId = !isRegenerate ? generateID() : undefined
     let persistedUserServerMessageId: string | undefined
+    let activeChatId: string | null = null
+    let assistantPersistedToServer = false
     let generateMessageId = resolvedAssistantMessageId
     const fallbackParentMessageId = getLastUserMessageId(chatHistory)
     const resolvedAssistantParentMessageId = isRegenerate
@@ -1119,6 +1157,7 @@ export const useChatActions = ({
         setServerChatMetaLoaded(true)
         invalidateServerChatHistory()
       }
+      activeChatId = chatId
 
       if (createdNewChat && !isRegenerate && greetingText.length > 0) {
         try {
@@ -1377,6 +1416,7 @@ export const useChatActions = ({
             persisted?.message_id ??
             persisted?.id
           const createdAsstVersion = persisted?.version
+          assistantPersistedToServer = createdAsstServerId != null
           const metadataExtra = {
             speaker_character_id: speakerCharacterId ?? null,
             speaker_character_name: characterName,
@@ -1413,6 +1453,7 @@ export const useChatActions = ({
               role: "assistant",
               content: finalPersistedContent
             })) as { id?: string | number; version?: number } | null
+            assistantPersistedToServer = createdAsst?.id != null
             setMessages((prev) =>
               ((prev as any[]).map((m) => {
                 if (m.id !== generateMessageId) return m
@@ -1494,6 +1535,32 @@ export const useChatActions = ({
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      await attemptCharacterStreamRecoveryPersist({
+        chatId: activeChatId,
+        temporaryChat,
+        assistantContent: contentToSave || fullText,
+        alreadyPersisted: assistantPersistedToServer,
+        error: e,
+        persist: async (assistantContent) => {
+          if (!activeChatId) return false
+          const createdAsst = (await tldwClient.addChatMessage(activeChatId, {
+            role: "assistant",
+            content: assistantContent
+          })) as { id?: string | number; version?: number } | null
+          if (createdAsst?.id == null) return false
+          assistantPersistedToServer = true
+          setMessages((prev) =>
+            ((prev as any[]).map((m) => {
+              if (m.id !== generateMessageId) return m
+              return updateActiveVariant(m, {
+                serverMessageId: String(createdAsst.id),
+                serverMessageVersion: createdAsst?.version
+              })
+            }) as Message[])
+          )
+          return true
+        }
+      })
       const assistantContent = buildAssistantErrorContent(fullText, e)
       const interruptionReason =
         e instanceof Error ? e.message : t("somethingWentWrong")

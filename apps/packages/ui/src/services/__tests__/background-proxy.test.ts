@@ -353,6 +353,66 @@ describe("background proxy fallback safety", () => {
     expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
   })
 
+  it("treats post-first-chunk transport disconnect as graceful end", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true })
+    const onMessageListeners = new Set<(msg: any) => void>()
+    const onDisconnectListeners = new Set<() => void>()
+    const port = {
+      onMessage: {
+        addListener: (listener: (msg: any) => void) => onMessageListeners.add(listener),
+        removeListener: (listener: (msg: any) => void) => onMessageListeners.delete(listener)
+      },
+      onDisconnect: {
+        addListener: (listener: () => void) => onDisconnectListeners.add(listener),
+        removeListener: (listener: () => void) => onDisconnectListeners.delete(listener)
+      },
+      postMessage: vi.fn(() => {
+        onMessageListeners.forEach((listener) =>
+          listener({
+            event: "data",
+            data: '{"choices":[{"delta":{"content":"H"}}]}'
+          })
+        )
+        onMessageListeners.forEach((listener) =>
+          listener({
+            event: "error",
+            message: "Could not establish connection. Receiving end does not exist."
+          })
+        )
+      }),
+      disconnect: vi.fn(() => {
+        onDisconnectListeners.forEach((listener) => listener())
+      })
+    }
+    mocks.connect.mockReturnValue(port as any)
+    const fetchSpy = vi.fn(async () =>
+      new Response("data: [DONE]\n\n", {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      })
+    )
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chats/abc/complete-v2",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(chunks).toEqual(['{"choices":[{"delta":{"content":"H"}}]}'])
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it("falls back to direct stream when runtime.connect throws", async () => {
     mocks.sendMessage.mockResolvedValue({ ok: true })
     mocks.connect.mockImplementation(() => {

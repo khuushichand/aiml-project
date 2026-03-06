@@ -6563,9 +6563,18 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   const {
     actionBarVisible,
+    composerFocusWithin,
     actionBarVisibilityClass,
     handlers: actionBarHandlers
   } = useActionBarVisibility({ externalPinSources })
+  const shouldCompactComposerTextarea =
+    !composerFocusWithin &&
+    !contextToolsOpen &&
+    !showSlashMenu &&
+    !showMentions &&
+    !isSending &&
+    !isMessageCollapsed &&
+    messageDisplayValue.trim().length === 0
   const composerShellRef = React.useRef<HTMLDivElement>(null)
 
   const keepComposerBottomInView = React.useCallback(() => {
@@ -7478,6 +7487,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           isConnectionReady={isConnectionReady}
                           isCollapsed={isMessageCollapsed}
                           ariaExpanded={!isMessageCollapsed}
+                          compactWhenInactive={shouldCompactComposerTextarea}
                           formInputProps={form.getInputProps("message")}
                           showSlashMenu={showSlashMenu}
                           slashCommands={filteredSlashCommands}

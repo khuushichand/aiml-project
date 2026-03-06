@@ -57,5 +57,28 @@ describe("applyDynamicTextareaSize", () => {
     expect(textarea.style.maxHeight).toBe("")
     expect(textarea.style.overflowY).toBe("hidden")
   })
-})
 
+  it("resets height before measuring so expanded textareas can shrink", () => {
+    const style = {
+      height: "220px",
+      maxHeight: "",
+      overflowY: ""
+    }
+    const textarea = {
+      get scrollHeight() {
+        return style.height === "auto" ? 44 : 220
+      },
+      style
+    }
+
+    const result = applyDynamicTextareaSize(
+      textarea as any,
+      undefined,
+      220
+    )
+
+    expect(result.heightPx).toBe(44)
+    expect(result.changed).toBe(true)
+    expect(textarea.style.height).toBe("44px")
+  })
+})

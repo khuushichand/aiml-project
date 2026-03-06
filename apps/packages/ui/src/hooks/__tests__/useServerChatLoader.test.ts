@@ -4,7 +4,8 @@ import type { ServerChatMessage } from "@/services/tldw/TldwApiClient"
 import {
   fetchAllServerChatMessages,
   mapServerChatMessagesToPlaygroundMessages,
-  shouldPreserveLocalMessagesForServerLoad
+  shouldPreserveLocalMessagesForServerLoad,
+  shouldSkipLoadedServerChatReload
 } from "@/hooks/chat/useServerChatLoader"
 import {
   buildImageGenerationEventMirrorContent,
@@ -123,6 +124,30 @@ describe("shouldPreserveLocalMessagesForServerLoad", () => {
         isProcessing: false
       })
     ).toBe(false)
+  })
+})
+
+describe("shouldSkipLoadedServerChatReload", () => {
+  it("returns false when current messages are empty even if same chat is marked loaded", () => {
+    expect(
+      shouldSkipLoadedServerChatReload({
+        activeServerChatId: "chat-1",
+        loadedChatId: "chat-1",
+        loaded: true,
+        currentMessages: []
+      })
+    ).toBe(false)
+  })
+
+  it("returns true when same chat is loaded and local messages exist", () => {
+    expect(
+      shouldSkipLoadedServerChatReload({
+        activeServerChatId: "chat-1",
+        loadedChatId: "chat-1",
+        loaded: true,
+        currentMessages: [createMessage({ message: "synced" })]
+      })
+    ).toBe(true)
   })
 })
 

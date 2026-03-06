@@ -38,6 +38,13 @@ type PreserveLocalMessagesArgs = {
   isProcessing: boolean
 }
 
+type ShouldSkipLoadedServerChatReloadArgs = {
+  activeServerChatId: string | null
+  loadedChatId: string | null
+  loaded: boolean
+  currentMessages: Message[]
+}
+
 type FetchServerChatMessagesPageArgs = {
   limit: number
   offset: number
@@ -102,6 +109,17 @@ export const shouldPreserveLocalMessagesForServerLoad = ({
     const serverMessageId = toServerMessageId(message)
     return Boolean(serverMessageId) && !serverMessageIds.has(serverMessageId)
   })
+}
+
+export const shouldSkipLoadedServerChatReload = ({
+  activeServerChatId,
+  loadedChatId,
+  loaded,
+  currentMessages
+}: ShouldSkipLoadedServerChatReloadArgs): boolean => {
+  if (!activeServerChatId || !loaded) return false
+  if (loadedChatId !== activeServerChatId) return false
+  return Array.isArray(currentMessages) && currentMessages.length > 0
 }
 
 export const fetchAllServerChatMessages = async (
@@ -394,6 +412,10 @@ export const useServerChatLoader = ({
     timer: ReturnType<typeof setTimeout> | null
   }>({ chatId: null, timer: null })
 
+  messagesRef.current = messages
+  streamingRef.current = streaming
+  processingRef.current = isProcessing
+
   React.useEffect(() => {
     return () => {
       if (serverChatDebounceRef.current.timer) {
@@ -406,22 +428,14 @@ export const useServerChatLoader = ({
   }, [])
 
   React.useEffect(() => {
-    messagesRef.current = messages
-  }, [messages])
-
-  React.useEffect(() => {
-    streamingRef.current = streaming
-  }, [streaming])
-
-  React.useEffect(() => {
-    processingRef.current = isProcessing
-  }, [isProcessing])
-
-  React.useEffect(() => {
     if (!serverChatId) return
     if (
-      serverChatLoadRef.current.chatId === serverChatId &&
-      serverChatLoadRef.current.loaded
+      shouldSkipLoadedServerChatReload({
+        activeServerChatId: serverChatId,
+        loadedChatId: serverChatLoadRef.current.chatId,
+        loaded: serverChatLoadRef.current.loaded,
+        currentMessages: messagesRef.current
+      })
     ) {
       return
     }
@@ -550,11 +564,18 @@ export const useServerChatLoader = ({
             isProcessing: processingRef.current
           })
 
-          if (!shouldPreserveLocal) {
+          const shouldPreserveAtCommit = shouldPreserveLocalMessagesForServerLoad({
+            currentMessages: messagesRef.current,
+            serverMessages: mappedMessages,
+            isStreaming: streamingRef.current,
+            isProcessing: processingRef.current
+          })
+
+          if (!shouldPreserveLocal && !shouldPreserveAtCommit) {
             setHistory(history)
             setMessages(mappedMessages)
           }
-          if (!temporaryChat && !shouldPreserveLocal) {
+          if (!temporaryChat && !shouldPreserveLocal && !shouldPreserveAtCommit) {
             try {
               const localHistoryId = await ensureServerChatHistoryId(
                 serverChatId,
@@ -661,8 +682,6 @@ export const useServerChatLoader = ({
     }
   }, [
     ensureServerChatHistoryId,
-    isProcessing,
-    messages,
     notification,
     serverChatCharacterId,
     serverChatId,
@@ -680,7 +699,6 @@ export const useServerChatLoader = ({
     setServerChatTitle,
     setServerChatTopic,
     setServerChatVersion,
-    streaming,
     t,
     temporaryChat
   ])

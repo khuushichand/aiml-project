@@ -11,5 +11,6 @@ describe("useChatActions interruption recovery guard", () => {
     expect(source).toContain("interruptionReason")
     expect(source).toContain("interruptedAt: Date.now()")
     expect(source).toContain("imageGenerationRefine")
+    expect(source).toContain("attemptCharacterStreamRecoveryPersist")
   })
 })

@@ -1690,10 +1690,10 @@ export const PlaygroundMessage = (props: Props) => {
     ? `gap-2 px-4 pt-3 ${hasSources ? "pb-4" : "pb-2.5"}`
     : `gap-1.5 px-3 pt-2 ${hasSources ? "pb-3" : "pb-2"}`
   const messageCardClass = isSystemMessage
-    ? `flex flex-col rounded-2xl border border-dashed border-warn/30 bg-warn/10 shadow-sm ${messageSpacing}`
+    ? `flex max-w-[calc(100%-1.75rem)] flex-col rounded-2xl border border-dashed border-warn/30 bg-warn/10 shadow-sm ${messageSpacing}`
     : props.isBot
-      ? `flex flex-col rounded-2xl border border-border/50 bg-surface/60 shadow-sm border-l-2 border-l-primary/20 ${messageSpacing}`
-      : `flex flex-col rounded-2xl border border-border/50 bg-surface2/60 shadow-sm ${messageSpacing}`
+      ? `flex max-w-[calc(100%-1.75rem)] flex-col rounded-2xl border border-border/50 bg-surface/60 shadow-sm border-l-2 border-l-primary/20 ${messageSpacing}`
+      : `flex max-w-[calc(100%-1.75rem)] flex-col rounded-2xl border border-border/50 bg-surface2/60 shadow-sm ${messageSpacing}`
   const portraitPanel = shouldShowPortrait ? (
     <button
       type="button"

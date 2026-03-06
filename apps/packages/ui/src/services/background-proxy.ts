@@ -1099,6 +1099,16 @@ export async function* bgStream<
       yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
       return
     }
+    const shouldGracefullyEndAfterPartialStreamError =
+      firstDataReceived &&
+      !abortSignal?.aborted &&
+      Boolean(error) &&
+      (isExtensionTransportFailure(error) || !hasHttpStatusInMessage(error))
+    if (shouldGracefullyEndAfterPartialStreamError) {
+      // We already delivered data to the caller; avoid replaying non-idempotent
+      // streamed requests after transport loss and let caller finalize partial output.
+      return
+    }
     if (error) throw error
   } finally {
     clearTimeout(connectionTimer)

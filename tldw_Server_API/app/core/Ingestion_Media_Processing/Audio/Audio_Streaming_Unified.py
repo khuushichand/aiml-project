@@ -21,6 +21,7 @@ import copy
 import importlib
 import json
 import os
+import sys
 import tempfile
 import time
 from abc import ABC, abstractmethod
@@ -129,10 +130,30 @@ _WHISPER_COMPUTE_TYPE_OVERRIDE = ""  # type: ignore[assignment]
 
 
 def _resample_audio_if_needed(audio, sample_rate, target_sr=16000):  # type: ignore
-    """Lazily delegate to Audio_Transcription_Lib resampling when available."""
+    """Resample audio while avoiding heavy dependency imports during tests."""
+    if sample_rate == target_sr:
+        return np.asarray(audio, dtype=np.float32)
+
+    lib_mod = sys.modules.get(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib"
+    )
+    if lib_mod is not None:
+        impl = getattr(lib_mod, "_resample_audio_if_needed", None)
+        if callable(impl):
+            try:
+                return impl(audio, sample_rate, target_sr=target_sr)
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                pass
+
     try:
-        from .Audio_Transcription_Lib import _resample_audio_if_needed as _impl  # type: ignore
-        return _impl(audio, sample_rate, target_sr=target_sr)
+        arr = np.asarray(audio, dtype=np.float32)
+        if arr.size == 0:
+            return arr
+        ratio = float(target_sr) / float(sample_rate)
+        new_len = max(1, round(arr.shape[0] * ratio))
+        x_old = np.linspace(0.0, 1.0, num=arr.shape[0], endpoint=False)
+        x_new = np.linspace(0.0, 1.0, num=new_len, endpoint=False)
+        return np.interp(x_new, x_old, arr).astype(np.float32, copy=False)
     except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
         return audio
 
@@ -225,12 +246,14 @@ def _ensure_nemo_rnnt_deps() -> None:
 
 
 def _is_transcription_error_message(text: str) -> bool:
-    """Lazily resolve STT sentinel checks without importing heavy modules upfront."""
-    try:
-        from .Audio_Transcription_Lib import (
-            is_transcription_error_message as _impl,  # type: ignore
-        )
-    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+    """Resolve STT sentinel checks without importing heavy modules."""
+    lib_mod = sys.modules.get(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib"
+    )
+    if lib_mod is None:
+        return False
+    _impl = getattr(lib_mod, "is_transcription_error_message", None)
+    if not callable(_impl):
         return False
     try:
         return bool(_impl(text))
@@ -1948,8 +1971,8 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
             # may not expose a cuda namespace in unit tests.
             device = 'cpu'
             try:
-                import torch  # type: ignore
-                cuda_mod = getattr(torch, "cuda", None)
+                torch_mod = globals().get("torch") or sys.modules.get("torch")
+                cuda_mod = getattr(torch_mod, "cuda", None)
                 is_available = getattr(cuda_mod, "is_available", None)
                 if callable(is_available) and is_available():
                     device = 'cuda'
@@ -1960,10 +1983,7 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
             # overridden via [STT-Settings].whisper_compute_type when set to a
             # non-empty value other than "auto", mirroring the offline
             # speech_to_text path.
-            try:
-                from .Audio_Transcription_Lib import WHISPER_COMPUTE_TYPE_OVERRIDE as _CT_OVERRIDE  # type: ignore
-            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive; falls back to device-based default
-                _CT_OVERRIDE = ""  # type: ignore
+            _CT_OVERRIDE = globals().get("_WHISPER_COMPUTE_TYPE_OVERRIDE", "")  # type: ignore
 
             if _CT_OVERRIDE and str(_CT_OVERRIDE).strip().lower() != "auto":
                 compute_type = str(_CT_OVERRIDE).strip()

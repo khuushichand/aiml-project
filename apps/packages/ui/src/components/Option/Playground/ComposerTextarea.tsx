@@ -26,6 +26,7 @@ export type ComposerTextareaProps = {
   isConnectionReady: boolean
   isCollapsed: boolean
   ariaExpanded: boolean
+  compactWhenInactive?: boolean
   rows?: number
   // Form bindings
   formInputProps: Record<string, any>
@@ -67,6 +68,7 @@ export const ComposerTextarea = React.memo(function ComposerTextarea({
   isConnectionReady,
   isCollapsed,
   ariaExpanded,
+  compactWhenInactive = false,
   rows = 1,
   formInputProps,
   showSlashMenu,
@@ -85,6 +87,15 @@ export const ComposerTextarea = React.memo(function ComposerTextarea({
   draftSaved
 }: ComposerTextareaProps) {
   const { t } = useTranslation(["sidepanel"])
+  const minHeight = isMobile
+    ? "40px"
+    : compactWhenInactive
+      ? isProMode
+        ? "44px"
+        : "40px"
+      : isProMode
+        ? "60px"
+        : "44px"
 
   return (
     <div className="relative rounded-2xl border border-border/70 bg-surface/80 px-1 py-1.5 transition focus-within:border-focus/60 focus-within:ring-2 focus-within:ring-focus/30">
@@ -116,7 +127,7 @@ export const ComposerTextarea = React.memo(function ComposerTextarea({
         aria-expanded={ariaExpanded}
         rows={rows}
         style={{
-          minHeight: isMobile ? "40px" : isProMode ? "60px" : "44px"
+          minHeight
         }}
         tabIndex={0}
         placeholder={placeholder}

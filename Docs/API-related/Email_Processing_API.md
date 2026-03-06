@@ -7,6 +7,12 @@ This guide documents email support in the media API. It covers the processing-on
 - Supported format: `.eml` (RFC 822). Attachments are enumerated in metadata; attached `.eml` files can be parsed recursively when enabled.
 - The parser extracts plain-text and HTML (HTML is converted to text if no plain-text part exists), headers, addresses, and attachments metadata. No raw attachment bytes are stored.
 
+## Deprecation Headers
+
+Email processing endpoints may emit additive HTTP deprecation metadata when a
+contract change is planned. Clients should be prepared to read `Deprecation`,
+`Sunset`, and `Link` headers and treat them as advisory migration signals.
+
 ## Processing Only
 
 - Endpoint: `POST /api/v1/media/process-emails`

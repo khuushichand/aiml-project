@@ -25,6 +25,10 @@ describe("chat width cross-surface guard", () => {
     expect(playgroundChatSource).toContain("w-full max-w-5xl md:px-4 mb-4 space-y-2")
     expect(playgroundFormSource).toContain("max-w-[64rem]")
     expect(messageSource).toContain("max-w-5xl")
+    const messageInsetMatches = messageSource.match(
+      /max-w-\[calc\(100%-1\.75rem\)\]/g
+    )
+    expect(messageInsetMatches?.length ?? 0).toBeGreaterThanOrEqual(3)
     expect(messageSource).toContain(
       '"prose break-words text-message dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark max-w-none"'
     )
@@ -35,6 +39,10 @@ describe("chat width cross-surface guard", () => {
     expect(userMessageSource).toContain(
       "rounded-3xl prose max-w-none dark:prose-invert break-words"
     )
+    const userBubbleInsetMatches = userMessageSource.match(
+      /max-w-\[calc\(100%-1\.75rem\)\]/g
+    )
+    expect(userBubbleInsetMatches?.length ?? 0).toBeGreaterThanOrEqual(2)
     expect(humanMessageSource).toContain("max-w-none")
     expect(sidepanelFormSource).toContain("max-w-[64rem]")
     expect(sidepanelRouteSource).toContain("w-full max-w-5xl")

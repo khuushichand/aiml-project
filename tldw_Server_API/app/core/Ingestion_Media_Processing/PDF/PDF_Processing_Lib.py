@@ -16,6 +16,7 @@ import asyncio
 import gc
 import importlib.util
 import re
+import sys
 from datetime import datetime
 from typing import Any, Optional, Union
 
@@ -349,7 +350,22 @@ def docling_parse_pdf(pdf_path: str):
         log_counter("pdf_text_extraction_attempt", labels={"file_path": pdf_path, "parser": parser_name})
         start_time = datetime.now()
 
-        converter = DocumentConverter()
+        # Avoid OCR-dependent backends (EasyOCR -> torch) in constrained
+        # environments; keep docling focused on native PDF text extraction.
+        try:
+            from docling.datamodel.base_models import InputFormat
+            from docling.datamodel.pipeline_options import PdfPipelineOptions
+            from docling.document_converter import PdfFormatOption
+
+            pdf_options = PdfPipelineOptions()
+            pdf_options.do_ocr = False
+            converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options)
+                }
+            )
+        except _PDF_NONCRITICAL_EXCEPTIONS:
+            converter = DocumentConverter()
         parsed_pdf = converter.convert(pdf_path)
         markdown_text = parsed_pdf.document.export_to_markdown() # Or other formats if needed
 
@@ -584,7 +600,18 @@ def process_pdf(
                 DOCLING_AVAILABLE = importlib.util.find_spec("docling.document_converter") is not None
                 if not DOCLING_AVAILABLE:
                     raise ImportError("Docling parser selected, but library is not installed.")
-                content = docling_parse_pdf(path_for_processing)
+                # Docling currently pulls torch-backed layout models. Avoid hard
+                # imports in environments where torch is not already loaded.
+                if "torch" not in sys.modules:
+                    logging.info(
+                        "Docling parser requested but torch is not preloaded; "
+                        "falling back to pymupdf4llm for %s",
+                        filename,
+                    )
+                    result["parser_used"] = "pymupdf4llm"
+                    content = pymupdf4llm_parse_pdf(path_for_processing)
+                else:
+                    content = docling_parse_pdf(path_for_processing)
             else:
                 # This case should ideally be caught by Pydantic validation in the endpoint
                 logging.warning(f"Unsupported PDF parser specified: {parser}. Attempting fallback to pymupdf4llm.")

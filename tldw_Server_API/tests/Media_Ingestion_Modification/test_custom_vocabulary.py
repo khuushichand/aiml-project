@@ -131,13 +131,13 @@ def test_whisper_streaming_initial_prompt_injection(monkeypatch):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Streaming_Unified as s
     monkeypatch.setattr(s, 'get_whisper_model', lambda size, device: FakeModel())
 
-    # Force CUDA off path
-    import builtins
-    try:
-        import torch
-        monkeypatch.setattr(torch, 'cuda', SimpleNamespace(is_available=lambda: False), raising=True)
-    except Exception:
-        _ = None
+    # Force CUDA-off path without importing native torch in test environments
+    monkeypatch.setattr(
+        s,
+        'torch',
+        SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False)),
+        raising=False,
+    )
 
     # Initial prompt provider
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Custom_Vocabulary as cv

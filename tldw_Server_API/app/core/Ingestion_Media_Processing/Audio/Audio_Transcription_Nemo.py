@@ -98,18 +98,22 @@ def _get_torch(*, allow_import: bool) -> Any | None:
         return torch
     if _TORCH_IMPORT_ERROR is not None:
         return None
+    torch_mod = sys.modules.get("torch")
+    if torch_mod is not None:
+        torch = torch_mod
+        _TORCH_IMPORT_ERROR = None
+        return torch
     if not allow_import:
         return None
     if _TORCH_IMPORT_ATTEMPTED:
         return None
 
+    # Avoid importing torch here. On some environments (including constrained
+    # CI/test runners) native torch import can terminate the interpreter.
+    # Callers should tolerate a None return and fall back to CPU paths.
     _TORCH_IMPORT_ATTEMPTED = True
-    try:
-        torch = importlib.import_module("torch")
-        _TORCH_IMPORT_ERROR = None
-    except Exception as exc:
-        _TORCH_IMPORT_ERROR = exc
-        torch = None
+    _TORCH_IMPORT_ERROR = RuntimeError("torch not preloaded")
+    torch = None
     return torch
 
 

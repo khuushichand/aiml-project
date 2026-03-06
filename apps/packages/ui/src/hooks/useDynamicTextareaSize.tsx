@@ -24,6 +24,10 @@ export const applyDynamicTextareaSize = (
   maxHeight?: number,
   lastAppliedHeightPx?: number | null
 ): DynamicTextareaApplyResult => {
+  // Reset before measuring so textarea can shrink after larger drafts.
+  if (textarea.style.height !== "auto") {
+    textarea.style.height = "auto"
+  }
   const contentHeight = Math.max(0, Math.ceil(textarea.scrollHeight || 0))
   const hasMax = typeof maxHeight === "number" && Number.isFinite(maxHeight)
   const clampedMax = hasMax ? Math.max(0, Math.ceil(maxHeight as number)) : null
@@ -45,8 +49,9 @@ export const applyDynamicTextareaSize = (
   }
 
   const changed = lastAppliedHeightPx == null || lastAppliedHeightPx !== nextHeight
-  if (changed) {
-    textarea.style.height = `${nextHeight}px`
+  const nextHeightCss = `${nextHeight}px`
+  if (changed || textarea.style.height !== nextHeightCss) {
+    textarea.style.height = nextHeightCss
   }
 
   return { heightPx: nextHeight, changed }
@@ -94,4 +99,3 @@ const useDynamicTextareaSize = (
 }
 
 export default useDynamicTextareaSize
-

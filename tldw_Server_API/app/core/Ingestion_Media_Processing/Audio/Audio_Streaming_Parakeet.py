@@ -16,6 +16,7 @@
 import asyncio
 import base64
 import json
+import sys
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
@@ -27,11 +28,13 @@ from loguru import logger
 
 def is_transcription_error_message(text: str) -> bool:
     """Lazily resolve STT sentinel detection to avoid heavy imports at module load."""
-    try:
-        from .Audio_Transcription_Lib import (
-            is_transcription_error_message as _impl,
-        )
-    except Exception:
+    lib_mod = sys.modules.get(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib"
+    )
+    if lib_mod is None:
+        return False
+    _impl = getattr(lib_mod, "is_transcription_error_message", None)
+    if not callable(_impl):
         return False
     try:
         return bool(_impl(text))

@@ -232,7 +232,7 @@ export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
         <div
           dir="auto"
           data-is-not-editable={!editMode}
-          className={`message-bubble ${bubbleToneClass} shadow-sm rounded-3xl prose max-w-none dark:prose-invert break-words min-h-7 prose-p:opacity-95 prose-strong:opacity-100 border max-w-[100%] sm:max-w-[90%] px-4 py-3 rounded-br-lg ${userTextClass} ${
+          className={`message-bubble ${bubbleToneClass} shadow-sm rounded-3xl prose max-w-none dark:prose-invert break-words min-h-7 prose-p:opacity-95 prose-strong:opacity-100 border max-w-[calc(100%-1.75rem)] px-4 py-3 rounded-br-lg ${userTextClass} ${
             props.message_type && !editMode ? "italic" : ""
           }`}>
           <HumanMessage message={props.message} />
@@ -242,7 +242,7 @@ export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
       {editMode && (
         <div
           dir="auto"
-          className={`message-bubble ${bubbleToneClass} shadow-sm rounded-3xl prose max-w-none dark:prose-invert break-words min-h-7 prose-p:opacity-95 prose-strong:opacity-100 border max-w-[100%] sm:max-w-[90%] px-4 py-3 rounded-br-lg ${userTextClass} ${
+          className={`message-bubble ${bubbleToneClass} shadow-sm rounded-3xl prose max-w-none dark:prose-invert break-words min-h-7 prose-p:opacity-95 prose-strong:opacity-100 border max-w-[calc(100%-1.75rem)] px-4 py-3 rounded-br-lg ${userTextClass} ${
             props.message_type && !editMode ? "italic" : ""
           }`}>
           <div className="w-screen max-w-[100%]">
