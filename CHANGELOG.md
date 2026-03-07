@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.34] 2026-03-07
+
+### Added
+
+- **Quick Ingest Wizard Redesign** — Replace 3-tab modal with 5-step progressive wizard:
+  - **Step 1 — Add Content**: Combined file drop zone + multi-line URL paste, auto-detect content type with icons, inline validation (malformed URLs, duplicates, size limits), per-item remove, "Use defaults & process" quick mode for single items
+  - **Step 2 — Configure**: Preset card selector (Quick/Standard/Deep) with per-queue time estimates, content-type-filtered options (audio language/diarization, document OCR, video captions shown only when relevant), storage mode (Server/Local), collapsible advanced options
+  - **Step 3 — Review**: Confirmation checkpoint with per-item operation summary, contextual warnings (large files >50 MB, long estimated time >15 min, large batches >5 items), total time estimate
+  - **Step 4 — Processing**: Per-item live progress dashboard with multi-stage indicators, current stage label + percentage, per-item cancel, overall summary bar (completed/processing/queued + elapsed/remaining), Cancel All and Minimize to Background buttons
+  - **Step 5 — Results**: Grouped results (successes collapsed, errors expanded), error classification badges (Network/Format/Server + Retryable/Permanent), plain-language error descriptions, per-error Retry button, per-success Open/Chat/View actions, Retry All Errors batch button, Ingest More to restart
+  - **Minimize-to-background floating widget**: Portal-rendered fixed-position widget (bottom-right) showing progress percentage, item count, estimated time, expand/restore button; auto-dismisses 10s after completion
+  - **SSE real-time updates** via `useIngestSSE` hook: Connects to `GET /api/v1/media/ingest/jobs/events/stream`, handles `snapshot` and `job` events, maps backend statuses to wizard progress, exponential backoff reconnection (1s→10s)
+  - **`IngestWizardContext`**: React context + `useReducer` managing wizard state (current step, queue items, preset config, processing state, minimized flag) with navigation guards
+  - **`IngestWizardStepper`**: Horizontal breadcrumb stepper with accumulated context labels, click-to-revisit completed steps
+  - **`timeEstimation.ts`**: Client-side heuristic time estimates by media type and preset (audio 10s+2s/MB, video 15s+3s/MB, document 3s+0.5s/MB, web ~8s) with preset multipliers
+  - **`ErrorClassification.ts`**: Pattern-based error categorization with priority ordering and retryable/permanent flags
+  - **`PresetSelector.tsx`**: Rewritten from dropdown to card layout with plain-language descriptions and dynamic time estimates
+  - **Direct modal swap**: `QuickIngestButton.tsx` and `Sidepanel/Chat/form.tsx` now import `QuickIngestWizardModal` (no feature flag)
+  - **`autoProcessQueued` backward compat**: New modal supports auto-skip to processing step when items are pre-queued (used by sidepanel chat form)
+  - 70 new tests: `ErrorClassification.test.ts` (22), `timeEstimation.test.ts` (21), `IngestWizardContext.test.tsx` (13), `IngestWizardStepper.test.tsx` (7), `QuickIngestWizardModal.integration.test.tsx` (7 — full Steps 1→5 flow)
+
+### Fixed
+
+- Fixed temporal dead zone bug in `AddContentStep` where `newItems` array was spread inside its own initialization callback
+- Fixed `ReviewStep` "Start Processing" button not initializing processing state (was only calling `goNext`, now calls `startProcessing()` first)
+- Fixed `ReviewStep` passing `PresetConfig` object instead of preset name string to `estimateTotalSeconds()`
+- Fixed Ant Design `Radio.Group` onChange type mismatch in `ConfigureStep`
+
 ## [0.1.33] 2026-03-06
 
 ### Added
