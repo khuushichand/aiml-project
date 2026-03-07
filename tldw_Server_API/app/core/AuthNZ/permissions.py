@@ -296,6 +296,11 @@ WORKFLOWS_RUNS_READ = "workflows.runs.read"
 WORKFLOWS_RUNS_CONTROL = "workflows.runs.control"
 WORKFLOWS_ADMIN = "workflows.admin"
 
+# Chat workflows permissions
+CHAT_WORKFLOWS_READ = "chat_workflows.read"
+CHAT_WORKFLOWS_WRITE = "chat_workflows.write"
+CHAT_WORKFLOWS_RUN = "chat_workflows.run"
+
 # Notes / graph permissions
 NOTES_GRAPH_READ = "notes.graph.read"
 NOTES_GRAPH_WRITE = "notes.graph.write"

@@ -820,6 +820,7 @@ _HAS_OUTPUT_TEMPLATES = False
 _HAS_OUTPUTS = False
 _HAS_PROMPT_STUDIO = False
 _HAS_WORKFLOWS = False
+_HAS_CHAT_WORKFLOWS = False
 _HAS_UNIFIED_EVALUATIONS = False
 _HAS_SCHEDULER_WF = False
 _HAS_JOBS_ADMIN = False
@@ -1102,6 +1103,17 @@ else:
     except _IMPORT_EXCEPTIONS as _wf_import_err:
         logger.warning(f"Workflows endpoints unavailable; skipping import: {_wf_import_err}")
         _HAS_WORKFLOWS = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.chat_workflows import (
+            router as chat_workflows_router,
+        )
+
+        _HAS_CHAT_WORKFLOWS = True
+    except _IMPORT_EXCEPTIONS as _chat_wf_import_err:
+        logger.warning(
+            f"Chat workflows endpoints unavailable; skipping import: {_chat_wf_import_err}"
+        )
+        _HAS_CHAT_WORKFLOWS = False
 # Legacy RAG Endpoint (Deprecated)
 # from tldw_Server_API.app.api.v1.endpoints.rag import router as retrieval_agent_router
 #
@@ -5776,6 +5788,16 @@ elif _MINIMAL_TEST_APP:
     except _IMPORT_EXCEPTIONS as _wf_min_err:
         logger.debug(f"Skipping workflows router in minimal test app: {_wf_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.chat_workflows import (
+            router as _chat_wf_router,
+        )
+
+        app.include_router(_chat_wf_router, prefix="", tags=["chat-workflows"])
+    except _IMPORT_EXCEPTIONS as _chat_wf_min_err:
+        logger.debug(
+            f"Skipping chat workflows router in minimal test app: {_chat_wf_min_err}"
+        )
+    try:
         from tldw_Server_API.app.api.v1.endpoints.scheduler_workflows import router as _sch_wf_router
 
         app.include_router(_sch_wf_router, prefix="", tags=["scheduler"])
@@ -6141,6 +6163,12 @@ else:
             app.include_router(workflows_router, prefix="", tags=["workflows"])
         else:
             _include_if_enabled("workflows", workflows_router, tags=["workflows"], default_stable=False)
+    if _HAS_CHAT_WORKFLOWS:
+        _test_ctx = bool(_TEST_MODE)
+        if _test_ctx:
+            app.include_router(chat_workflows_router, prefix="", tags=["chat-workflows"])
+        else:
+            _include_if_enabled("chat-workflows", chat_workflows_router, tags=["chat-workflows"])
     try:
         from tldw_Server_API.app.api.v1.endpoints.scheduler_workflows import router as scheduler_workflows_router
 
