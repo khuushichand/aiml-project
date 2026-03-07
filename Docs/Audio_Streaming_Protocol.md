@@ -259,6 +259,7 @@ Client -> server frames:
     `auto_flush_ms`, `auto_flush_tokens`
 - `type=text`/`input`: `{ "type": "text", "delta": "..." }` (accepted keys: `delta|text|input`)
 - `type=commit`: flush buffered text to synthesis
+- `type=interrupt`: cancel the current synthesis window and reopen a fresh realtime session on the same socket
 - `type=final`: flush + close session
 - `type=ping`: server replies `pong`
 
@@ -266,12 +267,14 @@ Server -> client frames:
 - `ready`: `{ "type": "ready", "provider": "...", "format": "pcm", "sample_rate": 24000, "request_id": "..." }`
 - `warning`: `{ "type": "warning", "message": "...", "request_id": "..." }` (e.g., fallback to buffered TTS)
 - `error`: `{ "type": "error", "code": "...", "message": "...", "request_id": "..." }`
+- `interrupted`: `{ "type": "interrupted", "phase": "tts", "reason": "...", "request_id": "..." }`
 - `done`: `{ "type": "done" }`
 - Binary audio frames (format from config/ready; for `pcm`, raw PCM16 LE)
 
 Behavior notes:
 - Auto-flush: when `auto_flush_ms` elapses after the last input or `auto_flush_tokens` is exceeded, the server issues
   an internal commit. Set either to `0` to disable.
+- `interrupt` does not close the WebSocket; it rotates to a new realtime session so clients can continue sending text.
 - Config updates after session start are ignored.
 - Defaults: provider `vibevoice_realtime`, model `vibevoice-realtime-0.5b`, format `pcm`.
 - Example client: `Helper_Scripts/voice_latency_harness/examples/ws_tts_realtime_client.py`
@@ -294,11 +297,14 @@ Endpoint: `/api/v1/audio/chat/stream`
   - `config` (required first): STT knobs (`model|variant|sample_rate|enable_vad|min_silence_ms|turn_stop_secs`), `llm` (`provider|model|temperature|max_tokens|system|extra_params`), `tts` (`voice|model|provider|format|speed|extra_params`), optional `session_id|metadata`.
   - `audio`: base64 float32/PCM chunks (same shape as `/stream/transcribe`).
   - `commit`: finalize the current turn (also auto-triggered by VAD when enabled).
+  - `interrupt`: cancel in-flight generation/synthesis for the active turn without closing the socket.
   - `reset` / `stop`: reset buffers or close the stream.
 - Server → client frames:
   - STT partials/finals: mirrors `/stream/transcribe` plus `full_transcript` with `voice_to_voice_start` timestamp and `auto_commit` hint.
   - LLM streaming: `{"type":"llm_delta","delta": "<text>"}` per SSE chunk, then `llm_message` + `assistant_summary` (finish_reason/usage).
   - TTS streaming: binary audio frames (PCM default; `mp3|opus|aac|flac|wav` accepted) preceded by `tts_start` and terminated by `tts_done`; underruns surfaced via `audio_stream_underruns_total`.
+  - Interrupt ack: `{"type":"interrupted","turn_id":"turn-N|null","phase":"both","reason":"..."}`.
+  - Overlapped flow: `tts_start` and first audio bytes may be emitted before final `llm_message`.
   - Errors use `{type:"error", code:"...", message, data?}`; with compatibility on (`AUDIO_WS_COMPAT_ERROR_TYPE=1`), `error_type` is also present. Quota/rate errors include `data.quota` (and legacy top-level `quota` while compatibility mode is enabled).
 - VAD: Silero-based auto-commit when enabled (`enable_vad=true`, `vad_threshold`, `min_silence_ms`, `turn_stop_secs`, `min_utterance_secs`).
 - Metrics: `stt_final_latency_seconds{endpoint="audio.chat.stream"}`, `voice_to_voice_seconds{route="audio.chat.stream"}`, `audio_stream_underruns_total`, `audio_stream_errors_total`, plus provider metrics from LLM/TTS.

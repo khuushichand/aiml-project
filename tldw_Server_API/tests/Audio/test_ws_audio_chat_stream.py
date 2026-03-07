@@ -2,12 +2,53 @@
 
 import asyncio
 import base64
+import importlib.machinery
 import json
+import sys
 import time
 from types import SimpleNamespace
+import types
 from typing import Any, AsyncIterator, Dict, Iterable, List, Optional
 
 import pytest
+
+# Keep module imports deterministic in environments where torch-backed deps abort.
+if "torch" not in sys.modules:
+    _fake_torch = types.ModuleType("torch")
+    _fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
+    _fake_torch.Tensor = object
+    _fake_torch.nn = SimpleNamespace(Module=object)
+    sys.modules["torch"] = _fake_torch
+
+if "faster_whisper" not in sys.modules:
+    _fake_fw = types.ModuleType("faster_whisper")
+    _fake_fw.__spec__ = importlib.machinery.ModuleSpec("faster_whisper", loader=None)
+
+    class _StubWhisperModel:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+            return None
+
+    _fake_fw.WhisperModel = _StubWhisperModel
+    _fake_fw.BatchedInferencePipeline = _StubWhisperModel
+    sys.modules["faster_whisper"] = _fake_fw
+
+if "transformers" not in sys.modules:
+    _fake_tf = types.ModuleType("transformers")
+    _fake_tf.__spec__ = importlib.machinery.ModuleSpec("transformers", loader=None)
+
+    class _StubProcessor:
+        @classmethod
+        def from_pretrained(cls, *args: Any, **kwargs: Any):  # noqa: ANN206, ARG002
+            return cls()
+
+    class _StubModel:
+        @classmethod
+        def from_pretrained(cls, *args: Any, **kwargs: Any):  # noqa: ANN206, ARG002
+            return cls()
+
+    _fake_tf.AutoProcessor = _StubProcessor
+    _fake_tf.Qwen2AudioForConditionalGeneration = _StubModel
+    sys.modules["transformers"] = _fake_tf
 
 from tldw_Server_API.app.api.v1.endpoints import audio
 from tldw_Server_API.app.api.v1.endpoints.audio import audio_streaming as audio_streaming_module
@@ -25,6 +66,7 @@ class DummyWebSocket:
         ]
         self.sent_bytes: List[bytes] = []
         self.sent_json: List[Dict[str, Any]] = []
+        self.sent_events: List[tuple[str, Any]] = []
         self.accepted: bool = False
         self.closed: bool = False
         self.close_code: Optional[int] = None
@@ -43,10 +85,12 @@ class DummyWebSocket:
     async def send_bytes(self, data: bytes) -> None:
         """Record bytes sent over the WebSocket."""
         self.sent_bytes.append(data)
+        self.sent_events.append(("bytes", data))
 
     async def send_json(self, payload: Dict[str, Any]) -> None:
         """Record JSON payloads sent over the WebSocket."""
         self.sent_json.append(payload)
+        self.sent_events.append(("json", dict(payload)))
 
     async def close(self, code: int = 1000, reason: Optional[str] = None) -> None:  # noqa: ARG002
         """Record the close code and mark the WebSocket as closed."""
@@ -262,6 +306,192 @@ async def test_audio_chat_ws_streams_llm_and_tts(monkeypatch: pytest.MonkeyPatch
     assert any(msg.get("type") == "tts_done" for msg in ws.sent_json)
     assert ws.sent_bytes == [b"tts1", b"tts2"]
     assert ws.closed is True
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_audio_chat_ws_interrupt_without_active_turn_is_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+    ws = DummyWebSocket(
+        [
+            {
+                "type": "config",
+                "stt": {"model": "parakeet"},
+                "llm": {"provider": "stub", "model": "stub-model"},
+                "tts": {"voice": "af_heart", "format": "pcm"},
+            },
+            {"type": "interrupt", "reason": "user_stop"},
+            {"type": "stop"},
+        ]
+    )
+
+    async def _get_tts_service():
+        return _DummyTTSService([b"tts"])
+
+    monkeypatch.setattr(audio, "get_tts_service", _get_tts_service)
+
+    await audio.websocket_audio_chat_stream(ws, token=None)
+
+    assert any(msg.get("type") == "interrupted" for msg in ws.sent_json)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_audio_chat_ws_overlap_starts_tts_before_final_llm_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    audio_payload = base64.b64encode(b"abc").decode("ascii")
+    ws = DummyWebSocket(
+        [
+            {
+                "type": "config",
+                "stt": {"model": "parakeet"},
+                "llm": {"provider": "stub", "model": "stub-model"},
+                "tts": {"voice": "af_heart", "format": "pcm"},
+            },
+            {"type": "audio", "data": audio_payload},
+            {"type": "commit"},
+            {"type": "stop"},
+        ]
+    )
+
+    async def _overlap_llm_stub(**kwargs: Any) -> AsyncIterator[str]:  # noqa: ARG002
+        async def _gen() -> AsyncIterator[str]:
+            yield 'data: {"choices":[{"delta":{"content":"Hello world. "}}]}\n\n'
+            await asyncio.sleep(0)
+            yield 'data: {"choices":[{"delta":{"content":"How are you?"}}]}\n\n'
+            await asyncio.sleep(0)
+            yield 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return _gen()
+
+    realtime_service = _DummyRealtimeCapableTTSService()
+
+    async def _get_tts_service():
+        return realtime_service
+
+    monkeypatch.setattr(audio, "chat_api_call_async", _overlap_llm_stub)
+    monkeypatch.setattr(audio, "get_tts_service", _get_tts_service)
+
+    await audio.websocket_audio_chat_stream(ws, token=None)
+
+    llm_message_idx = next(
+        i for i, event in enumerate(ws.sent_events)
+        if event[0] == "json" and event[1].get("type") == "llm_message"
+    )
+    tts_start_idx = next(
+        i for i, event in enumerate(ws.sent_events)
+        if event[0] == "json" and event[1].get("type") == "tts_start"
+    )
+    first_audio_idx = next(i for i, event in enumerate(ws.sent_events) if event[0] == "bytes")
+
+    assert tts_start_idx < llm_message_idx
+    assert first_audio_idx < llm_message_idx
+    assert ws.sent_bytes
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_audio_chat_ws_interrupt_cancels_inflight_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    audio_payload = base64.b64encode(b"abc").decode("ascii")
+    ws = DummyWebSocket(
+        [
+            {
+                "type": "config",
+                "stt": {"model": "parakeet"},
+                "llm": {"provider": "stub", "model": "stub-model"},
+                "tts": {"voice": "af_heart", "format": "pcm"},
+            },
+            {"type": "audio", "data": audio_payload},
+            {"type": "commit"},
+            {"type": "interrupt", "reason": "barge_in"},
+            {"type": "stop"},
+        ]
+    )
+
+    async def _slow_llm_stub(**kwargs: Any) -> AsyncIterator[str]:  # noqa: ARG002
+        async def _gen() -> AsyncIterator[str]:
+            await asyncio.sleep(0.05)
+            yield 'data: {"choices":[{"delta":{"content":"This should be cancelled."}}]}\n\n'
+            await asyncio.sleep(0.05)
+            yield 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return _gen()
+
+    realtime_service = _DummyRealtimeCapableTTSService()
+
+    async def _get_tts_service():
+        return realtime_service
+
+    monkeypatch.setattr(audio, "chat_api_call_async", _slow_llm_stub)
+    monkeypatch.setattr(audio, "get_tts_service", _get_tts_service)
+
+    await audio.websocket_audio_chat_stream(ws, token=None)
+
+    interrupted = [msg for msg in ws.sent_json if msg.get("type") == "interrupted"]
+    assert interrupted
+    assert interrupted[-1].get("turn_id")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_audio_chat_ws_drops_stale_audio_after_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    audio_payload = base64.b64encode(b"abc").decode("ascii")
+    ws = DummyWebSocket(
+        [
+            {
+                "type": "config",
+                "stt": {"model": "parakeet"},
+                "llm": {"provider": "stub", "model": "stub-model"},
+                "tts": {"voice": "af_heart", "format": "pcm"},
+            },
+            {"type": "audio", "data": audio_payload},
+            {"type": "commit"},
+            {"type": "interrupt", "reason": "barge_in"},
+            {"type": "stop"},
+        ]
+    )
+
+    class _DelayedRealtimeSession(_DummyRealtimeSession):
+        async def commit(self) -> None:
+            if self._closed:
+                return
+            text = self._buffer.strip()
+            self._buffer = ""
+            if text:
+                await asyncio.sleep(0.05)
+                await self._queue.put(f"rt:{text}".encode("utf-8"))
+
+    class _DelayedRealtimeService(_DummyRealtimeCapableTTSService):
+        def __init__(self) -> None:
+            self.session = _DelayedRealtimeSession()
+
+    async def _slow_llm_stub(**kwargs: Any) -> AsyncIterator[str]:  # noqa: ARG002
+        async def _gen() -> AsyncIterator[str]:
+            yield 'data: {"choices":[{"delta":{"content":"Chunk one. "}}]}\n\n'
+            await asyncio.sleep(0.05)
+            yield 'data: {"choices":[{"delta":{"content":"Chunk two."}}]}\n\n'
+            yield 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return _gen()
+
+    async def _get_tts_service():
+        return _DelayedRealtimeService()
+
+    monkeypatch.setattr(audio, "chat_api_call_async", _slow_llm_stub)
+    monkeypatch.setattr(audio, "get_tts_service", _get_tts_service)
+
+    await audio.websocket_audio_chat_stream(ws, token=None)
+
+    interrupted_idx = next(
+        i for i, event in enumerate(ws.sent_events)
+        if event[0] == "json" and event[1].get("type") == "interrupted"
+    )
+    stale_bytes_after_interrupt = [
+        event for event in ws.sent_events[interrupted_idx + 1:]
+        if event[0] == "bytes"
+    ]
+    assert stale_bytes_after_interrupt == []
 
 
 @pytest.mark.integration

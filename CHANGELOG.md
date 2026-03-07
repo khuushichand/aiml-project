@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.30] 2026-03-06
+
+### Added
+
+- Voice-streaming interruption + overlap protocol additions:
+  - Added additive client `interrupt` and server `interrupted` frame handling for `/api/v1/audio/chat/stream`.
+  - Added active turn identifiers (`turn_id`) for interruption acknowledgements.
+  - Added `interrupt` recovery flow for `/api/v1/audio/stream/tts/realtime` that rotates to a fresh realtime session without closing the socket.
+- Added streaming phrase chunker utility:
+  - `tldw_Server_API/app/core/Streaming/phrase_chunker.py`
+- Added backend regression coverage for voice overlap/cancellation:
+  - `tldw_Server_API/tests/Audio/test_ws_audio_chat_stream.py` now covers idle interrupt safety, overlap ordering (`tts_start`/audio before final `llm_message`), inflight cancellation, and stale-audio suppression after interrupt.
+  - `tldw_Server_API/tests/Audio/test_ws_tts_realtime_endpoint.py` now covers realtime TTS interrupt handling and post-interrupt continuation.
+- Added frontend regression coverage for barge-in interruption behavior:
+  - `apps/packages/ui/src/hooks/__tests__/useVoiceChatStream.interrupt.test.tsx`
+
+### Changed
+
+- `/api/v1/audio/chat/stream` now supports overlapped LLM->TTS streaming by incrementally chunking LLM deltas into phrase commits against realtime TTS sessions.
+- `/api/v1/audio/chat/stream` turn finalization now runs as cancellable per-turn tasks, enabling barge-in interruption and stale-output guards.
+- `/api/v1/audio/stream/tts/realtime` now supports in-session `interrupt` by finishing/cancelling the active synthesis window, reopening a session with the same config, and continuing on the same WebSocket.
+- `apps/packages/ui/src/hooks/useVoiceChatStream.tsx` now sends `interrupt` on barge-in while speaking and transitions back to `listening` on server `interrupted` frames.
+- Updated audio protocol/docs to document new frames and overlap behavior:
+  - `Docs/API/Audio_Chat.md`
+  - `Docs/Audio_Streaming_Protocol.md`
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed stale/cancelled turn output leakage by dropping outdated audio/LLM emissions after interruption.
+- Fixed realtime TTS interruption flow to allow continued text commits without requiring WebSocket reconnect.
+- Fixed voice websocket test stability in local environments by stubbing heavyweight STT dependency imports in targeted WS test modules.
+
 ## [0.1.29] 2026-03-05
 
 ### Added
