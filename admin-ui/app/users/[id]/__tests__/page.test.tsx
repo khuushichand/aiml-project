@@ -75,6 +75,7 @@ vi.mock('@/lib/api-client', () => {
       getUserPermissionOverrides: vi.fn(),
       getPermissions: vi.fn(),
       getUserRateLimits: vi.fn(),
+      updateUser: vi.fn(),
       resetUserPassword: vi.fn(),
     },
   };
@@ -92,6 +93,7 @@ type ApiMock = {
   getUserPermissionOverrides: ReturnType<typeof vi.fn>;
   getPermissions: ReturnType<typeof vi.fn>;
   getUserRateLimits: ReturnType<typeof vi.fn>;
+  updateUser: ReturnType<typeof vi.fn>;
   resetUserPassword: ReturnType<typeof vi.fn>;
 };
 
@@ -200,6 +202,7 @@ beforeEach(() => {
   });
   apiMock.getPermissions.mockResolvedValue([]);
   apiMock.getUserRateLimits.mockResolvedValue({});
+  apiMock.updateUser.mockResolvedValue({});
   apiMock.resetUserPassword.mockResolvedValue({
     force_password_change: false,
     message: 'Password reset successfully',
@@ -255,6 +258,43 @@ describe('UserDetailPage password reset', () => {
     expect(screen.queryByRole('option', { name: 'Member' })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Super Admin' })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Owner' })).not.toBeInTheDocument();
+  });
+
+  it('preserves an unsupported existing role when saving unrelated changes', async () => {
+    const user = userEvent.setup();
+    apiMock.getUser.mockResolvedValueOnce({
+      id: 42,
+      uuid: 'user-42',
+      username: 'demo-user',
+      email: 'demo@example.com',
+      role: 'member',
+      is_active: true,
+      is_verified: true,
+      storage_quota_mb: 1024,
+      storage_used_mb: 32,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      metadata: {
+        force_password_change: true,
+      },
+    });
+
+    render(<UserDetailPage />);
+
+    const roleSelect = await screen.findByLabelText('Role') as HTMLSelectElement;
+    expect(roleSelect.value).toBe('member');
+
+    const emailInput = screen.getByLabelText('Email');
+    await user.clear(emailInput);
+    await user.type(emailInput, 'legacy-updated@example.com');
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      expect(apiMock.updateUser).toHaveBeenCalledWith('42', {
+        email: 'legacy-updated@example.com',
+      });
+    });
+    expect(privilegedActionMock).not.toHaveBeenCalled();
   });
 
   it('renders login history with success and failure badges', async () => {

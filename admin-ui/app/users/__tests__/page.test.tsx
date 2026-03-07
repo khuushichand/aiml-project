@@ -310,26 +310,14 @@ describe('UsersPage', () => {
     });
   });
 
-  it('supports bulk password reset for selected users', async () => {
+  it('does not offer bulk password reset from the list view', async () => {
     const user = userEvent.setup();
     render(<UsersPage />);
 
     await screen.findByText('Bob');
     await user.click(screen.getByRole('checkbox', { name: /select user bob/i }));
-    await user.click(screen.getByRole('button', { name: 'Reset Passwords' }));
 
-    await waitFor(() => {
-      expect(privilegedActionMock).toHaveBeenCalledWith(
-        expect.objectContaining({ title: 'Reset selected user passwords' })
-      );
-    });
-    await waitFor(() => {
-      expect(apiMock.resetUserPassword).toHaveBeenCalledWith('2', {
-        force_password_change: true,
-        reason: 'Customer requested this change',
-        admin_password: 'AdminPass123!',
-      });
-    });
+    expect(screen.queryByRole('button', { name: 'Reset Passwords' })).not.toBeInTheDocument();
   });
 
   it('supports bulk MFA requirement updates for selected users', async () => {

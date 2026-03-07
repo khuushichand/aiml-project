@@ -72,7 +72,7 @@ type UserRole = (typeof roleOptions)[number]['value'];
 type UserFormData = {
   username: string;
   email: string;
-  role: UserRole;
+  role: string;
   is_active: boolean;
   storage_quota_mb: number;
 };
@@ -402,7 +402,9 @@ export default function UserDetailPage() {
       setIsAuthorized(true);
       const data = await api.getUser(userId);
       const userValue = data as User & { rate_limits?: UserRateLimits; metadata?: Record<string, unknown> };
-      const roleValue = userValue.role && isValidRole(userValue.role) ? userValue.role : 'user';
+      const roleValue = typeof userValue.role === 'string' && userValue.role.trim()
+        ? userValue.role
+        : 'user';
       setUser(userValue);
       setFormData({
         username: userValue.username || '',
@@ -674,7 +676,26 @@ export default function UserDetailPage() {
       setSaving(true);
       setError('');
       setSuccess('');
-      let payload: Record<string, unknown> = { ...formData };
+      const payload: Record<string, unknown> = {};
+      const normalizedEmail = formData.email.trim();
+      const currentEmail = typeof user?.email === 'string' ? user.email.trim() : '';
+      if (normalizedEmail !== currentEmail) {
+        payload.email = normalizedEmail;
+      }
+      if (user && formData.role !== user.role && isValidRole(formData.role)) {
+        payload.role = formData.role;
+      }
+      if (user && formData.is_active !== user.is_active) {
+        payload.is_active = formData.is_active;
+      }
+      if (user && formData.storage_quota_mb !== user.storage_quota_mb) {
+        payload.storage_quota_mb = formData.storage_quota_mb;
+      }
+      if (Object.keys(payload).length === 0) {
+        setSuccess('No changes to save');
+        setSaving(false);
+        return;
+      }
       if (requiresPrivilegedApproval) {
         const approval = await promptPrivilegedAction({
           title: 'Apply privileged user changes',
@@ -685,11 +706,11 @@ export default function UserDetailPage() {
           setSaving(false);
           return;
         }
-        payload = {
+        Object.assign(payload, {
           ...payload,
           reason: approval.reason,
           admin_password: approval.adminPassword,
-        };
+        });
       }
       await api.updateUser(userId, payload);
       setSuccess('User updated successfully');
@@ -1107,12 +1128,22 @@ export default function UserDetailPage() {
                         }
                       }}
                     >
+                      {!isValidRole(formData.role) && formData.role ? (
+                        <option value={formData.role}>
+                          Unsupported ({formData.role})
+                        </option>
+                      ) : null}
                       {roleOptions.map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>
                       ))}
                     </Select>
+                    {!isValidRole(formData.role) && formData.role ? (
+                      <p className="text-xs text-muted-foreground">
+                        This account uses an unsupported role value. It will be preserved unless you explicitly choose a supported replacement.
+                      </p>
+                    ) : null}
                   </div>
 
                   <div className="flex items-center gap-2">

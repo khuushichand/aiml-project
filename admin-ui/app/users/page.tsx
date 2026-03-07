@@ -60,7 +60,6 @@ type BulkActionType =
   | 'deactivate'
   | 'delete'
   | 'assign-role'
-  | 'reset-password'
   | 'mfa-require'
   | 'mfa-clear'
   | null;
@@ -704,46 +703,6 @@ function UsersPageContent() {
     }
   };
 
-  const handleBulkResetPasswords = async () => {
-    const ids = Array.from(selectedUserIds);
-    if (ids.length === 0) return;
-    const approval = await promptPrivilegedAction({
-      title: 'Reset selected user passwords',
-      message: `Reset passwords for ${ids.length} selected user${ids.length !== 1 ? 's' : ''}?`,
-      confirmText: 'Reset passwords',
-    });
-    if (!approval) return;
-
-    try {
-      setBulkAction('reset-password');
-      const results = await Promise.allSettled(
-        ids.map((id) => api.resetUserPassword(id.toString(), {
-          force_password_change: true,
-          reason: approval.reason,
-          admin_password: approval.adminPassword,
-        }))
-      );
-      const failures = results.filter((result) => result.status === 'rejected').length;
-      if (failures > 0) {
-        showError(
-          'Bulk password reset incomplete',
-          `${ids.length - failures} reset, ${failures} failed.`
-        );
-      } else {
-        success(
-          'Passwords reset',
-          `${ids.length} user${ids.length !== 1 ? 's' : ''} now require a password change on next login.`
-        );
-      }
-      handleClearSelection();
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to reset passwords';
-      showError('Bulk password reset failed', message);
-    } finally {
-      setBulkAction(null);
-    }
-  };
-
   const handleBulkSetMfaRequirement = async (requireMfa: boolean) => {
     const ids = Array.from(selectedUserIds);
     if (ids.length === 0) return;
@@ -1343,17 +1302,6 @@ function UsersPageContent() {
                       >
                         <UserX className="mr-2 h-4 w-4" />
                         Deactivate
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleBulkResetPasswords}
-                        loading={bulkAction === 'reset-password'}
-                        loadingText="Resetting..."
-                        disabled={bulkBusy && bulkAction !== 'reset-password'}
-                      >
-                        <Key className="mr-2 h-4 w-4" />
-                        Reset Passwords
                       </Button>
                       <Button
                         variant="outline"

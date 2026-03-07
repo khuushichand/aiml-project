@@ -13,7 +13,11 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventType,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.services import admin_sessions_mfa_service, admin_users_service
+from tldw_Server_API.app.services import (
+    admin_audit_service,
+    admin_sessions_mfa_service,
+    admin_users_service,
+)
 
 
 class _FakeCursor:
@@ -331,6 +335,36 @@ async def test_set_user_mfa_requirement_emits_durable_audit_event(monkeypatch) -
     assert emitted[0]["action"] == "admin.user.mfa_requirement.update"
     assert emitted[0]["metadata"]["reason"] == "Support case 123"
     assert emitted[0]["metadata"]["require_mfa"] is False
+
+
+@pytest.mark.asyncio
+async def test_emit_admin_account_audit_event_does_not_raise_when_flush_fails(monkeypatch) -> None:
+    class _FailingAuditService:
+        async def log_event(self, **_kwargs) -> None:
+            return None
+
+        async def flush(self, *, raise_on_failure: bool) -> None:
+            raise RuntimeError("audit unavailable")
+
+    async def _fake_get_service(_actor_id):
+        return _FailingAuditService()
+
+    monkeypatch.setattr(
+        admin_audit_service,
+        "get_or_create_audit_service_for_user_id_optional",
+        _fake_get_service,
+    )
+
+    await admin_audit_service.emit_admin_account_audit_event(
+        actor_id=7,
+        target_user_id=42,
+        event_type=AuditEventType.USER_DEACTIVATED,
+        category=AuditEventCategory.AUTHORIZATION,
+        resource_type="user_account",
+        resource_id="42",
+        action="admin.user.deactivate",
+        metadata={"reason": "Support case 123"},
+    )
 
 
 async def _false_async() -> bool:
