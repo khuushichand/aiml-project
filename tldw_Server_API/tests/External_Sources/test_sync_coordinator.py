@@ -33,18 +33,26 @@ def media_db(tmp_path: Path) -> MediaDatabase:
 
 
 async def _create_account_and_source(db: aiosqlite.Connection) -> tuple[dict, dict]:
+    return await _create_account_and_source_for_provider(db, provider="drive")
+
+
+async def _create_account_and_source_for_provider(
+    db: aiosqlite.Connection,
+    *,
+    provider: str,
+) -> tuple[dict, dict]:
     account = await svc.create_account(
         db,
         user_id=11,
-        provider="drive",
-        display_name="Drive",
+        provider=provider,
+        display_name=provider.title(),
         email="sync@example.com",
         tokens={"access_token": "token"},
     )
     source = await svc.create_source(
         db,
         account_id=account["id"],
-        provider="drive",
+        provider=provider,
         remote_id="root",
         type_="folder",
         path="/",
@@ -249,6 +257,45 @@ async def test_reconcile_content_update_updates_media_fts_versions_and_binding(
     assert updated_results[0]["id"] == media_id
     assert original_total == 0
     assert original_results == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_reconcile_created_change_uses_provider_modified_timestamp_aliases(
+    connectors_db: aiosqlite.Connection,
+    media_db: MediaDatabase,
+) -> None:
+    _, source = await _create_account_and_source_for_provider(connectors_db, provider="onedrive")
+
+    await reconcile_file_change(
+        connectors_db,
+        media_db,
+        source_id=source["id"],
+        provider="onedrive",
+        change=FileSyncChange(
+            event_type="created",
+            remote_id="item-22",
+            remote_name="alias.txt",
+            remote_revision="etag-2",
+            metadata={
+                "mime_type": "text/plain",
+                "size": 33,
+                "last_modified": "2026-03-06T12:00:00Z",
+            },
+        ),
+        content=FileSyncContentPayload(text="alias timestamp body"),
+        job_id="job-sync-alias",
+    )
+
+    binding = await svc.get_external_item_binding(
+        connectors_db,
+        source_id=source["id"],
+        provider="onedrive",
+        external_id="item-22",
+    )
+
+    assert binding is not None
+    assert binding["modified_at"] == "2026-03-06T12:00:00Z"
 
 
 @pytest.mark.asyncio

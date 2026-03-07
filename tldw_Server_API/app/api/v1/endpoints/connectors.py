@@ -40,6 +40,7 @@ from tldw_Server_API.app.core.External_Sources import (
     get_connector_by_name,
 )
 from tldw_Server_API.app.core.External_Sources.connectors_service import (
+    FILE_SYNC_PROVIDERS,
     consume_oauth_state,
     count_connectors_jobs_today,
     create_account,
@@ -325,6 +326,15 @@ def _gmail_connector_enabled() -> bool:
         return bool(settings.get("EMAIL_GMAIL_CONNECTOR_ENABLED", False))
     except Exception:
         return False
+
+
+def _manual_sync_job_type(source: dict[str, Any], sync_state: dict[str, Any] | None) -> str:
+    provider = str(source.get("provider") or "").strip().lower()
+    if provider not in FILE_SYNC_PROVIDERS:
+        return "import"
+    if bool((sync_state or {}).get("needs_full_rescan")):
+        return "repair_rescan"
+    return "incremental_sync"
 
 
 def _ensure_connector_provider_enabled(provider: str) -> str:
@@ -805,6 +815,7 @@ async def trigger_source_sync(
     source = await get_source_by_id(db, user_id, source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
+    sync_state = await get_source_sync_state(db, source_id=source_id) or {}
 
     job = await _queue_source_job(
         source_id=source_id,
@@ -812,7 +823,7 @@ async def trigger_source_sync(
         principal=principal,
         org_policy=org_policy,
         count_jobs_fn=count_jobs_fn,
-        job_type="incremental_sync",
+        job_type=_manual_sync_job_type(source, sync_state),
     )
     return ConnectorSourceSyncTriggerResponse(
         source_id=int(source_id),

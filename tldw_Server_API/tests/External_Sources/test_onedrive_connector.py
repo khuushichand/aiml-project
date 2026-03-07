@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from tldw_Server_API.app.api.v1.schemas.connectors import ConnectorSourceCreateRequest
 from tldw_Server_API.app.core.External_Sources.onedrive import OneDriveConnector
+from tldw_Server_API.app.core.External_Sources.sync_adapter import FileSyncWebhookSubscription
 
 
 class _Resp:
@@ -111,6 +114,90 @@ async def test_onedrive_get_item_metadata_url_encodes_remote_id(monkeypatch: pyt
     assert seen["url"].endswith("/v1.0/me/drive/items/item%2F..%2Funsafe")
     assert metadata is not None
     assert metadata["remote_id"] == "item/../unsafe"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_onedrive_subscribe_webhook_defaults_future_expiration(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_afetch(*, method, url, headers=None, json=None, timeout=None):
+        seen["method"] = method
+        seen["url"] = url
+        seen["json"] = json
+        return _Resp(
+            {
+                "id": "sub-1",
+                "expirationDateTime": (json or {}).get("expirationDateTime"),
+            }
+        )
+
+    import tldw_Server_API.app.core.External_Sources.onedrive as onedrive_mod
+
+    monkeypatch.setattr(onedrive_mod, "afetch", _fake_afetch)
+
+    connector = OneDriveConnector(client_id="x", client_secret="y", redirect_base="http://localhost")
+    subscription = await connector.subscribe_webhook(
+        {"tokens": {"access_token": "token"}},
+        resource={
+            "resource": "me/drive/root",
+            "change_type": "updated",
+            "clientState": "state-123",
+        },
+        callback_url="http://localhost/api/v1/connectors/providers/onedrive/webhook",
+    )
+
+    requested_expiration = str((seen.get("json") or {}).get("expirationDateTime") or "")
+    requested_dt = datetime.fromisoformat(requested_expiration.replace("Z", "+00:00"))
+
+    assert seen["method"] == "POST"
+    assert seen["url"] == "https://graph.microsoft.com/v1.0/subscriptions"
+    assert requested_expiration
+    assert requested_dt > datetime.now(UTC)
+    assert subscription is not None
+    assert subscription.expires_at == requested_expiration
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_onedrive_renew_webhook_requests_new_future_expiration(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_afetch(*, method, url, headers=None, json=None, timeout=None):
+        seen["method"] = method
+        seen["url"] = url
+        seen["json"] = json
+        return _Resp(
+            {
+                "id": "sub-1",
+                "expirationDateTime": (json or {}).get("expirationDateTime"),
+            }
+        )
+
+    import tldw_Server_API.app.core.External_Sources.onedrive as onedrive_mod
+
+    monkeypatch.setattr(onedrive_mod, "afetch", _fake_afetch)
+
+    connector = OneDriveConnector(client_id="x", client_secret="y", redirect_base="http://localhost")
+    renewed = await connector.renew_webhook(
+        {"tokens": {"access_token": "token"}},
+        subscription=FileSyncWebhookSubscription(
+            subscription_id="sub-1",
+            expires_at="2026-03-01T00:00:00Z",
+            metadata={"expirationDateTime": "2026-03-01T00:00:00Z"},
+        ),
+    )
+
+    requested_expiration = str((seen.get("json") or {}).get("expirationDateTime") or "")
+    requested_dt = datetime.fromisoformat(requested_expiration.replace("Z", "+00:00"))
+
+    assert seen["method"] == "PATCH"
+    assert seen["url"] == "https://graph.microsoft.com/v1.0/subscriptions/sub-1"
+    assert requested_expiration
+    assert requested_expiration != "2026-03-01T00:00:00Z"
+    assert requested_dt > datetime.now(UTC)
+    assert renewed is not None
+    assert renewed.expires_at == requested_expiration
 
 
 @pytest.mark.asyncio

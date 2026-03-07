@@ -16031,15 +16031,15 @@ class MediaDatabase:
                         new_content_hash,
                     )
             except _MEDIA_NONCRITICAL_EXCEPTIONS as _anch_err:
-                logging.debug(f"Highlight re-anchoring hook (sync update) failed: {_anch_err}")
+                logger.debug("Highlight re-anchoring hook (sync update) failed: {}", _anch_err)
             try:
                 from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
                     invalidate_intra_doc_vectors,  # lazy import
                 )
 
                 invalidate_intra_doc_vectors(str(media_id))
-            except _MEDIA_NONCRITICAL_EXCEPTIONS:
-                pass
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as _rag_err:
+                logger.debug("Intra-doc vector invalidation skipped for media {}: {}", media_id, _rag_err)
         except (InputError, ConflictError, DatabaseError, sqlite3.Error, TypeError) as e:
             logger.error(f"Synced content update error media {media_id}: {e}", exc_info=True)
             if isinstance(e, (InputError, ConflictError, DatabaseError, TypeError)):

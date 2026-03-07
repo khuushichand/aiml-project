@@ -24,6 +24,7 @@ from tldw_Server_API.app.core.External_Sources.connectors_service import (
     FILE_SYNC_PROVIDERS,
     create_import_job,
     list_sources_for_scheduler,
+    prune_webhook_receipts,
 )
 from tldw_Server_API.app.core.testing import env_flag_enabled
 
@@ -39,6 +40,7 @@ _NONCRITICAL_EXCEPTIONS = (
 _MIN_SCAN_SECONDS = 30
 _DEFAULT_SCAN_SECONDS = 300
 _DEFAULT_RENEWAL_LOOKAHEAD_SECONDS = 3600
+_DEFAULT_WEBHOOK_RECEIPT_RETENTION_SECONDS = 7 * 24 * 3600
 
 
 def _parse_utc_datetime(value: Any) -> datetime | None:
@@ -69,6 +71,22 @@ def _renewal_lookahead_seconds() -> int:
         return max(0, int(os.getenv("CONNECTORS_SYNC_RENEWAL_LOOKAHEAD_SEC", str(_DEFAULT_RENEWAL_LOOKAHEAD_SECONDS)) or _DEFAULT_RENEWAL_LOOKAHEAD_SECONDS))
     except _NONCRITICAL_EXCEPTIONS:
         return _DEFAULT_RENEWAL_LOOKAHEAD_SECONDS
+
+
+def _webhook_receipt_retention_seconds() -> int:
+    try:
+        return max(
+            0,
+            int(
+                os.getenv(
+                    "CONNECTORS_WEBHOOK_RECEIPT_RETENTION_SEC",
+                    str(_DEFAULT_WEBHOOK_RECEIPT_RETENTION_SECONDS),
+                )
+                or _DEFAULT_WEBHOOK_RECEIPT_RETENTION_SECONDS
+            ),
+        )
+    except _NONCRITICAL_EXCEPTIONS:
+        return _DEFAULT_WEBHOOK_RECEIPT_RETENTION_SECONDS
 
 
 class _ConnectorsSyncScheduler:
@@ -129,10 +147,16 @@ class _ConnectorsSyncScheduler:
 
     async def _scan_once(self) -> None:
         pool = await get_db_pool()
+        now = datetime.now(UTC)
         async with pool.transaction() as db:
+            retention_seconds = _webhook_receipt_retention_seconds()
+            if retention_seconds > 0:
+                await prune_webhook_receipt_rows(
+                    db,
+                    older_than=now - timedelta(seconds=retention_seconds),
+                )
             rows = await list_sources_for_scheduler(db)
 
-        now = datetime.now(UTC)
         for source in rows:
             job_type = self._select_job_type(source, now=now)
             if not job_type:
@@ -187,9 +211,17 @@ async def stop_connectors_sync_scheduler(task: asyncio.Task | None) -> None:
         await get_connectors_sync_scheduler().stop()
 
 
+async def prune_webhook_receipt_rows(db, *, older_than: datetime) -> int:
+    deleted = await prune_webhook_receipts(db, older_than=older_than)
+    if deleted:
+        logger.info("Pruned {} stale external webhook receipts", deleted)
+    return deleted
+
+
 __all__ = [
     "_ConnectorsSyncScheduler",
     "get_connectors_sync_scheduler",
+    "prune_webhook_receipt_rows",
     "start_connectors_sync_scheduler",
     "stop_connectors_sync_scheduler",
 ]

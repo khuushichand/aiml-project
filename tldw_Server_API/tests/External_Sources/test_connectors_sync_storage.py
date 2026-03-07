@@ -272,3 +272,38 @@ async def test_get_source_binding_health_counts_tracked_and_degraded_items(
 
     assert health["tracked_item_count"] == 3
     assert health["degraded_item_count"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_prune_webhook_receipts_removes_only_older_rows(
+    sqlite_db: aiosqlite.Connection,
+) -> None:
+    await svc._ensure_tables(sqlite_db)
+    await sqlite_db.execute(
+        """
+        INSERT INTO external_webhook_receipts (provider, receipt_key, source_id, payload_hash, received_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("drive", "old-receipt", 1, "hash-old", "2026-03-01 00:00:00"),
+    )
+    await sqlite_db.execute(
+        """
+        INSERT INTO external_webhook_receipts (provider, receipt_key, source_id, payload_hash, received_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("drive", "new-receipt", 1, "hash-new", "2026-03-06 00:00:00"),
+    )
+    await sqlite_db.commit()
+
+    deleted = await svc.prune_webhook_receipts(
+        sqlite_db,
+        older_than="2026-03-05 00:00:00",
+    )
+    cur = await sqlite_db.execute(
+        "SELECT receipt_key FROM external_webhook_receipts ORDER BY receipt_key ASC"
+    )
+    remaining = [row["receipt_key"] for row in await cur.fetchall()]
+
+    assert deleted == 1
+    assert remaining == ["new-receipt"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
@@ -12,6 +13,7 @@ from .sync_adapter import FileSyncChange, FileSyncWebhookSubscription
 
 class OneDriveConnector(BaseConnector):
     name = "onedrive"
+    _DEFAULT_WEBHOOK_LIFETIME_HOURS = 24
 
     def __init__(self, client_id: str | None = None, client_secret: str | None = None, redirect_base: str | None = None):
         super().__init__(
@@ -23,6 +25,12 @@ class OneDriveConnector(BaseConnector):
     @staticmethod
     def _access_token_from_account(account: dict[str, Any]) -> str | None:
         return (account.get("tokens") or {}).get("access_token") or account.get("access_token")
+
+    @classmethod
+    def _default_expiration_datetime(cls) -> str:
+        return (
+            datetime.now(UTC) + timedelta(hours=cls._DEFAULT_WEBHOOK_LIFETIME_HOURS)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     def authorize_url(
         self,
@@ -315,6 +323,7 @@ class OneDriveConnector(BaseConnector):
         if not token:
             return None
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        requested_expiration = str(resource.get("expirationDateTime") or "").strip() or self._default_expiration_datetime()
         resp = await afetch(
             method="POST",
             url="https://graph.microsoft.com/v1.0/subscriptions",
@@ -323,7 +332,7 @@ class OneDriveConnector(BaseConnector):
                 "changeType": resource.get("change_type", "updated"),
                 "notificationUrl": callback_url,
                 "resource": resource.get("resource", "me/drive/root"),
-                "expirationDateTime": resource.get("expirationDateTime"),
+                "expirationDateTime": requested_expiration,
                 "clientState": resource.get("clientState"),
             },
             timeout=30,
@@ -335,10 +344,12 @@ class OneDriveConnector(BaseConnector):
             close = getattr(resp, "aclose", None)
             if callable(close):
                 await close()
+        metadata = dict(data or {})
+        metadata.setdefault("expirationDateTime", requested_expiration)
         return FileSyncWebhookSubscription(
             subscription_id=data.get("id"),
-            expires_at=data.get("expirationDateTime"),
-            metadata=data,
+            expires_at=data.get("expirationDateTime") or requested_expiration,
+            metadata=metadata,
         )
 
     async def renew_webhook(
@@ -351,11 +362,12 @@ class OneDriveConnector(BaseConnector):
         if not token or not subscription.subscription_id:
             return None
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        requested_expiration = self._default_expiration_datetime()
         resp = await afetch(
             method="PATCH",
             url=f"https://graph.microsoft.com/v1.0/subscriptions/{subscription.subscription_id}",
             headers=headers,
-            json={"expirationDateTime": subscription.metadata.get("expirationDateTime") if subscription.metadata else subscription.expires_at},
+            json={"expirationDateTime": requested_expiration},
             timeout=30,
         )
         try:
@@ -365,10 +377,13 @@ class OneDriveConnector(BaseConnector):
             close = getattr(resp, "aclose", None)
             if callable(close):
                 await close()
+        metadata = dict(subscription.metadata or {})
+        metadata.update(data or {})
+        metadata["expirationDateTime"] = data.get("expirationDateTime") or requested_expiration
         return FileSyncWebhookSubscription(
             subscription_id=data.get("id", subscription.subscription_id),
-            expires_at=data.get("expirationDateTime", subscription.expires_at),
-            metadata=data or subscription.metadata,
+            expires_at=data.get("expirationDateTime") or requested_expiration,
+            metadata=metadata,
         )
 
     async def revoke_webhook(

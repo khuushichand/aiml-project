@@ -77,6 +77,13 @@ def _utc_now_text() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _normalize_utc_timestamp_text(value: Any) -> str:
+    if isinstance(value, datetime):
+        normalized = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return normalized.strftime("%Y-%m-%d %H:%M:%S")
+    return str(value or "").strip()
+
+
 def _normalize_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -1270,6 +1277,38 @@ async def record_webhook_receipt(
     )
     await getattr(db, "commit", lambda: None)()
     return int(getattr(cur, "rowcount", 0) or 0) > 0
+
+
+async def prune_webhook_receipts(
+    db,
+    *,
+    older_than: str | datetime,
+) -> int:
+    await _ensure_tables(db)
+    cutoff = _normalize_utc_timestamp_text(older_than)
+    if not cutoff:
+        return 0
+
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        rows = await db.fetch(
+            """
+            DELETE FROM external_webhook_receipts
+            WHERE received_at < $1
+            RETURNING id
+            """,
+            cutoff,
+        )
+        return len(rows)
+
+    cur = await db.execute(
+        """
+        DELETE FROM external_webhook_receipts
+        WHERE received_at < ?
+        """,
+        (cutoff,),
+    )
+    return int(getattr(cur, "rowcount", 0) or 0)
 
 
 async def reserve_source_sync_job(

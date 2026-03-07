@@ -628,6 +628,9 @@ def test_trigger_source_sync_endpoint_queues_job(connectors_client, monkeypatch)
             "enabled": True,
         }
 
+    async def _fake_get_source_sync_state(db, *, source_id):
+        return {}
+
     async def _fake_create_import_job(user_id, source_id, *, request_id=None, job_type="import"):
         queued_requests.append(
             {
@@ -647,6 +650,7 @@ def test_trigger_source_sync_endpoint_queues_job(connectors_client, monkeypatch)
         }
 
     monkeypatch.setattr(ep, "get_source_by_id", _fake_get_source_by_id)
+    monkeypatch.setattr(ep, "get_source_sync_state", _fake_get_source_sync_state)
     monkeypatch.setattr(ep, "create_import_job", _fake_create_import_job)
 
     response = client.post("/api/v1/connectors/sources/22/sync", headers=headers)
@@ -658,3 +662,99 @@ def test_trigger_source_sync_endpoint_queues_job(connectors_client, monkeypatch)
     assert body["job"]["id"] == "job-123"
     assert body["job"]["type"] == "incremental_sync"
     assert queued_requests[0]["job_type"] == "incremental_sync"
+
+
+@pytest.mark.integration
+def test_trigger_source_sync_endpoint_falls_back_to_import_for_non_file_provider(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    queued_requests: list[dict] = []
+
+    async def _fake_get_source_by_id(db, user_id, source_id):
+        return {
+            "id": source_id,
+            "provider": "notion",
+            "enabled": True,
+        }
+
+    async def _fake_get_source_sync_state(db, *, source_id):
+        return {}
+
+    async def _fake_create_import_job(user_id, source_id, *, request_id=None, job_type="import"):
+        queued_requests.append(
+            {
+                "user_id": user_id,
+                "source_id": source_id,
+                "request_id": request_id,
+                "job_type": job_type,
+            }
+        )
+        return {
+            "id": "job-456",
+            "source_id": source_id,
+            "type": job_type,
+            "status": "queued",
+            "progress_pct": 0,
+            "counts": {"processed": 0, "skipped": 0, "failed": 0},
+        }
+
+    monkeypatch.setattr(ep, "get_source_by_id", _fake_get_source_by_id)
+    monkeypatch.setattr(ep, "get_source_sync_state", _fake_get_source_sync_state)
+    monkeypatch.setattr(ep, "create_import_job", _fake_create_import_job)
+
+    response = client.post("/api/v1/connectors/sources/41/sync", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["provider"] == "notion"
+    assert body["job"]["type"] == "import"
+    assert queued_requests[0]["job_type"] == "import"
+
+
+@pytest.mark.integration
+def test_trigger_source_sync_endpoint_uses_repair_rescan_when_source_requires_it(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    queued_requests: list[dict] = []
+
+    async def _fake_get_source_by_id(db, user_id, source_id):
+        return {
+            "id": source_id,
+            "provider": "drive",
+            "enabled": True,
+        }
+
+    async def _fake_get_source_sync_state(db, *, source_id):
+        return {"needs_full_rescan": True}
+
+    async def _fake_create_import_job(user_id, source_id, *, request_id=None, job_type="import"):
+        queued_requests.append(
+            {
+                "user_id": user_id,
+                "source_id": source_id,
+                "request_id": request_id,
+                "job_type": job_type,
+            }
+        )
+        return {
+            "id": "job-789",
+            "source_id": source_id,
+            "type": job_type,
+            "status": "queued",
+            "progress_pct": 0,
+            "counts": {"processed": 0, "skipped": 0, "failed": 0},
+        }
+
+    monkeypatch.setattr(ep, "get_source_by_id", _fake_get_source_by_id)
+    monkeypatch.setattr(ep, "get_source_sync_state", _fake_get_source_sync_state)
+    monkeypatch.setattr(ep, "create_import_job", _fake_create_import_job)
+
+    response = client.post("/api/v1/connectors/sources/52/sync", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["provider"] == "drive"
+    assert body["job"]["type"] == "repair_rescan"
+    assert queued_requests[0]["job_type"] == "repair_rescan"

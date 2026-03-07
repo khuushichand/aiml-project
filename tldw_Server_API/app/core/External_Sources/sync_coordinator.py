@@ -14,6 +14,22 @@ def _utc_now_text() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _modified_at_from_metadata(metadata: dict[str, Any]) -> str | None:
+    for key in (
+        "modified_at",
+        "modifiedAt",
+        "modified_time",
+        "modifiedTime",
+        "last_modified",
+        "lastModified",
+        "lastModifiedDateTime",
+    ):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
 @dataclass(slots=True)
 class FileSyncContentPayload:
     text: str
@@ -86,6 +102,7 @@ async def reconcile_file_change(
 ) -> SyncReconcileResult:
     sync_now = _utc_now_text()
     metadata = change.metadata or {}
+    modified_at = _modified_at_from_metadata(metadata)
     binding = await svc.get_external_item_binding(
         connectors_db,
         source_id=source_id,
@@ -124,7 +141,7 @@ async def reconcile_file_change(
             mime=metadata.get("mime_type"),
             size=metadata.get("size"),
             version=change.remote_revision,
-            modified_at=metadata.get("modified_at"),
+            modified_at=modified_at,
             content_hash=change.remote_hash,
             media_id=int(media_id),
             sync_status="active",
@@ -188,7 +205,7 @@ async def reconcile_file_change(
             mime=metadata.get("mime_type"),
             size=metadata.get("size"),
             version=change.remote_revision,
-            modified_at=metadata.get("modified_at"),
+            modified_at=modified_at,
             content_hash=change.remote_hash,
             media_id=int(media_id),
             sync_status="active",
@@ -255,7 +272,7 @@ async def reconcile_file_change(
             external_id=change.remote_id,
             name=change.remote_name,
             version=change.remote_revision,
-            modified_at=metadata.get("modified_at"),
+            modified_at=modified_at,
             remote_parent_id=change.remote_parent_id,
             remote_path=change.remote_path,
             content_hash=change.remote_hash,
@@ -288,7 +305,7 @@ async def reconcile_file_change(
             mime=metadata.get("mime_type"),
             size=metadata.get("size"),
             version=change.remote_revision,
-            modified_at=metadata.get("modified_at"),
+            modified_at=modified_at,
             content_hash=change.remote_hash,
             media_id=int(media_id),
             sync_status=str(binding.get("sync_status") or "active"),

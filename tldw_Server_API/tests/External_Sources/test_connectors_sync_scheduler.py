@@ -78,6 +78,7 @@ async def test_connectors_sync_scheduler_scan_enqueues_renewal_repair_and_increm
         ]
 
     queued_jobs: list[dict[str, object]] = []
+    prune_calls: list[str] = []
 
     async def _fake_create_import_job(user_id, source_id, *, request_id=None, job_type="import"):
         queued_jobs.append(
@@ -96,6 +97,10 @@ async def test_connectors_sync_scheduler_scan_enqueues_renewal_repair_and_increm
             "counts": {"processed": 0, "skipped": 0, "failed": 0},
         }
 
+    async def _fake_prune_webhook_receipts(db, *, older_than):
+        prune_calls.append(str(older_than))
+        return 2
+
     monkeypatch.setattr(scheduler_mod, "get_db_pool", _fake_get_db_pool, raising=False)
     monkeypatch.setattr(
         scheduler_mod,
@@ -109,10 +114,17 @@ async def test_connectors_sync_scheduler_scan_enqueues_renewal_repair_and_increm
         _fake_create_import_job,
         raising=False,
     )
+    monkeypatch.setattr(
+        scheduler_mod,
+        "prune_webhook_receipts",
+        _fake_prune_webhook_receipts,
+        raising=False,
+    )
 
     scheduler = scheduler_mod._ConnectorsSyncScheduler()
     await scheduler._scan_once()
 
+    assert len(prune_calls) == 1
     assert queued_jobs == [
         {"user_id": 1, "source_id": 11, "job_type": "subscription_renewal"},
         {"user_id": 2, "source_id": 12, "job_type": "repair_rescan"},
