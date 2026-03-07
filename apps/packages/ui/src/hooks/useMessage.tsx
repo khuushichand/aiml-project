@@ -75,6 +75,7 @@ import {
   findUnavailableChatModel,
   normalizeChatModelId
 } from "@/utils/chat-model-availability"
+import { discardAbortedTurnIfRequested } from "@/hooks/chat/abort-turn-cleanup"
 import {
   collectGreetings,
   isGreetingMessageType
@@ -103,6 +104,7 @@ export const useMessage = () => {
     embeddingController,
     setEmbeddingController
   } = usePageAssist()
+  const discardCurrentTurnOnAbortRef = React.useRef(false)
 
   // Messages now come from Zustand store (single source of truth)
   const messages = useStoreMessageOption((state) => state.messages)
@@ -771,6 +773,22 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: messages,
+          previousHistory: history,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        setIsEmbedding(false)
+        return
+      }
+
       console.error(e)
       const assistantContent = buildAssistantErrorContent(fullText, e)
       setMessages((prev) =>
@@ -807,6 +825,7 @@ export const useMessage = () => {
       setStreaming(false)
       setIsEmbedding(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
       setEmbeddingController(null)
     }
@@ -1079,6 +1098,22 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: messages,
+          previousHistory: history,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        setIsEmbedding(false)
+        return
+      }
+
       const assistantContent = buildAssistantErrorContent(fullText, e)
       setMessages((prev) =>
         prev.map((msg) =>
@@ -1114,6 +1149,7 @@ export const useMessage = () => {
       setStreaming(false)
       setIsEmbedding(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
       setEmbeddingController(null)
     }
@@ -1738,6 +1774,21 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: messages,
+          previousHistory: history,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        return
+      }
+
       const assistantContent = buildAssistantErrorContent(fullText, e)
       if (generateMessageId) {
         setMessages((prev) =>
@@ -1775,6 +1826,7 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
     }
   }
@@ -2035,6 +2087,21 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: messages,
+          previousHistory: history,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        return
+      }
+
       const assistantContent = buildAssistantErrorContent(fullText, e)
       setMessages((prev) =>
         prev.map((msg) =>
@@ -2070,6 +2137,7 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
     }
   }
@@ -2388,7 +2456,18 @@ export const useMessage = () => {
     }
   }
 
-  const stopStreamingRequest = () => {
+  const stopStreamingRequest = (options?: unknown) => {
+    const discardTurn =
+      typeof options === "object" &&
+      options !== null &&
+      "discardTurn" in options &&
+      options.discardTurn === true
+    if (
+      discardTurn &&
+      (isEmbedding || abortController || embeddingController)
+    ) {
+      discardCurrentTurnOnAbortRef.current = true
+    }
     if (isEmbedding) {
       if (embeddingController) {
         embeddingController.abort()

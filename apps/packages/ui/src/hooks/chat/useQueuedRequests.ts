@@ -18,7 +18,7 @@ type UseQueuedRequestsOptions = {
       | ((prev: QueuedRequest[]) => QueuedRequest[])
   ) => void
   sendQueuedRequest: (item: QueuedRequest) => Promise<void>
-  stopStreamingRequest: () => void
+  stopStreamingRequest: (options?: { discardTurn?: boolean }) => void
 }
 
 export function useQueuedRequests({
@@ -118,7 +118,7 @@ export function useQueuedRequests({
         return reordered
       })
       if (isStreaming) {
-        stopStreamingRequest()
+        stopStreamingRequest({ discardTurn: true })
       }
       return promotedItem
     },

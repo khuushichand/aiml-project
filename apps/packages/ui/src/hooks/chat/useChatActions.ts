@@ -30,7 +30,6 @@ import {
 import {
   createRegenerateLastMessage,
   createEditMessage,
-  createStopStreamingRequest,
   createBranchMessage
 } from "@/hooks/handlers/messageHandlers"
 import { generateBranchFromMessageIds } from "@/db/dexie/branch"
@@ -80,6 +79,10 @@ import { generateTitle } from "@/services/title"
 import { trackCompareMetric } from "@/utils/compare-metrics"
 import { MAX_COMPARE_MODELS } from "@/hooks/chat/compare-constants"
 import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
+import {
+  discardAbortedTurnIfRequested,
+  isAbortLikeError
+} from "@/hooks/chat/abort-turn-cleanup"
 import type { Character } from "@/types/character"
 import type {
   MessageSteeringMode,
@@ -151,16 +154,6 @@ type TldwChatMeta =
   | number
   | null
   | undefined
-
-const isAbortLikeError = (error: unknown): boolean => {
-  if (error instanceof Error) {
-    if (error.name === "AbortError") return true
-    return error.message.toLowerCase().includes("abort")
-  }
-  return String(error || "")
-    .toLowerCase()
-    .includes("abort")
-}
 
 const attemptCharacterStreamRecoveryPersist = async ({
   chatId,
@@ -418,6 +411,7 @@ export const useChatActions = ({
     [appendFormattingGuidePrompt]
   )
   const messagesRef = React.useRef(messages)
+  const discardCurrentTurnOnAbortRef = React.useRef(false)
 
   React.useEffect(() => {
     messagesRef.current = messages
@@ -1596,6 +1590,21 @@ export const useChatActions = ({
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: chatHistory,
+          previousHistory: chatMemory,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        return
+      }
+
       await attemptCharacterStreamRecoveryPersist({
         chatId: activeChatId,
         temporaryChat,
@@ -1667,6 +1676,7 @@ export const useChatActions = ({
       setIsProcessing(false)
       setStreaming(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
     }
   }
@@ -2627,9 +2637,26 @@ export const useChatActions = ({
     }
   })
 
-  const stopStreamingRequest = createStopStreamingRequest(
-    abortController,
-    setAbortController
+  const stopStreamingRequest = React.useCallback(
+    (options?: unknown) => {
+      if (!abortController) {
+        return
+      }
+
+      const discardTurn =
+        typeof options === "object" &&
+        options !== null &&
+        "discardTurn" in options &&
+        options.discardTurn === true
+
+      if (discardTurn) {
+        discardCurrentTurnOnAbortRef.current = true
+      }
+
+      abortController.abort()
+      setAbortController(null)
+    },
+    [abortController, setAbortController]
   )
 
   const editMessage = createEditMessage({

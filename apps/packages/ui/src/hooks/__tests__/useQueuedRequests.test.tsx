@@ -38,6 +38,9 @@ describe("useQueuedRequests", () => {
     })
 
     expect(stopStreamingRequest).toHaveBeenCalledTimes(1)
+    expect(stopStreamingRequest).toHaveBeenCalledWith({
+      discardTurn: true
+    })
     expect(queueRef.current).toEqual([
       expect.objectContaining({
         id: second.id,
