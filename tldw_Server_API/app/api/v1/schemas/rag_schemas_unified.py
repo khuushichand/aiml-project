@@ -18,6 +18,10 @@ except Exception:
 from pydantic import ConfigDict
 
 from ._compat import Field
+from tldw_Server_API.app.core.Text2SQL.source_registry import (
+    normalize_source,
+    normalize_sources_public,
+)
 
 # Load contextual retrieval defaults from settings (config.txt/env)
 try:
@@ -59,8 +63,13 @@ class UnifiedRAGRequest(BaseModel):
     # ========== DATA SOURCES ==========
     sources: Optional[list[str]] = Field(
         default=["media_db"],
-        description="Databases to search: media_db, notes, characters, chats, kanban",
+        description="Databases to search: media_db, notes, characters, chats, kanban, sql",
         example=["media_db", "notes", "kanban"]
+    )
+    sql_target_id: str = Field(
+        default="media_db",
+        description="SQL target identifier used when sources includes 'sql'",
+        example="media_db",
     )
 
     # ========== STRATEGY SELECTION ==========
@@ -97,21 +106,22 @@ class UnifiedRAGRequest(BaseModel):
     @field_validator("sources", mode="before")
     @classmethod
     def _validate_sources(cls, v):
-        allowed = {"media_db", "notes", "characters", "chats", "kanban"}
-        alias_map = {"media": "media_db", "character_cards": "characters", "kanban_db": "kanban"}
         if v is None:
-            return ["media_db"]
+            return normalize_sources_public(None)
         if not isinstance(v, list):
             raise ValueError("sources must be a list of strings")
-        normalized = []
-        for s in v:
-            if not isinstance(s, str):
-                raise ValueError("sources entries must be strings")
-            key = alias_map.get(s.strip().lower(), s.strip().lower())
-            if key not in allowed:
-                raise ValueError(f"Invalid source '{s}'. Allowed: {sorted(allowed)}")
-            normalized.append(key)
-        return normalized
+        if any(not isinstance(source, str) for source in v):
+            raise ValueError("sources entries must be strings")
+        return normalize_sources_public(v)
+
+    @field_validator("sql_target_id", mode="before")
+    @classmethod
+    def _validate_sql_target_id(cls, v):
+        if v is None:
+            return "media_db"
+        if not isinstance(v, str):
+            raise ValueError("sql_target_id must be a string")
+        return normalize_source(v)
 
     # Map corpus -> index_namespace at model-level (before validation)
     if model_validator is not None:
@@ -1519,19 +1529,13 @@ class UnifiedRAGRequest(BaseModel):
     @field_validator('sources')
     @classmethod
     def validate_sources(cls, v):
-        valid_sources = {"media_db", "notes", "characters", "chats", "kanban"}
-        alias_map = {"media": "media_db", "character_cards": "characters", "kanban_db": "kanban"}
-        if v:
-            normalized = []
-            for source in v:
-                if not isinstance(source, str):
-                    raise ValueError("sources entries must be strings")
-                key = alias_map.get(source.strip().lower(), source.strip().lower())
-                if key not in valid_sources:
-                    raise ValueError(f"Invalid source '{source}'. Valid options: {sorted(valid_sources)}")
-                normalized.append(key)
-            return normalized
-        return v
+        if v is None:
+            return normalize_sources_public(None)
+        if not isinstance(v, list):
+            raise ValueError("sources must be a list of strings")
+        if any(not isinstance(source, str) for source in v):
+            raise ValueError("sources entries must be strings")
+        return normalize_sources_public(v)
 
     @field_validator('expansion_strategies')
     @classmethod

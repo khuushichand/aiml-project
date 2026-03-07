@@ -5,6 +5,71 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.33] 2026-03-06
+
+### Added
+
+- Text2SQL security hardening:
+  - Added `sql.read` RBAC permission constant and seeded baseline grants for default `user` and `admin` roles.
+  - Added SQL target ACL claims (`sql.target:*`, `sql.target:media_db`) and removed implicit default target allow.
+  - Enforced connector ACL checks in `POST /api/v1/text2sql/query` with explicit `403 unauthorized_target` on denied targets.
+  - Added RBAC/ACL regression tests in `tldw_Server_API/tests/Security/test_text2sql_rbac_and_acl.py`.
+  - Added baseline seed consistency for `sql.read` in `rbac_seed` paths.
+- API documentation updates for SQL retrieval:
+  - Documented standalone Text2SQL endpoint in `Docs/API-related/API_README.md`.
+  - Documented unified RAG SQL source usage (`sources=["sql"]`, `sql_target_id`) and required SQL ACL claims in `Docs/API-related/RAG_API_Documentation.md`.
+
+## [0.1.32] 2026-03-06
+
+### Added
+
+- **TTS Listen Tab UX Redesign** — Two-zone layout (Workspace + Inspector Panel):
+  - `CharacterProgressBar` component with color-coded thresholds and ARIA progressbar role
+  - `VoicePreviewButton` component for inline voice previews via TTS API
+  - `TtsStickyActionBar` with Play/Stop/Download controls, stream status indicator, and inspector toggle
+  - `TtsProviderStrip` compact config summary strip with clickable tags and preset switcher
+  - `TtsInspectorPanel` with Voice/Output/Advanced tabs, responsive drawer mode on mobile
+  - `TtsVoiceTab`, `TtsOutputTab`, `TtsAdvancedTab` inspector tab components
+  - Provider-conditional field visibility (browser shows voice only, openai shows model+voice, tldw shows full controls)
+  - Multi-voice narration UI in Voice tab with role assignment cards (tldw provider only)
+  - Inline `VoiceCloningManager` rendering in Advanced tab
+  - Keyboard shortcuts: Ctrl/Cmd+Enter (play), Escape (stop), Ctrl/Cmd+. (toggle inspector)
+  - `aria-live="polite"` on provider strip for screen reader announcements
+  - 24 component tests across 6 test files
+- **STT Playground Comparison-First Redesign** — Record once, compare across multiple models:
+  - Rewrote `SttPlaygroundPage` from 736-line single-model tool into three-zone comparison architecture
+  - **Zone 1 — RecordingStrip**: Record/stop with real-time duration timer, animated audio level meter (`role="meter"`), native audio playback, file upload (`accept="audio/*"`), collapsible settings gear toggle
+  - **Zone 2 — ComparisonPanel**: Multi-select model picker, parallel transcription via `Promise.allSettled`, responsive card grid (1/2/3 cols), per-card skeleton loading, editable transcripts, latency + word count metrics, copy-to-clipboard, save to Notes, per-card retry on error
+  - **Zone 3 — HistoryPanel**: Collapsible past recordings with re-compare (loads blob from IndexedDB), markdown export to clipboard, single-delete and confirmed clear-all via Modal
+  - **Dexie/IndexedDB persistence** (`stt-recordings.ts`): Audio blobs stored with 20-recording cap and oldest-eviction, schema version bump in `schema.ts`
+  - **`useAudioRecorder` hook**: MediaRecorder lifecycle, 200ms timer, blob retention, `loadBlob()` for re-compare, cleanup on unmount
+  - **`useComparisonTranscribe` hook**: Parallel multi-model transcription, per-model status (pending/running/done/error), `performance.now()` latency, retry single model, multi-format response extraction
+  - **`InlineSettingsPanel`**: Playground-local overrides for language, task, format, temperature, prompt, segmentation (progressive disclosure); "Reset to defaults" restores global settings
+  - **Keyboard shortcuts**: Space to toggle record (when no text input focused), Cmd/Ctrl+Enter for Transcribe All, shortcut hints on buttons
+  - **Accessibility**: Dynamic `aria-label` on record button with shortcut hint, `aria-live="polite"` on duration timer and transcript textareas, `role="region"` with model-specific labels on result cards, multi-state visual feedback (icon + color + text, not color alone)
+  - 51 tests across 9 test files (Dexie store, both hooks, all 4 components, keyboard shortcuts, page integration)
+
+### Fixed
+
+- Fixed `Manager.first-use.test.tsx` selectors to match updated button labels (`Filters` instead of `Advanced filters`, text queries instead of role queries for onboarding cards)
+
+## [0.1.31] 2026-03-06
+
+### Added
+
+- Docker runner integration test (`test_docker_runner_integration.py`) for full container lifecycle validation (session → upload → run → artifacts → cleanup), skipped without Docker daemon.
+
+### Changed
+
+- Updated misleading docstrings in `DockerRunner`, `SandboxService`, `LinuxLimaEnforcer`, and `MacOSLimaEnforcer` to accurately reflect implemented functionality.
+
+### Fixed
+
+- Fixed `PostgresStore._coerce_created_at()` `AttributeError`: moved method from `SQLiteStore` to `SandboxStore` base class so both SQLite and Postgres backends inherit it. Admin list/count endpoints with date filters on Postgres would crash without this fix.
+- Fixed event loop closure causing cascading "Event loop is closed" test failures in `RunStreamHub._schedule_dispatch()`: now clears stale `self._loop` reference and falls through to the threading.Timer fallback. Added `reset_loop()` method for test fixture cleanup.
+- Fixed config cache leaking between sandbox tests: added `_sandbox_clear_config_cache` and `_sandbox_reset_stream_hub` autouse fixtures to sandbox `conftest.py` so environment variable changes and stale event loop references don't bleed across tests.
+- Added debug logging to 8 silent `except ... pass` handlers in `network_policy.py` (`expand_allowlist_to_targets`, `pin_dns_map`, `apply_egress_rules_atomic`, `delete_rules_by_label`) so iptables/DNS failures are observable instead of silently swallowed.
+
 ## [0.1.30] 2026-03-06
 
 ### Added

@@ -28,7 +28,7 @@ import {
   type ServerChatSummary
 } from "@/services/tldw/TldwApiClient"
 import { fetchChatModels } from "@/services/tldw-server"
-import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Download, CheckSquare, Square, Tags, X, MoreHorizontal, Star, ExternalLink, Clock3, Columns2, Info } from "lucide-react"
+import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Upload as UploadIcon, Download, CheckSquare, Square, Tags, X, MoreHorizontal, Star, ExternalLink, Clock3, Columns2 } from "lucide-react"
 import { CharacterPreview } from "./CharacterPreview"
 import { CharacterGalleryCard, type GalleryCardDensity } from "./CharacterGalleryCard"
 import { CharacterPreviewPopup } from "./CharacterPreviewPopup"
@@ -6230,6 +6230,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
       // Optimistic update: immediately reflect the change in the UI
       let previousData: unknown = undefined
+      let previousPreview: any = undefined
       try {
         previousData = qc.getQueryData?.(["tldw:listCharacters"])
         qc.setQueryData?.(["tldw:listCharacters"], (old: any) => {
@@ -6244,6 +6245,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         // Optimistic update not available — continue with server call
       }
       setPreviewCharacter((current) => {
+        previousPreview = current
         if (!current) return current
         const currentId = String(
           current?.id || current?.slug || current?.name || ""
@@ -6266,6 +6268,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         // Roll back optimistic update on failure
         if (previousData !== undefined) {
           try { qc.setQueryData?.(["tldw:listCharacters"], previousData) } catch { /* noop */ }
+        }
+        if (previousPreview !== undefined) {
+          setPreviewCharacter(previousPreview)
         }
         notification.error({
           message: t("settings:manageCharacters.notification.error", {
@@ -6729,7 +6734,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         role="main"
         tabIndex={-1}
         aria-describedby="characters-shortcuts-summary"
-        className="space-y-4">
+        className="space-y-4"
+        onDragEnter={handleImportDragEnter}
+        onDragOver={handleImportDragOver}
+        onDragLeave={handleImportDragLeave}
+        onDrop={(event) => {
+          void handleImportDrop(event)
+        }}>
       <div id="characters-shortcuts-summary" className="sr-only">
         {`${t("settings:manageCharacters.shortcuts.title", {
           defaultValue: "Keyboard shortcuts"
@@ -6754,7 +6765,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           <Tooltip title={t("settings:manageCharacters.import.button", { defaultValue: "Import" })}>
             <Button
               size="small"
-              icon={<Download className="h-4 w-4" />}
+              icon={<UploadIcon className="h-4 w-4" />}
               loading={isImportBusy}
               onClick={triggerImportPicker}
               aria-label={t("settings:manageCharacters.import.button", {
@@ -6768,12 +6779,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             ref={importButtonContainerRef}
             data-testid="character-import-dropzone"
             className="sr-only"
-            onDragEnter={handleImportDragEnter}
-            onDragOver={handleImportDragOver}
-            onDragLeave={handleImportDragLeave}
-            onDrop={(event) => {
-              void handleImportDrop(event)
-            }}
           >
             <Upload
               accept={IMPORT_UPLOAD_ACCEPT}
@@ -7345,7 +7350,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 disabled={isImportBusy}
                 onClick={triggerImportPicker}
               >
-                <Download className="h-7 w-7 text-primary" />
+                <UploadIcon className="h-7 w-7 text-primary" />
                 <span className="text-sm font-medium">
                   {t("settings:manageCharacters.onboarding.importTitle", {
                     defaultValue: "Import existing"

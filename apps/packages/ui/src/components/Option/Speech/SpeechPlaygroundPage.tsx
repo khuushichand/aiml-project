@@ -61,6 +61,7 @@ import { TtsInspectorPanel } from "@/components/Option/Speech/TtsInspectorPanel"
 import { TtsVoiceTab } from "@/components/Option/Speech/TtsVoiceTab"
 import { TtsOutputTab } from "@/components/Option/Speech/TtsOutputTab"
 import { TtsAdvancedTab } from "@/components/Option/Speech/TtsAdvancedTab"
+import { VoiceCloningManager } from "@/components/Option/TTS/VoiceCloningManager"
 
 const { Text, Title, Paragraph } = Typography
 
@@ -2502,6 +2503,49 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                       emotionIntensity={tldwEmotionIntensity}
                       onEmotionIntensityChange={(val) => setTldwEmotionIntensity(val)}
                       supportsEmotion={Boolean(isTldw && activeProviderCaps?.caps.supports_emotion_control)}
+                      useVoiceRoles={useVoiceRoles}
+                      onVoiceRolesChange={setUseVoiceRoles}
+                      voiceRolesContent={
+                        <>
+                          {voiceCards.map((card) => (
+                            <div key={card.id} className="flex items-center gap-2">
+                              <Select
+                                size="small"
+                                className="w-28"
+                                value={card.role}
+                                onChange={(val) => handleUpdateVoiceCard(card.id, { role: val })}
+                                options={VOICE_ROLE_OPTIONS}
+                              />
+                              <Select
+                                size="small"
+                                className="flex-1"
+                                value={card.voiceId || undefined}
+                                onChange={(val) => handleUpdateVoiceCard(card.id, { voiceId: val })}
+                                options={tldwVoiceOptions as { label: string; value: string }[]}
+                                showSearch
+                                optionFilterProp="label"
+                                placeholder="Select voice"
+                              />
+                              <Button
+                                size="small"
+                                type="text"
+                                danger
+                                onClick={() => handleRemoveVoiceCard(card.id)}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          ))}
+                          {voiceCards.length < 4 && (
+                            <Button size="small" type="dashed" block onClick={handleAddVoiceCard}>
+                              Add voice
+                            </Button>
+                          )}
+                          {voiceRoleError && (
+                            <div className="text-xs text-red-500">{voiceRoleError}</div>
+                          )}
+                        </>
+                      }
                       focusField={inspectorFocusField}
                       onFocusHandled={() => setInspectorFocusField(null)}
                     />
@@ -2571,6 +2615,12 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                       }}
                       isTldw={isTldw}
                       onOpenVoiceCloning={() => openInspectorAt("advanced")}
+                      voiceCloningContent={
+                        <VoiceCloningManager
+                          providersInfo={providersInfo}
+                          onSelectVoice={(val) => setTldwVoice(val)}
+                        />
+                      }
                     />
                   }
                 />
