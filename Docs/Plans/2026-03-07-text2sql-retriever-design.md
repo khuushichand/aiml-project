@@ -109,6 +109,8 @@ Response:
 - `target_id`
 - `guardrail`: policy metadata (limit injected, clamped, etc.)
 - `trace_id`
+- Sensitive fields in result rows must be redacted/masked by policy before
+  response serialization (for example by column policy tags or allowlist).
 
 ### 5.2 RAG Source Integration
 - Add `sql` as valid `sources` entry.

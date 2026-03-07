@@ -325,6 +325,7 @@ git commit -m "feat(text2sql): add strict SQL AST guard with limit rewrite"
 - Create: `tldw_Server_API/app/core/Text2SQL/connectors.py`
 - Create: `tldw_Server_API/app/core/Text2SQL/executor.py`
 - Create: `tldw_Server_API/tests/Text2SQL/test_connectors.py`
+- Create: `tldw_Server_API/tests/Text2SQL/test_sql_executor_read_only.py`
 
 **Step 1: Write the failing test**
 
@@ -344,6 +345,30 @@ def test_connector_lookup_rejects_unknown_id():
     reg = ConnectorRegistry({})
     with pytest.raises(KeyError):
         reg.get("postgresql://raw-dsn-not-allowed")
+```
+
+```python
+import sqlite3
+import pytest
+
+from tldw_Server_API.app.core.Text2SQL.executor import SqliteReadOnlyExecutor
+
+
+@pytest.mark.asyncio
+async def test_sqlite_executor_enforces_read_only(tmp_path):
+    db = tmp_path / "ro.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT)")
+    conn.execute("INSERT INTO items(name) VALUES('ok')")
+    conn.commit()
+    conn.close()
+
+    ex = SqliteReadOnlyExecutor(str(db))
+    out = await ex.execute("SELECT id, name FROM items", timeout_ms=2000, max_rows=50)
+    assert out["row_count"] == 1
+
+    with pytest.raises(Exception):
+        await ex.execute("DELETE FROM items", timeout_ms=2000, max_rows=50)
 ```
 
 **Step 2: Run test to verify it fails**
@@ -372,17 +397,22 @@ from typing import Protocol
 
 class SqlExecutor(Protocol):
     async def execute(self, sql: str, *, timeout_ms: int, max_rows: int) -> dict: ...
+
+
+class SqliteReadOnlyExecutor:
+    """Reference read-only executor used in tests and local internal targets."""
+    ...
 ```
 
 **Step 4: Run test to verify it passes**
 
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Text2SQL/test_connectors.py -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Text2SQL/test_connectors.py tldw_Server_API/tests/Text2SQL/test_sql_executor_read_only.py -v`
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/core/Text2SQL/connectors.py tldw_Server_API/app/core/Text2SQL/executor.py tldw_Server_API/tests/Text2SQL/test_connectors.py
+git add tldw_Server_API/app/core/Text2SQL/connectors.py tldw_Server_API/app/core/Text2SQL/executor.py tldw_Server_API/tests/Text2SQL/test_connectors.py tldw_Server_API/tests/Text2SQL/test_sql_executor_read_only.py
 git commit -m "feat(text2sql): add connector-id registry and executor interface"
 ```
 
@@ -514,7 +544,17 @@ class Text2SQLResponse(BaseModel):
 # text2sql.py
 router = APIRouter(prefix="/text2sql", tags=["text2sql"])
 
-@router.post("/query", response_model=Text2SQLResponse)
+@router.post(
+    "/query",
+    response_model=Text2SQLResponse,
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(rbac_rate_limit("text2sql.query")),
+        Depends(require_permissions(SQL_READ)),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="text2sql.query", count_as="call")),
+        Depends(require_within_limit(LimitCategory.RAG_QUERIES_DAY, 1)),
+    ],
+)
 async def query_text2sql(...):
     ...
 ```
@@ -583,6 +623,19 @@ Update `MultiDatabaseRetriever.__init__`:
 ```python
 if sql_retriever is not None:
     self.retrievers[DataSource.SQL] = sql_retriever
+```
+
+When constructing `MultiDatabaseRetriever` inside `unified_pipeline.py`, pass
+the sql retriever instance through each constructor path (primary retrieval and
+additional retrieval fallbacks), for example:
+```python
+retriever = MultiDatabaseRetriever(
+    db_paths,
+    user_id=user_id or "0",
+    media_db=media_db,
+    chacha_db=chacha_db,
+    sql_retriever=sql_retriever,
+)
 ```
 
 Update source mapping in `unified_pipeline.py` to use canonical registry and explicit SQL mapping:
