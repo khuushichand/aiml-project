@@ -622,11 +622,8 @@ class DatabasePaths:
             "personalization": DatabasePaths.get_personalization_db_path(user_id),
             "workflows": DatabasePaths.get_workflows_db_path(user_id),
             "workflows_scheduler": DatabasePaths.get_workflows_scheduler_db_path(user_id),
-<<<<<<< HEAD
-=======
             "chat_workflows": DatabasePaths.get_chat_workflows_db_path(user_id),
             "research_sessions": DatabasePaths.get_research_sessions_db_path(user_id),
->>>>>>> 1739efb8a (feat(chat-workflows): add persistence foundation)
             "kanban": DatabasePaths.get_kanban_db_path(user_id),
             "slides": DatabasePaths.get_slides_db_path(user_id),
         }
