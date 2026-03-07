@@ -104,4 +104,34 @@ describe("ChatQueuePanel", () => {
     expect(onDelete).toHaveBeenCalledWith(first.id)
     expect(onClearAll).toHaveBeenCalledTimes(1)
   })
+
+  it("disables edit and reorder controls for requests already sending", async () => {
+    const user = userEvent.setup()
+    const sending = buildQueuedRequest({
+      promptText: "sending now",
+      status: "sending"
+    })
+    const queued = buildQueuedRequest({ promptText: "queued next" })
+
+    render(
+      <ChatQueuePanel
+        queue={[sending, queued]}
+        isConnectionReady
+        isStreaming={false}
+        onRunNext={vi.fn()}
+        onRunNow={vi.fn()}
+        onDelete={vi.fn()}
+        onMove={vi.fn()}
+        onUpdate={vi.fn()}
+        onClearAll={vi.fn()}
+      />
+    )
+
+    await user.click(screen.getByRole("button", { name: "View queue" }))
+
+    expect(screen.getAllByRole("button", { name: "Edit" })[0]).toBeDisabled()
+    expect(
+      screen.getAllByRole("button", { name: "Move down" })[0]
+    ).toBeDisabled()
+  })
 })

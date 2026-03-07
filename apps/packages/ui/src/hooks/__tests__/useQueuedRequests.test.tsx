@@ -224,4 +224,44 @@ describe("useQueuedRequests", () => {
     })
     expect(queueRef.current[1]?.id).toBe(second.id)
   })
+
+  it("does not edit or reorder requests that are already sending", async () => {
+    const sending = buildQueuedRequest({
+      promptText: "in flight",
+      status: "sending"
+    })
+    const queued = buildQueuedRequest({ promptText: "later" })
+    const queueRef = {
+      current: [sending, queued]
+    }
+    const setQueue = createQueueSetter(queueRef)
+
+    const { result } = renderHook(() =>
+      useQueuedRequests({
+        isConnectionReady: true,
+        isStreaming: false,
+        queue: queueRef.current,
+        setQueue,
+        sendQueuedRequest: vi.fn(),
+        stopStreamingRequest: vi.fn()
+      })
+    )
+
+    await act(async () => {
+      result.current.update(sending.id, "edited in flight")
+      result.current.move(sending.id, "down")
+    })
+
+    expect(queueRef.current).toEqual([
+      expect.objectContaining({
+        id: sending.id,
+        promptText: "in flight",
+        status: "sending"
+      }),
+      expect.objectContaining({
+        id: queued.id,
+        promptText: "later"
+      })
+    ])
+  })
 })

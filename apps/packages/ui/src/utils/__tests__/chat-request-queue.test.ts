@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest"
 import {
   blockQueuedRequest,
   buildQueuedRequest,
-  moveQueuedRequestToFront
+  moveQueuedRequestToFront,
+  restoreQueuedRequests
 } from "@/utils/chat-request-queue"
 
 describe("chat request queue helpers", () => {
@@ -35,5 +36,23 @@ describe("chat request queue helpers", () => {
     expect(blocked.status).toBe("blocked")
     expect(blocked.blockedReason).toBe("missing_attachment")
     expect(blocked.snapshot.selectedModel).toBe("gpt-4o-mini")
+  })
+
+  it("downgrades restored sending requests back to queued", () => {
+    const restored = restoreQueuedRequests([
+      buildQueuedRequest({
+        promptText: "resume after refresh",
+        status: "sending",
+        blockedReason: "dispatch_failed"
+      })
+    ])
+
+    expect(restored).toEqual([
+      expect.objectContaining({
+        promptText: "resume after refresh",
+        status: "queued",
+        blockedReason: null
+      })
+    ])
   })
 })

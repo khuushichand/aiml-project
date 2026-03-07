@@ -54,7 +54,7 @@ export function useQueuedRequests({
       setQueue(
         (prev) =>
           prev.map((item) =>
-            item.id === requestId
+            item.id === requestId && item.status !== "sending"
               ? {
                   ...item,
                   promptText,
@@ -73,6 +73,7 @@ export function useQueuedRequests({
       setQueue((prev) => {
         const currentIndex = prev.findIndex((item) => item.id === requestId)
         if (currentIndex === -1) return prev
+        if (prev[currentIndex]?.status === "sending") return prev
         const targetIndex =
           direction === "up" ? currentIndex - 1 : currentIndex + 1
         if (targetIndex < 0 || targetIndex >= prev.length) return prev

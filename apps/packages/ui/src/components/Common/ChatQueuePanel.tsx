@@ -149,13 +149,16 @@ export const ChatQueuePanel: React.FC<ChatQueuePanelProps> = ({
         <div className="space-y-2 border-t border-success/20 pt-2">
           {queue.map((item, index) => {
             const isEditing = editingRequestId === item.id
+            const isSendingItem = item.status === "sending"
             const runNowDisabled =
-              item.status === "sending" ||
+              isSendingItem ||
               (isStreaming && Boolean(forceRunDisabledReason))
             const runNowTitle =
               isStreaming && forceRunDisabledReason
                 ? forceRunDisabledReason
                 : undefined
+            const moveUpDisabled = isSendingItem || index === 0
+            const moveDownDisabled = isSendingItem || index === queue.length - 1
 
             return (
               <div
@@ -248,16 +251,19 @@ export const ChatQueuePanel: React.FC<ChatQueuePanelProps> = ({
                             setEditingRequestId(item.id)
                             setDraftPrompt(item.promptText)
                           }}
-                          className="rounded-md border border-border px-2 py-1 font-medium text-text-subtle hover:bg-surface2"
+                          disabled={isSendingItem}
+                          className={`rounded-md border border-border px-2 py-1 font-medium text-text-subtle hover:bg-surface2 ${
+                            isSendingItem ? "cursor-not-allowed opacity-50" : ""
+                          }`}
                         >
                           {t("common:edit", "Edit")}
                         </button>
                         <button
                           type="button"
                           onClick={() => onMove(item.id, "up")}
-                          disabled={index === 0}
+                          disabled={moveUpDisabled}
                           className={`rounded-md border border-border px-2 py-1 font-medium text-text-subtle hover:bg-surface2 ${
-                            index === 0 ? "cursor-not-allowed opacity-50" : ""
+                            moveUpDisabled ? "cursor-not-allowed opacity-50" : ""
                           }`}
                         >
                           {t("playground:composer.queue.moveUp", "Move up")}
@@ -265,11 +271,9 @@ export const ChatQueuePanel: React.FC<ChatQueuePanelProps> = ({
                         <button
                           type="button"
                           onClick={() => onMove(item.id, "down")}
-                          disabled={index === queue.length - 1}
+                          disabled={moveDownDisabled}
                           className={`rounded-md border border-border px-2 py-1 font-medium text-text-subtle hover:bg-surface2 ${
-                            index === queue.length - 1
-                              ? "cursor-not-allowed opacity-50"
-                              : ""
+                            moveDownDisabled ? "cursor-not-allowed opacity-50" : ""
                           }`}
                         >
                           {t("playground:composer.queue.moveDown", "Move down")}

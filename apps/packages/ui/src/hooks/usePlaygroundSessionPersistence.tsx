@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react"
 import { usePlaygroundSessionStore } from "@/store/playground-session"
 import { useStoreMessageOption } from "@/store/option"
 import { shallow } from "zustand/shallow"
+import { restoreQueuedRequests } from "@/utils/chat-request-queue"
 import {
   formatToChatHistory,
   formatToMessage,
@@ -253,7 +254,7 @@ export function usePlaygroundSessionPersistence() {
       }
       setRagEnableGeneration(sessionStore.ragEnableGeneration)
       setRagEnableCitations(sessionStore.ragEnableCitations)
-      setQueuedMessages(savedQueue)
+      setQueuedMessages(restoreQueuedRequests(savedQueue))
 
       return true
     } catch (error) {

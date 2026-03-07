@@ -92,6 +92,19 @@ export const normalizeQueuedRequests = (
   queue: QueuedRequestInput[]
 ): QueuedRequest[] => queue.map((item) => buildQueuedRequest(item))
 
+export const restoreQueuedRequests = (
+  queue: QueuedRequestInput[]
+): QueuedRequest[] =>
+  normalizeQueuedRequests(queue).map((item) =>
+    item.status === "sending"
+      ? {
+          ...item,
+          status: "queued",
+          blockedReason: null
+        }
+      : item
+  )
+
 export const moveQueuedRequestToFront = (
   queue: QueuedRequest[],
   requestId: string
