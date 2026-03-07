@@ -210,3 +210,41 @@ async def test_sync_storage_helpers_track_bindings_events_and_archive_state(
     assert fetched["sync_status"] == "archived_upstream_removed"
     assert len(items) == 1
     assert items[0]["external_id"] == "file-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_get_source_binding_health_counts_tracked_and_degraded_items(
+    sqlite_db: aiosqlite.Connection,
+) -> None:
+    _, source = await _create_account_and_source(sqlite_db)
+
+    await svc.upsert_external_item_binding(
+        sqlite_db,
+        source_id=source["id"],
+        provider="drive",
+        external_id="file-active",
+        media_id=11,
+        sync_status="active",
+    )
+    await svc.upsert_external_item_binding(
+        sqlite_db,
+        source_id=source["id"],
+        provider="drive",
+        external_id="file-degraded",
+        media_id=12,
+        sync_status="degraded",
+    )
+    await svc.upsert_external_item_binding(
+        sqlite_db,
+        source_id=source["id"],
+        provider="drive",
+        external_id="file-archived",
+        media_id=13,
+        sync_status="archived_upstream_removed",
+    )
+
+    health = await svc.get_source_binding_health(sqlite_db, source_id=source["id"])
+
+    assert health["tracked_item_count"] == 3
+    assert health["degraded_item_count"] == 1

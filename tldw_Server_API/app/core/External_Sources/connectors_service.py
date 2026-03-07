@@ -1527,6 +1527,46 @@ async def list_external_items_for_source(db, *, source_id: int) -> list[dict[str
     return [_normalize_external_item_row(row) or {} for row in rows]
 
 
+async def get_source_binding_health(db, *, source_id: int) -> dict[str, int]:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            SELECT
+                COUNT(*) AS tracked_item_count,
+                COALESCE(SUM(CASE WHEN COALESCE(sync_status, 'active') = 'degraded' THEN 1 ELSE 0 END), 0)
+                    AS degraded_item_count
+            FROM external_items
+            WHERE source_id = $1
+            """,
+            source_id,
+        )
+        data = _row_to_dict(row)
+        return {
+            "tracked_item_count": int(data.get("tracked_item_count") or 0),
+            "degraded_item_count": int(data.get("degraded_item_count") or 0),
+        }
+
+    cur = await db.execute(
+        """
+        SELECT
+            COUNT(*) AS tracked_item_count,
+            COALESCE(SUM(CASE WHEN COALESCE(sync_status, 'active') = 'degraded' THEN 1 ELSE 0 END), 0)
+                AS degraded_item_count
+        FROM external_items
+        WHERE source_id = ?
+        """,
+        (source_id,),
+    )
+    row = await cur.fetchone()
+    data = _row_to_dict(row)
+    return {
+        "tracked_item_count": int(data.get("tracked_item_count") or 0),
+        "degraded_item_count": int(data.get("degraded_item_count") or 0),
+    }
+
+
 async def upsert_external_item_binding(
     db,
     *,

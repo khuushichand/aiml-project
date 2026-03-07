@@ -48,6 +48,7 @@ from tldw_Server_API.app.core.External_Sources.connectors_service import (
     get_account_for_user,
     get_account_tokens,
     get_policy,
+    get_source_binding_health,
     get_source_by_id,
     get_source_by_webhook_subscription,
     get_source_sync_state,
@@ -177,10 +178,14 @@ def _load_active_job(sync_state: dict[str, Any] | None) -> dict[str, Any] | None
         return None
 
 
-def _build_source_sync_summary(sync_state: dict[str, Any] | None) -> ConnectorSourceSyncSummary | None:
+def _build_source_sync_summary(
+    sync_state: dict[str, Any] | None,
+    binding_health: dict[str, int] | None = None,
+) -> ConnectorSourceSyncSummary | None:
     if not sync_state:
         return None
     active_job = _load_active_job(sync_state)
+    binding_health = binding_health or {}
     return ConnectorSourceSyncSummary(
         state=_derive_sync_state(sync_state, active_job),
         sync_mode=str(sync_state.get("sync_mode") or "manual"),
@@ -190,6 +195,8 @@ def _build_source_sync_summary(sync_state: dict[str, Any] | None) -> ConnectorSo
         webhook_status=sync_state.get("webhook_status"),
         needs_full_rescan=bool(sync_state.get("needs_full_rescan")),
         active_job_id=str(sync_state.get("active_job_id") or "").strip() or None,
+        tracked_item_count=int(binding_health.get("tracked_item_count") or 0),
+        degraded_item_count=int(binding_health.get("degraded_item_count") or 0),
     )
 
 
@@ -620,6 +627,7 @@ async def get_sources(
     out: list[ConnectorSource] = []
     for r in rows:
         sync_state = await get_source_sync_state(db, source_id=int(r.get("id")))
+        binding_health = await get_source_binding_health(db, source_id=int(r.get("id")))
         out.append(
             ConnectorSource(
                 id=int(r.get("id")),
@@ -631,7 +639,7 @@ async def get_sources(
                 options=SyncOptions(**(r.get("options") or {})),
                 enabled=bool(r.get("enabled", True)),
                 last_synced_at=str(r.get("last_synced_at")) if r.get("last_synced_at") else None,
-                sync=_build_source_sync_summary(sync_state),
+                sync=_build_source_sync_summary(sync_state, binding_health),
             )
         )
     return out
@@ -694,6 +702,7 @@ async def get_source_sync_status(
         raise HTTPException(status_code=404, detail="Source not found")
 
     sync_state = await get_source_sync_state(db, source_id=source_id) or {}
+    binding_health = await get_source_binding_health(db, source_id=source_id)
     active_job = _load_active_job(sync_state)
     active_job_id = str(sync_state.get("active_job_id") or "").strip() or None
 
@@ -717,6 +726,8 @@ async def get_source_sync_status(
         active_job_id=active_job_id,
         active_job_started_at=_as_str_or_none(sync_state.get("active_job_started_at")),
         active_job=_summarize_job(active_job),
+        tracked_item_count=int(binding_health.get("tracked_item_count") or 0),
+        degraded_item_count=int(binding_health.get("degraded_item_count") or 0),
     )
 
 

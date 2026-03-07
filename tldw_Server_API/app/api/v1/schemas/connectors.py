@@ -36,6 +36,8 @@ class ConnectorSourceSyncSummary(BaseModel):
     webhook_status: str | None = None
     needs_full_rescan: bool = False
     active_job_id: str | None = None
+    tracked_item_count: int = 0
+    degraded_item_count: int = 0
 
 
 class ConnectorSource(BaseModel):
@@ -91,6 +93,8 @@ class ConnectorSourceSyncStatus(BaseModel):
     active_job_id: str | None = None
     active_job_started_at: str | None = None
     active_job: ConnectorSyncJobSummary | None = None
+    tracked_item_count: int = 0
+    degraded_item_count: int = 0
 
 
 class AuthorizeURLResponse(BaseModel):

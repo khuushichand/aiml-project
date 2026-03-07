@@ -448,8 +448,16 @@ def test_get_sources_includes_sync_summary(connectors_client, monkeypatch):
             "active_job_id": "88",
         }
 
+    async def _fake_get_source_binding_health(db, *, source_id):
+        assert source_id == 22
+        return {
+            "tracked_item_count": 4,
+            "degraded_item_count": 2,
+        }
+
     monkeypatch.setattr(ep, "list_sources", _fake_list_sources)
     monkeypatch.setattr(ep, "get_source_sync_state", _fake_get_source_sync_state)
+    monkeypatch.setattr(ep, "get_source_binding_health", _fake_get_source_binding_health)
 
     response = client.get("/api/v1/connectors/sources", headers=headers)
     assert response.status_code == 200, response.text
@@ -462,6 +470,8 @@ def test_get_sources_includes_sync_summary(connectors_client, monkeypatch):
     assert body[0]["sync"]["webhook_status"] == "active"
     assert body[0]["sync"]["needs_full_rescan"] is True
     assert body[0]["sync"]["active_job_id"] == "88"
+    assert body[0]["sync"]["tracked_item_count"] == 4
+    assert body[0]["sync"]["degraded_item_count"] == 2
 
 
 @pytest.mark.integration
@@ -575,8 +585,16 @@ def test_get_source_sync_status_returns_state_and_active_job(connectors_client, 
                 "result": {"processed": 7, "failed": 0, "skipped": 0},
             }
 
+    async def _fake_get_source_binding_health(db, *, source_id):
+        assert source_id == 22
+        return {
+            "tracked_item_count": 9,
+            "degraded_item_count": 3,
+        }
+
     monkeypatch.setattr(ep, "get_source_by_id", _fake_get_source_by_id)
     monkeypatch.setattr(ep, "get_source_sync_state", _fake_get_source_sync_state)
+    monkeypatch.setattr(ep, "get_source_binding_health", _fake_get_source_binding_health)
     monkeypatch.setattr(jobs_manager, "JobManager", _FakeJobManager)
 
     response = client.get("/api/v1/connectors/sources/22/sync", headers=headers)
@@ -591,6 +609,8 @@ def test_get_source_sync_status_returns_state_and_active_job(connectors_client, 
     assert body["active_job"]["id"] == "77"
     assert body["active_job"]["status"] == "processing"
     assert body["active_job"]["progress_pct"] == 35
+    assert body["tracked_item_count"] == 9
+    assert body["degraded_item_count"] == 3
 
 
 @pytest.mark.integration
