@@ -915,6 +915,48 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
               <div className="p-3 bg-danger/10 border border-danger/30 rounded text-sm text-danger font-mono">
                 {data.error_msg}
               </div>
+              {/* Common causes by failure kind */}
+              {failureKind && failureKind !== "unknown" && (
+                <Alert
+                  type="info"
+                  showIcon
+                  title={t("watchlists:runs.detail.commonCausesTitle", "Common causes")}
+                  description={
+                    <ul className="list-disc pl-4 text-sm space-y-1">
+                      {failureKind === "auth" && (
+                        <>
+                          <li>{t("watchlists:runs.detail.commonCauses.auth1", "Source requires authentication or API key")}</li>
+                          <li>{t("watchlists:runs.detail.commonCauses.auth2", "Credentials expired or permissions changed")}</li>
+                        </>
+                      )}
+                      {failureKind === "rate_limit" && (
+                        <>
+                          <li>{t("watchlists:runs.detail.commonCauses.rateLimit1", "Monitor schedule is too frequent for this source")}</li>
+                          <li>{t("watchlists:runs.detail.commonCauses.rateLimit2", "Source has per-IP rate limits")}</li>
+                        </>
+                      )}
+                      {failureKind === "timeout" && (
+                        <>
+                          <li>{t("watchlists:runs.detail.commonCauses.timeout1", "Source is slow to respond or temporarily unavailable")}</li>
+                          <li>{t("watchlists:runs.detail.commonCauses.timeout2", "Too many concurrent requests — reduce concurrency")}</li>
+                        </>
+                      )}
+                      {(failureKind === "dns" || failureKind === "network") && (
+                        <>
+                          <li>{t("watchlists:runs.detail.commonCauses.network1", "Source host is unreachable or has changed")}</li>
+                          <li>{t("watchlists:runs.detail.commonCauses.network2", "Local network or DNS configuration issue")}</li>
+                        </>
+                      )}
+                      {failureKind === "tls" && (
+                        <>
+                          <li>{t("watchlists:runs.detail.commonCauses.tls1", "SSL certificate expired or self-signed")}</li>
+                          <li>{t("watchlists:runs.detail.commonCauses.tls2", "Certificate chain is incomplete")}</li>
+                        </>
+                      )}
+                    </ul>
+                  }
+                />
+              )}
             </div>
           )}
 

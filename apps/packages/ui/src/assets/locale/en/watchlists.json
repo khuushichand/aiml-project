@@ -338,6 +338,8 @@
     "runFailedDescription": "Run #{{id}} failed. {{hint}}",
     "runFailedGroupedTitle": "Multiple runs failed",
     "runFailedGroupedDescription": "{{count}} runs failed. {{hint}}",
+    "retryTriggered": "Retry started",
+    "retryFailed": "Failed to retry run",
     "runStalledTitle": "Run appears stalled",
     "runStalledDescription": "{{count}} runs appear stalled. {{hint}}",
     "failureHints": {
@@ -377,6 +379,80 @@
       "notFound": "Refresh the list and confirm the requested records still exist.",
       "generic": "Retry the request. If the problem continues, review server diagnostics."
     }
+  },
+  "commandPalette": {
+    "placeholder": "Type a command or search...",
+    "noResults": "No matching commands",
+    "hint": "Tip: Use Cmd+K to open this palette anytime",
+    "commands": {
+      "openFeeds": "Open Feeds",
+      "openArticles": "Open Articles",
+      "openReports": "Open Reports",
+      "openMonitors": "Open Monitors",
+      "openActivity": "Open Activity",
+      "openTemplates": "Open Templates",
+      "createFeed": "Create feed",
+      "createMonitor": "Create monitor",
+      "refresh": "Refresh current view",
+      "openSettings": "Open settings",
+      "startTour": "Start guided tour"
+    }
+  },
+  "keyboardShortcuts": {
+    "title": "Keyboard Shortcuts",
+    "commandPalette": "Command palette",
+    "switchTab": "Switch tab (1-3)",
+    "newEntity": "New entity",
+    "refresh": "Refresh",
+    "focusSearch": "Focus search",
+    "showHelp": "Show shortcuts"
+  },
+  "emptyState": {
+    "feeds": {
+      "description": "Feeds are the sources your monitors check for new content.",
+      "primaryCta": "Add your first feed",
+      "secondaryCta": "Import from OPML"
+    },
+    "monitors": {
+      "description": "Monitors run on a schedule to fetch and process content from your feeds.",
+      "primaryCta": "Create your first monitor"
+    },
+    "activity": {
+      "description": "Activity shows the history of monitor runs. Set up a monitor to start seeing activity here.",
+      "primaryCta": "Set up a monitor"
+    },
+    "articles": {
+      "description": "Articles are captured content from successful monitor runs, ready for review.",
+      "primaryCta": "Set up a monitor to start capturing articles"
+    },
+    "reports": {
+      "description": "Reports are generated briefings from monitor runs using your templates.",
+      "primaryCta": "Run a monitor to generate your first report"
+    },
+    "templates": {
+      "description": "Templates define the format and structure of your generated reports.",
+      "primaryCta": "Create a template"
+    }
+  },
+  "healthBar": {
+    "toggleLabel": "Toggle health bar",
+    "refresh": "Refresh",
+    "noData": "No watchlist data yet",
+    "feedsSummary": "{{count}} feeds",
+    "monitorsActive": "{{count}} monitors active",
+    "lastRun": "Last run {{time}}",
+    "runningNow": "running now",
+    "articlesPending": "{{count}} articles pending",
+    "attentionTooltip": "{{count}} items need attention",
+    "feedsDegraded": "{{count}} need review",
+    "monitorsAttention": "{{count}} need fixes",
+    "runsRunning": "{{count}} running",
+    "runsFailed": "{{count}} failed",
+    "runsOk": "OK",
+    "runsFailedDetail": "{{count}} recent failures",
+    "articlesUnread": "unread",
+    "showAllViews": "Show all views",
+    "showAllViewsTooltip": "Switch to the full 8-tab layout"
   },
   "help": {
     "docs": "Watchlists docs",
@@ -958,6 +1034,19 @@
       "openMonitor": "Open monitor settings",
       "openOutputs": "Open reports for this run",
       "openSources": "Review source settings",
+      "commonCausesTitle": "Common causes",
+      "commonCauses": {
+        "auth1": "Source requires authentication or API key",
+        "auth2": "Credentials expired or permissions changed",
+        "rateLimit1": "Monitor schedule is too frequent for this source",
+        "rateLimit2": "Source has per-IP rate limits",
+        "timeout1": "Source is slow to respond or temporarily unavailable",
+        "timeout2": "Too many concurrent requests — reduce concurrency",
+        "network1": "Source host is unreachable or has changed",
+        "network2": "Local network or DNS configuration issue",
+        "tls1": "SSL certificate expired or self-signed",
+        "tls2": "Certificate chain is incomplete"
+      },
       "itemsUntitled": "Untitled",
       "errorMessage": "Error Message",
       "filteredSampleTitle": "Filtered item sample",

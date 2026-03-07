@@ -16,6 +16,15 @@ const WATCHLIST_TABS: Set<WatchlistTab> = new Set([
   "settings"
 ])
 
+/** Backward-compat: map new user-facing tab names to internal keys */
+const TAB_ALIASES: Record<string, WatchlistTab> = {
+  feeds: "sources",
+  monitors: "jobs",
+  activity: "runs",
+  articles: "items",
+  reports: "outputs"
+}
+
 const parsePositiveIntegerParam = (
   params: URLSearchParams,
   keys: string[]
@@ -45,9 +54,27 @@ const parseStringParam = (
 const parseTabParam = (params: URLSearchParams): WatchlistTab | undefined => {
   const rawTab = parseStringParam(params, ["tab"])
   if (!rawTab) return undefined
-  return WATCHLIST_TABS.has(rawTab as WatchlistTab)
-    ? (rawTab as WatchlistTab)
-    : undefined
+  // Check canonical tab names first
+  if (WATCHLIST_TABS.has(rawTab as WatchlistTab)) return rawTab as WatchlistTab
+  // Check aliases (feeds→sources, monitors→jobs, etc.)
+  const aliased = TAB_ALIASES[rawTab.toLowerCase()]
+  if (aliased) return aliased
+  return undefined
+}
+
+/** Handle ?expand= param to auto-expand inline secondary sections */
+const parseExpandParam = (params: URLSearchParams): string | undefined => {
+  return parseStringParam(params, ["expand"])
+}
+
+/** Handle ?settings=open to open the settings drawer */
+const parseSettingsParam = (params: URLSearchParams): boolean => {
+  return parseStringParam(params, ["settings"]) === "open"
+}
+
+/** Handle ?view=all to force show-all-views mode */
+const parseViewParam = (params: URLSearchParams): boolean => {
+  return parseStringParam(params, ["view"]) === "all"
 }
 
 const OptionWatchlists = () => {

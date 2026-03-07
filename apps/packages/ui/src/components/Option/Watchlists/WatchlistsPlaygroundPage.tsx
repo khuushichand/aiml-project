@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useRef } from "react"
-import { Alert, Button, Empty, Modal, Tabs } from "antd"
+import { Alert, Button, Drawer, Empty, Modal, Select, Switch, Tabs, Tooltip } from "antd"
 import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
 import {
   CalendarClock,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
   FileOutput,
   FileText,
@@ -17,7 +19,7 @@ import { useTranslation } from "react-i18next"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { PageShell } from "@/components/Common/PageShell"
-import { fetchWatchlistRuns } from "@/services/watchlists"
+import { fetchWatchlistRuns, triggerWatchlistRun } from "@/services/watchlists"
 import { useWatchlistsStore } from "@/store/watchlists"
 import type { WatchlistRun } from "@/types/watchlists"
 import type { WatchlistTab } from "@/types/watchlists"
@@ -34,6 +36,9 @@ import {
   WATCHLISTS_MAIN_DOCS_URL,
   WATCHLISTS_TAB_HELP_DOCS
 } from "./shared/help-docs"
+import { WatchlistsHealthBar } from "./shared/WatchlistsHealthBar"
+import { WatchlistsCommandPalette, useWatchlistsCommands } from "./shared/WatchlistsCommandPalette"
+import { useWatchlistsKeyboardShortcuts } from "./shared/useWatchlistsKeyboardShortcuts"
 import {
   buildRunStateNotificationKey,
   dedupeRunNotificationEvents,
@@ -61,7 +66,88 @@ const RUN_STALLED_THRESHOLD_MS = 45 * 60_000
 const GUIDED_TOUR_STORAGE_KEY = "watchlists:guided-tour:v1"
 const TEACH_POINTS_STORAGE_KEY = "watchlists:teach-points:v1"
 const ORIENTATION_DISMISSED_STORAGE_KEY = "watchlists:orientation-dismissed:v1"
+const SHOW_ALL_VIEWS_STORAGE_KEY = "watchlists:show-all-views:v1"
+const SECONDARY_EXPANDED_STORAGE_KEY = "watchlists:secondary-expanded:v1"
 const SUCCESSFUL_RUN_STATUSES = new Set(["completed", "succeeded", "success", "done", "finished"])
+
+/** Maps old tab param values to new primary tabs for backward compat deep links */
+const TAB_PARAM_COMPAT: Record<string, string> = {
+  feeds: "sources",
+  monitors: "jobs",
+  activity: "runs",
+  articles: "items",
+  reports: "outputs"
+}
+
+/** Primary tabs in the progressive disclosure layout */
+const PROGRESSIVE_PRIMARY_TABS = ["sources", "items", "outputs"] as const
+
+/** Which secondary section lives inside which primary tab */
+const SECONDARY_IN_PRIMARY: Record<string, string> = {
+  jobs: "sources",    // Monitors section inside Feeds tab
+  runs: "items",      // Activity section inside Articles tab
+  templates: "outputs" // Templates section inside Reports tab
+}
+
+const MOBILE_BREAKPOINT = 768
+
+const useIsMobile = (): boolean => {
+  const [isMobile, setIsMobile] = React.useState(() => {
+    if (typeof window === "undefined") return false
+    return window.innerWidth < MOBILE_BREAKPOINT
+  })
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches)
+    mql.addEventListener("change", handler)
+    return () => mql.removeEventListener("change", handler)
+  }, [])
+
+  return isMobile
+}
+
+const readShowAllViews = (): boolean => {
+  if (typeof window === "undefined") return false
+  try {
+    return localStorage.getItem(SHOW_ALL_VIEWS_STORAGE_KEY) === "true"
+  } catch {
+    return false
+  }
+}
+
+const writeShowAllViews = (value: boolean): void => {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(SHOW_ALL_VIEWS_STORAGE_KEY, String(value))
+  } catch {
+    // localStorage may be unavailable
+  }
+}
+
+type SecondaryExpandedState = Partial<Record<string, boolean>>
+
+const readSecondaryExpanded = (): SecondaryExpandedState => {
+  if (typeof window === "undefined") return {}
+  try {
+    const raw = localStorage.getItem(SECONDARY_EXPANDED_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as SecondaryExpandedState
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+const writeSecondaryExpanded = (state: SecondaryExpandedState): void => {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(SECONDARY_EXPANDED_STORAGE_KEY, JSON.stringify(state))
+  } catch {
+    // localStorage may be unavailable
+  }
+}
 
 type GuidedTourTab = "sources" | "jobs" | "runs" | "items" | "outputs"
 type GuidedTourStatus = "idle" | "in_progress" | "dismissed" | "completed"
@@ -233,6 +319,8 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   const runsPollingActive = useWatchlistsStore((s) => s.pollingActive)
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
+  const openSourceForm = useWatchlistsStore((s) => s.openSourceForm)
+  const openJobForm = useWatchlistsStore((s) => s.openJobForm)
   const resetStore = useWatchlistsStore((s) => s.resetStore)
   const runStatusRef = useRef<Map<number, string>>(new Map())
   const notifiedRunStatesRef = useRef<Set<string>>(new Set())
@@ -255,6 +343,34 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   const iaExperimentVariant = iaRollout.variant
   const iaExperimentEnabled = iaExperimentVariant === "experimental"
   const previousActiveTabRef = useRef<typeof activeTab | null>(null)
+
+  // Progressive disclosure: 3 primary tabs with inline secondary views
+  const [showAllViews, setShowAllViews] = React.useState(readShowAllViews)
+  const [secondaryExpanded, setSecondaryExpanded] = React.useState<SecondaryExpandedState>(readSecondaryExpanded)
+  const [settingsDrawerOpen, setSettingsDrawerOpen] = React.useState(false)
+  const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = React.useState(false)
+  const isMobile = useIsMobile()
+
+  const toggleShowAllViews = useCallback(() => {
+    setShowAllViews((prev) => {
+      const next = !prev
+      writeShowAllViews(next)
+      return next
+    })
+  }, [])
+
+  const toggleSecondaryExpanded = useCallback((key: string) => {
+    setSecondaryExpanded((prev) => {
+      const next = { ...prev, [key]: !prev[key] }
+      writeSecondaryExpanded(next)
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    writeSecondaryExpanded(secondaryExpanded)
+  }, [secondaryExpanded])
 
   const tabHelpLabels = {
     overview: t("watchlists:help.tabs.overview", "Overview guidance"),
@@ -648,6 +764,79 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     }
   }, [])
 
+  // Handle URL params for progressive disclosure features
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const params = new URLSearchParams(window.location.search)
+
+    // ?view=all → force show all views
+    if (params.get("view") === "all") {
+      setShowAllViews(true)
+      writeShowAllViews(true)
+    }
+
+    // ?settings=open → open settings drawer
+    if (params.get("settings") === "open") {
+      setSettingsDrawerOpen(true)
+    }
+
+    // ?expand=monitors|activity|templates → expand inline secondary section
+    const expandParam = params.get("expand")
+    if (expandParam) {
+      setSecondaryExpanded((prev) => {
+        const next = { ...prev, [expandParam]: true }
+        writeSecondaryExpanded(next)
+        return next
+      })
+    }
+  }, []) // Run once on mount
+
+  // Command palette commands
+  const commandPaletteCommands = useWatchlistsCommands({
+    setActiveTab: (tab: string) => setActiveTab(tab as typeof activeTab),
+    openSourceForm: () => openSourceForm(),
+    openJobForm: () => openJobForm(),
+    openSettings: () => setSettingsDrawerOpen(true),
+    refreshCurrentView: () => {
+      // Trigger a page-level refresh by toggling a dummy state
+      // The individual tabs handle their own refresh via store
+      window.dispatchEvent(new CustomEvent("watchlists:refresh"))
+    },
+    startGuidedTour
+  })
+
+  // Keyboard shortcuts
+  const primaryTabKeys = PROGRESSIVE_PRIMARY_TABS
+  useWatchlistsKeyboardShortcuts(
+    {
+      onOpenCommandPalette: () => setCommandPaletteOpen(true),
+      onSwitchTab: (index: number) => {
+        if (index >= 0 && index < primaryTabKeys.length) {
+          handleTabChange(primaryTabKeys[index])
+        }
+      },
+      onNewEntity: () => {
+        // Context-sensitive: create based on active tab
+        const resolved = resolvedActiveTab
+        if (resolved === "sources") openSourceForm()
+        else if (resolved === "jobs") openJobForm()
+        else openSourceForm() // default to creating a feed
+      },
+      onRefresh: () => {
+        window.dispatchEvent(new CustomEvent("watchlists:refresh"))
+      },
+      onFocusSearch: () => {
+        // Focus the first search input on the page
+        const searchInput = document.querySelector<HTMLInputElement>(
+          '[data-testid*="search"] input, .watchlists-tabs input[type="text"]'
+        )
+        if (searchInput) searchInput.focus()
+      },
+      onShowHelp: () => setShortcutsHelpOpen(true)
+    },
+    isOnline
+  )
+
   const openRunFromNotification = useCallback((runId: number, key: string) => {
     notification.destroy(key)
     setActiveTab("runs")
@@ -694,6 +883,25 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           id: run.id
         })
 
+    const onRetryRun = async () => {
+      if (!run.job_id) return
+      try {
+        notification.destroy(key)
+        await triggerWatchlistRun(run.job_id)
+        notification.success({
+          message: t("watchlists:notifications.retryTriggered", "Retry started"),
+          placement: "bottomRight",
+          duration: 5
+        })
+      } catch {
+        notification.error({
+          message: t("watchlists:notifications.retryFailed", "Failed to retry run"),
+          placement: "bottomRight",
+          duration: 5
+        })
+      }
+    }
+
     notification[kind === "failed" ? "error" : "success"]({
       key,
       message: messageText,
@@ -702,17 +910,32 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       duration: kind === "failed" ? 0 : 8,
       onClick: onOpenRun,
       btn: (
-        <Button
-          size="small"
-          type="link"
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            onOpenRun()
-          }}
-        >
-          {t("watchlists:notifications.viewRun", "View run")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="small"
+            type="link"
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              onOpenRun()
+            }}
+          >
+            {t("watchlists:notifications.viewRun", "View run")}
+          </Button>
+          {kind === "failed" && run.job_id && (
+            <Button
+              size="small"
+              type="link"
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                void onRetryRun()
+              }}
+            >
+              {t("watchlists:errors.retry", "Retry")}
+            </Button>
+          )}
+        </div>
       )
     })
   }, [notification, openRunFromNotification, t])
@@ -933,7 +1156,46 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       </span>
     ) : null
 
-  const tabItems: TabsProps["items"] = [
+  // Inline secondary section component for progressive disclosure layout
+  const InlineSecondarySection: React.FC<{
+    sectionKey: string
+    title: string
+    count?: number
+    children: React.ReactNode
+  }> = ({ sectionKey, title, count, children }) => {
+    const isExpanded = Boolean(secondaryExpanded[sectionKey])
+    return (
+      <div className="mt-6 border-t border-border pt-4" data-testid={`watchlists-secondary-${sectionKey}`}>
+        <div
+          className="flex cursor-pointer items-center gap-2 text-sm font-medium text-text-muted hover:text-text"
+          onClick={() => toggleSecondaryExpanded(sectionKey)}
+          role="button"
+          tabIndex={0}
+          aria-expanded={isExpanded}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault()
+              toggleSecondaryExpanded(sectionKey)
+            }
+          }}
+        >
+          {isExpanded ? (
+            <ChevronUp className="h-4 w-4" />
+          ) : (
+            <ChevronDown className="h-4 w-4" />
+          )}
+          <span>{title}</span>
+          {count !== undefined && count > 0 && (
+            <span className="text-xs text-text-muted">({count})</span>
+          )}
+        </div>
+        {isExpanded && <div className="mt-3">{children}</div>}
+      </div>
+    )
+  }
+
+  // Full 8-tab items (used in "show all views" mode)
+  const allTabItems: TabsProps["items"] = [
     {
       key: "overview",
       label: (
@@ -1018,7 +1280,112 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       children: <SettingsTab />
     }
   ]
-  const reducedIaPrimaryTabKeys = ["overview", "sources", "items", "outputs", "settings"] as const
+
+  // Progressive disclosure: 3 primary tabs with inline secondary views
+  const progressiveTabItems: TabsProps["items"] = [
+    {
+      key: "sources",
+      label: (
+        <span className="flex items-center gap-2">
+          <Rss className="h-4 w-4" />
+          {t("watchlists:tabs.sources", "Feeds")}
+          {tabAttentionBadge(overviewBadges.sources)}
+        </span>
+      ),
+      children: (
+        <>
+          <SourcesTab />
+          <InlineSecondarySection
+            sectionKey="monitors"
+            title={t("watchlists:tabs.jobs", "Monitors")}
+          >
+            <JobsTab />
+          </InlineSecondarySection>
+        </>
+      )
+    },
+    {
+      key: "items",
+      label: (
+        <span className="flex items-center gap-2">
+          <Newspaper className="h-4 w-4" />
+          {t("watchlists:tabs.items", "Articles")}
+        </span>
+      ),
+      children: (
+        <>
+          <InlineSecondarySection
+            sectionKey="activity"
+            title={t("watchlists:tabs.runs", "Recent Activity")}
+            count={overviewBadges.runs}
+          >
+            <RunsTab />
+          </InlineSecondarySection>
+          <ItemsTab />
+        </>
+      )
+    },
+    {
+      key: "outputs",
+      label: (
+        <span className="flex items-center gap-2">
+          <FileOutput className="h-4 w-4" />
+          {t("watchlists:tabs.outputs", "Reports")}
+          {tabAttentionBadge(overviewBadges.outputs)}
+        </span>
+      ),
+      children: (
+        <>
+          <OutputsTab />
+          <InlineSecondarySection
+            sectionKey="templates"
+            title={t("watchlists:tabs.templates", "Templates")}
+          >
+            <TemplatesTab />
+          </InlineSecondarySection>
+        </>
+      )
+    }
+  ]
+
+  // Resolve which tab set to render based on mode
+  const useProgressiveLayout = !showAllViews && !iaExperimentEnabled
+  const renderedTabItems: TabsProps["items"] = useProgressiveLayout
+    ? progressiveTabItems
+    : iaExperimentEnabled
+      ? (() => {
+          const reducedIaPrimaryTabKeys = ["overview", "sources", "items", "outputs", "settings"] as const
+          const primarySet = new Set<string>(reducedIaPrimaryTabKeys)
+          const primaryItems = allTabItems.filter((item) => item?.key && primarySet.has(String(item.key)))
+          if (primarySet.has(activeTab)) return primaryItems
+          const activeSecondaryItem = allTabItems.find((item) => String(item?.key) === activeTab)
+          if (!activeSecondaryItem) return primaryItems
+          return [...primaryItems, activeSecondaryItem]
+        })()
+      : allTabItems
+
+  // When in progressive mode, redirect secondary tab keys to their parent primary tab
+  const handleTabChange = useCallback((key: string) => {
+    if (useProgressiveLayout && SECONDARY_IN_PRIMARY[key]) {
+      const primaryTab = SECONDARY_IN_PRIMARY[key]
+      setActiveTab(primaryTab as typeof activeTab)
+      // Also expand the secondary section
+      setSecondaryExpanded((prev) => {
+        const sectionKey = key === "jobs" ? "monitors" : key === "runs" ? "activity" : "templates"
+        const next = { ...prev, [sectionKey]: true }
+        writeSecondaryExpanded(next)
+        return next
+      })
+      return
+    }
+    setActiveTab(key as typeof activeTab)
+  }, [setActiveTab, useProgressiveLayout])
+
+  // Resolve active tab for the tab bar (in progressive mode, secondary tabs map to their parent)
+  const resolvedActiveTab = useProgressiveLayout && SECONDARY_IN_PRIMARY[activeTab]
+    ? SECONDARY_IN_PRIMARY[activeTab]
+    : activeTab
+
   const reducedIaSecondaryTabKeys = ["jobs", "runs", "templates"] as const
   const reducedIaSecondaryButtons = reducedIaSecondaryTabKeys.map((key) => ({
     key,
@@ -1029,16 +1396,6 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           ? t("watchlists:tabs.runs", "Activity")
           : t("watchlists:tabs.templates", "Templates")
   }))
-  const renderedTabItems: TabsProps["items"] = iaExperimentEnabled
-    ? (() => {
-        const primarySet = new Set<string>(reducedIaPrimaryTabKeys)
-        const primaryItems = tabItems.filter((item) => item?.key && primarySet.has(String(item.key)))
-        if (primarySet.has(activeTab)) return primaryItems
-        const activeSecondaryItem = tabItems.find((item) => String(item?.key) === activeTab)
-        if (!activeSecondaryItem) return primaryItems
-        return [...primaryItems, activeSecondaryItem]
-      })()
-    : tabItems
 
   useEffect(() => {
     trackWatchlistsIaExperimentTransition(
@@ -1129,6 +1486,22 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
                 : t("watchlists:guide.start", "Start guided tour")}
             </Button>
           )}
+          {/* Show all views toggle */}
+          {!iaExperimentEnabled && (
+            <Tooltip title={t("watchlists:healthBar.showAllViewsTooltip", "Switch to the full 8-tab layout")}>
+              <div className="inline-flex items-center gap-1.5 border-l border-border pl-3 ml-1">
+                <Switch
+                  size="small"
+                  checked={showAllViews}
+                  onChange={toggleShowAllViews}
+                  data-testid="watchlists-show-all-views-toggle"
+                />
+                <span className="text-text-muted text-xs">
+                  {t("watchlists:healthBar.showAllViews", "Show all views")}
+                </span>
+              </div>
+            </Tooltip>
+          )}
           {iaExperimentEnabled && (
             <div className="inline-flex flex-wrap items-center gap-2 border-l border-border pl-3 ml-1">
               <span className="text-text-muted">
@@ -1167,7 +1540,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
               </Button>
             ))}
           </div>
-        ) : (
+        ) : showAllViews ? (
           <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
             <span className="text-text-muted">
               {t("watchlists:quickActions.label", "Jump to")}
@@ -1184,8 +1557,11 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
               </Button>
             ))}
           </div>
-        )}
+        ) : null}
       </div>
+
+      {/* Persistent health bar — replaces Overview tab in progressive layout */}
+      <WatchlistsHealthBar onOpenSettings={() => setSettingsDrawerOpen(true)} />
 
       {orientationDismissed ? (
         <div className="mb-4">
@@ -1309,12 +1685,39 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         className="mb-6"
       />
 
-      <Tabs
-        activeKey={activeTab}
-        onChange={(key) => setActiveTab(key as typeof activeTab)}
-        items={renderedTabItems}
-        className="watchlists-tabs"
-      />
+      {isMobile ? (
+        <>
+          <Select
+            value={resolvedActiveTab}
+            onChange={handleTabChange}
+            className="mb-4 w-full"
+            data-testid="watchlists-mobile-tab-select"
+            options={renderedTabItems?.map((item) => ({
+              value: String(item?.key),
+              label: item?.label
+            })) || []}
+          />
+          {renderedTabItems?.find((item) => String(item?.key) === resolvedActiveTab)?.children}
+        </>
+      ) : (
+        <Tabs
+          activeKey={resolvedActiveTab}
+          onChange={handleTabChange}
+          items={renderedTabItems}
+          className="watchlists-tabs"
+        />
+      )}
+
+      {/* Settings drawer (accessible from health bar gear icon) */}
+      <Drawer
+        title={t("watchlists:tabs.settings", "Settings")}
+        open={settingsDrawerOpen}
+        onClose={() => setSettingsDrawerOpen(false)}
+        width={isMobile ? "100%" : 520}
+        data-testid="watchlists-settings-drawer"
+      >
+        <SettingsTab />
+      </Drawer>
 
       <Modal
         open={guidedTourOpen}
@@ -1353,6 +1756,41 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           </div>
           <div className="text-base font-semibold">{guidedTourStep.title}</div>
           <div className="text-sm text-text-muted">{guidedTourStep.description}</div>
+        </div>
+      </Modal>
+
+      {/* Command palette */}
+      <WatchlistsCommandPalette
+        open={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        commands={commandPaletteCommands}
+      />
+
+      {/* Keyboard shortcuts help */}
+      <Modal
+        open={shortcutsHelpOpen}
+        onCancel={() => setShortcutsHelpOpen(false)}
+        title={t("watchlists:keyboardShortcuts.title", "Keyboard Shortcuts")}
+        footer={null}
+        width={400}
+        data-testid="watchlists-shortcuts-help"
+      >
+        <div className="space-y-2 text-sm">
+          {[
+            { keys: "\u2318/Ctrl + K", label: t("watchlists:keyboardShortcuts.commandPalette", "Command palette") },
+            { keys: "1 / 2 / 3", label: t("watchlists:keyboardShortcuts.switchTab", "Switch tab (1-3)") },
+            { keys: "N", label: t("watchlists:keyboardShortcuts.newEntity", "New entity") },
+            { keys: "R", label: t("watchlists:keyboardShortcuts.refresh", "Refresh") },
+            { keys: "/", label: t("watchlists:keyboardShortcuts.focusSearch", "Focus search") },
+            { keys: "?", label: t("watchlists:keyboardShortcuts.showHelp", "Show shortcuts") }
+          ].map((shortcut) => (
+            <div key={shortcut.keys} className="flex items-center justify-between">
+              <span>{shortcut.label}</span>
+              <kbd className="rounded border border-border bg-surface px-1.5 py-0.5 text-xs font-mono">
+                {shortcut.keys}
+              </kbd>
+            </div>
+          ))}
         </div>
       </Modal>
     </PageShell>
