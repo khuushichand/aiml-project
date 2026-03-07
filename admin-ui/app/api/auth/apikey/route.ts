@@ -9,8 +9,11 @@ const isAdminApiKeyLoginEnabled = (): boolean =>
 const isEnterpriseAdminUiMode = (): boolean =>
   process.env.ADMIN_UI_ENTERPRISE_MODE === 'true';
 
+const isSingleUserAuthMode = (): boolean =>
+  process.env.AUTH_MODE === 'single_user';
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  if (isEnterpriseAdminUiMode() || !isAdminApiKeyLoginEnabled()) {
+  if (isEnterpriseAdminUiMode() || !isAdminApiKeyLoginEnabled() || !isSingleUserAuthMode()) {
     return NextResponse.json(
       { detail: 'Admin UI API key login is disabled. Use multi-user credentials.' },
       { status: 403 }

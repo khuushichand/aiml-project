@@ -136,7 +136,7 @@ describe('auth API key storage', () => {
   });
 
   it('treats the API-key auth mode cookie as single-user mode after reload', async () => {
-    document.cookie = 'admin_auth_mode=api_key; path=/';
+    document.cookie = 'admin_auth_mode=single_user; path=/';
     document.cookie = 'admin_session=1; path=/';
 
     vi.resetModules();

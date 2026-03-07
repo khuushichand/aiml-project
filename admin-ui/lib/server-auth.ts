@@ -121,7 +121,7 @@ export const setApiKeySessionCookies = (
   });
   response.cookies.set({
     name: AUTH_MODE_COOKIE,
-    value: 'api_key',
+    value: 'single_user',
     ...buildMarkerCookieOptions(),
   });
 };

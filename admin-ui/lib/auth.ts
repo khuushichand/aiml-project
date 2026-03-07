@@ -124,7 +124,7 @@ const isAuthenticatedLoginPayload = (value: LoginSuccessPayload): boolean =>
  */
 export function isSingleUserMode(): boolean {
   if (typeof window === 'undefined') return false;
-  return getCookieValue(AUTH_MODE_COOKIE) === 'api_key' || !!getApiKey();
+  return getCookieValue(AUTH_MODE_COOKIE) === 'single_user' || !!getApiKey();
 }
 
 /**

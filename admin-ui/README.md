@@ -42,6 +42,8 @@ NEXT_PUBLIC_DEFAULT_AUTH_MODE=password
 `NEXT_PUBLIC_DEFAULT_AUTH_MODE` supports `password` (JWT) or `apikey` (single-user).
 `NEXT_PUBLIC_ALLOW_ADMIN_API_KEY_LOGIN=true` is required before the UI will expose the API-key login
 tab, and `ADMIN_UI_ALLOW_API_KEY_LOGIN=true` is required before the server-side route will accept it.
+The server-side API-key login route also requires `AUTH_MODE=single_user`; it is rejected in
+multi-user deployments even if the UI toggle is enabled.
 Leave both disabled for enterprise/live-customer admin use.
 
 Optional JWT local verification (middleware) reads `JWT_SECRET_KEY`, `JWT_SECONDARY_SECRET`,
