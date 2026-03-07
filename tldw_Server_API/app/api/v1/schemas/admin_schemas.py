@@ -49,7 +49,6 @@ class AdminPasswordResetResponse(BaseModel):
     """Response payload for admin-initiated user password reset."""
 
     user_id: int
-    temporary_password: str
     force_password_change: bool
     message: str
 

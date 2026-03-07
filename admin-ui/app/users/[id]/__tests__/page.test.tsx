@@ -112,7 +112,7 @@ beforeEach(() => {
     uuid: 'user-42',
     username: 'demo-user',
     email: 'demo@example.com',
-    role: 'member',
+    role: 'user',
     is_active: true,
     is_verified: true,
     storage_quota_mb: 1024,
@@ -201,7 +201,6 @@ beforeEach(() => {
   apiMock.getPermissions.mockResolvedValue([]);
   apiMock.getUserRateLimits.mockResolvedValue({});
   apiMock.resetUserPassword.mockResolvedValue({
-    temporary_password: 'TempP@ssw0rd123',
     force_password_change: false,
     message: 'Password reset successfully',
   });
@@ -218,6 +217,7 @@ describe('UserDetailPage password reset', () => {
     render(<UserDetailPage />);
 
     const resetButton = await screen.findByRole('button', { name: 'Reset Password' });
+    await user.type(screen.getByLabelText('Temporary Password to Set'), 'TempP@ssw0rd123');
     await user.click(screen.getByLabelText('Force Password Change on Next Login'));
     await user.click(resetButton);
 
@@ -229,6 +229,7 @@ describe('UserDetailPage password reset', () => {
 
     await waitFor(() => {
       expect(apiMock.resetUserPassword).toHaveBeenCalledWith('42', {
+        temporary_password: 'TempP@ssw0rd123',
         force_password_change: false,
         reason: 'Customer requested this change',
         admin_password: 'AdminPass123!',
@@ -237,10 +238,23 @@ describe('UserDetailPage password reset', () => {
 
     expect(toastSuccessMock).toHaveBeenCalledWith(
       'Password reset',
-      'A new temporary password has been generated.'
+      'Temporary password updated. Share it with the user through an approved secure channel.'
     );
-    expect(await screen.findByText('Temporary password (shown once)')).toBeInTheDocument();
-    expect(screen.getByText('TempP@ssw0rd123')).toBeInTheDocument();
+    expect(screen.queryByText('Temporary password (shown once)')).not.toBeInTheDocument();
+    expect(screen.queryByText('TempP@ssw0rd123')).not.toBeInTheDocument();
+  });
+
+  it('only exposes backend-supported platform roles in the role selector', async () => {
+    render(<UserDetailPage />);
+
+    const roleSelect = await screen.findByLabelText('Role') as HTMLSelectElement;
+    expect(roleSelect.value).toBe('user');
+    expect(screen.getByRole('option', { name: 'User' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Admin' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Service' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Member' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Super Admin' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Owner' })).not.toBeInTheDocument();
   });
 
   it('renders login history with success and failure badges', async () => {

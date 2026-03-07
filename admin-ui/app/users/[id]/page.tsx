@@ -62,10 +62,9 @@ type EffectivePermission = {
 };
 
 const roleOptions = [
-  { value: 'member', label: 'Member' },
+  { value: 'user', label: 'User' },
   { value: 'admin', label: 'Admin' },
-  { value: 'super_admin', label: 'Super Admin' },
-  { value: 'owner', label: 'Owner' },
+  { value: 'service', label: 'Service' },
 ] as const;
 
 type UserRole = (typeof roleOptions)[number]['value'];
@@ -96,7 +95,6 @@ type UserSession = {
 };
 
 type PasswordResetResponse = {
-  temporary_password?: string;
   force_password_change?: boolean;
   message?: string;
 };
@@ -357,12 +355,12 @@ export default function UserDetailPage() {
   const [teamMembershipsError, setTeamMembershipsError] = useState('');
   const [forcePasswordChangeOnNextLogin, setForcePasswordChangeOnNextLogin] = useState(true);
   const [passwordResetLoading, setPasswordResetLoading] = useState(false);
-  const [temporaryPassword, setTemporaryPassword] = useState('');
+  const [resetPasswordValue, setResetPasswordValue] = useState('');
 
   const [formData, setFormData] = useState<UserFormData>({
     username: '',
     email: '',
-    role: 'member',
+    role: 'user',
     is_active: true,
     storage_quota_mb: 0,
   });
@@ -404,7 +402,7 @@ export default function UserDetailPage() {
       setIsAuthorized(true);
       const data = await api.getUser(userId);
       const userValue = data as User & { rate_limits?: UserRateLimits; metadata?: Record<string, unknown> };
-      const roleValue = userValue.role && isValidRole(userValue.role) ? userValue.role : 'member';
+      const roleValue = userValue.role && isValidRole(userValue.role) ? userValue.role : 'user';
       setUser(userValue);
       setFormData({
         username: userValue.username || '',
@@ -779,6 +777,12 @@ export default function UserDetailPage() {
   };
 
   const handleResetPassword = async () => {
+    const normalizedTemporaryPassword = resetPasswordValue.trim();
+    if (normalizedTemporaryPassword.length < 10) {
+      showError('Password reset failed', 'Enter a temporary password with at least 10 characters.');
+      return;
+    }
+
     const approval = await promptPrivilegedAction({
       title: 'Reset Password',
       message: `Reset password for ${user?.username || user?.email || 'this user'}?`,
@@ -788,16 +792,17 @@ export default function UserDetailPage() {
 
     try {
       setPasswordResetLoading(true);
-      const result = await api.resetUserPassword(userId, {
+      await api.resetUserPassword(userId, {
+        temporary_password: normalizedTemporaryPassword,
         force_password_change: forcePasswordChangeOnNextLogin,
         reason: approval.reason,
         admin_password: approval.adminPassword,
       }) as PasswordResetResponse;
-      const tempPassword = typeof result.temporary_password === 'string'
-        ? result.temporary_password
-        : '';
-      setTemporaryPassword(tempPassword);
-      toastSuccess('Password reset', 'A new temporary password has been generated.');
+      setResetPasswordValue('');
+      toastSuccess(
+        'Password reset',
+        'Temporary password updated. Share it with the user through an approved secure channel.'
+      );
       void loadUser();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to reset password';
@@ -1247,6 +1252,22 @@ export default function UserDetailPage() {
                         Reset Password
                       </Button>
                     </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="temporary-password">Temporary Password to Set</Label>
+                      <Input
+                        id="temporary-password"
+                        type="password"
+                        autoComplete="new-password"
+                        value={resetPasswordValue}
+                        onChange={(event) => setResetPasswordValue(event.target.value)}
+                        disabled={!isAuthorized || passwordResetLoading}
+                        minLength={10}
+                        placeholder="Enter a temporary password to share securely"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Set the temporary password yourself so it never needs to be returned to the browser.
+                      </p>
+                    </div>
                     <label className="flex items-center gap-2 text-sm">
                       <input
                         type="checkbox"
@@ -1257,14 +1278,6 @@ export default function UserDetailPage() {
                       />
                       Force Password Change on Next Login
                     </label>
-                    {temporaryPassword && (
-                      <Alert>
-                        <AlertDescription className="space-y-1">
-                          <div className="font-medium">Temporary password (shown once)</div>
-                          <code className="rounded bg-muted px-2 py-1 text-xs">{temporaryPassword}</code>
-                        </AlertDescription>
-                      </Alert>
-                    )}
                   </div>
 
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
