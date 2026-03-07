@@ -8,6 +8,7 @@ import { api } from '@/lib/api-client';
 import { formatAxeViolations, getCriticalAndSeriousAxeViolations } from '@/test-utils/axe';
 
 const confirmMock = vi.hoisted(() => vi.fn());
+const privilegedActionMock = vi.hoisted(() => vi.fn());
 const toastSuccessMock = vi.hoisted(() => vi.fn());
 const toastErrorMock = vi.hoisted(() => vi.fn());
 
@@ -52,6 +53,10 @@ vi.mock('@/components/ResponsiveLayout', () => ({
 
 vi.mock('@/components/ui/confirm-dialog', () => ({
   useConfirm: () => confirmMock,
+}));
+
+vi.mock('@/components/ui/privileged-action-dialog', () => ({
+  usePrivilegedActionDialog: () => privilegedActionMock,
 }));
 
 vi.mock('@/components/ui/toast', () => ({
@@ -130,6 +135,10 @@ const makeUser = (overrides: Partial<Record<string, unknown>> = {}) => ({
 
 beforeEach(() => {
   confirmMock.mockResolvedValue(true);
+  privilegedActionMock.mockResolvedValue({
+    reason: 'Customer requested this change',
+    adminPassword: 'AdminPass123!',
+  });
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
 
@@ -288,12 +297,16 @@ describe('UsersPage', () => {
     await user.click(screen.getByRole('button', { name: 'Assign Role' }));
 
     await waitFor(() => {
-      expect(confirmMock).toHaveBeenCalledWith(
+      expect(privilegedActionMock).toHaveBeenCalledWith(
         expect.objectContaining({ title: 'Assign role to selected users' })
       );
     });
     await waitFor(() => {
-      expect(apiMock.updateUser).toHaveBeenCalledWith('2', { role: 'admin' });
+      expect(apiMock.updateUser).toHaveBeenCalledWith('2', {
+        role: 'admin',
+        reason: 'Customer requested this change',
+        admin_password: 'AdminPass123!',
+      });
     });
   });
 
@@ -306,13 +319,15 @@ describe('UsersPage', () => {
     await user.click(screen.getByRole('button', { name: 'Reset Passwords' }));
 
     await waitFor(() => {
-      expect(confirmMock).toHaveBeenCalledWith(
+      expect(privilegedActionMock).toHaveBeenCalledWith(
         expect.objectContaining({ title: 'Reset selected user passwords' })
       );
     });
     await waitFor(() => {
       expect(apiMock.resetUserPassword).toHaveBeenCalledWith('2', {
         force_password_change: true,
+        reason: 'Customer requested this change',
+        admin_password: 'AdminPass123!',
       });
     });
   });
@@ -326,13 +341,15 @@ describe('UsersPage', () => {
     await user.click(screen.getByRole('button', { name: 'Require MFA' }));
 
     await waitFor(() => {
-      expect(confirmMock).toHaveBeenCalledWith(
+      expect(privilegedActionMock).toHaveBeenCalledWith(
         expect.objectContaining({ title: 'Require MFA for selected users' })
       );
     });
     await waitFor(() => {
       expect(apiMock.setUserMfaRequirement).toHaveBeenCalledWith('2', {
         require_mfa: true,
+        reason: 'Customer requested this change',
+        admin_password: 'AdminPass123!',
       });
     });
   });

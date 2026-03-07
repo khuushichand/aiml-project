@@ -28,6 +28,7 @@ from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.core.AuthNZ.settings import get_profile
 from tldw_Server_API.app.core.AuthNZ.password_service import hash_password
 from tldw_Server_API.app.services import admin_scope_service
+from tldw_Server_API.app.services.admin_guardrails_service import verify_privileged_action
 from tldw_Server_API.app.services.admin_data_ops_service import (
     build_users_csv as svc_build_users_csv,
 )
@@ -225,6 +226,7 @@ async def update_user(
     user_id: int,
     request: UserUpdateRequest,
     db,
+    password_service,
     *,
     is_pg_fn: Callable[[], Awaitable[bool]],
 ) -> dict[str, str]:
@@ -234,6 +236,14 @@ async def update_user(
             user_id,
             require_hierarchy=True,
         )
+        if request.role is not None or request.is_active is not None:
+            await verify_privileged_action(
+                principal,
+                db,
+                password_service,
+                reason=request.reason,
+                admin_password=request.admin_password,
+            )
 
         is_pg = await is_pg_fn()
         updates = []
@@ -333,6 +343,7 @@ async def reset_user_password(
     user_id: int,
     request: AdminPasswordResetRequest,
     db,
+    password_service,
     *,
     is_pg_fn: Callable[[], Awaitable[bool]],
 ) -> dict[str, Any]:
@@ -341,6 +352,13 @@ async def reset_user_password(
             principal,
             user_id,
             require_hierarchy=True,
+        )
+        await verify_privileged_action(
+            principal,
+            db,
+            password_service,
+            reason=request.reason,
+            admin_password=request.admin_password,
         )
 
         temporary_password = request.temporary_password or _generate_temporary_password()
@@ -430,6 +448,7 @@ async def set_user_mfa_requirement(
     user_id: int,
     request: AdminMfaRequirementRequest,
     db,
+    password_service,
     *,
     is_pg_fn: Callable[[], Awaitable[bool]],
 ) -> dict[str, Any]:
@@ -438,6 +457,13 @@ async def set_user_mfa_requirement(
             principal,
             user_id,
             require_hierarchy=True,
+        )
+        await verify_privileged_action(
+            principal,
+            db,
+            password_service,
+            reason=request.reason,
+            admin_password=request.admin_password,
         )
 
         require_mfa = bool(request.require_mfa)
@@ -513,7 +539,9 @@ async def set_user_mfa_requirement(
 async def delete_user(
     principal: AuthPrincipal,
     user_id: int,
+    request,
     db,
+    password_service,
     *,
     is_pg_fn: Callable[[], Awaitable[bool]],
 ) -> dict[str, str]:
@@ -527,6 +555,13 @@ async def delete_user(
             principal,
             user_id,
             require_hierarchy=True,
+        )
+        await verify_privileged_action(
+            principal,
+            db,
+            password_service,
+            reason=getattr(request, "reason", None),
+            admin_password=getattr(request, "admin_password", None),
         )
 
         is_pg = await is_pg_fn()

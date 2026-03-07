@@ -14,6 +14,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { ArrowLeft, Key, Save, Building2, Users, Shield, Monitor, RefreshCw, Trash2, Clock, ShieldCheck, Plus, X } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
@@ -330,6 +331,7 @@ export default function UserDetailPage() {
   const router = useRouter();
   const userId = Array.isArray(params.id) ? params.id[0] : params.id;
   const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success: toastSuccess, error: showError } = useToast();
 
   const [user, setUser] = useState<User | null>(null);
@@ -664,11 +666,34 @@ export default function UserDetailPage() {
       setError('You are not authorized to update this user.');
       return;
     }
+    const requiresPrivilegedApproval = Boolean(
+      user && (
+        formData.role !== user.role
+        || formData.is_active !== user.is_active
+      )
+    );
     try {
       setSaving(true);
       setError('');
       setSuccess('');
-      await api.updateUser(userId, formData);
+      let payload: Record<string, unknown> = { ...formData };
+      if (requiresPrivilegedApproval) {
+        const approval = await promptPrivilegedAction({
+          title: 'Apply privileged user changes',
+          message: 'Changing role or activation state requires a reason and reauthentication.',
+          confirmText: 'Apply changes',
+        });
+        if (!approval) {
+          setSaving(false);
+          return;
+        }
+        payload = {
+          ...payload,
+          reason: approval.reason,
+          admin_password: approval.adminPassword,
+        };
+      }
+      await api.updateUser(userId, payload);
       setSuccess('User updated successfully');
       void loadUser();
     } catch (err: unknown) {
@@ -691,17 +716,18 @@ export default function UserDetailPage() {
 
   const handleDisableMfa = async () => {
     if (!mfaStatus?.enabled) return;
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Disable MFA',
       message: `Disable MFA for ${user?.username || user?.email || 'this user'}?`,
       confirmText: 'Disable MFA',
-      variant: 'danger',
-      icon: 'delete',
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
-      await api.disableUserMfa(userId);
+      await api.disableUserMfa(userId, {
+        reason: approval.reason,
+        admin_password: approval.adminPassword,
+      });
       toastSuccess('MFA disabled', 'Multi-factor authentication has been turned off.');
       void loadSecurity();
     } catch (err: unknown) {
@@ -711,17 +737,18 @@ export default function UserDetailPage() {
   };
 
   const handleRevokeSession = async (session: UserSession) => {
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Revoke Session',
       message: 'Revoke this session? The user will be signed out on that device.',
       confirmText: 'Revoke',
-      variant: 'warning',
-      icon: 'warning',
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
-      await api.revokeUserSession(userId, session.id.toString());
+      await api.revokeUserSession(userId, session.id.toString(), {
+        reason: approval.reason,
+        admin_password: approval.adminPassword,
+      });
       toastSuccess('Session revoked', 'The session has been revoked.');
       void loadSecurity();
     } catch (err: unknown) {
@@ -731,17 +758,18 @@ export default function UserDetailPage() {
   };
 
   const handleRevokeAllSessions = async () => {
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Revoke All Sessions',
       message: 'Revoke all active sessions for this user? They will be signed out everywhere.',
       confirmText: 'Revoke all',
-      variant: 'warning',
-      icon: 'warning',
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
-      await api.revokeAllUserSessions(userId);
+      await api.revokeAllUserSessions(userId, {
+        reason: approval.reason,
+        admin_password: approval.adminPassword,
+      });
       toastSuccess('Sessions revoked', 'All sessions have been revoked.');
       void loadSecurity();
     } catch (err: unknown) {
@@ -751,19 +779,19 @@ export default function UserDetailPage() {
   };
 
   const handleResetPassword = async () => {
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Reset Password',
       message: `Reset password for ${user?.username || user?.email || 'this user'}?`,
       confirmText: 'Reset password',
-      variant: 'warning',
-      icon: 'warning',
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setPasswordResetLoading(true);
       const result = await api.resetUserPassword(userId, {
         force_password_change: forcePasswordChangeOnNextLogin,
+        reason: approval.reason,
+        admin_password: approval.adminPassword,
       }) as PasswordResetResponse;
       const tempPassword = typeof result.temporary_password === 'string'
         ? result.temporary_password

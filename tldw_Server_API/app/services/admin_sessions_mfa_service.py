@@ -9,6 +9,7 @@ from tldw_Server_API.app.api.v1.schemas.auth_schemas import MessageResponse, Ses
 from tldw_Server_API.app.core.AuthNZ.mfa_service import get_mfa_service
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.services import admin_scope_service
+from tldw_Server_API.app.services.admin_guardrails_service import verify_privileged_action
 
 _ADMIN_SESSIONS_NONCRITICAL_EXCEPTIONS = (
     AttributeError,
@@ -57,6 +58,9 @@ async def revoke_user_session(
     user_id: int,
     session_id: int,
     session_manager,
+    db,
+    password_service,
+    request,
 ) -> MessageResponse:
     """Revoke a specific session for a user (admin scope)."""
     try:
@@ -64,6 +68,13 @@ async def revoke_user_session(
             principal,
             user_id,
             require_hierarchy=True,
+        )
+        await verify_privileged_action(
+            principal,
+            db,
+            password_service,
+            reason=getattr(request, "reason", None),
+            admin_password=getattr(request, "admin_password", None),
         )
         await session_manager.revoke_session(session_id=session_id, revoked_by=principal.user_id)
         return MessageResponse(message="Session revoked")
@@ -78,6 +89,9 @@ async def revoke_all_user_sessions(
     principal: AuthPrincipal,
     user_id: int,
     session_manager,
+    db,
+    password_service,
+    request,
 ) -> MessageResponse:
     """Revoke all sessions for a user (admin scope)."""
     try:
@@ -85,6 +99,13 @@ async def revoke_all_user_sessions(
             principal,
             user_id,
             require_hierarchy=True,
+        )
+        await verify_privileged_action(
+            principal,
+            db,
+            password_service,
+            reason=getattr(request, "reason", None),
+            admin_password=getattr(request, "admin_password", None),
         )
         await session_manager.revoke_all_user_sessions(user_id=user_id)
         return MessageResponse(message="All sessions revoked")
@@ -118,6 +139,9 @@ async def get_user_mfa_status(
 async def disable_user_mfa(
     principal: AuthPrincipal,
     user_id: int,
+    db,
+    password_service,
+    request,
 ) -> MessageResponse:
     """Disable MFA for a user (admin scope)."""
     try:
@@ -125,6 +149,13 @@ async def disable_user_mfa(
             principal,
             user_id,
             require_hierarchy=True,
+        )
+        await verify_privileged_action(
+            principal,
+            db,
+            password_service,
+            reason=getattr(request, "reason", None),
+            admin_password=getattr(request, "admin_password", None),
         )
         mfa_service = get_mfa_service()
         success = await mfa_service.disable_mfa(user_id)

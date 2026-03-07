@@ -7,6 +7,7 @@ import UserDetailPage from '../page';
 import { api } from '@/lib/api-client';
 
 const confirmMock = vi.hoisted(() => vi.fn());
+const privilegedActionMock = vi.hoisted(() => vi.fn());
 const toastSuccessMock = vi.hoisted(() => vi.fn());
 const toastErrorMock = vi.hoisted(() => vi.fn());
 const pushMock = vi.hoisted(() => vi.fn());
@@ -37,6 +38,10 @@ vi.mock('@/components/ResponsiveLayout', () => ({
 
 vi.mock('@/components/ui/confirm-dialog', () => ({
   useConfirm: () => confirmMock,
+}));
+
+vi.mock('@/components/ui/privileged-action-dialog', () => ({
+  usePrivilegedActionDialog: () => privilegedActionMock,
 }));
 
 vi.mock('@/components/ui/toast', () => ({
@@ -94,6 +99,10 @@ const apiMock = api as unknown as ApiMock;
 
 beforeEach(() => {
   confirmMock.mockResolvedValue(true);
+  privilegedActionMock.mockResolvedValue({
+    reason: 'Customer requested this change',
+    adminPassword: 'AdminPass123!',
+  });
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
   pushMock.mockClear();
@@ -213,7 +222,7 @@ describe('UserDetailPage password reset', () => {
     await user.click(resetButton);
 
     await waitFor(() => {
-      expect(confirmMock).toHaveBeenCalledWith(
+      expect(privilegedActionMock).toHaveBeenCalledWith(
         expect.objectContaining({ title: 'Reset Password' })
       );
     });
@@ -221,6 +230,8 @@ describe('UserDetailPage password reset', () => {
     await waitFor(() => {
       expect(apiMock.resetUserPassword).toHaveBeenCalledWith('42', {
         force_password_change: false,
+        reason: 'Customer requested this change',
+        admin_password: 'AdminPass123!',
       });
     });
 
