@@ -3,8 +3,7 @@ import { buildApiUrl } from '@/lib/api-config';
 import { setApiKeySessionCookies } from '@/lib/server-auth';
 
 const isAdminApiKeyLoginEnabled = (): boolean =>
-  process.env.ADMIN_UI_ALLOW_API_KEY_LOGIN === 'true'
-  || process.env.NEXT_PUBLIC_ALLOW_ADMIN_API_KEY_LOGIN === 'true';
+  process.env.ADMIN_UI_ALLOW_API_KEY_LOGIN === 'true';
 
 const isEnterpriseAdminUiMode = (): boolean =>
   process.env.ADMIN_UI_ENTERPRISE_MODE === 'true';

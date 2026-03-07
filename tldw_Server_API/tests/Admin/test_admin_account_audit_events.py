@@ -90,6 +90,7 @@ async def _allow_reauth(*_args, **_kwargs) -> str:
 @pytest.mark.asyncio
 async def test_reset_user_password_emits_durable_audit_event(monkeypatch) -> None:
     emitted: list[dict[str, object]] = []
+    hashed_passwords: list[str] = []
 
     async def _fake_emit(**kwargs) -> None:
         emitted.append(kwargs)
@@ -101,7 +102,7 @@ async def test_reset_user_password_emits_durable_audit_event(monkeypatch) -> Non
     )
     monkeypatch.setattr(admin_users_service, "verify_privileged_action", _allow_reauth)
     monkeypatch.setattr(admin_users_service, "_emit_admin_account_audit_event", _fake_emit, raising=False)
-    monkeypatch.setattr(admin_users_service, "hash_password", lambda value: f"hashed::{value}")
+    monkeypatch.setattr(admin_users_service, "hash_password", lambda value: hashed_passwords.append(value) or f"hashed::{value}")
 
     result = await admin_users_service.reset_user_password(
         _admin_principal(),
@@ -118,6 +119,7 @@ async def test_reset_user_password_emits_durable_audit_event(monkeypatch) -> Non
     )
 
     assert result["message"] == "Password reset successfully"
+    assert hashed_passwords == ["TempPass123!"]
     assert len(emitted) == 1
     assert emitted[0]["actor_id"] == 7
     assert emitted[0]["target_user_id"] == 42
@@ -127,6 +129,7 @@ async def test_reset_user_password_emits_durable_audit_event(monkeypatch) -> Non
     assert emitted[0]["resource_id"] == "42"
     assert emitted[0]["action"] == "admin.user.password_reset"
     assert emitted[0]["metadata"]["reason"] == "Support case 123"
+    assert emitted[0]["metadata"]["credential_provided_by_admin"] is True
 
 
 @pytest.mark.asyncio

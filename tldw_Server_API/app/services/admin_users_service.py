@@ -386,7 +386,7 @@ async def reset_user_password(
             admin_password=request.admin_password,
         )
 
-        temporary_password = request.temporary_password or _generate_temporary_password()
+        temporary_password = request.temporary_password
         password_hash = hash_password(temporary_password)
         force_password_change = bool(request.force_password_change)
 
@@ -450,7 +450,7 @@ async def reset_user_password(
             metadata={
                 "reason": reason,
                 "force_password_change": force_password_change,
-                "temporary_password_provided": request.temporary_password is not None,
+                "credential_provided_by_admin": True,
             },
         )
 

@@ -138,23 +138,23 @@ export const api = {
   getUserEffectivePermissions: (userId: string) =>
     requestJson(`/admin/users/${userId}/effective-permissions`),
   getUserSessions: (userId: string) => requestJson(`/admin/users/${userId}/sessions`),
-  revokeUserSession: (userId: string, sessionId: string, data: { reason: string; admin_password: string }) =>
+  revokeUserSession: (userId: string, sessionId: string, data: { reason: string; admin_password?: string | null }) =>
     requestJson(`/admin/users/${userId}/sessions/${sessionId}`, {
       method: 'DELETE',
       body: JSON.stringify(data),
     }),
-  revokeAllUserSessions: (userId: string, data: { reason: string; admin_password: string }) =>
+  revokeAllUserSessions: (userId: string, data: { reason: string; admin_password?: string | null }) =>
     requestJson(`/admin/users/${userId}/sessions/revoke-all`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
   getUserMfaStatus: (userId: string) => requestJson(`/admin/users/${userId}/mfa`),
-  disableUserMfa: (userId: string, data: { reason: string; admin_password: string }) =>
+  disableUserMfa: (userId: string, data: { reason: string; admin_password?: string | null }) =>
     requestJson(`/admin/users/${userId}/mfa/disable`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  setUserMfaRequirement: (userId: string, data: { require_mfa: boolean; reason: string; admin_password: string }) =>
+  setUserMfaRequirement: (userId: string, data: { require_mfa: boolean; reason: string; admin_password?: string | null }) =>
     requestJson(`/admin/users/${userId}/mfa/require`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -165,12 +165,12 @@ export const api = {
   }),
   resetUserPassword: (
     userId: string,
-    data: { temporary_password?: string; force_password_change?: boolean; reason: string; admin_password: string }
+    data: { temporary_password: string; force_password_change?: boolean; reason: string; admin_password?: string | null }
   ) => requestJson(`/admin/users/${userId}/reset-password`, {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  deleteUser: (userId: string, data: { reason: string; admin_password: string }) => requestJson(`/admin/users/${userId}`, {
+  deleteUser: (userId: string, data: { reason: string; admin_password?: string | null }) => requestJson(`/admin/users/${userId}`, {
     method: 'DELETE',
     body: JSON.stringify(data),
   }),
