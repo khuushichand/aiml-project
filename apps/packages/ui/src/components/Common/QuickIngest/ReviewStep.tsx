@@ -84,7 +84,7 @@ const TYPE_ICONS: Record<DetectedMediaType, React.ElementType> = {
 
 export const ReviewStep: React.FC = () => {
   const { t } = useTranslation(["option"])
-  const { state, goBack, goNext } = useIngestWizard()
+  const { state, goBack, goNext, startProcessing } = useIngestWizard()
 
   const qi = useCallback(
     (key: string, defaultValue: string, options?: Record<string, unknown>) =>
@@ -98,8 +98,8 @@ export const ReviewStep: React.FC = () => {
 
   // Compute total estimated time
   const totalEstimatedSeconds = useMemo(
-    () => estimateTotalSeconds(queueItems, presetConfig),
-    [queueItems, presetConfig]
+    () => estimateTotalSeconds(queueItems, selectedPreset),
+    [queueItems, selectedPreset]
   )
 
   const estimatedTimeLabel = useMemo(
@@ -254,7 +254,7 @@ export const ReviewStep: React.FC = () => {
 
         <button
           type="button"
-          onClick={goNext}
+          onClick={() => { startProcessing(); goNext() }}
           disabled={queueItems.length === 0}
           className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-50"
           aria-label={qi("review.startAriaLabel", "Start processing")}

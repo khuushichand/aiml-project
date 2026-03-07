@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Modal, Button, Switch, Select, Radio, Collapse } from "antd"
 import { useTranslation } from "react-i18next"
 import {
@@ -17,6 +17,7 @@ import { ReviewStep } from "./QuickIngest/ReviewStep"
 import { ProcessingStep } from "./QuickIngest/ProcessingStep"
 import { WizardResultsStep } from "./QuickIngest/WizardResultsStep"
 import { FloatingProgressWidget } from "./QuickIngest/FloatingProgressWidget"
+import { useIngestSSE } from "./QuickIngest/useIngestSSE"
 import type { DetectedMediaType, WizardStep } from "./QuickIngest/types"
 
 // ---------------------------------------------------------------------------
@@ -26,6 +27,8 @@ import type { DetectedMediaType, WizardStep } from "./QuickIngest/types"
 type QuickIngestWizardModalProps = {
   open: boolean
   onClose: () => void
+  /** When true, automatically skip to processing on mount (compat with old modal). */
+  autoProcessQueued?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +115,7 @@ const ConfigureStep: React.FC = () => {
   )
 
   const handleStorageChange = useCallback(
-    (e: { target: { value: boolean } }) => {
+    (e: any) => {
       setCustomOptions({ storeRemote: e.target.value })
     },
     [setCustomOptions],
@@ -286,10 +289,42 @@ const ConfigureStep: React.FC = () => {
 // Inner modal content (must be inside IngestWizardProvider)
 // ---------------------------------------------------------------------------
 
-const WizardModalContent: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+type WizardModalContentProps = {
+  onClose: () => void
+  autoProcessQueued?: boolean
+}
+
+const WizardModalContent: React.FC<WizardModalContentProps> = ({
+  onClose,
+  autoProcessQueued = false,
+}) => {
   const { t } = useTranslation(["option"])
   const { state, minimize, cancelProcessing, skipToProcessing } = useIngestWizard()
   const { currentStep, queueItems, processingState } = state
+
+  // Track the batch ID for SSE subscription (set when processing starts)
+  const [sseJobMap] = useState(() => new Map<number, string>())
+  const [sseBatchId, setSseBatchId] = useState<string | undefined>()
+
+  // SSE connection: active during processing step
+  const sseEnabled =
+    currentStep === 4 &&
+    (processingState.status === "running" || processingState.status === "idle")
+
+  useIngestSSE({
+    batchId: sseBatchId,
+    jobIdToQueueId: sseJobMap,
+    enabled: sseEnabled,
+  })
+
+  // Auto-process on mount if autoProcessQueued is set and there are queued items
+  const autoProcessedRef = useRef(false)
+  useEffect(() => {
+    if (autoProcessQueued && !autoProcessedRef.current && queueItems.length > 0) {
+      autoProcessedRef.current = true
+      skipToProcessing()
+    }
+  }, [autoProcessQueued, queueItems.length, skipToProcessing])
 
   const qi = useCallback(
     (key: string, defaultValue: string, options?: Record<string, unknown>) =>
@@ -412,12 +447,13 @@ const WizardModalContent: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 export const QuickIngestWizardModal: React.FC<QuickIngestWizardModalProps> = ({
   open,
   onClose,
+  autoProcessQueued = false,
 }) => {
   if (!open) return null
 
   return (
     <IngestWizardProvider>
-      <WizardModalContent onClose={onClose} />
+      <WizardModalContent onClose={onClose} autoProcessQueued={autoProcessQueued} />
     </IngestWizardProvider>
   )
 }

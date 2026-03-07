@@ -175,7 +175,8 @@ export const AddContentStep: React.FC<AddContentStepProps> = ({
   // Add files from the drop zone
   const handleFilesAdded = useCallback(
     (files: File[]) => {
-      const newItems: WizardQueueItem[] = files.map((file) => {
+      const newItems: WizardQueueItem[] = []
+      for (const file of files) {
         const detectedType = detectTypeFromExtension(file.name)
         const item: WizardQueueItem = {
           id: crypto.randomUUID(),
@@ -188,8 +189,8 @@ export const AddContentStep: React.FC<AddContentStepProps> = ({
           validation: { valid: true },
         }
         item.validation = validateQueueItem(item, [...queueItems, ...newItems])
-        return item
-      })
+        newItems.push(item)
+      }
       setQueueItems([...queueItems, ...newItems])
     },
     [queueItems, setQueueItems]
@@ -204,7 +205,8 @@ export const AddContentStep: React.FC<AddContentStepProps> = ({
 
     if (lines.length === 0) return
 
-    const newItems: WizardQueueItem[] = lines.map((url) => {
+    const newItems: WizardQueueItem[] = []
+    for (const url of lines) {
       const detectedType = detectTypeFromUrl(url)
       const item: WizardQueueItem = {
         id: crypto.randomUUID(),
@@ -215,8 +217,8 @@ export const AddContentStep: React.FC<AddContentStepProps> = ({
         validation: { valid: true },
       }
       item.validation = validateQueueItem(item, [...queueItems, ...newItems])
-      return item
-    })
+      newItems.push(item)
+    }
 
     setQueueItems([...queueItems, ...newItems])
     setUrlInput("")
