@@ -1,4 +1,5 @@
 import React from "react"
+import type { TFunction } from "i18next"
 import { useTranslation } from "react-i18next"
 
 import type { QueuedRequest } from "@/utils/chat-request-queue"
@@ -19,7 +20,7 @@ type ChatQueuePanelProps = {
 
 const formatBlockedReason = (
   blockedReason: string | null,
-  t: (key: string, fallback?: string) => string
+  t: TFunction
 ) => {
   switch (blockedReason) {
     case "unsupported_attachment":

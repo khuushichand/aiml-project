@@ -2086,6 +2086,7 @@ export const useMessage = () => {
     docs,
     uploadedFiles,
     imageBackendOverride,
+    requestOverrides,
     serverChatIdOverride
   }: {
     message: string
@@ -2099,6 +2100,14 @@ export const useMessage = () => {
     docs?: ChatDocuments
     uploadedFiles?: UploadedFile[]
     imageBackendOverride?: string
+    requestOverrides?: {
+      selectedModel?: string | null
+      selectedSystemPrompt?: string | null
+      toolChoice?: "auto" | "none" | "required"
+      useOCR?: boolean
+      webSearch?: boolean
+      chatMode?: "normal" | "rag" | "vision"
+    }
     serverChatIdOverride?: string | null
   }) => {
     resetChatLoopState()
@@ -2107,12 +2116,44 @@ export const useMessage = () => {
         ? imageBackendOverride.trim()
         : ""
     const hasExplicitImageBackend = trimmedImageBackendOverride.length > 0
+    const resolvedSelectedModel =
+      typeof requestOverrides?.selectedModel === "string" &&
+      requestOverrides.selectedModel.trim().length > 0
+        ? requestOverrides.selectedModel.trim()
+        : selectedModel || ""
+    const resolvedSelectedSystemPrompt =
+      requestOverrides && Object.prototype.hasOwnProperty.call(
+        requestOverrides,
+        "selectedSystemPrompt"
+      )
+        ? (requestOverrides.selectedSystemPrompt ?? "")
+        : selectedSystemPrompt ?? ""
+    const resolvedToolChoice =
+      requestOverrides?.toolChoice === "auto" ||
+      requestOverrides?.toolChoice === "required" ||
+      requestOverrides?.toolChoice === "none"
+        ? requestOverrides.toolChoice
+        : toolChoice
+    const resolvedUseOCR =
+      typeof requestOverrides?.useOCR === "boolean"
+        ? requestOverrides.useOCR
+        : useOCR
+    const resolvedWebSearch =
+      typeof requestOverrides?.webSearch === "boolean"
+        ? requestOverrides.webSearch
+        : webSearch
+    const resolvedChatMode =
+      requestOverrides?.chatMode === "normal" ||
+      requestOverrides?.chatMode === "rag" ||
+      requestOverrides?.chatMode === "vision"
+        ? requestOverrides.chatMode
+        : chatMode
     if (!hasExplicitImageBackend) {
-      if (!validateBeforeSubmit(selectedModel || "", t, notification)) {
+      if (!validateBeforeSubmit(resolvedSelectedModel, t, notification)) {
         return
       }
       const modelAvailable = await ensureSelectedChatModelIsAvailable(
-        selectedModel || ""
+        resolvedSelectedModel
       )
       if (!modelAvailable) {
         return
@@ -2121,8 +2162,8 @@ export const useMessage = () => {
 
     const model =
       (hasExplicitImageBackend
-        ? trimmedImageBackendOverride || selectedModel
-        : selectedModel
+        ? trimmedImageBackendOverride || resolvedSelectedModel
+        : resolvedSelectedModel
       ).trim() || "image-generation"
     let signal: AbortSignal
     if (!controller) {
@@ -2137,7 +2178,7 @@ export const useMessage = () => {
       Boolean(replyTarget) &&
       !isRegenerate &&
       !messageType &&
-      chatMode === "normal" &&
+      resolvedChatMode === "normal" &&
       !selectedCharacter?.id
     const replyOverrides = replyActive
       ? (() => {
@@ -2169,8 +2210,8 @@ export const useMessage = () => {
           signal,
           {
             selectedModel: model,
-            useOCR,
-            selectedSystemPrompt: selectedSystemPrompt ?? "",
+            useOCR: resolvedUseOCR,
+            selectedSystemPrompt: resolvedSelectedSystemPrompt,
             currentChatModelSettings,
             setMessages,
             saveMessageOnSuccess,
@@ -2184,7 +2225,7 @@ export const useMessage = () => {
               id: string,
               options?: { preserveServerChatId?: boolean }
             ) => void,
-            webSearch,
+            webSearch: resolvedWebSearch,
             setIsSearchingInternet,
             uploadedFiles: hasExplicitImageBackend ? [] : uploadedFiles,
             imageBackendOverride: hasExplicitImageBackend
@@ -2207,9 +2248,9 @@ export const useMessage = () => {
           uploadedFiles,
           {
             selectedModel: model,
-            useOCR,
+            useOCR: resolvedUseOCR,
             currentChatModelSettings,
-            toolChoice,
+            toolChoice: resolvedToolChoice,
             setMessages,
             saveMessageOnSuccess,
             saveMessageOnError,
@@ -2238,9 +2279,9 @@ export const useMessage = () => {
           signal,
           {
             selectedModel: model,
-            useOCR,
-            selectedSystemPrompt: selectedSystemPrompt ?? "",
-            toolChoice,
+            useOCR: resolvedUseOCR,
+            selectedSystemPrompt: resolvedSelectedSystemPrompt,
+            toolChoice: resolvedToolChoice,
             setMessages,
             saveMessageOnSuccess,
             saveMessageOnError,
@@ -2269,7 +2310,7 @@ export const useMessage = () => {
           regenerateFromMessage
         )
       } else {
-        if (chatMode === "normal") {
+        if (resolvedChatMode === "normal") {
           if (selectedCharacter?.id) {
             await characterChatMode(
               message,
@@ -2292,8 +2333,8 @@ export const useMessage = () => {
               signal,
               {
                 selectedModel: model,
-                useOCR,
-                selectedSystemPrompt: selectedSystemPrompt ?? "",
+                useOCR: resolvedUseOCR,
+                selectedSystemPrompt: resolvedSelectedSystemPrompt,
                 currentChatModelSettings,
                 setMessages,
                 saveMessageOnSuccess,
@@ -2307,14 +2348,14 @@ export const useMessage = () => {
                   id: string,
                   options?: { preserveServerChatId?: boolean }
                 ) => void,
-                webSearch,
+                webSearch: resolvedWebSearch,
                 setIsSearchingInternet,
                 regenerateFromMessage,
                 ...replyOverrides
               }
             )
           }
-        } else if (chatMode === "vision") {
+        } else if (resolvedChatMode === "vision") {
           await visionChatMode(
             message,
             image,

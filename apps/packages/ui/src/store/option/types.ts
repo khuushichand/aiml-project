@@ -146,7 +146,11 @@ export type State = {
   clearMessageSteering: () => void
   queuedMessages: QueuedRequest[]
   addQueuedMessage: (payload: QueuedRequestInput) => void
-  setQueuedMessages: (messages: QueuedRequestInput[]) => void
+  setQueuedMessages: (
+    messagesOrUpdater:
+      | QueuedRequestInput[]
+      | ((prev: QueuedRequest[]) => QueuedRequestInput[])
+  ) => void
   clearQueuedMessages: () => void
   selectedKnowledge: Knowledge | null
   setSelectedKnowledge: (selectedKnowledge: Knowledge) => void

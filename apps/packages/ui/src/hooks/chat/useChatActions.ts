@@ -117,6 +117,10 @@ type ChatModeOverrides = {
   historyId?: string | null
   serverChatId?: string | null
   selectedModel?: string | null
+  selectedSystemPrompt?: string | null
+  toolChoice?: ToolChoice | null
+  useOCR?: boolean
+  webSearch?: boolean
   imageEventSyncPolicy?: ImageGenerationEventSyncPolicy
 } & Record<string, unknown>
 
@@ -806,13 +810,31 @@ export const useChatActions = ({
     const effectiveSelectedModel = getEffectiveSelectedModel(
       overrides.selectedModel
     )
+    const resolvedSelectedSystemPrompt = Object.prototype.hasOwnProperty.call(
+      overrides,
+      "selectedSystemPrompt"
+    )
+      ? (overrides.selectedSystemPrompt as string | null)
+      : selectedSystemPrompt
+    const resolvedToolChoice =
+      overrides.toolChoice === "auto" ||
+      overrides.toolChoice === "required" ||
+      overrides.toolChoice === "none"
+        ? overrides.toolChoice
+        : toolChoice
+    const resolvedUseOCR =
+      typeof overrides.useOCR === "boolean" ? overrides.useOCR : useOCR
+    const resolvedWebSearch =
+      typeof overrides.webSearch === "boolean"
+        ? overrides.webSearch
+        : webSearch
 
     return {
       selectedModel: effectiveSelectedModel || "",
-      useOCR,
-      selectedSystemPrompt,
+      useOCR: resolvedUseOCR,
+      selectedSystemPrompt: resolvedSelectedSystemPrompt,
       selectedKnowledge,
-      toolChoice,
+      toolChoice: resolvedToolChoice,
       currentChatModelSettings,
       setMessages,
       setIsSearchingInternet,
@@ -833,7 +855,7 @@ export const useChatActions = ({
       ragSources,
       ragAdvancedOptions,
       setActionInfo,
-      webSearch,
+      webSearch: resolvedWebSearch,
       actorSettings,
       systemPromptAppendix,
       messageSteeringPrompts: resolvedMessageSteeringPrompts,
@@ -1860,6 +1882,7 @@ export const useChatActions = ({
     imageGenerationSource,
     imageEventSyncPolicy,
     messageSteeringOverride,
+    requestOverrides,
     continueOutputTarget = "chat",
     serverChatIdOverride
   }: {
@@ -1881,10 +1904,13 @@ export const useChatActions = ({
     imageGenerationSource?: "slash-command" | "generate-modal" | "message-regen"
     imageEventSyncPolicy?: ImageGenerationEventSyncPolicy
     messageSteeringOverride?: Partial<MessageSteeringState> | null
+    requestOverrides?: ChatModeOverrides
     continueOutputTarget?: "chat" | "composer_input"
     serverChatIdOverride?: string | null
   }) => {
-    const effectiveSelectedModel = getEffectiveSelectedModel()
+    const effectiveSelectedModel = getEffectiveSelectedModel(
+      requestOverrides?.selectedModel
+    )
     setStreaming(true)
     const trimmedImageBackendOverride =
       typeof imageBackendOverride === "string"
@@ -1927,6 +1953,7 @@ export const useChatActions = ({
     }
 
     const chatModeParams = await buildChatModeParams({
+      ...(requestOverrides ?? {}),
       selectedModel: effectiveSelectedModel,
       messageSteering: messageSteeringForTurn,
       userMessageType,

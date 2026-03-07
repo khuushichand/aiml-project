@@ -12,7 +12,11 @@ type UseQueuedRequestsOptions = {
   isConnectionReady: boolean
   isStreaming: boolean
   queue: QueuedRequest[]
-  setQueue: (queue: QueuedRequest[]) => void
+  setQueue: (
+    queueOrUpdater:
+      | QueuedRequest[]
+      | ((prev: QueuedRequest[]) => QueuedRequest[])
+  ) => void
   sendQueuedRequest: (item: QueuedRequest) => Promise<void>
   stopStreamingRequest: () => void
 }
@@ -28,17 +32,17 @@ export function useQueuedRequests({
   const enqueue = React.useCallback(
     (partial: QueuedRequestInput) => {
       const nextItem = buildQueuedRequest(partial)
-      setQueue([...queue, nextItem])
+      setQueue((prev) => [...prev, nextItem])
       return nextItem
     },
-    [queue, setQueue]
+    [setQueue]
   )
 
   const remove = React.useCallback(
     (requestId: string) => {
-      setQueue(queue.filter((item) => item.id !== requestId))
+      setQueue((prev) => prev.filter((item) => item.id !== requestId))
     },
-    [queue, setQueue]
+    [setQueue]
   )
 
   const clear = React.useCallback(() => {
@@ -48,101 +52,126 @@ export function useQueuedRequests({
   const update = React.useCallback(
     (requestId: string, promptText: string) => {
       setQueue(
-        queue.map((item) =>
-          item.id === requestId
-            ? {
-                ...item,
-                promptText,
-                message: promptText,
-                updatedAt: Date.now()
-              }
-            : item
-        )
+        (prev) =>
+          prev.map((item) =>
+            item.id === requestId
+              ? {
+                  ...item,
+                  promptText,
+                  message: promptText,
+                  updatedAt: Date.now()
+                }
+              : item
+          )
       )
     },
-    [queue, setQueue]
+    [setQueue]
   )
 
   const move = React.useCallback(
     (requestId: string, direction: "up" | "down") => {
-      const currentIndex = queue.findIndex((item) => item.id === requestId)
-      if (currentIndex === -1) return
-      const targetIndex =
-        direction === "up" ? currentIndex - 1 : currentIndex + 1
-      if (targetIndex < 0 || targetIndex >= queue.length) return
-      const reordered = [...queue]
-      const [target] = reordered.splice(currentIndex, 1)
-      reordered.splice(targetIndex, 0, target)
-      setQueue(reordered)
+      setQueue((prev) => {
+        const currentIndex = prev.findIndex((item) => item.id === requestId)
+        if (currentIndex === -1) return prev
+        const targetIndex =
+          direction === "up" ? currentIndex - 1 : currentIndex + 1
+        if (targetIndex < 0 || targetIndex >= prev.length) return prev
+        const reordered = [...prev]
+        const [target] = reordered.splice(currentIndex, 1)
+        reordered.splice(targetIndex, 0, target)
+        return reordered
+      })
     },
-    [queue, setQueue]
+    [setQueue]
   )
 
   const markBlocked = React.useCallback(
     (requestId: string, blockedReason: string) => {
       setQueue(
-        queue.map((item) =>
-          item.id === requestId ? blockQueuedRequest(item, blockedReason) : item
-        )
+        (prev) =>
+          prev.map((item) =>
+            item.id === requestId ? blockQueuedRequest(item, blockedReason) : item
+          )
       )
     },
-    [queue, setQueue]
+    [setQueue]
   )
 
   const runNow = React.useCallback(
     async (requestId: string) => {
-      const reordered = moveQueuedRequestToFront(queue, requestId).map(
-        (item, index) =>
+      let promotedItem: QueuedRequest | null = null
+      setQueue((prev) => {
+        const reordered: QueuedRequest[] = moveQueuedRequestToFront(
+          prev,
+          requestId
+        ).map((item, index) =>
           index === 0
             ? {
                 ...item,
-                status: "queued",
+                status: "queued" as const,
                 blockedReason: null,
                 updatedAt: Date.now()
               }
             : item
-      )
-      setQueue(reordered)
+        )
+        promotedItem = reordered[0] ?? null
+        return reordered
+      })
       if (isStreaming) {
         stopStreamingRequest()
       }
-      return reordered[0] ?? null
+      return promotedItem
     },
-    [isStreaming, queue, setQueue, stopStreamingRequest]
+    [isStreaming, setQueue, stopStreamingRequest]
   )
 
   const flushNext = React.useCallback(async () => {
-    const next = queue[0]
-    if (
-      !next ||
-      isStreaming ||
-      !isConnectionReady ||
-      next.status === "blocked" ||
-      next.status === "sending"
-    ) {
+    if (!isConnectionReady || isStreaming) {
       return null
     }
 
-    const sendingItem: QueuedRequest = {
-      ...next,
-      status: "sending",
-      blockedReason: null,
-      updatedAt: Date.now()
-    }
+    let sendingItem: QueuedRequest | null = null
+    setQueue((prev) => {
+      const next = prev[0]
+      if (
+        !next ||
+        next.status === "blocked" ||
+        next.status === "sending"
+      ) {
+        return prev
+      }
 
-    setQueue([sendingItem, ...queue.slice(1)])
+      sendingItem = {
+        ...next,
+        status: "sending",
+        blockedReason: null,
+        updatedAt: Date.now()
+      }
+
+      return [sendingItem, ...prev.slice(1)] as QueuedRequest[]
+    })
+
+    if (!sendingItem) {
+      return null
+    }
 
     try {
       await sendQueuedRequest(sendingItem)
-      setQueue(queue.slice(1))
+      setQueue((prev) => prev.filter((item) => item.id !== sendingItem?.id))
       return sendingItem
     } catch (error) {
       const blockedReason =
         error instanceof Error ? error.message : "dispatch_failed"
-      setQueue([blockQueuedRequest(next, blockedReason), ...queue.slice(1)])
+      setQueue((prev) =>
+        prev.map((item) =>
+          item.id === sendingItem?.id
+            ? blockQueuedRequest(item, blockedReason)
+            : item
+        )
+      )
       return null
     }
-  }, [isConnectionReady, isStreaming, queue, sendQueuedRequest, setQueue])
+  }, [isConnectionReady, isStreaming, sendQueuedRequest, setQueue])
 
   return {
     clear,

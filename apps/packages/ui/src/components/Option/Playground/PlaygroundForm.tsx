@@ -3457,6 +3457,18 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         image: sourceContext?.isImageCommand ? "" : item.image,
         message: item.promptText,
         docs: sourceContext?.isImageCommand ? [] : documents,
+        requestOverrides: {
+          selectedModel: item.snapshot.selectedModel,
+          selectedSystemPrompt: item.snapshot.selectedSystemPrompt,
+          toolChoice:
+            item.snapshot.toolChoice === "auto" ||
+            item.snapshot.toolChoice === "required" ||
+            item.snapshot.toolChoice === "none"
+              ? item.snapshot.toolChoice
+              : undefined,
+          useOCR: item.snapshot.useOCR,
+          webSearch: item.snapshot.webSearch
+        },
         imageBackendOverride: sourceContext?.isImageCommand
           ? sourceContext.imageBackendOverride
           : undefined,

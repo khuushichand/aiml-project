@@ -147,8 +147,14 @@ export const createCoreSlice: StoreSlice<
     set((state) => ({
       queuedMessages: [...state.queuedMessages, buildQueuedRequest(payload)]
     })),
-  setQueuedMessages: (queuedMessages) =>
-    set({ queuedMessages: normalizeQueuedRequests(queuedMessages) }),
+  setQueuedMessages: (queuedMessagesOrUpdater) =>
+    set((state) => ({
+      queuedMessages: normalizeQueuedRequests(
+        typeof queuedMessagesOrUpdater === "function"
+          ? queuedMessagesOrUpdater(state.queuedMessages)
+          : queuedMessagesOrUpdater
+      )
+    })),
   clearQueuedMessages: () => set({ queuedMessages: [] }),
   selectedKnowledge: null,
   setSelectedKnowledge: (selectedKnowledge) => set({ selectedKnowledge }),
