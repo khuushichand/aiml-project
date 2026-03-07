@@ -178,20 +178,31 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
         assert approve_outline_resp.json()["phase"] == "packaging"
 
     store = ResearchArtifactStore(base_dir=outputs_dir, db=db)
-    outline = store.read_json(session_id=session_id, artifact_name="outline_v1.json")
-    claims = store.read_json(session_id=session_id, artifact_name="claims.json")
-    report_markdown = store.read_text(session_id=session_id, artifact_name="report_v1.md")
-    source_registry = store.read_json(session_id=session_id, artifact_name="source_registry.json")
-
-    package = service.build_package(
-        owner_user_id="1",
-        session_id=session_id,
-        brief={"query": "Test deep research run"},
-        outline=outline or {"sections": []},
-        report_markdown=report_markdown or "",
-        claims=(claims or {}).get("claims", []),
-        source_inventory=(source_registry or {}).get("sources", []),
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 14,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "packaging",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+        )
     )
+
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.phase == "completed"
+    assert session.status == "completed"
+    assert session.completed_at is not None
+
+    package = store.read_json(session_id=session_id, artifact_name="bundle.json")
+    assert package is not None
+
     adapter = FileAdapterRegistry().get_adapter("research_package")
     assert adapter is not None
     export = adapter.export(package, format="md")

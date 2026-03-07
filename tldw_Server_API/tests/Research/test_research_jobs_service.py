@@ -129,13 +129,16 @@ def test_approve_sources_review_advances_to_synthesizing_without_requeue(tmp_pat
     assert updated.active_job_id is None
 
 
-def test_approve_outline_review_advances_to_packaging_without_requeue(tmp_path):
+def test_approve_outline_review_enqueues_packaging_job(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
     from tldw_Server_API.app.core.Research.service import ResearchService
 
+    captured: dict[str, object] = {}
+
     class DummyJobs:
         def create_job(self, **kwargs):
-            raise AssertionError(f"unexpected job enqueue: {kwargs}")
+            captured.update(kwargs)
+            return {"id": 12, "uuid": "job-12", "status": "queued"}
 
     service = ResearchService(
         research_db_path=tmp_path / "research.db",
@@ -169,4 +172,6 @@ def test_approve_outline_review_advances_to_packaging_without_requeue(tmp_path):
     )
 
     assert updated.phase == "packaging"
-    assert updated.active_job_id is None
+    assert updated.active_job_id == "12"
+    assert captured["payload"]["phase"] == "packaging"
+    assert captured["payload"]["session_id"] == session.id

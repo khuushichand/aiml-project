@@ -62,7 +62,7 @@ class ResearchService:
         if checkpoint_type == "sources_review":
             return ("synthesizing", False)
         if checkpoint_type == "outline_review":
-            return ("packaging", False)
+            return ("packaging", True)
         raise ValueError(f"unsupported checkpoint type: {checkpoint_type}")
 
     def create_session(

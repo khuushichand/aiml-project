@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
 from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
 from tldw_Server_API.app.core.Research.broker import ResearchBroker
+from tldw_Server_API.app.core.Research.exporter import build_final_package
 from tldw_Server_API.app.core.Research.models import (
     ResearchEvidenceNote,
     ResearchPlan,
@@ -20,6 +22,10 @@ from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
 RESEARCH_DOMAIN = "research"
 RESEARCH_JOB_TYPE = "research_phase"
 RESEARCH_QUEUE = "default"
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 def enqueue_research_phase_job(
@@ -99,6 +105,13 @@ async def handle_research_phase_job(
             artifact_store=artifact_store,
             job_id=job_id,
             synthesizer=synthesizer or ResearchSynthesizer(),
+        )
+    if phase == "packaging":
+        return await _handle_packaging_phase(
+            session=session,
+            db=db,
+            artifact_store=artifact_store,
+            job_id=job_id,
         )
     raise ValueError(f"unsupported research phase: {phase}")
 
@@ -364,6 +377,58 @@ async def _handle_synthesizing_phase(
         "phase": next_phase,
         "checkpoint_id": checkpoint_id,
         "artifacts_written": 4,
+    }
+
+
+async def _handle_packaging_phase(
+    *,
+    session: Any,
+    db: ResearchSessionsDB,
+    artifact_store: ResearchArtifactStore,
+    job_id: str | None,
+) -> dict[str, Any]:
+    plan = _load_effective_plan(session=session, artifact_store=artifact_store)
+    outline = artifact_store.read_json(session_id=session.id, artifact_name="outline_v1.json")
+    if outline is None:
+        raise ValueError(f"missing outline artifact for session {session.id}")
+    claims_payload = artifact_store.read_json(session_id=session.id, artifact_name="claims.json")
+    if claims_payload is None:
+        raise ValueError(f"missing claims artifact for session {session.id}")
+    report_markdown = artifact_store.read_text(session_id=session.id, artifact_name="report_v1.md")
+    if report_markdown is None:
+        raise ValueError(f"missing report artifact for session {session.id}")
+    source_registry_payload = artifact_store.read_json(session_id=session.id, artifact_name="source_registry.json")
+    if source_registry_payload is None:
+        raise ValueError(f"missing source registry artifact for session {session.id}")
+    synthesis_summary = artifact_store.read_json(session_id=session.id, artifact_name="synthesis_summary.json")
+    if synthesis_summary is None:
+        raise ValueError(f"missing synthesis summary artifact for session {session.id}")
+
+    package = build_final_package(
+        brief={"query": plan.query},
+        outline=outline,
+        report_markdown=report_markdown,
+        claims=list(claims_payload.get("claims", [])),
+        source_inventory=list(source_registry_payload.get("sources", [])),
+        unresolved_questions=list(synthesis_summary.get("unresolved_questions", [])),
+    )
+
+    artifact_store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="bundle.json",
+        payload=package,
+        phase="packaging",
+        job_id=job_id,
+    )
+
+    db.update_phase(session.id, phase="completed", status="completed", completed_at=_utc_now())
+    db.attach_active_job(session.id, None)
+    return {
+        "session_id": session.id,
+        "phase": "completed",
+        "checkpoint_id": None,
+        "artifacts_written": 1,
     }
 
 

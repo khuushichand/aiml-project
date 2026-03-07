@@ -14,6 +14,7 @@
 
 **Files:**
 - Modify: `tldw_Server_API/tests/Research/test_research_jobs_worker.py`
+**Status:** Complete
 
 **Step 1: Write the failing test**
 
@@ -45,6 +46,7 @@ Do not commit yet.
 - Modify: `tldw_Server_API/app/core/Research/jobs.py`
 - Modify: `tldw_Server_API/app/core/Research/artifact_store.py` if additional read helpers are needed
 - Modify: `tldw_Server_API/app/core/Research/exporter.py` only if small adapter logic is required
+**Status:** Complete
 
 **Step 1: Write minimal implementation**
 
@@ -73,6 +75,7 @@ git commit -m "feat(research): add packaging jobs slice"
 - Modify: `tldw_Server_API/app/core/Research/service.py`
 - Modify: `tldw_Server_API/tests/Research/test_research_jobs_service.py`
 - Modify: `tldw_Server_API/tests/e2e/test_deep_research_runs.py`
+**Status:** Complete
 
 **Step 1: Write the failing test**
 
@@ -109,6 +112,7 @@ git commit -m "test(research): verify packaging lifecycle"
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-07-deep-research-packaging-implementation-plan.md`
+**Status:** Complete
 
 **Step 1: Run targeted suite**
 
