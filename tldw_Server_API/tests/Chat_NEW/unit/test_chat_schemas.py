@@ -238,6 +238,52 @@ class TestResponseFormat:
         format_spec = ResponseFormat(type="text")
         assert format_spec.type == "text"
 
+    @pytest.mark.unit
+    def test_json_schema_response_format(self):
+        """Test JSON schema response format specification."""
+        format_spec = ResponseFormat(
+            type="json_schema",
+            json_schema={
+                "name": "answer_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                },
+            },
+        )
+        assert format_spec.type == "json_schema"
+        assert format_spec.json_schema is not None
+        assert format_spec.json_schema.name == "answer_schema"
+
+        request = ChatCompletionRequest(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Return structured"}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "answer_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                        "required": ["answer"],
+                    },
+                },
+            },
+        )
+        assert request.response_format is not None
+        assert request.response_format.type == "json_schema"
+
+    @pytest.mark.unit
+    def test_json_schema_response_format_requires_schema(self):
+        """Test JSON schema response format requires json_schema.schema."""
+        with pytest.raises(ValidationError):
+            ChatCompletionRequest(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "Return structured"}],
+                response_format={"type": "json_schema", "json_schema": {"name": "bad"}},
+            )
+
 # ========================================================================
 # Tool/Function Calling Tests
 # ========================================================================
