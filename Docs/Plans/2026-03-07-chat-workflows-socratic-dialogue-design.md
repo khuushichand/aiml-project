@@ -76,6 +76,7 @@ A `dialogue_round_step` should define:
 
 - `goal_prompt`
 - `opening_prompt_mode`
+- `opening_prompt_text` nullable, required when `opening_prompt_mode=custom_prompt`
 - `user_role_label`
 - `debate_instruction_prompt`
 - `moderator_instruction_prompt`
@@ -84,6 +85,27 @@ A `dialogue_round_step` should define:
 - `context_refs`
 - `max_rounds`
 - `finish_conditions`
+
+### LLM Config Contract
+
+`debate_llm_config` and `moderator_llm_config` should be typed workflow-safe selectors rather than arbitrary provider payloads.
+
+Allowed v1 fields:
+
+- `model`
+- `provider` optional
+- `temperature` optional
+- `max_tokens` optional
+- `top_p` optional
+
+Explicitly disallowed in workflow templates and run snapshots:
+
+- API keys
+- base URLs
+- raw `extra_body` payloads
+- arbitrary adapter/provider-specific options
+
+At execution time, the dialogue runtime should resolve and normalize these fields through the existing Chat orchestration stack, then freeze the normalized provider/model settings into the run snapshot for reproducibility.
 
 ### Dialogue Step Runtime
 
@@ -132,11 +154,12 @@ Rules:
 
 `ChatWorkflowRun` should gain lightweight runtime state so the server can resume an in-progress dialogue step cleanly:
 
-- `active_step_kind`
 - `active_round_index`
 - `step_runtime_state_json`
 
 Both debate and moderator model/provider configuration should be frozen into the run snapshot at start time, not resolved from mutable live defaults during execution.
+
+`active_round_index` should always mean the next expected round index for the active `dialogue_round_step`, using zero-based indexing. The current step kind should be derived from `current_step_index` plus the frozen template snapshot rather than duplicated as a separate persisted source of truth.
 
 ### New Round Record
 
@@ -156,7 +179,26 @@ Suggested fields:
 - `status`
 - timestamps
 
-Transcript rendering should remain a derived view over rounds plus workflow events rather than becoming the primary persistence format.
+Transcript rendering should remain a derived view over structured answer and round records rather than becoming the primary persistence format.
+
+### Transcript Projection
+
+Transcript projection should have one canonical source per step type:
+
+- `question_step`
+  - transcript messages come from `chat_workflow_answers`
+- `dialogue_round_step`
+  - transcript messages come from `ChatWorkflowRound` records only
+
+Workflow events remain audit-only and should not be projected as user-visible transcript entries.
+
+For dialogue rounds, the transcript API should preserve explicit participant roles instead of collapsing everything into assistant/user pairs:
+
+- `user`
+- `debate_llm`
+- `moderator`
+
+This avoids ambiguity in the UI and keeps retry or partial-failure events from leaking into the visible conversation history.
 
 ### Event Additions
 
@@ -196,13 +238,15 @@ Add a round-response endpoint, for example:
 
 - `POST /api/v1/chat-workflows/runs/{id}/rounds/{round_index}/respond`
 
-This endpoint should atomically:
+From the caller's perspective, this endpoint should behave as one synchronous round submission. Internally it should use a two-phase claim/execute/finalize flow so the SQLite write lock is never held while waiting on LLM calls.
 
-1. validate the expected run state
-2. persist the user response
+Internal flow:
+
+1. atomically validate the expected run state and claim the round attempt
+2. release the DB transaction
 3. generate the debate LLM reply
 4. generate the moderator decision
-5. persist the full round result
+5. atomically finalize the claimed round if the run is still on the expected step/round
 6. either keep the step active or mark it complete
 
 The endpoint should remain idempotent for safe retry behavior.
@@ -234,6 +278,25 @@ If structured parsing fails:
 - allow safe retry
 - do not partially advance the run
 
+Both the debate reply and moderator reply should be executed through the existing Chat orchestration layer, not through bespoke provider-specific call paths. That keeps provider resolution, metrics, fallback, and error normalization consistent with the rest of the chat stack.
+
+### Round Claim And Retry Rules
+
+The dialogue runtime should distinguish:
+
+- `pending`
+  - a round has been claimed and is currently being executed
+- `completed`
+  - a round has a persisted debate reply and moderator decision
+- `failed`
+  - execution failed and the same round may be retried safely
+
+Idempotency rules:
+
+- same `idempotency_key` + same payload after completion returns the stored result
+- same `idempotency_key` while a round is still `pending` returns a deterministic conflict or retryable status
+- different payload for the same claimed round returns `409`
+
 ### Partial Failure Handling
 
 If debate generation fails:
@@ -253,6 +316,13 @@ If context resolution degrades:
 - continue with reduced context
 - record the degradation in round or run metadata and events
 
+### Free Chat Handoff Boundary
+
+`Continue as free chat` should not replay moderator control scaffolding into a normal conversation. If later work chooses to seed the free-chat conversation with workflow context, it should use either:
+
+- no seed transcript at all
+- or a distilled summary that excludes `decision` and `next_user_prompt` control fields
+
 ## Security And Reliability Risks
 
 ### Prompt Injection Into Moderator Control
@@ -265,6 +335,7 @@ Adjustment:
 - use strong system instructions for the moderator
 - pass quoted debate/context content as untrusted material
 - constrain moderator output to a strict response schema
+- never allow moderator output to carry raw provider-execution parameters
 
 ### Duplicate Round Submission
 
