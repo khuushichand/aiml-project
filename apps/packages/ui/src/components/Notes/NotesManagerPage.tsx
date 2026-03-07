@@ -26,7 +26,7 @@ import { useDemoMode } from '@/context/demo-mode'
 import { useServerCapabilities } from '@/hooks/useServerCapabilities'
 import { tldwClient } from '@/services/tldw/TldwApiClient'
 import { useAntdMessage } from '@/hooks/useAntdMessage'
-import { getAllNoteKeywordStats, searchNoteKeywords } from "@/services/note-keywords"
+/* getAllNoteKeywordStats, searchNoteKeywords moved to useNotesKeywords hook */
 import { useStoreMessageOption } from "@/store/option"
 import { shallow } from "zustand/shallow"
 import { updatePageTitle } from "@/utils/update-page-title"
@@ -46,6 +46,8 @@ import {
   type SingleNoteCopyMode,
   type SingleNoteExportFormat
 } from "@/components/Notes/export-utils"
+import { useNotesKeywords } from "@/components/Notes/hooks/useNotesKeywords"
+// Note: hook file is .tsx because it returns JSX from renderKeywordLabelWithFrequency
 import type { NoteListItem } from "@/components/Notes/notes-manager-types"
 import type { ActiveWikilinkQuery, WikilinkCandidate } from "@/components/Notes/wikilinks"
 import {
@@ -133,7 +135,6 @@ import {
   normalizeOfflineDraftQueue,
   NOTES_TITLE_STRATEGIES,
   NOTE_TEMPLATES,
-  KEYWORD_FREQUENCY_DOT_CLASS,
   toKeywordTestIdSegment,
   normalizeNotebookKeywords,
   normalizeNotebookName,
@@ -199,30 +200,7 @@ const NotesManagerPage: React.FC = () => {
   const [loadingDetail, setLoadingDetail] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [saveIndicator, setSaveIndicator] = React.useState<SaveIndicatorState>('idle')
-  const [keywordTokens, setKeywordTokens] = React.useState<string[]>([])
-  const [keywordOptions, setKeywordOptions] = React.useState<string[]>([])
-  const [allKeywords, setAllKeywords] = React.useState<string[]>([])
-  const [keywordNoteCountByKey, setKeywordNoteCountByKey] = React.useState<Record<string, number>>({})
-  const allKeywordsRef = React.useRef<string[]>([])
-  allKeywordsRef.current = allKeywords
-  const [keywordPickerOpen, setKeywordPickerOpen] = React.useState(false)
-  const [keywordPickerQuery, setKeywordPickerQuery] = React.useState('')
-  const [keywordPickerSelection, setKeywordPickerSelection] = React.useState<string[]>([])
-  const [keywordPickerSortMode, setKeywordPickerSortMode] =
-    React.useState<KeywordPickerSortMode>('frequency_desc')
-  const [recentKeywordHistory, setRecentKeywordHistory] = React.useState<string[]>([])
-  const [keywordManagerOpen, setKeywordManagerOpen] = React.useState(false)
-  const [keywordManagerLoading, setKeywordManagerLoading] = React.useState(false)
-  const [keywordManagerQuery, setKeywordManagerQuery] = React.useState('')
-  const [keywordManagerItems, setKeywordManagerItems] = React.useState<KeywordManagementItem[]>([])
-  const [keywordRenameDraft, setKeywordRenameDraft] = React.useState<KeywordRenameDraft | null>(
-    null
-  )
-  const [keywordMergeDraft, setKeywordMergeDraft] = React.useState<KeywordMergeDraft | null>(null)
-  const [keywordManagerActionLoading, setKeywordManagerActionLoading] = React.useState(false)
-  const [keywordSuggestionOptions, setKeywordSuggestionOptions] = React.useState<string[]>([])
-  const [keywordSuggestionSelection, setKeywordSuggestionSelection] = React.useState<string[]>([])
-  const [editorKeywords, setEditorKeywords] = React.useState<string[]>([])
+  /* ---- keyword state is now in useNotesKeywords (initialized after deps are ready) ---- */
   const [originalMetadata, setOriginalMetadata] = React.useState<Record<string, any> | null>(null)
   const [selectedVersion, setSelectedVersion] = React.useState<number | null>(null)
   const [selectedLastSavedAt, setSelectedLastSavedAt] = React.useState<string | null>(null)
@@ -257,14 +235,12 @@ const NotesManagerPage: React.FC = () => {
   const [wikilinkSelectionIndex, setWikilinkSelectionIndex] = React.useState(0)
   const [largePreviewReady, setLargePreviewReady] = React.useState(true)
   const searchQueryTimeoutRef = React.useRef<number | null>(null)
-  const keywordSearchTimeoutRef = React.useRef<number | null>(null)
+  /* keywordSearchTimeoutRef moved to useNotesKeywords */
   const autosaveTimeoutRef = React.useRef<number | null>(null)
   const pageSizeSettingHydratedRef = React.useRef(false)
   const notebookSettingsHydratedRef = React.useRef(false)
   const bulkSelectionAnchorRef = React.useRef<string | null>(null)
-  const keywordPickerReturnFocusRef = React.useRef<HTMLElement | null>(null)
-  const keywordManagerReturnFocusRef = React.useRef<HTMLElement | null>(null)
-  const keywordSuggestionReturnFocusRef = React.useRef<HTMLElement | null>(null)
+  /* keywordPickerReturnFocusRef, keywordManagerReturnFocusRef, keywordSuggestionReturnFocusRef moved to useNotesKeywords */
   const graphModalReturnFocusRef = React.useRef<HTMLElement | null>(null)
   const contentTextareaRef = React.useRef<HTMLTextAreaElement | null>(null)
   const richEditorRef = React.useRef<HTMLDivElement | null>(null)
@@ -335,6 +311,88 @@ const NotesManagerPage: React.FC = () => {
       }
     })
   }, [])
+
+  const markManualEdit = React.useCallback(() => {
+    setEditProvenance((current) => (current.mode === 'manual' ? current : { mode: 'manual' }))
+  }, [])
+
+  const markGeneratedEdit = React.useCallback((action: NotesAssistAction) => {
+    setEditProvenance({
+      mode: 'generated',
+      action,
+      at: Date.now()
+    })
+  }, [])
+
+  const selectedNotebook = React.useMemo(
+    () =>
+      selectedNotebookId == null
+        ? null
+        : notebookOptions.find((option) => option.id === selectedNotebookId) || null,
+    [notebookOptions, selectedNotebookId]
+  )
+  const notebookKeywordTokens = React.useMemo(
+    () =>
+      selectedNotebook == null
+        ? []
+        : selectedNotebook.keywords
+            .map((keyword) => String(keyword || '').trim().toLowerCase())
+            .filter((keyword) => keyword.length > 0),
+    [selectedNotebook]
+  )
+
+  const kw = useNotesKeywords({
+    isOnline,
+    editorDisabled,
+    listMode,
+    message,
+    confirmDanger,
+    restoreFocusAfterOverlayClose,
+    notebookKeywordTokens,
+    queryClient,
+    t,
+    setPage,
+    setIsDirty,
+    setSaveIndicator: setSaveIndicator as (state: 'dirty' | 'saving' | 'saved' | 'error' | 'idle') => void,
+    setMonitoringNotice,
+    markGeneratedEdit,
+  })
+  const {
+    keywordTokens, setKeywordTokens,
+    keywordOptions, setKeywordOptions,
+    allKeywords, allKeywordsRef,
+    keywordNoteCountByKey, setKeywordNoteCountByKey,
+    editorKeywords, setEditorKeywords,
+    keywordPickerOpen, setKeywordPickerOpen,
+    keywordPickerQuery, setKeywordPickerQuery,
+    keywordPickerSelection, setKeywordPickerSelection,
+    keywordPickerSortMode, setKeywordPickerSortMode,
+    recentKeywordHistory,
+    keywordManagerOpen,
+    keywordManagerLoading,
+    keywordManagerQuery, setKeywordManagerQuery,
+    keywordManagerItems,
+    keywordRenameDraft, setKeywordRenameDraft,
+    keywordMergeDraft, setKeywordMergeDraft,
+    keywordManagerActionLoading,
+    keywordSuggestionOptions, setKeywordSuggestionOptions,
+    keywordSuggestionSelection, setKeywordSuggestionSelection,
+    keywordPickerReturnFocusRef, keywordManagerReturnFocusRef, keywordSuggestionReturnFocusRef,
+    keywordSearchTimeoutRef,
+    availableKeywords,
+    filteredKeywordPickerOptions, sortedKeywordPickerOptions, recentKeywordPickerOptions,
+    maxKeywordNoteCount, getKeywordFrequencyTone, renderKeywordLabelWithFrequency,
+    keywordManagerVisibleItems, keywordMergeTargetOptions,
+    rememberRecentKeywords,
+    loadAllKeywords, loadKeywordManagementItems,
+    refreshKeywordDataAfterManagement,
+    openKeywordManager, closeKeywordManager, openKeywordManagerFromPicker,
+    openKeywordPicker,
+    handleKeywordManagerDelete, submitKeywordRename, submitKeywordMerge,
+    loadKeywordSuggestions, debouncedLoadKeywordSuggestions,
+    closeKeywordSuggestionModal, applySelectedSuggestedKeywords,
+    handleKeywordFilterSearch, handleKeywordFilterChange,
+  } = kw
 
   const currentOfflineDraftKey = React.useMemo(() => {
     if (selectedId == null) return NOTES_OFFLINE_NEW_DRAFT_KEY
@@ -560,17 +618,7 @@ const NotesManagerPage: React.FC = () => {
     return 'border-primary/40 bg-primary/10 text-primary'
   }, [monitoringNotice])
 
-  const markManualEdit = React.useCallback(() => {
-    setEditProvenance((current) => (current.mode === 'manual' ? current : { mode: 'manual' }))
-  }, [])
-
-  const markGeneratedEdit = React.useCallback((action: NotesAssistAction) => {
-    setEditProvenance({
-      mode: 'generated',
-      action,
-      at: Date.now()
-    })
-  }, [])
+  /* markManualEdit, markGeneratedEdit, keyword hook moved before buildCurrentOfflineDraft */
 
   const rememberRecentNote = React.useCallback((noteId: string | number, noteTitle: string) => {
     const normalizedId = String(noteId || '').trim()
@@ -868,22 +916,6 @@ const NotesManagerPage: React.FC = () => {
     [content, editorInputMode, message, resizeEditorTextarea, selectedId, setContentDirty, t]
   )
 
-  const selectedNotebook = React.useMemo(
-    () =>
-      selectedNotebookId == null
-        ? null
-        : notebookOptions.find((option) => option.id === selectedNotebookId) || null,
-    [notebookOptions, selectedNotebookId]
-  )
-  const notebookKeywordTokens = React.useMemo(
-    () =>
-      selectedNotebook == null
-        ? []
-        : selectedNotebook.keywords
-            .map((keyword) => String(keyword || '').trim().toLowerCase())
-            .filter((keyword) => keyword.length > 0),
-    [selectedNotebook]
-  )
   const effectiveKeywordTokens = React.useMemo(() => {
     const merged = [...keywordTokens, ...notebookKeywordTokens]
     const deduped: string[] = []
@@ -1739,436 +1771,7 @@ const NotesManagerPage: React.FC = () => {
     [editorMode, previewContent]
   )
 
-  const availableKeywords = React.useMemo(() => {
-    const base = allKeywords.length ? allKeywords : keywordOptions
-    const seen = new Set<string>()
-    const out: string[] = []
-    const add = (value: string) => {
-      const text = String(value || '').trim()
-      if (!text) return
-      const key = text.toLowerCase()
-      if (seen.has(key)) return
-      seen.add(key)
-      out.push(text)
-    }
-    base.forEach(add)
-    keywordTokens.forEach(add)
-    notebookKeywordTokens.forEach(add)
-    return out
-  }, [allKeywords, keywordOptions, keywordTokens, notebookKeywordTokens])
-
-  const rememberRecentKeywords = React.useCallback((keywords: string[]) => {
-    const nextKeywords = keywords
-      .map((keyword) => String(keyword || '').trim())
-      .filter(Boolean)
-    if (nextKeywords.length === 0) return
-    setRecentKeywordHistory((current) => {
-      const seen = new Set<string>()
-      const ordered: string[] = []
-      for (const keyword of nextKeywords) {
-        const key = keyword.toLowerCase()
-        if (seen.has(key)) continue
-        seen.add(key)
-        ordered.push(keyword)
-      }
-      for (const keyword of current) {
-        const key = keyword.toLowerCase()
-        if (seen.has(key)) continue
-        seen.add(key)
-        ordered.push(keyword)
-      }
-      return ordered.slice(0, 20)
-    })
-  }, [])
-
-  const filteredKeywordPickerOptions = React.useMemo(() => {
-    const q = keywordPickerQuery.trim().toLowerCase()
-    if (!q) return availableKeywords
-    return availableKeywords.filter((kw) => kw.toLowerCase().includes(q))
-  }, [availableKeywords, keywordPickerQuery])
-
-  const sortedKeywordPickerOptions = React.useMemo(() => {
-    const options = [...filteredKeywordPickerOptions]
-    options.sort((a, b) => {
-      if (keywordPickerSortMode === 'alpha_asc') {
-        return a.localeCompare(b)
-      }
-      if (keywordPickerSortMode === 'alpha_desc') {
-        return b.localeCompare(a)
-      }
-      const countA = keywordNoteCountByKey[a.toLowerCase()] ?? 0
-      const countB = keywordNoteCountByKey[b.toLowerCase()] ?? 0
-      if (countA !== countB) {
-        return countB - countA
-      }
-      return a.localeCompare(b)
-    })
-    return options
-  }, [filteredKeywordPickerOptions, keywordNoteCountByKey, keywordPickerSortMode])
-
-  const recentKeywordPickerOptions = React.useMemo(() => {
-    const availableByKey = new Map<string, string>()
-    for (const keyword of availableKeywords) {
-      availableByKey.set(keyword.toLowerCase(), keyword)
-    }
-    const q = keywordPickerQuery.trim().toLowerCase()
-    const recent: string[] = []
-    for (const keyword of recentKeywordHistory) {
-      const resolved = availableByKey.get(keyword.toLowerCase())
-      if (!resolved) continue
-      if (q && !resolved.toLowerCase().includes(q)) continue
-      recent.push(resolved)
-      if (recent.length >= 8) break
-    }
-    return recent
-  }, [availableKeywords, keywordPickerQuery, recentKeywordHistory])
-
-  const maxKeywordNoteCount = React.useMemo(() => {
-    let maxCount = 0
-    for (const rawCount of Object.values(keywordNoteCountByKey)) {
-      const count = Number(rawCount)
-      if (!Number.isFinite(count)) continue
-      if (count > maxCount) maxCount = count
-    }
-    return maxCount
-  }, [keywordNoteCountByKey])
-
-  const getKeywordFrequencyTone = React.useCallback(
-    (keyword: string): KeywordFrequencyTone => {
-      const count = keywordNoteCountByKey[keyword.toLowerCase()]
-      if (typeof count !== 'number' || count <= 0 || maxKeywordNoteCount <= 0) {
-        return 'none'
-      }
-      const ratio = count / maxKeywordNoteCount
-      if (ratio >= 0.67) return 'high'
-      if (ratio >= 0.34) return 'medium'
-      return 'low'
-    },
-    [keywordNoteCountByKey, maxKeywordNoteCount]
-  )
-
-  const renderKeywordLabelWithFrequency = React.useCallback(
-    (
-      keyword: string,
-      options?: {
-        includeCount?: boolean
-        testIdPrefix?: string
-      }
-    ) => {
-      const includeCount = options?.includeCount ?? true
-      const noteCount = keywordNoteCountByKey[keyword.toLowerCase()]
-      const displayLabel =
-        includeCount && typeof noteCount === 'number' ? `${keyword} (${noteCount})` : keyword
-      const tone = getKeywordFrequencyTone(keyword)
-      const dotClass = KEYWORD_FREQUENCY_DOT_CLASS[tone]
-      const testId = options?.testIdPrefix
-        ? `${options.testIdPrefix}-${toKeywordTestIdSegment(keyword)}`
-        : undefined
-      return (
-        <span
-          className="inline-flex items-center gap-1.5"
-          data-frequency-tone={tone}
-          data-testid={testId}
-        >
-          <span className={`inline-block h-2 w-2 rounded-full ${dotClass}`} aria-hidden="true" />
-          <span>{displayLabel}</span>
-        </span>
-      )
-    },
-    [getKeywordFrequencyTone, keywordNoteCountByKey]
-  )
-
-  const loadAllKeywords = React.useCallback(async (force = false) => {
-    // Cached for session; add a refresh/TTL if keyword updates become frequent.
-    if (!force && allKeywordsRef.current.length > 0) return
-    try {
-      const keywordStats = await getAllNoteKeywordStats()
-      const arr = keywordStats.map((entry) => entry.keyword)
-      const nextCounts: Record<string, number> = {}
-      for (const entry of keywordStats) {
-        const key = entry.keyword.toLowerCase()
-        nextCounts[key] = Math.max(0, Number(entry.noteCount) || 0)
-      }
-      setAllKeywords(arr)
-      setKeywordOptions(arr)
-      setKeywordNoteCountByKey(nextCounts)
-    } catch {
-      console.debug('[NotesManagerPage] Keyword suggestions load failed')
-    }
-  }, [])
-
-  const loadKeywordManagementItems = React.useCallback(async () => {
-    if (!isOnline) return [] as KeywordManagementItem[]
-    setKeywordManagerLoading(true)
-    try {
-      const pageSize = 250
-      const maxPages = 40
-      const collected = new Map<string, KeywordManagementItem>()
-      let offset = 0
-
-      for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
-        const result = await bgRequest<any>({
-          path:
-            `/api/v1/notes/keywords/?limit=${pageSize}&offset=${offset}&include_note_counts=true` as any,
-          method: 'GET' as any
-        })
-        const rows = Array.isArray(result) ? result : []
-        if (rows.length === 0) break
-
-        for (const row of rows) {
-          const keyword = String(row?.keyword || row?.keyword_text || '').trim()
-          const id = Number(row?.id)
-          if (!keyword || !Number.isFinite(id)) continue
-          const key = keyword.toLowerCase()
-          const versionRaw = Number(row?.version)
-          const version = Number.isFinite(versionRaw) && versionRaw > 0 ? Math.floor(versionRaw) : 1
-          const noteCountRaw = Number(row?.note_count ?? row?.count ?? 0)
-          const noteCount =
-            Number.isFinite(noteCountRaw) && noteCountRaw >= 0 ? Math.floor(noteCountRaw) : 0
-
-          const existing = collected.get(key)
-          if (!existing || version >= existing.version) {
-            collected.set(key, {
-              id: Math.floor(id),
-              keyword,
-              version,
-              noteCount
-            })
-          }
-        }
-
-        if (rows.length < pageSize) break
-        offset += pageSize
-      }
-
-      const nextItems = Array.from(collected.values()).sort((a, b) =>
-        a.keyword.localeCompare(b.keyword)
-      )
-      const nextKeywords = nextItems.map((item) => item.keyword)
-      const nextCounts: Record<string, number> = {}
-      for (const item of nextItems) {
-        nextCounts[item.keyword.toLowerCase()] = item.noteCount
-      }
-
-      setKeywordManagerItems(nextItems)
-      setAllKeywords(nextKeywords)
-      setKeywordOptions(nextKeywords)
-      setKeywordNoteCountByKey(nextCounts)
-      return nextItems
-    } catch (error: any) {
-      message.error(String(error?.message || 'Could not load keyword management data'))
-      return [] as KeywordManagementItem[]
-    } finally {
-      setKeywordManagerLoading(false)
-    }
-  }, [isOnline, message])
-
-  const refreshKeywordDataAfterManagement = React.useCallback(async () => {
-    await loadKeywordManagementItems()
-    await queryClient.invalidateQueries({ queryKey: ['notes'] })
-  }, [loadKeywordManagementItems, queryClient])
-
-  const openKeywordManager = React.useCallback(() => {
-    keywordManagerReturnFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    setKeywordManagerQuery('')
-    setKeywordManagerOpen(true)
-    setKeywordRenameDraft(null)
-    setKeywordMergeDraft(null)
-    void loadKeywordManagementItems()
-  }, [loadKeywordManagementItems])
-
-  const closeKeywordManager = React.useCallback(() => {
-    setKeywordManagerOpen(false)
-    setKeywordRenameDraft(null)
-    setKeywordMergeDraft(null)
-    restoreFocusAfterOverlayClose(keywordManagerReturnFocusRef.current)
-  }, [restoreFocusAfterOverlayClose])
-
-  const openKeywordManagerFromPicker = React.useCallback(() => {
-    setKeywordPickerOpen(false)
-    openKeywordManager()
-  }, [openKeywordManager])
-
-  const keywordManagerVisibleItems = React.useMemo(() => {
-    const q = keywordManagerQuery.trim().toLowerCase()
-    if (!q) return keywordManagerItems
-    return keywordManagerItems.filter((item) => item.keyword.toLowerCase().includes(q))
-  }, [keywordManagerItems, keywordManagerQuery])
-
-  const keywordMergeTargetOptions = React.useMemo(() => {
-    if (!keywordMergeDraft) return [] as KeywordManagementItem[]
-    return keywordManagerItems
-      .filter((item) => item.id !== keywordMergeDraft.source.id)
-      .sort((a, b) => a.keyword.localeCompare(b.keyword))
-  }, [keywordManagerItems, keywordMergeDraft])
-
-  const getRequestStatusCode = React.useCallback((error: any): number => {
-    const raw = Number(error?.status ?? error?.response?.status)
-    return Number.isFinite(raw) ? Math.floor(raw) : 0
-  }, [])
-
-  const handleKeywordManagerDelete = React.useCallback(
-    async (item: KeywordManagementItem) => {
-      if (keywordManagerActionLoading) return
-      const ok = await confirmDanger({
-        title: 'Delete keyword?',
-        content: `Delete keyword "${item.keyword}"?`,
-        okText: 'Delete',
-        cancelText: 'Cancel'
-      })
-      if (!ok) return
-
-      setKeywordManagerActionLoading(true)
-      try {
-        await bgRequest({
-          path: `/api/v1/notes/keywords/${item.id}` as any,
-          method: 'DELETE' as any,
-          headers: {
-            'expected-version': String(item.version)
-          }
-        })
-        message.success(`Deleted keyword "${item.keyword}"`)
-        await refreshKeywordDataAfterManagement()
-      } catch (error: any) {
-        const statusCode = getRequestStatusCode(error)
-        if (statusCode === 404 || statusCode === 409) {
-          message.warning('Keyword changed on the server. Reloaded keyword list.')
-          await loadKeywordManagementItems()
-          return
-        }
-        message.error(String(error?.message || 'Could not delete keyword'))
-      } finally {
-        setKeywordManagerActionLoading(false)
-      }
-    },
-    [
-      confirmDanger,
-      getRequestStatusCode,
-      keywordManagerActionLoading,
-      loadKeywordManagementItems,
-      message,
-      refreshKeywordDataAfterManagement
-    ]
-  )
-
-  const submitKeywordRename = React.useCallback(async () => {
-    if (!keywordRenameDraft || keywordManagerActionLoading) return
-    const nextKeyword = keywordRenameDraft.nextKeyword.trim()
-    if (!nextKeyword) {
-      message.warning('Enter a keyword name')
-      return
-    }
-    if (nextKeyword.toLowerCase() === keywordRenameDraft.currentKeyword.toLowerCase()) {
-      setKeywordRenameDraft(null)
-      return
-    }
-
-    setKeywordManagerActionLoading(true)
-    try {
-      const renamed = await bgRequest<any>({
-        path: `/api/v1/notes/keywords/${keywordRenameDraft.id}` as any,
-        method: 'PATCH' as any,
-        headers: {
-          'Content-Type': 'application/json',
-          'expected-version': String(keywordRenameDraft.expectedVersion)
-        },
-        body: {
-          keyword: nextKeyword
-        }
-      })
-      setKeywordRenameDraft(null)
-      message.success(`Renamed keyword to "${String(renamed?.keyword || nextKeyword)}"`)
-      await refreshKeywordDataAfterManagement()
-    } catch (error: any) {
-      const statusCode = getRequestStatusCode(error)
-      if (statusCode === 404 || statusCode === 409) {
-        message.warning('Keyword rename conflict. Reloaded keyword list.')
-        setKeywordRenameDraft(null)
-        await loadKeywordManagementItems()
-        return
-      }
-      message.error(String(error?.message || 'Could not rename keyword'))
-    } finally {
-      setKeywordManagerActionLoading(false)
-    }
-  }, [
-    getRequestStatusCode,
-    keywordManagerActionLoading,
-    keywordRenameDraft,
-    loadKeywordManagementItems,
-    message,
-    refreshKeywordDataAfterManagement
-  ])
-
-  const submitKeywordMerge = React.useCallback(async () => {
-    if (!keywordMergeDraft || keywordManagerActionLoading) return
-    if (keywordMergeDraft.targetKeywordId == null) {
-      message.warning('Select a target keyword')
-      return
-    }
-
-    const target = keywordMergeTargetOptions.find(
-      (item) => item.id === keywordMergeDraft.targetKeywordId
-    )
-    if (!target) {
-      message.warning('Target keyword no longer exists. Reloaded keyword list.')
-      await loadKeywordManagementItems()
-      return
-    }
-
-    setKeywordManagerActionLoading(true)
-    try {
-      await bgRequest({
-        path: `/api/v1/notes/keywords/${keywordMergeDraft.source.id}/merge` as any,
-        method: 'POST' as any,
-        headers: {
-          'Content-Type': 'application/json',
-          'expected-version': String(keywordMergeDraft.source.version)
-        },
-        body: {
-          target_keyword_id: target.id,
-          expected_target_version: target.version
-        }
-      })
-      setKeywordMergeDraft(null)
-      message.success(`Merged "${keywordMergeDraft.source.keyword}" into "${target.keyword}"`)
-      await refreshKeywordDataAfterManagement()
-    } catch (error: any) {
-      const statusCode = getRequestStatusCode(error)
-      if (statusCode === 404 || statusCode === 409) {
-        message.warning('Keyword merge conflict. Reloaded keyword list.')
-        setKeywordMergeDraft(null)
-        await loadKeywordManagementItems()
-        return
-      }
-      message.error(String(error?.message || 'Could not merge keywords'))
-    } finally {
-      setKeywordManagerActionLoading(false)
-    }
-  }, [
-    getRequestStatusCode,
-    keywordManagerActionLoading,
-    keywordMergeDraft,
-    keywordMergeTargetOptions,
-    loadKeywordManagementItems,
-    message,
-    refreshKeywordDataAfterManagement
-  ])
-
-  const openKeywordPicker = React.useCallback(() => {
-    keywordPickerReturnFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    setKeywordPickerQuery('')
-    setKeywordPickerSelection(keywordTokens)
-    setKeywordPickerOpen(true)
-    void loadAllKeywords()
-  }, [keywordTokens, loadAllKeywords])
-
-  React.useEffect(() => {
-    if (!isOnline || listMode !== 'active') return
-    void loadAllKeywords()
-  }, [isOnline, listMode, loadAllKeywords])
+  /* keyword callbacks (availableKeywords .. loadAllKeywords useEffect) moved to useNotesKeywords */
 
   const handleKeywordPickerCancel = React.useCallback(() => {
     setKeywordPickerOpen(false)
@@ -2675,59 +2278,7 @@ const NotesManagerPage: React.FC = () => {
     titleSuggestionLoading
   ])
 
-  const closeKeywordSuggestionModal = React.useCallback(() => {
-    setKeywordSuggestionOptions([])
-    setKeywordSuggestionSelection([])
-    restoreFocusAfterOverlayClose(keywordSuggestionReturnFocusRef.current)
-  }, [restoreFocusAfterOverlayClose])
-
-  const applySelectedSuggestedKeywords = React.useCallback(() => {
-    const selectedSuggestions = keywordSuggestionSelection
-      .map((keyword) => String(keyword || '').trim())
-      .filter(Boolean)
-    if (selectedSuggestions.length === 0) {
-      message.warning(
-        t('option:notesSearch.assistKeywordsSelectAtLeastOne', {
-          defaultValue: 'Select at least one suggested keyword to apply.'
-        })
-      )
-      return
-    }
-
-    const merged: string[] = []
-    const seen = new Set<string>()
-    const append = (value: string) => {
-      const text = String(value || '').trim()
-      if (!text) return
-      const key = text.toLowerCase()
-      if (seen.has(key)) return
-      seen.add(key)
-      merged.push(text)
-    }
-    editorKeywords.forEach(append)
-    selectedSuggestions.forEach(append)
-
-    setEditorKeywords(merged)
-    setIsDirty(true)
-    setSaveIndicator('dirty')
-    setMonitoringNotice(null)
-    markGeneratedEdit('suggest_keywords')
-    rememberRecentKeywords(selectedSuggestions)
-    closeKeywordSuggestionModal()
-    message.success(
-      t('option:notesSearch.assistKeywordsApplied', {
-        defaultValue: 'Applied suggested keywords.'
-      })
-    )
-  }, [
-    closeKeywordSuggestionModal,
-    editorKeywords,
-    keywordSuggestionSelection,
-    markGeneratedEdit,
-    message,
-    rememberRecentKeywords,
-    t
-  ])
+  /* closeKeywordSuggestionModal, applySelectedSuggestedKeywords moved to useNotesKeywords */
 
   const runAssistAction = React.useCallback(
     async (action: NotesAssistAction) => {
@@ -4468,54 +4019,7 @@ const NotesManagerPage: React.FC = () => {
     }
   }
 
-  const loadKeywordSuggestions = React.useCallback(async (text?: string) => {
-    try {
-      if (text && text.trim().length > 0) {
-        const arr = await searchNoteKeywords(text, 10)
-        setKeywordOptions(arr)
-      } else if (allKeywords.length > 0) {
-        setKeywordOptions(allKeywords)
-      } else {
-        setKeywordOptions([])
-      }
-    } catch {
-      // Keyword load failed - feature will use empty suggestions
-      console.debug('[NotesManagerPage] Keyword suggestions load failed')
-    }
-  }, [allKeywords])
-
-  const debouncedLoadKeywordSuggestions = React.useCallback(
-    (text?: string) => {
-      if (typeof window === 'undefined') {
-        void loadKeywordSuggestions(text)
-        return
-      }
-      if (keywordSearchTimeoutRef.current != null) {
-        window.clearTimeout(keywordSearchTimeoutRef.current)
-      }
-      keywordSearchTimeoutRef.current = window.setTimeout(() => {
-        void loadKeywordSuggestions(text)
-      }, 300)
-    },
-    [loadKeywordSuggestions]
-  )
-
-  const handleKeywordFilterSearch = React.useCallback(
-    (text: string) => {
-      if (isOnline) void debouncedLoadKeywordSuggestions(text)
-    },
-    [debouncedLoadKeywordSuggestions, isOnline]
-  )
-
-  const handleKeywordFilterChange = React.useCallback(
-    (vals: string[] | string) => {
-      const nextValues = Array.isArray(vals) ? vals : [vals]
-      setKeywordTokens(nextValues)
-      rememberRecentKeywords(nextValues)
-      setPage(1)
-    },
-    [rememberRecentKeywords]
-  )
+  /* loadKeywordSuggestions, debouncedLoadKeywordSuggestions, handleKeywordFilterSearch, handleKeywordFilterChange moved to useNotesKeywords */
 
   const fetchServerNotebooks = React.useCallback(async (): Promise<NotebookFilterOption[]> => {
     const merged: NotebookFilterOption[] = []
