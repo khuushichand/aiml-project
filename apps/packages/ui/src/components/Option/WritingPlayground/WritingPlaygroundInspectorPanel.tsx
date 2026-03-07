@@ -10,27 +10,35 @@ type TabDefinition = {
 type WritingPlaygroundInspectorPanelProps = {
   activeTab: InspectorTabKey
   onTabChange: (tab: InspectorTabKey) => void
-  generation: ReactNode
-  planning: ReactNode
-  diagnostics: ReactNode
+  essentialsStrip?: ReactNode
+  sampling: ReactNode
+  context: ReactNode
+  setup: ReactNode
+  inspect: ReactNode
   tabLabels?: Partial<Record<InspectorTabKey, string>>
+  tabBadges?: Partial<Record<InspectorTabKey, ReactNode>>
 }
 
 const TAB_DEFINITIONS: TabDefinition[] = [
   {
-    key: "generation",
-    label: "Generation",
-    testId: "writing-inspector-tab-generation"
+    key: "sampling",
+    label: "Sampling",
+    testId: "writing-inspector-tab-sampling"
   },
   {
-    key: "planning",
-    label: "Planning",
-    testId: "writing-inspector-tab-planning"
+    key: "context",
+    label: "Context",
+    testId: "writing-inspector-tab-context"
   },
   {
-    key: "diagnostics",
-    label: "Diagnostics",
-    testId: "writing-inspector-tab-diagnostics"
+    key: "setup",
+    label: "Setup",
+    testId: "writing-inspector-tab-setup"
+  },
+  {
+    key: "inspect",
+    label: "Inspect",
+    testId: "writing-inspector-tab-inspect"
   }
 ]
 
@@ -39,10 +47,13 @@ export const WritingPlaygroundInspectorPanel: FC<
 > = ({
   activeTab,
   onTabChange,
-  generation,
-  planning,
-  diagnostics,
-  tabLabels
+  essentialsStrip,
+  sampling,
+  context,
+  setup,
+  inspect,
+  tabLabels,
+  tabBadges
 }) => {
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
 
@@ -57,13 +68,18 @@ export const WritingPlaygroundInspectorPanel: FC<
   }
 
   const panelMap: Record<InspectorTabKey, ReactNode> = {
-    generation,
-    planning,
-    diagnostics
+    sampling,
+    context,
+    setup,
+    inspect
   }
 
   return (
     <div data-testid="writing-playground-inspector-panel" className="flex flex-col gap-3">
+      {essentialsStrip ? (
+        <div data-testid="writing-essentials-strip">{essentialsStrip}</div>
+      ) : null}
+
       <div
         role="tablist"
         aria-label="Writing inspector tabs"
@@ -112,6 +128,9 @@ export const WritingPlaygroundInspectorPanel: FC<
                 }
               }}>
               {tabLabels?.[tab.key] || tab.label}
+              {tabBadges?.[tab.key] ? (
+                <span className="ml-1">{tabBadges[tab.key]}</span>
+              ) : null}
             </button>
           )
         })}
