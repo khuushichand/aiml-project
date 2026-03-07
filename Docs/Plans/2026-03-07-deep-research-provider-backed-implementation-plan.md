@@ -164,6 +164,7 @@ Add tests that verify:
 - `local_first` skips external lanes when local coverage is sufficient
 - lane failures are recorded as gaps/collection metadata without killing the run when another lane succeeds
 - planning writes `provider_config.json` and collecting consumes it
+- the resolved lane config from `provider_config.json` is passed explicitly into provider calls rather than being re-derived ad hoc during collection
 
 Example expectations:
 
@@ -171,6 +172,14 @@ Example expectations:
 assert result.collection_metrics["lane_counts"]["local"] >= 1
 assert "lane_errors" in collection_summary
 assert session.phase in {"awaiting_source_review", "synthesizing"}
+```
+
+Prefer structured lane error assertions such as:
+
+```python
+assert collection_summary["lane_errors"] == [
+    {"focus_area": "evidence alignment", "lane": "web", "message": "web search failed"}
+]
 ```
 
 **Step 2: Run tests to verify they fail**
@@ -183,8 +192,9 @@ Expected: FAIL because the broker still uses deterministic lane methods.
 
 Implement:
 - constructor injection for `LocalResearchProvider`, `WebResearchProvider`, and `AcademicResearchProvider`
-- loading `provider_config.json` during collection
-- `lane_errors` capture in collection summary when a provider raises
+- loading `provider_config.json` during collection and passing the resolved per-lane config explicitly to each provider call
+- replacing the temporary `_resolve_provider_config(...)` helper in `jobs.py` with `resolve_provider_config(...)` from `tldw_Server_API/app/core/Research/providers/config.py` so planning and execution use one canonical config resolver
+- `lane_errors` capture in collection summary when a provider raises, using structured entries that include at least `focus_area`, `lane`, and `message`
 - hard failure only when every enabled lane fails and zero sources are collected
 
 **Step 4: Run tests to verify they pass**
@@ -214,9 +224,11 @@ git commit -m "feat(research): use provider-backed collecting"
 Add tests that verify:
 - a synthesis provider can return structured JSON and produce outline/claims/report artifacts
 - unknown `source_id` references are rejected
+- unknown `note_id` references are rejected
 - parse failures or provider exceptions fall back to deterministic synthesis
 - fallback reason is recorded in `synthesis_summary.json`
 - the async synthesis path is awaited correctly by the worker and does not preserve the old synchronous call contract by accident
+- the synthesis provider call is built from the resolved provider config using an explicit chat request shape (`messages`, `provider`, `model`) instead of ad hoc kwargs
 
 Example structured output fixture:
 
@@ -248,9 +260,13 @@ Implement:
 - `SynthesisProvider.summarize(...)` using `perform_chat_api_call_async`
 - change `ResearchSynthesizer.synthesize(...)` to an async method and update `jobs.py` to await it
 - structured-output parsing via `parse_structured_output(...)` and `StructuredOutputOptions` from `tldw_Server_API/app/core/LLM_Calls/structured_output.py`
-- source-id validation in `ResearchSynthesizer`
+- source-id and note-id validation in `ResearchSynthesizer`
 - deterministic fallback when parsing or validation fails
 - `jobs.py` integration so the synthesizing phase uses the resolved provider config
+
+Implementation notes:
+- `SynthesisProvider` should build an explicit chat payload with bounded `messages`, `provider`, and `model` fields so production integration matches the `perform_chat_api_call_async(...)` adapter contract
+- if the resolved synthesis config does not name a usable provider/model, skip the provider path and fall back deterministically while recording the reason
 
 **Step 4: Run tests to verify they pass**
 
