@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import HTTPException, status
 
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, is_single_user_principal
 from tldw_Server_API.app.services.auth_service import fetch_active_user_by_id
+
+
+def _enterprise_admin_mode_enabled() -> bool:
+    raw_value = os.getenv("ADMIN_UI_ENTERPRISE_MODE", "")
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 async def verify_privileged_action(
@@ -17,7 +24,16 @@ async def verify_privileged_action(
     normalized_reason = str(reason or "").strip()
     normalized_password = str(admin_password or "").strip()
 
-    if len(normalized_reason) < 8 or len(normalized_password) < 8:
+    if len(normalized_reason) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reason is required for this action",
+        )
+
+    if is_single_user_principal(principal) and not _enterprise_admin_mode_enabled():
+        return normalized_reason
+
+    if len(normalized_password) < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Reason and current password are required for this action",

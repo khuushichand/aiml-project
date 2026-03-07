@@ -18,6 +18,7 @@ export interface PrivilegedActionOptions {
   message: string;
   confirmText?: string;
   cancelText?: string;
+  requirePassword?: boolean;
 }
 
 export interface PrivilegedActionResult {
@@ -69,7 +70,8 @@ export function PrivilegedActionDialogProvider({ children }: ProviderProps) {
     });
   }, []);
 
-  const canSubmit = reason.trim().length >= 8 && adminPassword.trim().length >= 8;
+  const requiresPassword = options?.requirePassword ?? true;
+  const canSubmit = reason.trim().length >= 8 && (!requiresPassword || adminPassword.trim().length >= 8);
 
   return (
     <PrivilegedActionContext.Provider value={{ prompt }}>
@@ -97,20 +99,26 @@ export function PrivilegedActionDialogProvider({ children }: ProviderProps) {
               </p>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="privileged-action-password">Current password</Label>
-              <Input
-                id="privileged-action-password"
-                type="password"
-                value={adminPassword}
-                onChange={(event) => setAdminPassword(event.target.value)}
-                placeholder="Re-enter your password"
-                autoComplete="current-password"
-              />
+            {requiresPassword ? (
+              <div className="space-y-2">
+                <Label htmlFor="privileged-action-password">Current password</Label>
+                <Input
+                  id="privileged-action-password"
+                  type="password"
+                  value={adminPassword}
+                  onChange={(event) => setAdminPassword(event.target.value)}
+                  placeholder="Re-enter your password"
+                  autoComplete="current-password"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Required to reauthenticate before this high-risk action.
+                </p>
+              </div>
+            ) : (
               <p className="text-xs text-muted-foreground">
-                Required to reauthenticate before this high-risk action.
+                Single-user mode requires an audit reason but does not prompt for password reauthentication.
               </p>
-            </div>
+            )}
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">

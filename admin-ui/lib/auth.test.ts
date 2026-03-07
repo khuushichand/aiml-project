@@ -132,6 +132,6 @@ describe('auth API key storage', () => {
     const auth = await import('./auth');
 
     expect(auth.getJWTToken()).toBeNull();
-    expect(auth.hasStoredAuth()).toBe(true);
+    expect(auth.hasStoredAuth()).toBe(false);
   });
 });

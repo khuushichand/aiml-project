@@ -141,7 +141,7 @@ export function getJWTToken(): string | null {
 
 export function hasStoredAuth(): boolean {
   if (typeof window === 'undefined') return false;
-  return hasSessionMarker() || !!getApiKey() || !!localStorage.getItem('user');
+  return hasSessionMarker() || !!getApiKey();
 }
 
 /**

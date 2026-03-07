@@ -19,6 +19,7 @@ import { useToast } from '@/components/ui/toast';
 import { ArrowLeft, Key, Save, Building2, Users, Shield, Monitor, RefreshCw, Trash2, Clock, ShieldCheck, Plus, X } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
+import { isSingleUserMode } from '@/lib/auth';
 import { formatDateTime } from '@/lib/format';
 import { parseOptionalInt } from '@/lib/number';
 import {
@@ -331,6 +332,7 @@ export default function UserDetailPage() {
   const confirm = useConfirm();
   const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success: toastSuccess, error: showError } = useToast();
+  const requirePasswordReauth = !isSingleUserMode();
 
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -701,6 +703,7 @@ export default function UserDetailPage() {
           title: 'Apply privileged user changes',
           message: 'Changing role or activation state requires a reason and reauthentication.',
           confirmText: 'Apply changes',
+          requirePassword: requirePasswordReauth,
         });
         if (!approval) {
           setSaving(false);
@@ -739,6 +742,7 @@ export default function UserDetailPage() {
       title: 'Disable MFA',
       message: `Disable MFA for ${user?.username || user?.email || 'this user'}?`,
       confirmText: 'Disable MFA',
+      requirePassword: requirePasswordReauth,
     });
     if (!approval) return;
 
@@ -760,6 +764,7 @@ export default function UserDetailPage() {
       title: 'Revoke Session',
       message: 'Revoke this session? The user will be signed out on that device.',
       confirmText: 'Revoke',
+      requirePassword: requirePasswordReauth,
     });
     if (!approval) return;
 
@@ -781,6 +786,7 @@ export default function UserDetailPage() {
       title: 'Revoke All Sessions',
       message: 'Revoke all active sessions for this user? They will be signed out everywhere.',
       confirmText: 'Revoke all',
+      requirePassword: requirePasswordReauth,
     });
     if (!approval) return;
 
@@ -808,6 +814,7 @@ export default function UserDetailPage() {
       title: 'Reset Password',
       message: `Reset password for ${user?.username || user?.email || 'this user'}?`,
       confirmText: 'Reset password',
+      requirePassword: requirePasswordReauth,
     });
     if (!approval) return;
 

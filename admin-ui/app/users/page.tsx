@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
+import { isSingleUserMode } from '@/lib/auth';
 import { Organization, User } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportUsers, ExportFormat } from '@/lib/export';
@@ -167,6 +168,7 @@ function UsersPageContent() {
   const { success, error: showError } = useToast();
   const { selectedOrg } = useOrgContext();
   const { user: currentUser } = usePermissions();
+  const requirePasswordReauth = !isSingleUserMode();
   const currentUserId = currentUser?.id;
   const [bulkAction, setBulkAction] = useState<BulkActionType>(null);
   const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
@@ -584,6 +586,7 @@ function UsersPageContent() {
       title: nextState ? 'Activate selected users' : 'Deactivate selected users',
       message: `${nextState ? 'Activate' : 'Deactivate'} ${ids.length} selected user${ids.length !== 1 ? 's' : ''}? Reauthentication is required.`,
       confirmText: nextState ? 'Activate' : 'Deactivate',
+      requirePassword: requirePasswordReauth,
     });
     if (!approval) return;
 
@@ -629,6 +632,7 @@ function UsersPageContent() {
       title: 'Delete selected users',
       message: `Delete ${ids.length} selected user${ids.length !== 1 ? 's' : ''}? This cannot be undone.`,
       confirmText: 'Delete',
+      requirePassword: requirePasswordReauth,
     });
     if (!approval) return;
 
@@ -669,6 +673,7 @@ function UsersPageContent() {
       title: 'Assign role to selected users',
       message: `Assign "${bulkRole}" role to ${ids.length} selected user${ids.length !== 1 ? 's' : ''}? Reauthentication is required.`,
       confirmText: 'Assign role',
+      requirePassword: requirePasswordReauth,
     });
     if (!approval) return;
 
@@ -710,6 +715,7 @@ function UsersPageContent() {
       title: requireMfa ? 'Require MFA for selected users' : 'Clear MFA requirement for selected users',
       message: `${requireMfa ? 'Require MFA for' : 'Clear MFA requirement for'} ${ids.length} selected user${ids.length !== 1 ? 's' : ''}?`,
       confirmText: requireMfa ? 'Require MFA' : 'Clear requirement',
+      requirePassword: requirePasswordReauth,
     });
     if (!approval) return;
 
@@ -861,6 +867,7 @@ function UsersPageContent() {
       title: nextState ? 'Activate User' : 'Deactivate User',
       message: `${nextState ? 'Activate' : 'Deactivate'} ${user.username || user.email}? Reauthentication is required.`,
       confirmText: nextState ? 'Activate' : 'Deactivate',
+      requirePassword: requirePasswordReauth,
     });
     if (!approval) return;
 
@@ -889,6 +896,7 @@ function UsersPageContent() {
       title: 'Delete User',
       message: `Delete ${user.username || user.email}? This cannot be undone.`,
       confirmText: 'Delete',
+      requirePassword: requirePasswordReauth,
     });
     if (!approval) return;
 
