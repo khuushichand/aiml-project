@@ -4,7 +4,7 @@
 
 **Goal:** Add pause, resume, cancel, and polling-based progress reporting to deep research runs while preserving the existing Jobs/session architecture and phase-boundary safety.
 
-**Architecture:** Extend `research_sessions` with session-local control and progress fields, make `ResearchService` the authority for control transitions, and have `jobs.py` honor pause/cancel intent only at safe phase boundaries. Expose the new fields and control actions through the existing research run API, and compose active-job progress into the polling response.
+**Architecture:** Extend `research_sessions` with session-local control and progress fields, make `ResearchService` the authority for control transitions, and have `jobs.py` honor pause/cancel intent only at safe phase boundaries. Expose the new fields and control actions through the existing research run API, treat session progress as the primary polling source, and use active-job progress only as optional read-path enrichment.
 
 **Tech Stack:** FastAPI, Pydantic, SQLite-backed `ResearchSessionsDB`, Jobs `JobManager`, pytest, Bandit.
 
@@ -86,10 +86,11 @@ Add tests that verify:
   - re-enqueues executable phases when `active_job_id` is empty
   - restores `waiting_human` without enqueue for paused checkpoint phases
 - `cancel_run(...)`:
-  - marks the session terminal `cancelled`
-  - clears `active_job_id`
+  - marks `cancel_requested` for executable sessions with active work
+  - terminalizes queued idle or checkpoint sessions immediately as `cancelled`
   - rejects future resume
-- `get_session(...)` composes `progress_percent` and `progress_message` from the active job when available
+- `approve_checkpoint(...)` rejects paused or cancellation-pending sessions
+- `get_session(...)` returns persisted session progress and may enrich it from the active job when available
 
 Example assertions:
 
@@ -118,14 +119,16 @@ Implement in `ResearchService`:
   - executable phases
   - checkpoint phases
   - terminal sessions
+- checkpoint approval gating for paused or cancellation-pending sessions
 - read-path composition in `get_session(...)`:
   - if `active_job_id` is numeric and a Jobs manager is available, call `get_job(...)`
-  - copy `progress_percent` and `progress_message` onto the returned session view
+  - preserve session `progress_percent` and `progress_message` as authoritative and only overlay non-null Jobs values as optional enrichment
 - best-effort `cancel_job(...)` call on active Jobs cancellation
 
 Keep rules:
 - `pause` is reversible
 - `cancel` is terminal
+- active-work cancellation is requested first and becomes terminal at a safe boundary
 - `resume` never double-enqueues when `active_job_id` already exists
 
 **Step 4: Run tests to verify they pass**
@@ -166,7 +169,7 @@ Example stub return:
 ```python
 {
     "id": "rs_1",
-    "status": "processing",
+    "status": "queued",
     "phase": "collecting",
     "control_state": "pause_requested",
     "progress_percent": 45.0,
@@ -300,6 +303,7 @@ Example path:
 4. poll and assert `control_state == "paused"`
 5. resume and assert `status == "waiting_human"`
 6. cancel and assert future resume returns `400`
+7. assert approving the checkpoint while paused or cancellation-pending is rejected
 
 **Step 2: Run test to verify it fails**
 

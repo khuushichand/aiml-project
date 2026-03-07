@@ -65,7 +65,7 @@ Session status and phase continue to represent lifecycle progress. `control_stat
 Rules:
 
 - `pause`
-  Allowed from `queued`, `processing`, and `waiting_human`
+  Allowed for executable phases with active work, for queued idle sessions, and for checkpoint sessions in `waiting_human`
 - `resume`
   Allowed only from `paused`
 - `cancel`
@@ -113,6 +113,7 @@ Each endpoint returns the updated `ResearchRunResponse`.
 - If the session is queued with no active work, or waiting at a checkpoint, move directly to `control_state = paused`
 - If already paused, return the existing session state
 - Reject terminal sessions
+- Do not introduce `status = paused`; keep lifecycle status and control state separate
 
 `resume`
 
@@ -124,7 +125,9 @@ Each endpoint returns the updated `ResearchRunResponse`.
 `cancel`
 
 - Allowed from any nonterminal session
-- Set `status = cancelled`, `control_state = cancelled`, clear `active_job_id`
+- For active executable work, leave lifecycle `status` and `phase` unchanged until the phase boundary resolves the cancellation
+- If the session still has active executable work, set `control_state = cancel_requested` and leave `active_job_id` attached until the phase boundary or Jobs cancellation acknowledgement
+- If the session is idle between phases or already waiting at a checkpoint, terminalize immediately with `status = cancelled`, `control_state = cancelled`, and cleared `active_job_id`
 - Best-effort cancel the active job in Jobs if one exists
 - Reject resume after cancellation
 
@@ -165,6 +168,7 @@ The emphasis is consistency and visibility, not exact percent accuracy.
 - enqueue-on-resume behavior
 - best-effort active-job cancellation
 - read-model composition for polling responses
+- guarding checkpoint approval while the session is paused or cancellation is pending
 
 `ResearchSessionsDB` will own persistence of control and progress fields.
 
@@ -191,6 +195,7 @@ Reject invalid control transitions clearly:
 - resume from non-paused session
 - pause or cancel terminal session
 - resume cancelled session
+- approve a checkpoint while the session is paused, pause-requested, cancel-requested, or cancelled
 
 Domain state is authoritative even if Jobs cancellation is best-effort. That prevents races where Jobs and research-session rows temporarily disagree.
 
@@ -198,11 +203,12 @@ Domain state is authoritative even if Jobs cancellation is best-effort. That pre
 
 Service tests:
 
-- pause from `queued`, `processing`, `waiting_human`
+- pause from an executable session with active work, from a queued idle session, and from a checkpoint session in `waiting_human`
 - resume from `paused`
 - cancel from nonterminal states
 - invalid-transition rejection
 - no double-enqueue on resume
+- checkpoint approval rejection while paused or cancellation is pending
 
 Worker tests:
 
@@ -233,9 +239,18 @@ Resume must only enqueue when:
 
 This prevents duplicate jobs.
 
+### Status Semantics
+
+`status` should remain lifecycle-oriented and should not gain a new `paused` value in this slice. Polling clients should interpret:
+
+- lifecycle from `status` and `phase`
+- operator intent and paused state from `control_state`
+
+That avoids mixing progress state with operator state.
+
 ### Polling-Only Progress
 
-This slice intentionally defers SSE or WebSocket progress transport. The Jobs layer already supports progress fields, so polling can provide useful visibility without adding a second transport contract now.
+This slice intentionally defers SSE or WebSocket progress transport. Session-level `progress_percent` and `progress_message` should be treated as the primary polling fields. Jobs progress can be overlaid when present, but research should not depend on Jobs heartbeats for correctness because the current phase handlers are not yet driven through a WorkerSDK `progress_cb`.
 
 ## Outcome
 
