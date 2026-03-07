@@ -35,7 +35,7 @@ export function TtsProviderStrip({
   const isBrowser = provider === "browser"
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2" aria-live="polite">
       <Volume2 className="h-4 w-4 shrink-0" />
 
       {isBrowser ? (

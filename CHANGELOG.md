@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.32] 2026-03-06
+
+### Added
+
+- **TTS Listen Tab UX Redesign** — Two-zone layout (Workspace + Inspector Panel):
+  - `CharacterProgressBar` component with color-coded thresholds and ARIA progressbar role
+  - `VoicePreviewButton` component for inline voice previews via TTS API
+  - `TtsStickyActionBar` with Play/Stop/Download controls, stream status indicator, and inspector toggle
+  - `TtsProviderStrip` compact config summary strip with clickable tags and preset switcher
+  - `TtsInspectorPanel` with Voice/Output/Advanced tabs, responsive drawer mode on mobile
+  - `TtsVoiceTab`, `TtsOutputTab`, `TtsAdvancedTab` inspector tab components
+  - Provider-conditional field visibility (browser shows voice only, openai shows model+voice, tldw shows full controls)
+  - Multi-voice narration UI in Voice tab with role assignment cards (tldw provider only)
+  - Inline `VoiceCloningManager` rendering in Advanced tab
+  - Keyboard shortcuts: Ctrl/Cmd+Enter (play), Escape (stop), Ctrl/Cmd+. (toggle inspector)
+  - `aria-live="polite"` on provider strip for screen reader announcements
+  - 24 component tests across 6 test files
+- **STT Playground Comparison Redesign** — Three-zone layout (Recording Strip + Comparison Panel + History):
+  - Rewrote `SttPlaygroundPage` with comparison-first three-zone architecture
+  - Added Cmd/Ctrl+Enter keyboard shortcut for transcription
+  - Added `aria-live` regions on transcript outputs
+  - Added Space key hint on record button
+  - Integration and keyboard shortcut tests for STT playground
+
+### Fixed
+
+- Fixed `Manager.first-use.test.tsx` selectors to match updated button labels (`Filters` instead of `Advanced filters`, text queries instead of role queries for onboarding cards)
+
 ## [0.1.31] 2026-03-06
 
 ### Added

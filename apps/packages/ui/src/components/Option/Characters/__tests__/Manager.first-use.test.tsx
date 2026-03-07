@@ -271,7 +271,7 @@ const openAdvancedFilters = async (
   user: ReturnType<typeof userEvent.setup>
 ) => {
   const advancedFiltersToggle = screen.queryByRole("button", {
-    name: /Advanced filters/i
+    name: /Filters/i
   })
   if (advancedFiltersToggle) {
     await user.click(advancedFiltersToggle)
@@ -684,16 +684,16 @@ describe("CharactersManager first-use onboarding", () => {
         "Create reusable personas you can chat with. Each character keeps its own conversation history."
       )
     ).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Create from scratch" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Start from a template" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Import existing" })).toBeInTheDocument()
+    expect(screen.getByText("Create from scratch")).toBeInTheDocument()
+    expect(screen.getByText("Start from a template")).toBeInTheDocument()
+    expect(screen.getByText("Import existing")).toBeInTheDocument()
   })
 
   it("shows template option in empty state and opens create modal with templates", async () => {
     const user = userEvent.setup()
     render(<CharactersManager />)
 
-    const templateButton = screen.getByRole("button", { name: "Start from a template" })
+    const templateButton = screen.getByText("Start from a template").closest("button")!
     expect(templateButton).toBeInTheDocument()
 
     await user.click(templateButton)
@@ -1344,7 +1344,7 @@ describe("CharactersManager first-use onboarding", () => {
 
     expect(screen.getByPlaceholderText("Search characters")).toBeInTheDocument()
     expect(
-      screen.getByRole("button", { name: "Advanced filters" })
+      screen.getByRole("button", { name: /Filters/i })
     ).toBeInTheDocument()
 
     await openAdvancedFilters(user)
@@ -1353,7 +1353,7 @@ describe("CharactersManager first-use onboarding", () => {
       await screen.findByLabelText("Filter characters by creator")
     ).toBeInTheDocument()
 
-    await user.click(screen.getByRole("button", { name: "Hide filters" }))
+    await user.click(screen.getByRole("button", { name: /Filters/i }))
 
     await waitFor(() => {
       expect(
@@ -1362,10 +1362,10 @@ describe("CharactersManager first-use onboarding", () => {
     })
     expect(screen.getByPlaceholderText("Search characters")).toBeInTheDocument()
     expect(
-      screen.getByRole("button", { name: "Advanced filters" })
+      screen.getByRole("button", { name: /Filters/i })
     ).toBeInTheDocument()
 
-    await user.click(screen.getByRole("button", { name: "Advanced filters" }))
+    await user.click(screen.getByRole("button", { name: /Filters/i }))
 
     expect(
       await screen.findByLabelText("Filter characters by creator")
