@@ -128,7 +128,7 @@ def _gmail_connector_enabled() -> bool:
 
 def _ensure_connector_provider_enabled(provider: str) -> str:
     normalized = str(provider or "").strip().lower()
-    if normalized not in {"drive", "notion", "gmail"}:
+    if normalized not in {"drive", "notion", "gmail", "onedrive"}:
         raise HTTPException(status_code=404, detail=f"Unknown connector provider: {provider}")
     if normalized == "gmail" and not _gmail_connector_enabled():
         raise HTTPException(status_code=404, detail="Connector provider 'gmail' is disabled.")
@@ -139,6 +139,7 @@ def _ensure_connector_provider_enabled(provider: str) -> str:
 async def list_providers() -> list[ConnectorProvider]:
     providers: list[ConnectorProvider] = [
         ConnectorProvider(name="drive", scopes_required=["drive.readonly"], auth_type="oauth2"),
+        ConnectorProvider(name="onedrive", scopes_required=["Files.Read"], auth_type="oauth2"),
         ConnectorProvider(name="notion", scopes_required=[], auth_type="oauth2"),
     ]
     if _gmail_connector_enabled():
@@ -350,6 +351,8 @@ async def browse_provider_sources(
     # For Drive, parent_remote_id None implies root
     try:
         if provider == "drive":
+            items, next_cursor = await conn.list_files({"tokens": tokens, "email": email}, parent_remote_id or "root", page_size=page_size, cursor=cursor)
+        elif provider == "onedrive":
             items, next_cursor = await conn.list_files({"tokens": tokens, "email": email}, parent_remote_id or "root", page_size=page_size, cursor=cursor)
         elif provider == "notion":
             # Notion: treat parent_remote_id as workspace hint; we search globally for now

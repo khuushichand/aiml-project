@@ -6,14 +6,14 @@ from pydantic import BaseModel, Field
 
 
 class ConnectorProvider(BaseModel):
-    name: Literal["drive", "notion", "gmail"]
+    name: Literal["drive", "notion", "gmail", "onedrive"]
     auth_type: Literal["oauth2", "token"] = "oauth2"
     scopes_required: list[str] = Field(default_factory=list)
 
 
 class ConnectorAccount(BaseModel):
     id: int
-    provider: Literal["drive", "notion", "gmail"]
+    provider: Literal["drive", "notion", "gmail", "onedrive"]
     display_name: str
     created_at: str | None = None
     connected: bool = True
@@ -30,9 +30,9 @@ class SyncOptions(BaseModel):
 class ConnectorSource(BaseModel):
     id: int
     account_id: int
-    provider: Literal["drive", "notion", "gmail"]
+    provider: Literal["drive", "notion", "gmail", "onedrive"]
     remote_id: str
-    type: Literal["folder", "page", "database", "link"]
+    type: Literal["folder", "file", "page", "database", "link"]
     path: str | None = None
     options: SyncOptions = Field(default_factory=SyncOptions)
     enabled: bool = True
@@ -58,7 +58,7 @@ class AuthorizeURLResponse(BaseModel):
 
 class ConnectorPolicy(BaseModel):
     org_id: int
-    enabled_providers: list[Literal["drive", "notion", "gmail"]] = Field(default_factory=lambda: ["drive", "notion"])
+    enabled_providers: list[Literal["drive", "notion", "gmail", "onedrive"]] = Field(default_factory=lambda: ["drive", "notion"])
     allowed_export_formats: list[Literal["md", "txt", "pdf"]] = Field(default_factory=lambda: ["md", "txt", "pdf"])
     allowed_file_types: list[str] = Field(default_factory=list, description="Extensions or MIME prefixes")
     max_file_size_mb: int = 500
@@ -78,9 +78,9 @@ class ConnectorSourceCreateRequest(BaseModel):
     model_config = {"extra": 'forbid'}
 
     account_id: int
-    provider: Literal["drive", "notion", "gmail"]
+    provider: Literal["drive", "notion", "gmail", "onedrive"]
     remote_id: str
-    type: Literal["folder", "page", "database", "link"]
+    type: Literal["folder", "file", "page", "database", "link"]
     path: str | None = None
     options: dict[str, Any] = Field(default_factory=dict)
 

@@ -11,6 +11,7 @@ from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.External_Sources.gmail import GmailConnector
 from tldw_Server_API.app.core.External_Sources.google_drive import GoogleDriveConnector
 from tldw_Server_API.app.core.External_Sources.notion import NotionConnector
+from tldw_Server_API.app.core.External_Sources.onedrive import OneDriveConnector
 from tldw_Server_API.app.core.External_Sources.sync_adapter import FileSyncAdapter
 
 _CONNECTORS_NONCRITICAL_EXCEPTIONS = (
@@ -32,7 +33,7 @@ _CONNECTORS_NONCRITICAL_EXCEPTIONS = (
     ValueError,
 )
 
-FILE_SYNC_PROVIDERS = frozenset({"drive"})
+FILE_SYNC_PROVIDERS = frozenset({"drive", "onedrive"})
 _SYNC_STATE_FIELDS = (
     "sync_mode",
     "cursor",
@@ -213,6 +214,8 @@ def get_connector_by_name(name: str):
     n = name.lower()
     if n == "drive":
         return GoogleDriveConnector()
+    if n == "onedrive":
+        return OneDriveConnector()
     if n == "notion":
         return NotionConnector()
     if n == "gmail":
