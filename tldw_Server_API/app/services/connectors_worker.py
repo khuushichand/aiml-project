@@ -598,10 +598,12 @@ async def _process_import_job(
         FILE_SYNC_PROVIDERS,
         get_external_item_binding,
         get_account_tokens,
+        record_item_event,
         get_source_by_id,
         get_source_sync_state,
         record_ingested_item,
         should_ingest_item,
+        upsert_external_item_binding,
         upsert_source_sync_state,
         update_account_tokens,
     )
@@ -951,6 +953,9 @@ async def _process_import_job(
 
     processed = 0
     total = 1
+    failed = 0
+    degraded = 0
+    bootstrap_sync_storage_enabled = False
     # Policy helpers
     from fnmatch import fnmatch
 
@@ -1041,6 +1046,8 @@ async def _process_import_job(
     async def _process_file_sync_changes() -> bool:
         nonlocal processed
         nonlocal total
+        nonlocal failed
+        nonlocal degraded
 
         if provider not in FILE_SYNC_PROVIDERS:
             return False
@@ -1107,48 +1114,65 @@ async def _process_import_job(
                     )
                     continue
 
-                content_payload = None
-                if change.event_type in {"created", "content_updated"}:
-                    metadata = dict(change.metadata or {})
-                    export_mime = None
-                    mime = str(metadata.get("mime_type") or metadata.get("mimeType") or "").strip() or None
-                    if provider == "drive":
-                        export_mime = _determine_drive_export_mime(
-                            mime=mime,
-                            allowed_export_formats=allowed_export_formats,
-                            allowed_export_set=allowed_export_set,
-                            export_overrides=export_overrides,
+                try:
+                    content_payload = None
+                    if change.event_type in {"created", "content_updated"}:
+                        metadata = dict(change.metadata or {})
+                        export_mime = None
+                        mime = str(metadata.get("mime_type") or metadata.get("mimeType") or "").strip() or None
+                        if provider == "drive":
+                            export_mime = _determine_drive_export_mime(
+                                mime=mime,
+                                allowed_export_formats=allowed_export_formats,
+                                allowed_export_set=allowed_export_set,
+                                export_overrides=export_overrides,
+                            )
+                            if export_mime:
+                                metadata["export_mime"] = export_mime
+                        raw = await _attempt_with_refresh(
+                            conn.download_or_export,
+                            acct,
+                            change.remote_id,
+                            metadata=metadata,
                         )
-                        if export_mime:
-                            metadata["export_mime"] = export_mime
-                    raw = await _attempt_with_refresh(
-                        conn.download_or_export,
-                        acct,
-                        change.remote_id,
-                        metadata=metadata,
-                    )
-                    content_text = _convert_document_bytes_to_text(
-                        raw=raw,
-                        name=change.remote_name or change.remote_id,
-                        effective_mime=(export_mime or mime or "").lower(),
-                    )
-                    content_payload = sync_coordinator.FileSyncContentPayload(
-                        text=content_text or f"[empty content for {provider}:{change.remote_id}]",
-                        safe_metadata={"export_mime": export_mime} if export_mime else None,
-                    )
+                        content_text = _convert_document_bytes_to_text(
+                            raw=raw,
+                            name=change.remote_name or change.remote_id,
+                            effective_mime=(export_mime or mime or "").lower(),
+                        )
+                        content_payload = sync_coordinator.FileSyncContentPayload(
+                            text=content_text or f"[empty content for {provider}:{change.remote_id}]",
+                            safe_metadata={"export_mime": export_mime} if export_mime else None,
+                        )
 
-                async with pool.transaction() as db:
-                    reconcile_result = await sync_coordinator.reconcile_file_change(
-                        db,
-                        mdb,
-                        source_id=source_id,
-                        provider=provider,
-                        change=change,
-                        content=content_payload,
-                        job_id=str(jid),
+                    async with pool.transaction() as db:
+                        reconcile_result = await sync_coordinator.reconcile_file_change(
+                            db,
+                            mdb,
+                            source_id=source_id,
+                            provider=provider,
+                            change=change,
+                            content=content_payload,
+                            job_id=str(jid),
+                        )
+                    if reconcile_result.action:
+                        processed += 1
+                except _CONNECTOR_NONCRITICAL_EXCEPTIONS as exc:
+                    failed += 1
+                    logger.warning(
+                        "File sync item reconcile failed for provider={} source_id={} remote_id={}: {}",
+                        provider,
+                        source_id,
+                        change.remote_id,
+                        exc,
                     )
-                if reconcile_result.action:
-                    processed += 1
+                    if await _mark_file_binding_degraded(
+                        binding=binding,
+                        change=change,
+                        error=exc,
+                    ):
+                        degraded += 1
+                    continue
 
             final_cursor = str(cursor_hint or next_cursor or file_cursor).strip() or file_cursor
             async with pool.transaction() as db:
@@ -1173,10 +1197,119 @@ async def _process_import_job(
             raise
         return True
 
+    async def _resolve_post_bootstrap_cursor() -> tuple[str | None, str | None]:
+        cursor_kind = _file_sync_cursor_kind(provider)
+        try:
+            async with pool.transaction() as db:
+                sync_state = await get_source_sync_state(db, source_id=source_id) or {}
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+            sync_state = {}
+
+        existing_cursor = str(sync_state.get("cursor") or "").strip() or None
+        existing_kind = str(sync_state.get("cursor_kind") or "").strip() or cursor_kind
+        if existing_cursor:
+            return existing_cursor, existing_kind
+
+        try:
+            if provider == "drive" and hasattr(conn, "get_start_page_token"):
+                drive_cursor = await _attempt_with_refresh(conn.get_start_page_token, acct)
+                resolved = str(drive_cursor or "").strip() or None
+                return resolved, existing_kind
+            if hasattr(conn, "list_changes"):
+                _changes, next_cursor, cursor_hint = await _attempt_with_refresh(
+                    conn.list_changes,
+                    acct,
+                    cursor=None,
+                    page_size=1,
+                )
+                resolved = str(cursor_hint or next_cursor or "").strip() or None
+                return resolved, existing_kind
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(
+                "Failed to resolve post-bootstrap cursor for provider={} source_id={}: {}",
+                provider,
+                source_id,
+                exc,
+            )
+        return None, existing_kind
+
+    def _supports_connector_sync_storage(db: Any) -> bool:
+        return callable(getattr(db, "execute", None))
+
+    async def _mark_file_binding_degraded(*, binding: dict[str, Any] | None, change, error: Exception) -> bool:
+        if not binding or binding.get("id") is None:
+            return False
+
+        change_metadata = dict(change.metadata or {})
+        provider_metadata = dict(binding.get("provider_metadata") or {})
+        provider_metadata.update(
+            {key: value for key, value in change_metadata.items() if value is not None}
+        )
+        provider_metadata.update(
+            {
+                "failed_remote_revision": change.remote_revision,
+                "failed_remote_hash": change.remote_hash,
+                "failed_event_type": change.event_type,
+            }
+        )
+
+        async with pool.transaction() as db:
+            updated = await upsert_external_item_binding(
+                db,
+                source_id=source_id,
+                provider=provider,
+                external_id=change.remote_id,
+                name=change.remote_name or binding.get("name"),
+                mime=change_metadata.get("mime_type") or binding.get("mime"),
+                size=change_metadata.get("size") or binding.get("size"),
+                version=binding.get("version"),
+                modified_at=change_metadata.get("modified_at") or binding.get("modified_at"),
+                content_hash=binding.get("hash"),
+                media_id=binding.get("media_id"),
+                sync_status="degraded",
+                current_version_number=binding.get("current_version_number"),
+                remote_parent_id=change.remote_parent_id or binding.get("remote_parent_id"),
+                remote_path=change.remote_path or binding.get("remote_path"),
+                last_seen_at=_utc_now_db_text(),
+                last_metadata_sync_at=_utc_now_db_text(),
+                provider_metadata=provider_metadata,
+            )
+            await record_item_event(
+                db,
+                external_item_id=int(updated["id"]),
+                event_type="ingest_failed",
+                job_id=str(jid),
+                payload={
+                    "error": str(error),
+                    "change_event_type": change.event_type,
+                    "remote_revision": change.remote_revision,
+                    "remote_hash": change.remote_hash,
+                },
+            )
+        return True
+
     try:
         if await _process_subscription_renewal():
             return
         if not await _process_file_sync_changes():
+            bootstrap_file_sync_scan = provider in FILE_SYNC_PROVIDERS
+            if bootstrap_file_sync_scan:
+                async with pool.transaction() as db:
+                    bootstrap_sync_storage_enabled = _supports_connector_sync_storage(db)
+                    if bootstrap_sync_storage_enabled:
+                        await upsert_source_sync_state(
+                            db,
+                            source_id=source_id,
+                            cursor_kind=_file_sync_cursor_kind(provider),
+                            last_sync_started_at=_utc_now_db_text(),
+                            last_error=None,
+                        )
+            if bootstrap_file_sync_scan and not bootstrap_sync_storage_enabled:
+                logger.debug(
+                    "Connector sync storage unavailable during bootstrap for provider={} source_id={}; falling back to legacy import path",
+                    provider,
+                    source_id,
+                )
             items = await _enumerate_items()
             total = max(1, len(items))
 
@@ -1477,6 +1610,77 @@ async def _process_import_job(
                     )
                 if not should:
                     continue
+                if provider in FILE_SYNC_PROVIDERS and bootstrap_sync_storage_enabled:
+                    from tldw_Server_API.app.core.External_Sources import sync_coordinator
+
+                    change = sync_coordinator.FileSyncChange(
+                        event_type="created",
+                        remote_id=fid,
+                        remote_name=name,
+                        remote_revision=version,
+                        remote_hash=content_hash,
+                        metadata={
+                            "mime_type": mime,
+                            "size": size,
+                            "modified_at": modified_at,
+                        },
+                    )
+                    existing_binding = None
+                    try:
+                        async with pool.transaction() as db:
+                            existing_binding = await get_external_item_binding(
+                                db,
+                                source_id=source_id,
+                                provider=provider,
+                                external_id=fid,
+                            )
+                        if existing_binding:
+                            change = sync_coordinator.FileSyncChange(
+                                event_type="content_updated",
+                                remote_id=fid,
+                                remote_name=name,
+                                remote_revision=version,
+                                remote_hash=content_hash,
+                                metadata={
+                                    "mime_type": mime,
+                                    "size": size,
+                                    "modified_at": modified_at,
+                                },
+                            )
+
+                        reconcile_content = sync_coordinator.FileSyncContentPayload(
+                            text=content_text or f"[empty content for {provider}:{fid}]",
+                            safe_metadata={"export_mime": export_mime} if export_mime else None,
+                        )
+                        async with pool.transaction() as db:
+                            reconcile_result = await sync_coordinator.reconcile_file_change(
+                                db,
+                                mdb,
+                                source_id=source_id,
+                                provider=provider,
+                                change=change,
+                                content=reconcile_content,
+                                job_id=str(jid),
+                            )
+                        if reconcile_result.action:
+                            processed += 1
+                    except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
+                        failed += 1
+                        logger.warning(
+                            "Bootstrap file sync reconcile failed for provider={} source_id={} remote_id={}: {}",
+                            provider,
+                            source_id,
+                            fid,
+                            e,
+                        )
+                        if await _mark_file_binding_degraded(
+                            binding=existing_binding,
+                            change=change,
+                            error=e,
+                        ):
+                            degraded += 1
+                    continue
+
                 # Ingest minimal record
                 title = name
                 url = f"{provider}://{fid}"
@@ -1509,6 +1713,19 @@ async def _process_import_job(
                             modified_at=modified_at,
                             content_hash=content_hash,
                         )
+
+            if bootstrap_file_sync_scan and bootstrap_sync_storage_enabled:
+                resolved_cursor, resolved_cursor_kind = await _resolve_post_bootstrap_cursor()
+                async with pool.transaction() as db:
+                    await upsert_source_sync_state(
+                        db,
+                        source_id=source_id,
+                        cursor=resolved_cursor,
+                        cursor_kind=resolved_cursor_kind,
+                        last_bootstrap_at=_utc_now_db_text(),
+                        last_sync_succeeded_at=_utc_now_db_text(),
+                        last_error=None,
+                    )
     except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
         if gmail_sync_state_supported and gmail_sync_state_started:
             with contextlib.suppress(_CONNECTOR_NONCRITICAL_EXCEPTIONS):
@@ -1643,7 +1860,12 @@ async def _process_import_job(
                 ),
             )
 
-    result_payload: dict[str, Any] = {"processed": processed, "total": total}
+    result_payload: dict[str, Any] = {
+        "processed": processed,
+        "total": total,
+        "failed": failed,
+        "degraded": degraded,
+    }
     if provider == "gmail" and gmail_cursor_recovery_active:
         result_payload["cursor_recovery"] = (
             "full_backfill_required"

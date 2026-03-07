@@ -387,3 +387,171 @@ async def test_worker_drive_created_delta_without_binding_still_reconciles(monke
     assert reconcile_calls[0]["change"].event_type == "created"
     assert reconcile_calls[0]["content"].text == "Brand new drive sync body"
     assert reconcile_calls[0]["job_id"] == "5678"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_worker_drive_bootstrap_reconcile_failure_is_nonfatal(monkeypatch):
+    import tldw_Server_API.app.services.connectors_worker as worker
+
+    class FakeJM:
+        def __init__(self):
+            self.completed = None
+
+        def renew_job_lease(self, *args, **kwargs):
+            return None
+
+        def complete_job(
+            self,
+            jid,
+            result=None,
+            worker_id=None,
+            lease_id=None,
+            completion_token=None,
+        ):
+            self.completed = {"jid": jid, "result": result}
+
+    class FakeDriveConn:
+        async def list_files(self, account, parent_remote_id, *, page_size=50, cursor=None):
+            assert account["tokens"]["access_token"] == "tok"
+            assert parent_remote_id == "root"
+            assert cursor is None
+            return (
+                [
+                    {
+                        "id": "file-bootstrap",
+                        "name": "bootstrap.txt",
+                        "mimeType": "text/plain",
+                        "size": 32,
+                    }
+                ],
+                None,
+            )
+
+        async def download_file(self, account, file_id, *, mime_type=None, export_mime=None):
+            assert file_id == "file-bootstrap"
+            return b"bootstrap body"
+
+        async def get_start_page_token(self, account):
+            return "cursor-bootstrap"
+
+    class _DummyDb:
+        async def execute(self, *args, **kwargs):
+            return None
+
+        async def fetchone(self, *args, **kwargs):
+            return None
+
+    class _DummyTx:
+        async def __aenter__(self):
+            return _DummyDb()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _DummyPool:
+        def transaction(self):
+            return _DummyTx()
+
+    async def _fake_get_db_pool():
+        return _DummyPool()
+
+    async def _fake_get_source_by_id(db, user_id, source_id):
+        return {
+            "id": source_id,
+            "provider": "drive",
+            "account_id": 123,
+            "remote_id": "root",
+            "type": "folder",
+            "path": "/",
+            "options": {"recursive": False},
+            "email": "sync@example.com",
+        }
+
+    async def _fake_get_account_tokens(db, user_id, account_id):
+        return {"access_token": "tok"}
+
+    async def _fake_should_ingest_item(db, **kwargs):
+        return True
+
+    async def _fake_get_source_sync_state(db, *, source_id):
+        return {}
+
+    sync_state_updates: list[dict[str, object]] = []
+
+    async def _fake_upsert_source_sync_state(db, *, source_id, **updates):
+        payload = {"source_id": source_id, **updates}
+        sync_state_updates.append(payload)
+        return payload
+
+    async def _fake_get_external_item_binding(db, *, source_id, provider, external_id):
+        return None
+
+    reconcile_calls: list[dict[str, object]] = []
+
+    async def _fake_reconcile_file_change(
+        connectors_db,
+        media_db,
+        *,
+        source_id,
+        provider,
+        change,
+        content=None,
+        job_id=None,
+    ):
+        reconcile_calls.append(
+            {
+                "source_id": source_id,
+                "provider": provider,
+                "change": change,
+                "content": content,
+                "job_id": job_id,
+            }
+        )
+        raise RuntimeError("ingest failed")
+
+    class _FakeMDB:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    import tldw_Server_API.app.core.AuthNZ.database as dbmod
+    import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
+    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
+    import tldw_Server_API.app.core.External_Sources as ext_pkg
+    import tldw_Server_API.app.core.External_Sources.connectors_service as svc
+    import tldw_Server_API.app.core.External_Sources.sync_coordinator as sync_coordinator
+
+    monkeypatch.setattr(ext_pkg, "get_connector_by_name", lambda name: FakeDriveConn())
+    monkeypatch.setattr(dbmod, "get_db_pool", _fake_get_db_pool)
+    monkeypatch.setattr(svc, "get_source_by_id", _fake_get_source_by_id)
+    monkeypatch.setattr(svc, "get_account_tokens", _fake_get_account_tokens)
+    monkeypatch.setattr(svc, "should_ingest_item", _fake_should_ingest_item)
+    monkeypatch.setattr(svc, "get_source_sync_state", _fake_get_source_sync_state)
+    monkeypatch.setattr(svc, "upsert_source_sync_state", _fake_upsert_source_sync_state)
+    monkeypatch.setattr(svc, "get_external_item_binding", _fake_get_external_item_binding)
+    monkeypatch.setattr(sync_coordinator, "reconcile_file_change", _fake_reconcile_file_change)
+    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(orgs, "list_memberships_for_user", lambda user_id: [])
+
+    jm = FakeJM()
+
+    await worker._process_import_job(
+        jm,
+        jid=91011,
+        lease_id="lease-1",
+        worker_id="worker-1",
+        source_id=99,
+        user_id=42,
+    )
+
+    assert jm.completed is not None
+    assert jm.completed["result"]["processed"] == 0
+    assert jm.completed["result"]["failed"] == 1
+    assert jm.completed["result"]["degraded"] == 0
+    assert len(reconcile_calls) == 1
+    assert reconcile_calls[0]["change"].event_type == "created"
+    assert reconcile_calls[0]["job_id"] == "91011"
+    assert sync_state_updates[0]["last_sync_started_at"] is not None
+    assert sync_state_updates[-1]["cursor"] == "cursor-bootstrap"
+    assert sync_state_updates[-1]["last_sync_succeeded_at"] is not None
