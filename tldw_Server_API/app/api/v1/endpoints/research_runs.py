@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import os
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Path
+from fastapi.responses import StreamingResponse
 
 from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import (
     ResearchArtifactResponse,
@@ -11,9 +16,17 @@ from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import (
     ResearchRunResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Research.streaming import (
+    diff_stream_events,
+    initial_stream_events,
+    load_research_stream_state,
+)
 from tldw_Server_API.app.core.Research.service import ResearchService
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter(prefix="/research", tags=["research-runs"])
+_RESEARCH_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 def get_research_service() -> ResearchService:
@@ -27,6 +40,16 @@ def _raise_research_http_error(exc: Exception) -> None:
     if isinstance(exc, KeyError):
         raise HTTPException(status_code=404, detail=f"research_not_found:{exc.args[0]}") from None
     raise exc
+
+
+def _job_manager_for_stream(service: ResearchService) -> object | None:
+    factory = getattr(service, "get_job_manager", None)
+    if not callable(factory):
+        return None
+    try:
+        return factory()
+    except Exception:
+        return None
 
 
 @router.post("/runs", response_model=ResearchRunResponse, summary="Create a deep research run")
@@ -60,6 +83,89 @@ async def get_research_run(
     except (KeyError, ValueError) as exc:
         _raise_research_http_error(exc)
     return ResearchRunResponse.model_validate(session)
+
+
+@router.get("/runs/{session_id}/events/stream", summary="Stream live deep research run events")
+async def stream_research_run_events(
+    session_id: str = Path(..., min_length=1),
+    current_user: User = Depends(get_request_user),
+    service: ResearchService = Depends(get_research_service),
+) -> StreamingResponse:
+    job_manager = _job_manager_for_stream(service)
+    try:
+        initial_state = load_research_stream_state(
+            service=service,
+            owner_user_id=str(current_user.id),
+            session_id=session_id,
+            job_manager=job_manager,
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_research_http_error(exc)
+
+    poll_interval = float(os.getenv("RESEARCH_RUNS_SSE_POLL_INTERVAL", "1.0") or "1.0")
+    max_duration_s: float | None = None
+    try:
+        if is_test_mode():
+            max_duration_s = float(os.getenv("RESEARCH_RUNS_SSE_TEST_MAX_SECONDS", "1.0") or "1.0")
+    except (OSError, ValueError, TypeError):
+        max_duration_s = 1.0
+
+    stream = SSEStream(
+        heartbeat_interval_s=poll_interval,
+        heartbeat_mode="data",
+        max_duration_s=max_duration_s,
+        labels={"component": "research", "endpoint": "research_run_events_sse"},
+    )
+
+    async def _producer() -> None:
+        state = initial_state
+        for event in initial_stream_events(state):
+            await stream.send_event(event.event, event.data)
+        if state.snapshot.run.status in _RESEARCH_TERMINAL_STATUSES:
+            await stream.done()
+            return
+
+        while True:
+            await asyncio.sleep(poll_interval)
+            try:
+                current = load_research_stream_state(
+                    service=service,
+                    owner_user_id=str(current_user.id),
+                    session_id=session_id,
+                    job_manager=job_manager,
+                )
+            except (KeyError, ValueError) as exc:
+                await stream.error(
+                    "research_stream_error",
+                    str(exc),
+                    close=True,
+                )
+                return
+
+            for event in diff_stream_events(previous=state, current=current):
+                await stream.send_event(event.event, event.data)
+            state = current
+            if state.snapshot.run.status in _RESEARCH_TERMINAL_STATUSES:
+                await stream.done()
+                return
+
+    async def _gen():
+        producer = asyncio.create_task(_producer())
+        try:
+            async for line in stream.iter_sse():
+                yield line
+        finally:
+            if not producer.done():
+                with contextlib.suppress(asyncio.CancelledError, RuntimeError, OSError):
+                    producer.cancel()
+                with contextlib.suppress(asyncio.CancelledError, RuntimeError, OSError):
+                    await producer
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/runs/{session_id}/pause", response_model=ResearchRunResponse, summary="Pause a deep research run")

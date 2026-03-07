@@ -79,6 +79,10 @@ class ResearchService:
             return self._job_manager
         return jobs_manager_from_env()
 
+    def get_job_manager(self) -> Any:
+        """Return the Jobs manager used for research phase execution and progress reads."""
+        return self._job_manager_for_session()
+
     @staticmethod
     def _job_identifier(job: dict[str, Any]) -> str | None:
         job_id = job.get("id")

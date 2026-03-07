@@ -289,3 +289,79 @@ def test_run_control_endpoints_map_invalid_transition_and_missing_run_errors():
         assert client.post("/api/v1/research/runs/rs_missing/pause").status_code == 404
         assert client.post("/api/v1/research/runs/rs_missing/resume").status_code == 404
         assert client.post("/api/v1/research/runs/rs_missing/cancel").status_code == 404
+
+
+def test_research_run_events_stream_emits_snapshot_then_terminal_for_completed_run():
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+    from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import ResearchRunSnapshotResponse
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    class StubService:
+        def get_stream_snapshot(self, **kwargs):
+            assert kwargs["owner_user_id"] == "1"
+            assert kwargs["session_id"] == "rs_1"
+            return ResearchRunSnapshotResponse.model_validate(
+                {
+                    "run": {
+                        "id": "rs_1",
+                        "status": "completed",
+                        "phase": "completed",
+                        "control_state": "running",
+                        "progress_percent": 100.0,
+                        "progress_message": "packaging results",
+                        "active_job_id": None,
+                        "latest_checkpoint_id": "cp_1",
+                        "completed_at": "2026-03-07T00:00:00+00:00",
+                    },
+                    "checkpoint": {
+                        "checkpoint_id": "cp_1",
+                        "checkpoint_type": "outline_review",
+                        "status": "resolved",
+                        "proposed_payload": {"outline": {"sections": [{"title": "Background"}]}},
+                        "resolution": "approved",
+                    },
+                    "artifacts": [
+                        {
+                            "artifact_name": "bundle.json",
+                            "artifact_version": 1,
+                            "content_type": "application/json",
+                            "phase": "packaging",
+                            "job_id": "14",
+                        }
+                    ],
+                }
+            )
+
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        with client.stream("GET", "/api/v1/research/runs/rs_1/events/stream") as response:
+            body = b"".join(response.iter_bytes()).decode("utf-8")
+
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers.get("content-type", "")
+        assert "event: snapshot" in body
+        assert "event: terminal" in body
+        assert body.index("event: snapshot") < body.index("event: terminal")
+
+
+def test_research_run_events_stream_maps_missing_run_to_404():
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    class StubService:
+        def get_stream_snapshot(self, **kwargs):
+            raise KeyError(kwargs["session_id"])
+
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/research/runs/rs_missing/events/stream")
+
+    assert response.status_code == 404
