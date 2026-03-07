@@ -74,6 +74,40 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
+- Knowledge QA "Adaptive Progressive" UX redesign (Stages 1 & 2):
+  - New `useLayoutMode` hook with Simple/Research mode toggle, localStorage persistence, and auto-promotion toast after 3+ Q&A turns.
+  - New `CompactToolbar` component: condensed pill bar (Sources, Preset, Web toggle, Settings gear) for Simple mode.
+  - New `InlineRecentSessions` component: horizontal scrollable row of recent search session cards for returning users in Simple mode.
+  - New `KnowledgeReadyState` empty state with "Ask Your Library" heading, collapsible "How it works" guide, suggested prompts, and source/session action buttons.
+  - Added "Open workspace" / "Simplify view" toggle button (bottom-right corner) for manual mode switching.
+  - Added "Scope changed" badge in compact toolbar when search context diverges from last run.
+- Added 50 new tests across 3 new test files:
+  - `useLayoutMode.test.ts` (25 tests): mode defaults, persistence, auto-promotion, dismiss persistence.
+  - `CompactToolbar.test.tsx` (12 tests): source summaries, preset labels, web toggle, callbacks, scope badge.
+  - `InlineRecentSessions.test.tsx` (13 tests): rendering, max-5 limit, click-to-restore, relative time formatting.
+
+### Changed
+
+- Renamed "Knowledge QA" heading to "Ask Your Library" with updated subtitle across empty state and tests.
+- Redesigned web search toggle from ambiguous text to visually distinct pill with globe icon, filled/outline states, and proper `aria-label`/`aria-pressed` attributes.
+- `KnowledgeQALayout` now conditionally renders based on layout mode:
+  - Simple mode: single centered column, `CompactToolbar`, no history sidebar.
+  - Research mode: three-column layout with `HistoryPane`, full `KnowledgeContextBar`, `EvidenceRail`.
+  - Mobile always forces Simple mode layout; promotion toast hidden on mobile.
+- `KnowledgeReadyState` guide section auto-collapses for returning users (via `useEffect` on async history load).
+- Evidence rail auto-open now respects user intent via `useRef` tracking — won't reopen after manual close.
+- Settings panel and evidence rail are now mutually exclusive (opening one closes the other).
+- Refactored `Knowledge/index.tsx` settings page status display from nested ternaries to a `STATUS_COPY` map.
+- Updated golden layout tests for new conditional rendering paths and component structure.
+
+### Fixed
+
+- Fixed blank `/settings/knowledge` page (Critical, H1 violation) — added connection-aware error states.
+- Fixed `contextChangedSinceLastRun` always showing "Scope changed" badge due to broken `normalizeIdentifierSet` comparisons against empty string.
+- Removed dead `normalizeIdentifierSet` function and stale `include_media_ids`/`include_note_ids` from `useMemo` dependency array.
+- Fixed `InlineRecentSessions` crash on invalid timestamp strings (added `NaN` guard in `formatRelativeTime`).
+- Fixed `CompactToolbar` source summary using magic number — extracted `ALL_SOURCES_THRESHOLD` constant.
+- Fixed evidence rail auto-open loop where `useEffect` would immediately reopen rail after user closed it.
 - Voice-streaming interruption + overlap protocol additions:
   - Added additive client `interrupt` and server `interrupted` frame handling for `/api/v1/audio/chat/stream`.
   - Added active turn identifiers (`turn_id`) for interruption acknowledgements.
