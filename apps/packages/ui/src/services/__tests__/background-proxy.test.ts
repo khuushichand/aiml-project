@@ -710,4 +710,119 @@ describe("background proxy fallback safety", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
   })
+
+  it("cooperatively yields while draining large stream queues", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true })
+    const onMessageListeners = new Set<(msg: any) => void>()
+    const port = {
+      onMessage: {
+        addListener: (listener: (msg: any) => void) =>
+          onMessageListeners.add(listener),
+        removeListener: (listener: (msg: any) => void) =>
+          onMessageListeners.delete(listener)
+      },
+      onDisconnect: {
+        addListener: vi.fn(),
+        removeListener: vi.fn()
+      },
+      postMessage: vi.fn(() => {
+        for (let i = 0; i < 180; i += 1) {
+          onMessageListeners.forEach((listener) =>
+            listener({
+              event: "data",
+              data: JSON.stringify({
+                choices: [{ delta: { content: String(i % 10) } }]
+              })
+            })
+          )
+        }
+        onMessageListeners.forEach((listener) => listener({ event: "done" }))
+      }),
+      disconnect: vi.fn()
+    }
+    mocks.connect.mockReturnValue(port as any)
+    const rafSpy = vi.fn((cb: FrameRequestCallback) => {
+      cb(0)
+      return 1
+    })
+    vi.stubGlobal("requestAnimationFrame", rafSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(chunks).toHaveLength(180)
+    expect(rafSpy).toHaveBeenCalled()
+  })
+
+  it("preserves chunk ordering when draining queued stream data", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true })
+    const onMessageListeners = new Set<(msg: any) => void>()
+    const port = {
+      onMessage: {
+        addListener: (listener: (msg: any) => void) =>
+          onMessageListeners.add(listener),
+        removeListener: (listener: (msg: any) => void) =>
+          onMessageListeners.delete(listener)
+      },
+      onDisconnect: {
+        addListener: vi.fn(),
+        removeListener: vi.fn()
+      },
+      postMessage: vi.fn(() => {
+        const ordered = ["A", "B", "C", "D", "E"]
+        for (const token of ordered) {
+          onMessageListeners.forEach((listener) =>
+            listener({
+              event: "data",
+              data: JSON.stringify({
+                choices: [{ delta: { content: token } }]
+              })
+            })
+          )
+        }
+        onMessageListeners.forEach((listener) => listener({ event: "done" }))
+      }),
+      disconnect: vi.fn()
+    }
+    mocks.connect.mockReturnValue(port as any)
+    vi.stubGlobal("requestAnimationFrame", ((cb: FrameRequestCallback) => {
+      cb(0)
+      return 1
+    }) as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(chunks).toEqual([
+      '{"choices":[{"delta":{"content":"A"}}]}',
+      '{"choices":[{"delta":{"content":"B"}}]}',
+      '{"choices":[{"delta":{"content":"C"}}]}',
+      '{"choices":[{"delta":{"content":"D"}}]}',
+      '{"choices":[{"delta":{"content":"E"}}]}'
+    ])
+  })
 })

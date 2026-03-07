@@ -22,6 +22,8 @@ const ERROR_LOG_MAX_ENTRIES = 200
 const BACKEND_UNREACHABLE_EVENT_THROTTLE_MS = 5_000
 const STREAM_RUNTIME_PING_TIMEOUT_MS = 400
 const STREAM_RUNTIME_HEALTH_TTL_MS = 30_000
+const STREAM_QUEUE_DRAIN_BATCH_LIMIT = 32
+const STREAM_QUEUE_DRAIN_SLICE_MS = 12
 const ABSOLUTE_URL_BLOCK_ERROR =
   "Direct stream fallback is allowed only for allowlisted absolute URLs."
 const BACKEND_UNREACHABLE_PATTERN =
@@ -763,6 +765,16 @@ const parseStreamError = async (resp: Response): Promise<string> => {
   return resp.statusText
 }
 
+const yieldToBrowser = async (): Promise<void> => {
+  if (typeof requestAnimationFrame === "function") {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve())
+    })
+    return
+  }
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
+}
+
 /**
  * Direct fetch streaming implementation - used as fallback when extension messaging is unavailable or times out
  */
@@ -1078,11 +1090,25 @@ export async function* bgStream<
   }
 
   try {
+    let drainedSinceYield = 0
+    let sliceStartedAt = Date.now()
     while (!done || queue.length > 0) {
       if (queue.length > 0) {
         yield queue.shift() as string
+        drainedSinceYield += 1
+        const sliceElapsedMs = Date.now() - sliceStartedAt
+        if (
+          drainedSinceYield >= STREAM_QUEUE_DRAIN_BATCH_LIMIT ||
+          sliceElapsedMs >= STREAM_QUEUE_DRAIN_SLICE_MS
+        ) {
+          await yieldToBrowser()
+          drainedSinceYield = 0
+          sliceStartedAt = Date.now()
+        }
       } else {
         await new Promise((r) => setTimeout(r, 10))
+        drainedSinceYield = 0
+        sliceStartedAt = Date.now()
       }
     }
     // If connection timed out before receiving any data, fall back to direct fetch
