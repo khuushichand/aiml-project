@@ -16,6 +16,11 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
     from tldw_Server_API.app.core.File_Artifacts.adapter_registry import FileAdapterRegistry
     from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+    from tldw_Server_API.app.core.Research.models import (
+        ResearchCollectionResult,
+        ResearchEvidenceNote,
+        ResearchSourceRecord,
+    )
     from tldw_Server_API.app.core.Research.service import ResearchService
 
     class DummyJobs:
@@ -68,6 +73,75 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
         )
         assert approve_resp.status_code == 200
         assert approve_resp.json()["phase"] == "collecting"
+
+    class StubBroker:
+        async def collect_focus_area(self, **kwargs):
+            focus_area = kwargs["focus_area"]
+            return ResearchCollectionResult(
+                sources=[
+                    ResearchSourceRecord(
+                        source_id=f"src_{focus_area}",
+                        focus_area=focus_area,
+                        source_type="local_document",
+                        provider="local_corpus",
+                        title=f"Internal note for {focus_area}",
+                        url=None,
+                        snippet=f"Evidence for {focus_area}",
+                        published_at=None,
+                        retrieved_at="2026-03-07T00:00:00+00:00",
+                        fingerprint=f"fp_{focus_area}",
+                        trust_tier="internal",
+                        metadata={},
+                    )
+                ],
+                evidence_notes=[
+                    ResearchEvidenceNote(
+                        note_id=f"note_{focus_area}",
+                        source_id=f"src_{focus_area}",
+                        focus_area=focus_area,
+                        kind="summary",
+                        text=f"Evidence for {focus_area}",
+                        citation_locator=None,
+                        confidence=0.8,
+                        metadata={},
+                    )
+                ],
+                collection_metrics={"lane_counts": {"local": 1, "academic": 0, "web": 0}, "deduped_sources": 0},
+                remaining_gaps=[],
+            )
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 12,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "collecting",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+            broker=StubBroker(),
+        )
+    )
+
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.phase == "awaiting_source_review"
+    assert session.latest_checkpoint_id is not None
+    assert (outputs_dir / "research" / session_id / "source_registry.json").exists()
+    assert (outputs_dir / "research" / session_id / "evidence_notes.jsonl").exists()
+    assert (outputs_dir / "research" / session_id / "collection_summary.json").exists()
+
+    with TestClient(app) as client:
+        approve_source_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={},
+        )
+        assert approve_source_resp.status_code == 200
+        assert approve_source_resp.json()["phase"] == "synthesizing"
 
     package = service.build_package(
         owner_user_id="1",

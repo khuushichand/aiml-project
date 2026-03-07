@@ -47,6 +47,24 @@ class ResearchService:
             return self._job_manager
         return jobs_manager_from_env()
 
+    @staticmethod
+    def _job_identifier(job: dict[str, Any]) -> str | None:
+        job_id = job.get("id")
+        if job_id is not None:
+            return str(job_id)
+        job_uuid = job.get("uuid")
+        return str(job_uuid) if job_uuid else None
+
+    @staticmethod
+    def _next_phase_for_checkpoint(checkpoint_type: str) -> tuple[str, bool]:
+        if checkpoint_type == "plan_review":
+            return ("collecting", True)
+        if checkpoint_type == "sources_review":
+            return ("synthesizing", False)
+        if checkpoint_type == "outline_review":
+            return ("packaging", False)
+        raise ValueError(f"unsupported checkpoint type: {checkpoint_type}")
+
     def create_session(
         self,
         *,
@@ -72,16 +90,9 @@ class ResearchService:
             phase=session.phase,
             owner_user_id=session.owner_user_id,
         )
-        job_id = job.get("id")
-        active_job_id: str | None
-        if job_id is not None:
-            active_job_id = str(job_id)
-        else:
-            job_uuid = job.get("uuid")
-            active_job_id = str(job_uuid) if job_uuid else None
         return db.attach_active_job(
             session.id,
-            active_job_id,
+            self._job_identifier(job),
         )
 
     def approve_checkpoint(
@@ -126,8 +137,19 @@ class ResearchService:
                 job_id=None,
             )
 
-        db.update_phase(session_id, phase="collecting", status="queued")
-        return db.attach_active_job(session_id, None)
+        next_phase, should_enqueue = self._next_phase_for_checkpoint(checkpoint.checkpoint_type)
+        db.update_phase(session_id, phase=next_phase, status="queued")
+        if not should_enqueue:
+            return db.attach_active_job(session_id, None)
+
+        job = enqueue_research_phase_job(
+            jm=self._job_manager_for_session(),
+            session_id=session.id,
+            phase=next_phase,
+            owner_user_id=session.owner_user_id,
+            checkpoint_id=checkpoint.id,
+        )
+        return db.attach_active_job(session_id, self._job_identifier(job))
 
     def build_package(
         self,

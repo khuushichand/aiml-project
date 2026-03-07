@@ -40,6 +40,16 @@ class ResearchArtifactStore:
         ]
         return (max(existing) + 1) if existing else 1
 
+    def _latest_artifact(self, session_id: str, artifact_name: str) -> ResearchArtifactRow | None:
+        matches = [
+            artifact
+            for artifact in self.db.list_artifacts(session_id)
+            if artifact.artifact_name == artifact_name
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda artifact: artifact.artifact_version)
+
     def write_json(
         self,
         *,
@@ -65,3 +75,45 @@ class ResearchArtifactStore:
             phase=phase,
             job_id=job_id,
         )
+
+    def write_jsonl(
+        self,
+        *,
+        owner_user_id: int | str,
+        session_id: str,
+        artifact_name: str,
+        records: list[dict[str, Any]],
+        phase: str,
+        job_id: str | None,
+    ) -> ResearchArtifactRow:
+        _ = owner_user_id
+        path = self._artifact_path(session_id, artifact_name)
+        encoded = "".join(
+            f"{json.dumps(record, sort_keys=True)}\n"
+            for record in records
+        ).encode("utf-8")
+        path.write_bytes(encoded)
+        return self.db.record_artifact(
+            session_id=session_id,
+            artifact_name=path.name,
+            artifact_version=self._next_version(session_id, path.name),
+            storage_path=str(path),
+            content_type="application/x-ndjson",
+            byte_size=len(encoded),
+            checksum=hashlib.sha256(encoded).hexdigest(),
+            phase=phase,
+            job_id=job_id,
+        )
+
+    def read_json(self, *, session_id: str, artifact_name: str) -> dict[str, Any] | None:
+        artifact = self._latest_artifact(session_id, artifact_name)
+        if artifact is None:
+            return None
+        path = Path(artifact.storage_path)
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
