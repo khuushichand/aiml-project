@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from fastapi import HTTPException, status
 
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, is_single_user_principal
+from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.services.auth_service import fetch_active_user_by_id
 
 
@@ -15,12 +17,24 @@ def _enterprise_admin_mode_enabled() -> bool:
 
 async def verify_privileged_action(
     principal: AuthPrincipal,
-    db,
-    password_service,
+    db: Any,
+    password_service: PasswordService,
     *,
     reason: str | None,
     admin_password: str | None,
 ) -> str:
+    """
+    Enforce step-up guardrails for high-risk admin actions.
+
+    Requires a human-readable reason for every privileged action. In enterprise
+    mode, or for any non-single-user principal, it also requires the acting
+    admin's current password and validates it against the active user record.
+
+    Raises:
+        HTTPException: When the reason is missing, the password reauth check
+            fails, or the acting principal cannot be resolved to an active admin
+            account.
+    """
     normalized_reason = str(reason or "").strip()
     normalized_password = str(admin_password or "").strip()
 

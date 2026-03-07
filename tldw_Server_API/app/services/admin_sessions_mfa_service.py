@@ -5,13 +5,16 @@ from typing import Any
 from fastapi import HTTPException
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.schemas.admin_schemas import AdminPrivilegedActionRequest
 from tldw_Server_API.app.api.v1.schemas.auth_schemas import MessageResponse, SessionResponse
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventCategory,
     AuditEventType,
 )
 from tldw_Server_API.app.core.AuthNZ.mfa_service import get_mfa_service
+from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.services import admin_scope_service
 from tldw_Server_API.app.services.admin_audit_service import (
     emit_admin_account_audit_event as _emit_admin_account_audit_event,
@@ -32,7 +35,7 @@ _ADMIN_SESSIONS_NONCRITICAL_EXCEPTIONS = (
 async def list_user_sessions(
     principal: AuthPrincipal,
     user_id: int,
-    session_manager,
+    session_manager: SessionManager,
 ) -> list[SessionResponse]:
     """List active sessions for a user (admin scope)."""
     try:
@@ -64,10 +67,10 @@ async def revoke_user_session(
     principal: AuthPrincipal,
     user_id: int,
     session_id: int,
-    session_manager,
-    db,
-    password_service,
-    request,
+    session_manager: SessionManager,
+    db: Any,
+    password_service: PasswordService,
+    request: AdminPrivilegedActionRequest,
 ) -> MessageResponse:
     """Revoke a specific session for a user (admin scope)."""
     try:
@@ -108,10 +111,10 @@ async def revoke_user_session(
 async def revoke_all_user_sessions(
     principal: AuthPrincipal,
     user_id: int,
-    session_manager,
-    db,
-    password_service,
-    request,
+    session_manager: SessionManager,
+    db: Any,
+    password_service: PasswordService,
+    request: AdminPrivilegedActionRequest,
 ) -> MessageResponse:
     """Revoke all sessions for a user (admin scope)."""
     try:
@@ -172,9 +175,9 @@ async def get_user_mfa_status(
 async def disable_user_mfa(
     principal: AuthPrincipal,
     user_id: int,
-    db,
-    password_service,
-    request,
+    db: Any,
+    password_service: PasswordService,
+    request: AdminPrivilegedActionRequest,
 ) -> MessageResponse:
     """Disable MFA for a user (admin scope)."""
     try:
