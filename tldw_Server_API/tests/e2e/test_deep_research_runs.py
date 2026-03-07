@@ -1,4 +1,7 @@
 import asyncio
+import json
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +12,76 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 
 pytestmark = pytest.mark.critical
+
+
+def _collect_sse_events(app: FastAPI, url: str, sink: list[dict[str, object]], snapshot_seen: threading.Event) -> None:
+    with TestClient(app) as client:
+        with client.stream("GET", url) as response:
+            sink.append({"event": "__meta__", "data": {"status_code": response.status_code}})
+            chunks: list[str] = []
+            for chunk in response.iter_text():
+                chunks.append(chunk)
+                if not snapshot_seen.is_set() and "event: snapshot" in "".join(chunks):
+                    snapshot_seen.set()
+
+    payload_text = "".join(chunks).replace("\r\n", "\n")
+    for block in payload_text.split("\n\n"):
+        if not block.strip():
+            continue
+        event_name: str | None = None
+        data_lines: list[str] = []
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                event_name = line.removeprefix("event: ").strip()
+            elif line.startswith("data: "):
+                data_lines.append(line.removeprefix("data: "))
+        if event_name is None:
+            continue
+        payload = "\n".join(data_lines)
+        sink.append(
+            {
+                "event": event_name,
+                "data": json.loads(payload) if payload else None,
+            }
+        )
+
+
+def _build_stub_synthesizer(first_source: dict[str, object], first_note: dict[str, object]):
+    from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
+
+    class StubSynthesisProvider:
+        async def summarize(self, **kwargs):
+            assert kwargs["config"]["provider"] == "openai"
+            assert kwargs["config"]["model"] == "gpt-4.1-mini"
+            return {
+                "outline_sections": [
+                    {
+                        "title": "Background",
+                        "focus_area": first_source["focus_area"],
+                        "source_ids": [first_source["source_id"]],
+                        "note_ids": [first_note["note_id"]],
+                    }
+                ],
+                "claims": [
+                    {
+                        "text": "Supported claim",
+                        "focus_area": first_source["focus_area"],
+                        "source_ids": [first_source["source_id"]],
+                        "citations": [{"source_id": first_source["source_id"]}],
+                        "confidence": 0.81,
+                    }
+                ],
+                "report_sections": [
+                    {
+                        "title": "Background",
+                        "markdown": "Evidence-backed section text.",
+                    }
+                ],
+                "unresolved_questions": [],
+                "summary": {"mode": "llm_backed"},
+            }
+
+    return ResearchSynthesizer(synthesis_provider=StubSynthesisProvider())
 
 
 def test_deep_research_run_can_be_approved_and_exported(tmp_path):
@@ -349,3 +422,183 @@ def test_deep_research_run_controls_support_pause_resume_cancel_and_progress_pol
         assert cancelled_resume_resp.status_code == 400
 
     assert jobs.cancelled == [(52, "research_cancel_requested")]
+
+
+def test_deep_research_live_progress_stream_reports_checkpoint_and_terminal_events(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            return {"id": 11, "uuid": "job-11", "status": "queued", **kwargs}
+
+    monkeypatch.setenv("RESEARCH_RUNS_SSE_POLL_INTERVAL", "0.05")
+    monkeypatch.setenv("RESEARCH_RUNS_SSE_TEST_MAX_SECONDS", "5.0")
+
+    research_db_path = tmp_path / "research.db"
+    outputs_dir = tmp_path / "outputs"
+    service = ResearchService(
+        research_db_path=research_db_path,
+        outputs_dir=outputs_dir,
+        job_manager=DummyJobs(),
+    )
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+    app.dependency_overrides[research_runs.get_research_service] = lambda: service
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/api/v1/research/runs",
+            json={
+                "query": "Stream deep research run",
+                "provider_overrides": {
+                    "local": {"top_k": 4, "sources": ["media_db"]},
+                    "web": {"engine": "kagi", "result_count": 3},
+                    "academic": {"providers": ["arxiv", "pubmed"], "max_results": 2},
+                    "synthesis": {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2},
+                },
+            },
+        )
+        assert create_resp.status_code == 200
+        session_id = create_resp.json()["id"]
+
+    events: list[dict[str, object]] = []
+    snapshot_seen = threading.Event()
+    stream_thread = threading.Thread(
+        target=_collect_sse_events,
+        args=(app, f"/api/v1/research/runs/{session_id}/events/stream", events, snapshot_seen),
+        daemon=True,
+    )
+    stream_thread.start()
+    time.sleep(0.2)
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 11,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "drafting_plan",
+                    "checkpoint_id": None,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+        )
+    )
+    time.sleep(0.15)
+
+    db = ResearchSessionsDB(research_db_path)
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.latest_checkpoint_id is not None
+
+    with TestClient(app) as client:
+        approve_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={"patch_payload": {"focus_areas": ["background", "counterevidence"]}},
+        )
+        assert approve_resp.status_code == 200
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 12,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "collecting",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+        )
+    )
+    time.sleep(0.15)
+
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.latest_checkpoint_id is not None
+
+    with TestClient(app) as client:
+        approve_source_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={},
+        )
+        assert approve_source_resp.status_code == 200
+
+    store = ResearchArtifactStore(base_dir=outputs_dir, db=db)
+    source_registry = store.read_json(session_id=session_id, artifact_name="source_registry.json")
+    evidence_notes = store.read_jsonl(session_id=session_id, artifact_name="evidence_notes.jsonl")
+    assert source_registry is not None
+    assert evidence_notes is not None
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 13,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "synthesizing",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+            synthesizer=_build_stub_synthesizer(source_registry["sources"][0], evidence_notes[0]),
+        )
+    )
+    time.sleep(0.15)
+
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.latest_checkpoint_id is not None
+
+    with TestClient(app) as client:
+        approve_outline_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={},
+        )
+        assert approve_outline_resp.status_code == 200
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 14,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "packaging",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+        )
+    )
+
+    stream_thread.join(timeout=5.0)
+    assert not stream_thread.is_alive()
+
+    meta = next(item for item in events if item["event"] == "__meta__")
+    assert meta["data"]["status_code"] == 200
+
+    event_names = [item["event"] for item in events if item["event"] != "__meta__"]
+    assert event_names[0] == "snapshot"
+    assert "status" in event_names
+    assert "checkpoint" in event_names
+    assert event_names[-1] == "terminal"
+
+    checkpoint_events = [item for item in events if item["event"] == "checkpoint"]
+    assert any(item["data"]["checkpoint_type"] == "plan_review" for item in checkpoint_events)
+
+    terminal_event = next(item for item in reversed(events) if item["event"] == "terminal")
+    assert terminal_event["data"]["status"] == "completed"
