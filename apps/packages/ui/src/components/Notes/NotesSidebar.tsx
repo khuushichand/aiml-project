@@ -18,7 +18,7 @@ import {
   NOTES_LIST_REGION_ID,
   MIN_SIDEBAR_HEIGHT,
 } from './notes-manager-utils'
-import type { ServerCapabilities } from '@/hooks/useServerCapabilities'
+import type { ServerCapabilities } from '@/services/tldw/server-capabilities'
 import type { NotesRecentOpenedEntry } from '@/services/settings/ui-settings'
 
 // ---------------------------------------------------------------------------

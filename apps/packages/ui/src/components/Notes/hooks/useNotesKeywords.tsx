@@ -22,7 +22,6 @@ type ConfirmDanger = (options: ConfirmDangerOptions) => Promise<boolean>
 
 export interface UseNotesKeywordsDeps {
   isOnline: boolean
-  editorDisabled: boolean
   /** Current list mode (active|trash) - needed for auto-loading keywords */
   listMode: 'active' | 'trash'
   message: MessageInstance
@@ -45,7 +44,6 @@ export interface UseNotesKeywordsDeps {
 export function useNotesKeywords(deps: UseNotesKeywordsDeps) {
   const {
     isOnline,
-    editorDisabled: _editorDisabled,
     listMode,
     message,
     confirmDanger,

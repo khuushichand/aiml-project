@@ -1,6 +1,11 @@
 import type { NotesTitleSuggestStrategy, NotesNotebookSetting } from '@/services/settings/ui-settings'
 import type { NoteListItem } from './types'
 
+export type NoteWithKeywords = {
+  metadata?: { keywords?: any[] }
+  keywords?: any[]
+}
+
 export const extractBacklink = (note: any) => {
   const meta = note?.metadata || {}
   const backlinks = meta?.backlinks || meta || {}

@@ -1,19 +1,9 @@
 import React from 'react'
 import type { InputRef } from 'antd'
-import { Input, Typography, Select, Button, Tooltip, Popover, Modal, Checkbox, Spin } from 'antd'
+import { Input, Typography, Select, Button, Modal, Checkbox } from 'antd'
 import {
-  Plus as PlusIcon,
-  Search as SearchIcon,
   ChevronLeft,
   ChevronRight,
-  Sparkles as SparklesIcon,
-  Bold as BoldIcon,
-  Italic as ItalicIcon,
-  Heading1 as HeadingIcon,
-  List as ListIcon,
-  Link2 as LinkIcon,
-  Code2 as CodeIcon,
-  Paperclip as PaperclipIcon
 } from 'lucide-react'
 import { bgRequest } from '@/services/background-proxy'
 import { useQuery, keepPreviousData, useQueryClient } from '@tanstack/react-query'
@@ -21,22 +11,16 @@ import { useServerOnline } from '@/hooks/useServerOnline'
 import { useConfirmDanger } from '@/components/Common/confirm-danger'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import FeatureEmptyState from '@/components/Common/FeatureEmptyState'
 import { useDemoMode } from '@/context/demo-mode'
 import { useServerCapabilities } from '@/hooks/useServerCapabilities'
 import { tldwClient } from '@/services/tldw/TldwApiClient'
 import { useAntdMessage } from '@/hooks/useAntdMessage'
-/* getAllNoteKeywordStats, searchNoteKeywords moved to useNotesKeywords hook */
 import { useStoreMessageOption } from "@/store/option"
 import { shallow } from "zustand/shallow"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
-import { useScrollToServerCard } from "@/hooks/useScrollToServerCard"
-import { MarkdownPreview } from "@/components/Common/MarkdownPreview"
-import NotesEditorHeader from "@/components/Notes/NotesEditorHeader"
 import NotesEditorPane from "@/components/Notes/NotesEditorPane"
 import NotesSidebar from "@/components/Notes/NotesSidebar"
-import NotesListPanel from "@/components/Notes/NotesListPanel"
 import NotesGraphModal from "@/components/Notes/NotesGraphModal"
 import {
   buildSingleNoteCopyText,
@@ -47,7 +31,6 @@ import {
   type SingleNoteExportFormat
 } from "@/components/Notes/export-utils"
 import { useNotesKeywords } from "@/components/Notes/hooks/useNotesKeywords"
-// Note: hook file is .tsx because it returns JSX from renderKeywordLabelWithFrequency
 import type { NoteListItem } from "@/components/Notes/notes-manager-types"
 import type { ActiveWikilinkQuery, WikilinkCandidate } from "@/components/Notes/wikilinks"
 import {
@@ -343,7 +326,6 @@ const NotesManagerPage: React.FC = () => {
 
   const kw = useNotesKeywords({
     isOnline,
-    editorDisabled,
     listMode,
     message,
     confirmDanger,

@@ -33,9 +33,5 @@ export type {
   NotesTitleSettingsResponse,
   NoteTemplateDefinition,
   NotesTocEntry,
+  NoteWithKeywords,
 } from './notes-manager-utils'
-
-export type NoteWithKeywords = {
-  metadata?: { keywords?: any[] }
-  keywords?: any[]
-}
