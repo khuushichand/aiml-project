@@ -1287,7 +1287,7 @@ export const useChatActions = ({
       let streamTransportInterruptionReason: string | null = null
 
       const explicitProvider = resolveExplicitProviderForSelectedModel({
-        currentSelectedModel: selectedModel,
+        currentSelectedModel: getEffectiveSelectedModel(),
         requestedSelectedModel: resolvedModel,
         explicitProvider: currentChatModelSettings.apiProvider
       })

@@ -13,18 +13,26 @@ import {
 
 const {
   addChatMessageMock,
+  streamCharacterChatCompletionMock,
+  persistCharacterCompletionMock,
   normalChatModeMock,
   updateMessageMediaMock,
   chatSettingsState,
-  storageValues
+  storageValues,
+  storeOptionState
 } = vi.hoisted(() => ({
   addChatMessageMock: vi.fn(),
+  streamCharacterChatCompletionMock: vi.fn(),
+  persistCharacterCompletionMock: vi.fn(async () => ({ assistant_message_id: "assistant-server-1" })),
   normalChatModeMock: vi.fn(),
   updateMessageMediaMock: vi.fn(async (_messageId: string, _payload: any) => null),
   chatSettingsState: {
     value: { imageEventSyncMode: "off" as "off" | "on" }
   },
-  storageValues: new Map<string, unknown>()
+  storageValues: new Map<string, unknown>(),
+  storeOptionState: {
+    value: { selectedModel: "deepseek-chat" as string | null }
+  }
 }))
 
 vi.mock("@/hooks/chat-modes/normalChatMode", () => ({
@@ -124,9 +132,7 @@ vi.mock("@plasmohq/storage/hook", () => ({
 
 vi.mock("@/store/option", () => ({
   useStoreMessageOption: {
-    getState: () => ({
-      selectedModel: "deepseek-chat"
-    })
+    getState: () => storeOptionState.value
   }
 }))
 
@@ -137,13 +143,15 @@ vi.mock("@/services/tldw/server-capabilities", () => ({
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     addChatMessage: addChatMessageMock,
+    streamCharacterChatCompletion: streamCharacterChatCompletionMock,
+    persistCharacterCompletion: persistCharacterCompletionMock,
     initialize: vi.fn(async () => null),
     getMessage: vi.fn(async () => ({ version: 1 })),
     editMessage: vi.fn(async () => null)
   }
 }))
 
-const createHookOptions = () => {
+const createHookOptions = (overrides: Record<string, unknown> = {}) => {
   let currentMessages: any[] = [
     {
       id: "assistant-image-1",
@@ -253,6 +261,8 @@ const createHookOptions = () => {
     clearMessageSteering: vi.fn()
   }
 
+  Object.assign(options, overrides)
+
   return {
     options,
     getCurrentMessages: () => currentMessages,
@@ -284,6 +294,7 @@ describe("useChatActions image event sync integration", () => {
     storageValues.clear()
     storageValues.set(PLAYGROUND_IMAGE_EVENT_SYNC_DEFAULT_STORAGE_KEY, "off")
     chatSettingsState.value = { imageEventSyncMode: "off" }
+    storeOptionState.value = { selectedModel: "deepseek-chat" }
 
     normalChatModeMock.mockImplementation(
       async (
@@ -319,6 +330,12 @@ describe("useChatActions image event sync integration", () => {
           },
           imageEventSyncPolicy: params.imageEventSyncPolicy
         })
+      }
+    )
+
+    streamCharacterChatCompletionMock.mockImplementation(
+      async function* () {
+        yield "Character reply"
       }
     )
   })
@@ -421,6 +438,43 @@ describe("useChatActions image event sync integration", () => {
     expect(syncMeta?.serverMessageId).toBe("server-message-99")
     expect(getCurrentMessages()[0]?.generationInfo?.image_generation?.sync?.status).toBe(
       "synced"
+    )
+  })
+
+  it("preserves the current explicit provider when selectedModel falls back from store state", async () => {
+    storeOptionState.value = {
+      selectedModel: "anthropic/claude-4.5-sonnet"
+    }
+    const { options } = createHookOptions({
+      selectedModel: null,
+      currentChatModelSettings: {
+        apiProvider: "openrouter",
+        setSystemPrompt: vi.fn()
+      },
+      selectedCharacter: {
+        id: 7,
+        name: "Guide"
+      },
+      serverChatCharacterId: 7
+    })
+    const { result } = renderHook(() => useChatActions(options))
+
+    await act(async () => {
+      await result.current.onSubmit({
+        message: "Stay in character",
+        image: "",
+        requestOverrides: {
+          selectedModel: "anthropic/claude-4.5-sonnet"
+        }
+      })
+    })
+
+    expect(streamCharacterChatCompletionMock).toHaveBeenCalledTimes(1)
+    expect(streamCharacterChatCompletionMock.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        model: "anthropic/claude-4.5-sonnet",
+        provider: "openrouter"
+      })
     )
   })
 })
