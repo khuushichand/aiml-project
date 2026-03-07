@@ -13,12 +13,18 @@ import {
 
 const {
   addChatMessageMock,
+  createChatMock,
+  streamCharacterChatCompletionMock,
+  persistCharacterCompletionMock,
   normalChatModeMock,
   updateMessageMediaMock,
   chatSettingsState,
   storageValues
 } = vi.hoisted(() => ({
   addChatMessageMock: vi.fn(),
+  createChatMock: vi.fn(),
+  streamCharacterChatCompletionMock: vi.fn(),
+  persistCharacterCompletionMock: vi.fn(),
   normalChatModeMock: vi.fn(),
   updateMessageMediaMock: vi.fn(async (_messageId: string, _payload: any) => null),
   chatSettingsState: {
@@ -137,14 +143,17 @@ vi.mock("@/services/tldw/server-capabilities", () => ({
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     addChatMessage: addChatMessageMock,
+    createChat: createChatMock,
+    streamCharacterChatCompletion: streamCharacterChatCompletionMock,
+    persistCharacterCompletion: persistCharacterCompletionMock,
     initialize: vi.fn(async () => null),
     getMessage: vi.fn(async () => ({ version: 1 })),
     editMessage: vi.fn(async () => null)
   }
 }))
 
-const createHookOptions = () => {
-  let currentMessages: any[] = [
+const createHookOptions = (
+  initialMessages: any[] = [
     {
       id: "assistant-image-1",
       role: "assistant",
@@ -167,6 +176,8 @@ const createHookOptions = () => {
       }
     }
   ]
+) => {
+  let currentMessages: any[] = initialMessages
 
   const setMessages = vi.fn((next: any[] | ((prev: any[]) => any[])) => {
     currentMessages =
@@ -422,5 +433,72 @@ describe("useChatActions image event sync integration", () => {
     expect(getCurrentMessages()[0]?.generationInfo?.image_generation?.sync?.status).toBe(
       "synced"
     )
+  })
+})
+
+describe("useChatActions character stream throttling integration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    storageValues.clear()
+    storageValues.set(PLAYGROUND_IMAGE_EVENT_SYNC_DEFAULT_STORAGE_KEY, "off")
+    chatSettingsState.value = { imageEventSyncMode: "off" }
+    normalChatModeMock.mockResolvedValue(undefined)
+    createChatMock.mockResolvedValue({
+      id: "chat-character-1",
+      title: "Character Chat",
+      version: 1,
+      state: "in-progress",
+      character_id: 101
+    })
+    addChatMessageMock.mockResolvedValue({ id: "chat-message-1", version: 1 })
+    persistCharacterCompletionMock.mockResolvedValue({
+      assistant_message_id: "assistant-message-1",
+      version: 1
+    })
+    streamCharacterChatCompletionMock.mockImplementation(async function* () {
+      for (let i = 0; i < 180; i += 1) {
+        yield {
+          choices: [
+            {
+              delta: {
+                content: "x"
+              }
+            }
+          ]
+        }
+      }
+    })
+  })
+
+  it("coalesces rapid tiny character chunks into bounded setMessages updates", async () => {
+    const { options, setMessages, getCurrentMessages } = createHookOptions([])
+    options.serverChatId = null
+    options.serverChatCharacterId = null
+    options.selectedCharacter = {
+      id: 101,
+      name: "Stream Character",
+      avatar_url: ""
+    }
+    options.selectedModel = "openrouter/openai/gpt-4.1-mini"
+    options.currentChatModelSettings.apiProvider = "openrouter"
+
+    const { result } = renderHook(() => useChatActions(options))
+
+    await act(async () => {
+      await result.current.onSubmit({
+        message: "hello there",
+        image: ""
+      })
+    })
+
+    // Includes setup/persistence/finalization updates, but should not be per-token.
+    expect(setMessages.mock.calls.length).toBeLessThan(40)
+    expect(streamCharacterChatCompletionMock).toHaveBeenCalledTimes(1)
+    expect(normalChatModeMock).not.toHaveBeenCalled()
+
+    const finalAssistant = getCurrentMessages()
+      .filter((message: any) => message.isBot)
+      .at(-1)
+    expect(String(finalAssistant?.message || "").length).toBeGreaterThan(100)
   })
 })
