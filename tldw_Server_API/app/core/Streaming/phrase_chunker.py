@@ -1,3 +1,5 @@
+"""Phrase-level chunker for streaming TTS synthesis."""
+
 from __future__ import annotations
 
 
@@ -13,12 +15,14 @@ class PhraseChunker:
         self._buffer = ""
 
     def push(self, delta: str) -> list[str]:
+        """Append *delta* to the buffer and return any complete phrase chunks."""
         if not isinstance(delta, str) or not delta:
             return []
         self._buffer += delta
         return self._drain_ready_chunks()
 
     def flush(self) -> str:
+        """Return any remaining buffered text and reset the buffer."""
         tail = self._buffer.strip()
         self._buffer = ""
         return tail

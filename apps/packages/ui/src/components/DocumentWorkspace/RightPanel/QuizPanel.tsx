@@ -192,9 +192,21 @@ export const QuizPanel: React.FC = () => {
   }
 
   const [savedPrefs] = useState(loadPrefs)
-  const [numQuestions, setNumQuestions] = useState<number>((savedPrefs?.numQuestions as number) ?? 5)
-  const [questionType, setQuestionType] = useState<QuestionType>((savedPrefs?.questionType as QuestionType) ?? "multiple_choice")
-  const [difficulty, setDifficulty] = useState<DifficultyLevel>((savedPrefs?.difficulty as DifficultyLevel) ?? "medium")
+  const validQuestionTypes: QuestionType[] = ["multiple_choice", "true_false", "short_answer", "mixed"]
+  const validDifficulties: DifficultyLevel[] = ["easy", "medium", "hard"]
+  const [numQuestions, setNumQuestions] = useState<number>(
+    typeof savedPrefs?.numQuestions === "number" ? savedPrefs.numQuestions : 5
+  )
+  const [questionType, setQuestionType] = useState<QuestionType>(
+    validQuestionTypes.includes(savedPrefs?.questionType as QuestionType)
+      ? (savedPrefs!.questionType as QuestionType)
+      : "multiple_choice"
+  )
+  const [difficulty, setDifficulty] = useState<DifficultyLevel>(
+    validDifficulties.includes(savedPrefs?.difficulty as DifficultyLevel)
+      ? (savedPrefs!.difficulty as DifficultyLevel)
+      : "medium"
+  )
   const [showConfig, setShowConfig] = useState(true)
 
   // Persist preferences when they change

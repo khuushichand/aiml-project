@@ -3,15 +3,12 @@
     {
       "name": "tldw.embeddings.v1",
       "version": 1,
-<<<<<<< HEAD
       "path": "embeddings_v1.schema.json",
-      "url": "https://schemas.tldw.ai/embeddings/v1.json"
-=======
       "schema_path": "Docs/Development/schema/embeddings_v1.schema.json",
+      "url": "https://schemas.tldw.ai/embeddings/v1.json",
       "schema_url": "https://schemas.tldw.ai/embeddings/v1.json",
       "status": "active",
       "notes": "Current embeddings envelope schema."
->>>>>>> worktree-agent-a71a6d7f
     }
   ]
 }
