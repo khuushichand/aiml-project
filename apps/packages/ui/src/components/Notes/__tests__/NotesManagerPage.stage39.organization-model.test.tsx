@@ -289,8 +289,15 @@ describe("NotesManagerPage stage 39 organization model", () => {
       expect(screen.getByTestId("notes-notebook-select")).toBeInTheDocument()
     })
 
-    fireEvent.change(screen.getByTestId("notes-notebook-select"), {
-      target: { value: "11" }
+    // Select option from Ant Design Select
+    const notebookContainer = screen.getByTestId("notes-notebook-select")
+    const notebookContent = notebookContainer.querySelector('.ant-select-content') || notebookContainer
+    fireEvent.mouseDown(notebookContent)
+    await waitFor(() => {
+      const options = document.querySelectorAll('.ant-select-item-option')
+      const match = Array.from(options).find(el => el.textContent === 'Research (2)')
+      if (!match) throw new Error('Option "Research (2)" not found')
+      fireEvent.click(match)
     })
 
     await waitFor(() => {
@@ -318,6 +325,9 @@ describe("NotesManagerPage stage 39 organization model", () => {
     const pickerDialog = applyFiltersButton.closest(".ant-modal") || document.body
     fireEvent.click(within(pickerDialog).getByText(/^research\b/i))
     fireEvent.click(screen.getByRole("button", { name: "Apply filters" }))
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-save-notebook")).not.toBeDisabled()
+    })
     fireEvent.click(screen.getByTestId("notes-save-notebook"))
 
     await waitFor(() => {

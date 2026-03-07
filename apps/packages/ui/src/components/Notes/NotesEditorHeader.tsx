@@ -124,7 +124,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
         createChildren.push({
           key: 'duplicate',
           label: t('option:notesSearch.duplicateNoteAction', { defaultValue: 'Duplicate' }),
-          icon: (<CopyIcon className="w-4 h-4" />) as any,
+          icon: (<CopyIcon className="w-4 h-4" />),
           disabled: !canDuplicate
         })
       }
@@ -133,7 +133,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
         createChildren.push({
           key: 'template-submenu',
           label: t('option:notesSearch.templateAction', { defaultValue: 'From Template' }),
-          icon: (<FileTemplateIcon className="w-4 h-4" />) as any,
+          icon: (<FileTemplateIcon className="w-4 h-4" />),
           children: templateOptions.map((tpl) => ({
             key: `template-${tpl.id}`,
             label: tpl.label
@@ -162,7 +162,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
             <StarIcon
               className={`w-4 h-4 ${isPinned ? 'fill-current text-amber-500' : ''}`}
             />
-          ) as any,
+          ),
           disabled: !canPin
         })
       }
@@ -173,7 +173,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
           label: t('option:notesSearch.openConversation', {
             defaultValue: 'Open linked conversation'
           }),
-          icon: (<LinkIcon className="w-4 h-4" />) as any
+          icon: (<LinkIcon className="w-4 h-4" />)
         })
       }
 
@@ -195,7 +195,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
             label: t('option:notesSearch.generateFlashcardsAction', {
               defaultValue: 'Generate flashcards'
             }),
-            icon: (<SparklesIcon className="w-4 h-4" />) as any,
+            icon: (<SparklesIcon className="w-4 h-4" />),
             disabled: !canGenerateFlashcards
           }
         ]
@@ -210,7 +210,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
         {
           key: 'copy-submenu',
           label: t('option:notesSearch.toolbarCopyTooltip', { defaultValue: 'Copy' }),
-          icon: (<CopyIcon className="w-4 h-4" />) as any,
+          icon: (<CopyIcon className="w-4 h-4" />),
           disabled: !hasContent,
           children: [
             {
@@ -230,7 +230,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
         {
           key: 'export-submenu',
           label: t('option:notesSearch.exportSingleAction', { defaultValue: 'Export' }),
-          icon: (<FileDownIcon className="w-4 h-4" />) as any,
+          icon: (<FileDownIcon className="w-4 h-4" />),
           disabled: !canExport,
           children: [
             {
@@ -250,7 +250,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
               label: t('option:notesSearch.exportSinglePrint', {
                 defaultValue: 'Print / Save as PDF'
               }),
-              icon: (<PrinterIcon className="w-4 h-4" />) as any
+              icon: (<PrinterIcon className="w-4 h-4" />)
             }
           ]
         }
@@ -262,7 +262,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
     items.push({
       key: 'delete',
       label: t('common:delete', { defaultValue: 'Delete' }),
-      icon: (<TrashIcon className="w-4 h-4" />) as any,
+      icon: (<TrashIcon className="w-4 h-4" />),
       danger: true,
       disabled: !canDelete
     })
@@ -403,7 +403,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
             onClick={onSave}
             loading={isSaving}
             disabled={!canSave}
-            icon={(<SaveIcon className="w-4 h-4" />) as any}
+            icon={(<SaveIcon className="w-4 h-4" />)}
             className={touchTargetClass}
             aria-label={t('option:notesSearch.toolbarSaveTooltip', {
               defaultValue: 'Save note'
@@ -432,7 +432,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
                 size={toolbarButtonSize}
                 type={editorMode === 'edit' ? 'primary' : 'text'}
                 onClick={() => onChangeEditorMode('edit')}
-                icon={(<EditIcon className="w-4 h-4" />) as any}
+                icon={(<EditIcon className="w-4 h-4" />)}
                 className={touchTargetClass}
                 aria-pressed={editorMode === 'edit'}
                 aria-label={t('option:notesSearch.editModeLabel', {
@@ -453,7 +453,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
                 size={toolbarButtonSize}
                 type={editorMode === 'split' ? 'primary' : 'text'}
                 onClick={() => onChangeEditorMode('split')}
-                icon={(<SplitIcon className="w-4 h-4" />) as any}
+                icon={(<SplitIcon className="w-4 h-4" />)}
                 className={touchTargetClass}
                 aria-pressed={editorMode === 'split'}
                 aria-label={t('option:notesSearch.splitModeLabel', {
@@ -474,7 +474,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
                 size={toolbarButtonSize}
                 type={editorMode === 'preview' ? 'primary' : 'text'}
                 onClick={() => onChangeEditorMode('preview')}
-                icon={(<EyeIcon className="w-4 h-4" />) as any}
+                icon={(<EyeIcon className="w-4 h-4" />)}
                 className={touchTargetClass}
                 aria-pressed={editorMode === 'preview'}
                 aria-label={t('option:notesSearch.previewModeLabel', {
@@ -504,7 +504,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
           >
             <Button
               size={toolbarButtonSize}
-              icon={(<MoreHorizontal className="w-4 h-4" />) as any}
+              icon={(<MoreHorizontal className="w-4 h-4" />)}
               className={touchTargetIconOnlyClass}
               aria-label={t('option:notesSearch.moreActionsTooltip', {
                 defaultValue: 'More actions'

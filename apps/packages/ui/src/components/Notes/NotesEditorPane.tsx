@@ -438,7 +438,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               }}
               disabled={editorDisabled || !isOnline || content.trim().length === 0}
               loading={titleSuggestionLoading}
-              icon={(<SparklesIcon className="w-4 h-4" />) as any}
+              icon={(<SparklesIcon className="w-4 h-4" />)}
               aria-label={t('option:notesSearch.generateTitleTooltip', {
                 defaultValue: 'Generate title from content'
               })}
@@ -602,27 +602,26 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
                 })}
               </Button>
               <div className="mt-2 flex items-center gap-2">
-                <select
-                  className="flex-1 rounded border border-border bg-surface px-2 py-1 text-sm text-text"
-                  value={manualLinkTargetId ?? ''}
-                  onChange={(event) => {
-                    const value = event.target.value
+                <Select
+                  className="flex-1"
+                  size="small"
+                  value={manualLinkTargetId ?? undefined}
+                  onChange={(value) => {
                     setManualLinkTargetId(value || null)
                   }}
                   disabled={manualLinkSaving || editorDisabled || manualLinkOptions.length === 0}
+                  placeholder={t('option:notesSearch.manualLinkTargetPlaceholder', {
+                    defaultValue: 'Select a note to link'
+                  })}
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  options={manualLinkOptions.map((option) => ({
+                    value: option.value,
+                    label: option.label
+                  }))}
                   data-testid="notes-manual-link-target-select"
-                >
-                  <option value="">
-                    {t('option:notesSearch.manualLinkTargetPlaceholder', {
-                      defaultValue: 'Select a note to link'
-                    })}
-                  </option>
-                  {manualLinkOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                />
                 <Button
                   size="small"
                   type="primary"
@@ -844,7 +843,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               <Button
                 size="small"
                 type="text"
-                icon={(<BoldIcon className="w-4 h-4" />) as any}
+                icon={(<BoldIcon className="w-4 h-4" />)}
                 onClick={() => applyMarkdownToolbarAction('bold')}
                 disabled={editorDisabled}
                 aria-label={t('option:notesSearch.toolbarBoldTooltip', { defaultValue: 'Bold' })}
@@ -855,7 +854,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               <Button
                 size="small"
                 type="text"
-                icon={(<ItalicIcon className="w-4 h-4" />) as any}
+                icon={(<ItalicIcon className="w-4 h-4" />)}
                 onClick={() => applyMarkdownToolbarAction('italic')}
                 disabled={editorDisabled}
                 aria-label={t('option:notesSearch.toolbarItalicTooltip', { defaultValue: 'Italic' })}
@@ -866,7 +865,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               <Button
                 size="small"
                 type="text"
-                icon={(<HeadingIcon className="w-4 h-4" />) as any}
+                icon={(<HeadingIcon className="w-4 h-4" />)}
                 onClick={() => applyMarkdownToolbarAction('heading')}
                 disabled={editorDisabled}
                 aria-label={t('option:notesSearch.toolbarHeadingTooltip', { defaultValue: 'Heading' })}
@@ -877,7 +876,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               <Button
                 size="small"
                 type="text"
-                icon={(<ListIcon className="w-4 h-4" />) as any}
+                icon={(<ListIcon className="w-4 h-4" />)}
                 onClick={() => applyMarkdownToolbarAction('list')}
                 disabled={editorDisabled}
                 aria-label={t('option:notesSearch.toolbarListTooltip', { defaultValue: 'List' })}
@@ -888,7 +887,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               <Button
                 size="small"
                 type="text"
-                icon={(<LinkIcon className="w-4 h-4" />) as any}
+                icon={(<LinkIcon className="w-4 h-4" />)}
                 onClick={() => applyMarkdownToolbarAction('link')}
                 disabled={editorDisabled}
                 aria-label={t('option:notesSearch.toolbarLinkTooltip', { defaultValue: 'Link' })}
@@ -899,7 +898,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               <Button
                 size="small"
                 type="text"
-                icon={(<PaperclipIcon className="w-4 h-4" />) as any}
+                icon={(<PaperclipIcon className="w-4 h-4" />)}
                 onClick={openAttachmentPicker}
                 disabled={editorDisabled}
                 aria-label={t('option:notesSearch.toolbarAttachmentTooltip', { defaultValue: 'Attachment' })}
@@ -910,7 +909,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               <Button
                 size="small"
                 type="text"
-                icon={(<CodeIcon className="w-4 h-4" />) as any}
+                icon={(<CodeIcon className="w-4 h-4" />)}
                 onClick={() => applyMarkdownToolbarAction('code')}
                 disabled={editorDisabled}
                 aria-label={t('option:notesSearch.toolbarCodeTooltip', { defaultValue: 'Code' })}
@@ -934,7 +933,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               <Button
                 size="small"
                 type="text"
-                icon={(<SparklesIcon className="w-4 h-4" />) as any}
+                icon={(<SparklesIcon className="w-4 h-4" />)}
                 onClick={() => {
                   void runAssistAction('summarize')
                 }}
@@ -955,7 +954,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               <Button
                 size="small"
                 type="text"
-                icon={(<SparklesIcon className="w-4 h-4" />) as any}
+                icon={(<SparklesIcon className="w-4 h-4" />)}
                 onClick={() => {
                   void runAssistAction('expand_outline')
                 }}
@@ -976,7 +975,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               <Button
                 size="small"
                 type="text"
-                icon={(<SparklesIcon className="w-4 h-4" />) as any}
+                icon={(<SparklesIcon className="w-4 h-4" />)}
                 onClick={() => {
                   void runAssistAction('suggest_keywords')
                 }}

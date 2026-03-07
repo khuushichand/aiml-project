@@ -347,7 +347,7 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                   shape="circle"
                   onClick={() => void handleNewNote()}
                   className="flex items-center justify-center"
-                  icon={(<PlusIcon className="w-4 h-4" />) as any}
+                  icon={(<PlusIcon className="w-4 h-4" />)}
                   aria-label={t('option:notesSearch.new', {
                     defaultValue: 'New note'
                   })}
@@ -454,11 +454,12 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                       </Typography.Text>
                       {isMoodboardsFetching && <Spin size="small" />}
                     </div>
-                    <select
-                      value={selectedMoodboardId == null ? '' : String(selectedMoodboardId)}
-                      onChange={(event) => {
-                        const value = String(event.target.value || '').trim()
-                        if (!value) {
+                    <Select
+                      className="w-full"
+                      size="small"
+                      value={selectedMoodboardId == null ? undefined : selectedMoodboardId}
+                      onChange={(value) => {
+                        if (value == null) {
                           setSelectedMoodboardId(null)
                           setPage(1)
                           return
@@ -468,22 +469,15 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                         setSelectedMoodboardId(Math.floor(parsed))
                         setPage(1)
                       }}
-                      className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+                      placeholder={t('option:notesSearch.moodboardEmptyOption', {
+                        defaultValue: 'No collections yet'
+                      })}
+                      options={moodboards.map((board) => ({
+                        value: board.id,
+                        label: board.name
+                      }))}
                       data-testid="notes-moodboard-select"
-                    >
-                      {moodboards.length === 0 ? (
-                        <option value="">
-                          {t('option:notesSearch.moodboardEmptyOption', {
-                            defaultValue: 'No collections yet'
-                          })}
-                        </option>
-                      ) : null}
-                      {moodboards.map((board) => (
-                        <option key={board.id} value={board.id}>
-                          {board.name}
-                        </option>
-                      ))}
-                    </select>
+                    />
                     <div className="grid grid-cols-3 gap-2">
                       <Button
                         size="small"
@@ -546,16 +540,17 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                       })}
                     </Typography.Text>
                     <div className="flex items-center gap-2">
-                      <select
-                        value={selectedNotebookId == null ? '' : String(selectedNotebookId)}
-                        onChange={(event) => {
-                          const raw = String(event.target.value || '').trim()
-                          if (!raw) {
+                      <Select
+                        className="min-w-0 flex-1"
+                        size="small"
+                        value={selectedNotebookId ?? undefined}
+                        onChange={(value) => {
+                          if (value == null) {
                             setSelectedNotebookId(null)
                             setPage(1)
                             return
                           }
-                          const parsed = Number(raw)
+                          const parsed = Number(value)
                           if (!Number.isFinite(parsed)) {
                             setSelectedNotebookId(null)
                             return
@@ -563,20 +558,16 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                           setSelectedNotebookId(Math.floor(parsed))
                           setPage(1)
                         }}
-                        className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+                        allowClear
+                        placeholder={t('option:notesSearch.notebookAllOption', {
+                          defaultValue: 'All smart collections'
+                        })}
+                        options={notebookOptions.map((notebook) => ({
+                          value: notebook.id,
+                          label: `${notebook.name} (${notebook.keywords.length})`
+                        }))}
                         data-testid="notes-notebook-select"
-                      >
-                        <option value="">
-                          {t('option:notesSearch.notebookAllOption', {
-                            defaultValue: 'All smart collections'
-                          })}
-                        </option>
-                        {notebookOptions.map((notebook) => (
-                          <option key={notebook.id} value={notebook.id}>
-                            {`${notebook.name} (${notebook.keywords.length})`}
-                          </option>
-                        ))}
-                      </select>
+                      />
                       <Button
                         size="small"
                         onClick={createNotebookFromCurrentKeywords}
@@ -630,7 +621,7 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                         placeholder={t('option:notesSearch.placeholder', {
                           defaultValue: 'Search titles & content...'
                         })}
-                        prefix={(<SearchIcon className="w-4 h-4 text-text-subtle" />) as any}
+                        prefix={(<SearchIcon className="w-4 h-4 text-text-subtle" />)}
                         value={queryInput}
                         onChange={(e) => {
                           setQueryInput(e.target.value)
@@ -642,39 +633,45 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                         }}
                       />
                     </div>
-                    <select
+                    <Select
                       value={sortOption}
-                      onChange={(event) => {
-                        setSortOption(event.target.value as NotesSortOption)
+                      onChange={(value) => {
+                        setSortOption(value as NotesSortOption)
                         setPage(1)
                       }}
-                      className="w-[130px] flex-shrink-0 rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+                      className="w-[160px] flex-shrink-0"
+                      size="small"
                       data-testid="notes-sort-select"
                       aria-label={t('option:notesSearch.sortAriaLabel', {
                         defaultValue: 'Sort notes'
                       })}
-                    >
-                      <option value="modified_desc">
-                        {t('option:notesSearch.sortModifiedDesc', {
-                          defaultValue: 'Date modified (newest first)'
-                        })}
-                      </option>
-                      <option value="created_desc">
-                        {t('option:notesSearch.sortCreatedDesc', {
-                          defaultValue: 'Date created (newest first)'
-                        })}
-                      </option>
-                      <option value="title_asc">
-                        {t('option:notesSearch.sortTitleAsc', {
-                          defaultValue: 'Title (A-Z)'
-                        })}
-                      </option>
-                      <option value="title_desc">
-                        {t('option:notesSearch.sortTitleDesc', {
-                          defaultValue: 'Title (Z-A)'
-                        })}
-                      </option>
-                    </select>
+                      options={[
+                        {
+                          value: 'modified_desc',
+                          label: t('option:notesSearch.sortModifiedDesc', {
+                            defaultValue: 'Date modified (newest first)'
+                          })
+                        },
+                        {
+                          value: 'created_desc',
+                          label: t('option:notesSearch.sortCreatedDesc', {
+                            defaultValue: 'Date created (newest first)'
+                          })
+                        },
+                        {
+                          value: 'title_asc',
+                          label: t('option:notesSearch.sortTitleAsc', {
+                            defaultValue: 'Title (A-Z)'
+                          })
+                        },
+                        {
+                          value: 'title_desc',
+                          label: t('option:notesSearch.sortTitleDesc', {
+                            defaultValue: 'Title (Z-A)'
+                          })
+                        }
+                      ]}
+                    />
                   </div>
 
                   {/* ---- Collapsible: Filters ---- */}
@@ -1027,29 +1024,27 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                         })}
                       </Typography.Text>
                       <div className="flex items-center gap-2">
-                        <select
-                          value={String(pageSize)}
-                          onChange={(event) => {
-                            const parsed = Number(event.target.value)
+                        <Select
+                          value={pageSize}
+                          onChange={(value) => {
+                            const parsed = Number(value)
                             if (!Number.isFinite(parsed) || parsed <= 0) return
                             setPageSize(Math.floor(parsed))
                             setPage(1)
                           }}
-                          className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text"
+                          size="small"
                           data-testid="notes-moodboard-page-size"
                           aria-label={t('option:notesSearch.moodboardPageSizeAria', {
                             defaultValue: 'Collection page size'
                           })}
-                        >
-                          {[10, 20, 50, 100].map((size) => (
-                            <option key={size} value={size}>
-                              {t('option:notesSearch.pageSizeValue', {
-                                defaultValue: '{{size}} / page',
-                                size
-                              })}
-                            </option>
-                          ))}
-                        </select>
+                          options={[10, 20, 50, 100].map((size) => ({
+                            value: size,
+                            label: t('option:notesSearch.pageSizeValue', {
+                              defaultValue: '{{size}} / page',
+                              size
+                            })
+                          }))}
+                        />
                         <Button
                           size="small"
                           onClick={() => setPage((current) => Math.max(1, current - 1))}

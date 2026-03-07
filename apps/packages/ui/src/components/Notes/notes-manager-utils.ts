@@ -677,10 +677,28 @@ export const escapeHtml = (value: string): string =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
 
+const SAFE_URL_PROTOCOLS = /^(https?:|mailto:|tel:|note:|#|\/)/i
+
+const sanitizeUrl = (url: string): string => {
+  const trimmed = url.trim()
+  if (!trimmed) return ''
+  if (SAFE_URL_PROTOCOLS.test(trimmed)) return trimmed
+  // Block javascript:, data:, vbscript:, etc.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return ''
+  // Relative URLs are safe
+  return trimmed
+}
+
 export const markdownInlineToHtml = (value: string): string => {
   let html = escapeHtml(value)
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, text, url) => {
-    const href = escapeHtml(String(url || '').trim())
+    const rawUrl = String(url || '').trim()
+    const safeUrl = sanitizeUrl(rawUrl)
+    if (!safeUrl) {
+      // Render as plain text if URL is unsafe
+      return escapeHtml(String(text || '').trim() || rawUrl)
+    }
+    const href = escapeHtml(safeUrl)
     const label = escapeHtml(String(text || '').trim() || href)
     return `<a href="${href}">${label}</a>`
   })
