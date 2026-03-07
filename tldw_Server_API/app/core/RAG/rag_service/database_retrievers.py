@@ -10,7 +10,9 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import sqlite3
+import time
 import urllib.parse as _urlparse
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -154,6 +156,12 @@ def _sanitize_media_fts_query(query: Optional[str]) -> Optional[str]:
     if "-" in text and " " not in text:
         return f"\"{text}\""
     return text
+
+
+_SQL_INPUT_PREFIX_RE = re.compile(
+    r"^(?:\s|--[^\n]*\n|/\*.*?\*/)*(select|with)\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -2235,12 +2243,53 @@ class SQLRetriever(BaseRetriever):
         target_id: str = "media_db",
         timeout_ms: int = 5000,
         max_rows: int = 100,
+        allow_nl_generation: bool = False,
     ) -> None:
         super().__init__(db_path, config, db_adapter=service)
         self.target_id = target_id
         self.timeout_ms = int(timeout_ms)
         self.max_rows = int(max_rows)
+        self.allow_nl_generation = bool(allow_nl_generation)
         self._service = service or self._build_default_service()
+
+    @staticmethod
+    def _looks_like_sql(query: str) -> bool:
+        return bool(_SQL_INPUT_PREFIX_RE.match(str(query or "")))
+
+    def _emit_counter(self, outcome: str, reason: Optional[str] = None) -> None:
+        labels: dict[str, str] = {"outcome": str(outcome)}
+        if reason:
+            labels["reason"] = str(reason)
+        try:
+            from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+
+            increment_counter("rag_sql_retriever_requests_total", labels=labels)
+        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+
+    def _emit_duration(self, duration_seconds: float, outcome: str) -> None:
+        try:
+            from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
+
+            observe_histogram(
+                "rag_sql_retriever_duration_seconds",
+                value=max(0.0, float(duration_seconds)),
+                labels={"outcome": str(outcome)},
+            )
+        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+
+    def _emit_rows(self, row_count: int, outcome: str) -> None:
+        try:
+            from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
+
+            observe_histogram(
+                "rag_sql_retriever_rows_returned",
+                value=max(0.0, float(row_count)),
+                labels={"outcome": str(outcome)},
+            )
+        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+            pass
 
     def _build_default_service(self) -> Optional[Any]:
         if not self.db_path:
@@ -2256,8 +2305,20 @@ class SQLRetriever(BaseRetriever):
             return None
 
     async def retrieve(self, query: str, **kwargs) -> list[Document]:
+        started = time.perf_counter()
+        query_text = str(query or "").strip()
         service = self._service
         if service is None:
+            self._emit_counter("unavailable", reason="service_missing")
+            self._emit_duration(time.perf_counter() - started, outcome="unavailable")
+            return []
+        if not query_text:
+            self._emit_counter("empty_query")
+            self._emit_duration(time.perf_counter() - started, outcome="empty_query")
+            return []
+        if not self.allow_nl_generation and not self._looks_like_sql(query_text):
+            self._emit_counter("non_sql_input")
+            self._emit_duration(time.perf_counter() - started, outcome="non_sql_input")
             return []
 
         target_id = str(kwargs.get("sql_target_id") or self.target_id)
@@ -2274,7 +2335,7 @@ class SQLRetriever(BaseRetriever):
 
         try:
             result = await service.generate_and_execute(
-                query=query,
+                query=query_text,
                 target_id=target_id,
                 timeout_ms=timeout_ms,
                 max_rows=max_rows,
@@ -2288,6 +2349,8 @@ class SQLRetriever(BaseRetriever):
             ValueError,
             asyncio.TimeoutError,
         ) as exc:
+            self._emit_counter("error", reason=type(exc).__name__)
+            self._emit_duration(time.perf_counter() - started, outcome="error")
             logger.debug(f"SQL retrieval failed: {exc}")
             return []
 
@@ -2324,6 +2387,9 @@ class SQLRetriever(BaseRetriever):
                     score=score,
                 )
             )
+        self._emit_counter("success")
+        self._emit_duration(time.perf_counter() - started, outcome="success")
+        self._emit_rows(len(docs), outcome="success")
         return docs
 
     async def get_metadata(self, doc_id: str) -> dict[str, Any]:
