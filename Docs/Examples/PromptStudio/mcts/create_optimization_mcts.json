@@ -1,0 +1,11 @@
+{
+  "project_id": "proj_docs_example",
+  "prompt_id": "prompt_baseline",
+  "strategy": "mcts",
+  "max_iterations": 30,
+  "token_budget": 120000,
+  "mcts_simulations": 64,
+  "mcts_max_depth": 4,
+  "prompt_candidates_per_node": 3,
+  "ws_throttle_every": 2
+}

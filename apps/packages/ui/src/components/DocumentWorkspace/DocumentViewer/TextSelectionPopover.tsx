@@ -13,6 +13,7 @@ import {
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { useTranslate } from "@/hooks/document-workspace/useTranslate"
 import { useDocumentTTS } from "@/hooks/document-workspace/useDocumentTTS"
+import { useMobile } from "@/hooks/useMediaQuery"
 import type { AnnotationColor } from "../types"
 
 interface TextSelectionPopoverProps {
@@ -70,6 +71,19 @@ export const TextSelectionPopover: React.FC<TextSelectionPopoverProps> = ({
   const currentChapterTitle = useDocumentWorkspaceStore((s) => s.currentChapterTitle)
   const addAnnotation = useDocumentWorkspaceStore((s) => s.addAnnotation)
   const setActiveRightTab = useDocumentWorkspaceStore((s) => s.setActiveRightTab)
+
+  const isMobileView = useMobile()
+
+  // Dismiss on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose()
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [onClose])
 
   // Adjust position to keep popover in viewport
   useEffect(() => {
@@ -137,20 +151,40 @@ export const TextSelectionPopover: React.FC<TextSelectionPopoverProps> = ({
     [activeDocumentId, currentPage, currentPercentage, currentChapterTitle, epubCfi, text, addAnnotation, onClose, t]
   )
 
-  // Ask AI - prefill chat with question about selected text
-  const handleAskAI = useCallback(() => {
-    // Set the chat tab as active and we'll handle the prefill via URL or state
+  // Ask AI - prefill chat with a prompt template about selected text
+  const handleAskAI = useCallback((promptTemplate: string) => {
     setActiveRightTab("chat")
-    // Store selected text for the chat component to pick up
-    // This could be done via a dedicated store action, but for simplicity we'll use
-    // a custom event that the DocumentChat component can listen to
     window.dispatchEvent(
       new CustomEvent("document-workspace-ask-ai", {
-        detail: { text, prompt: `Explain this passage: "${text}"` }
+        detail: { text, prompt: promptTemplate }
       })
     )
     onClose()
   }, [text, setActiveRightTab, onClose])
+
+  // Ask AI prompt templates
+  const askAIMenuItems: MenuProps["items"] = [
+    {
+      key: "explain",
+      label: t("option:documentWorkspace.aiExplain", "Explain"),
+      onClick: () => handleAskAI(`Explain this passage: "${text}"`)
+    },
+    {
+      key: "summarize",
+      label: t("option:documentWorkspace.aiSummarize", "Summarize"),
+      onClick: () => handleAskAI(`Summarize this passage: "${text}"`)
+    },
+    {
+      key: "define",
+      label: t("option:documentWorkspace.aiDefine", "Define terms"),
+      onClick: () => handleAskAI(`Define the key terms in this passage: "${text}"`)
+    },
+    {
+      key: "simplify",
+      label: t("option:documentWorkspace.aiSimplify", "Simplify"),
+      onClick: () => handleAskAI(`Simplify this passage in plain language: "${text}"`)
+    }
+  ]
 
   // Listen - text-to-speech
   const handleListen = useCallback(async () => {
@@ -209,67 +243,106 @@ export const TextSelectionPopover: React.FC<TextSelectionPopoverProps> = ({
     onClick: () => handleHighlight(c.key)
   }))
 
+  // Shared action buttons used in both desktop popover and mobile bottom sheet
+  const actionButtons = (
+    <>
+      <Button
+        type="text"
+        size={isMobileView ? "middle" : "small"}
+        icon={<Copy className="h-4 w-4" />}
+        onClick={handleCopy}
+        aria-label={t("common:copy", "Copy")}
+      >
+        {isMobileView && <span className="text-xs">{t("common:copy", "Copy")}</span>}
+      </Button>
+
+      <Dropdown menu={{ items: highlightMenuItems }} trigger={["click"]}>
+        <Button
+          type="text"
+          size={isMobileView ? "middle" : "small"}
+          icon={<Highlighter className="h-4 w-4" />}
+          aria-label={t("option:documentWorkspace.highlight", "Highlight")}
+        >
+          {isMobileView && <span className="text-xs">{t("option:documentWorkspace.highlight", "Highlight")}</span>}
+          <ChevronDown className="h-3 w-3 ml-0.5" />
+        </Button>
+      </Dropdown>
+
+      <Button
+        type="text"
+        size={isMobileView ? "middle" : "small"}
+        icon={<Languages className="h-4 w-4" />}
+        onClick={handleTranslate}
+        aria-label={t("option:documentWorkspace.translate", "Translate")}
+      >
+        {isMobileView && <span className="text-xs">{t("option:documentWorkspace.translate", "Translate")}</span>}
+      </Button>
+
+      <Dropdown menu={{ items: askAIMenuItems }} trigger={["click"]}>
+        <Button
+          type="text"
+          size={isMobileView ? "middle" : "small"}
+          icon={<MessageSquare className="h-4 w-4" />}
+          aria-label={t("option:documentWorkspace.askAI", "Ask AI")}
+        >
+          {isMobileView && <span className="text-xs">{t("option:documentWorkspace.askAI", "Ask AI")}</span>}
+          <ChevronDown className="h-3 w-3 ml-0.5" />
+        </Button>
+      </Dropdown>
+
+      <Button
+        type="text"
+        size={isMobileView ? "middle" : "small"}
+        icon={<Volume2 className="h-4 w-4" />}
+        onClick={handleListen}
+        loading={ttsState.isLoading}
+        aria-label={t("option:documentWorkspace.listen", "Listen")}
+        className={ttsState.isPlaying && ttsState.currentText === text ? "text-primary" : ""}
+      >
+        {isMobileView && <span className="text-xs">{t("option:documentWorkspace.listen", "Listen")}</span>}
+      </Button>
+    </>
+  )
+
   return (
     <>
-      <div
-        ref={popoverRef}
-        data-selection-popover
-        className="fixed z-[100] flex items-center gap-1 rounded-lg border border-border bg-surface p-1.5 shadow-lg"
-        style={{
-          left: adjustedPosition.x,
-          top: adjustedPosition.y
-        }}
-      >
-        {/* Copy */}
-        <Button
-          type="text"
-          size="small"
-          icon={<Copy className="h-4 w-4" />}
-          onClick={handleCopy}
-          title={t("common:copy", "Copy")}
-        />
-
-        {/* Highlight */}
-        <Dropdown menu={{ items: highlightMenuItems }} trigger={["click"]}>
-          <Button
-            type="text"
-            size="small"
-            icon={<Highlighter className="h-4 w-4" />}
-            title={t("option:documentWorkspace.highlight", "Highlight")}
+      {isMobileView ? (
+        // Mobile: bottom sheet
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 z-[99] bg-black/20"
+            onClick={onClose}
+          />
+          <div
+            ref={popoverRef}
+            data-selection-popover
+            className="fixed bottom-0 left-0 right-0 z-[100] rounded-t-xl border-t border-border bg-surface px-4 pb-[env(safe-area-inset-bottom,8px)] pt-3 shadow-2xl animate-in slide-in-from-bottom duration-200"
           >
-            <ChevronDown className="h-3 w-3 ml-0.5" />
-          </Button>
-        </Dropdown>
-
-        {/* Translate */}
-        <Button
-          type="text"
-          size="small"
-          icon={<Languages className="h-4 w-4" />}
-          onClick={handleTranslate}
-          title={t("option:documentWorkspace.translate", "Translate")}
-        />
-
-        {/* Ask AI */}
-        <Button
-          type="text"
-          size="small"
-          icon={<MessageSquare className="h-4 w-4" />}
-          onClick={handleAskAI}
-          title={t("option:documentWorkspace.askAI", "Ask AI")}
-        />
-
-        {/* Listen (TTS) */}
-        <Button
-          type="text"
-          size="small"
-          icon={<Volume2 className="h-4 w-4" />}
-          onClick={handleListen}
-          loading={ttsState.isLoading}
-          title={t("option:documentWorkspace.listen", "Listen")}
-          className={ttsState.isPlaying && ttsState.currentText === text ? "text-primary" : ""}
-        />
-      </div>
+            {/* Drag handle */}
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-border" />
+            {/* Selected text preview */}
+            <p className="mb-3 line-clamp-2 text-xs text-text-muted italic">"{text}"</p>
+            {/* Actions */}
+            <div className="flex flex-wrap items-center gap-2">
+              {actionButtons}
+            </div>
+          </div>
+        </>
+      ) : (
+        // Desktop: floating popover
+        <div
+          ref={popoverRef}
+          data-selection-popover
+          className="fixed z-[100] flex items-center gap-1 rounded-lg border border-border bg-surface p-1.5 shadow-lg"
+          style={{
+            left: adjustedPosition.x,
+            top: adjustedPosition.y
+          }}
+        >
+          {actionButtons}
+        </div>
+      )}
 
       {/* Translation Modal */}
       <Modal

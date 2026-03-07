@@ -189,6 +189,12 @@ async def test_streaming_autoexec_enabled_persists_tool_messages_and_emits_tool_
         llm_call_func=_tool_call_stream,
         refresh_provider_params=lambda *_args, **_kwargs: ({}, None),
         moderation_getter=lambda: _NoModeration(),
+        assistant_parent_message_id="anchor-stream-1",
+        continuation_metadata={
+            "applied": True,
+            "mode": "branch",
+            "from_message_id": "anchor-stream-1",
+        },
     )
 
     assert isinstance(response, StreamingResponse)
@@ -200,6 +206,7 @@ async def test_streaming_autoexec_enabled_persists_tool_messages_and_emits_tool_
     assert captured_kwargs["attach_idempotency"] is True
     assert len(save_payloads) == 2
     assert save_payloads[0]["role"] == "assistant"
+    assert save_payloads[0]["parent_message_id"] == "anchor-stream-1"
     assert save_payloads[1]["role"] == "tool"
     assert save_payloads[1]["tool_call_id"] == "c1"
 
@@ -214,6 +221,7 @@ async def test_streaming_autoexec_enabled_persists_tool_messages_and_emits_tool_
     assert payload["tool_results"][0]["tool_call_id"] == "c1"
     assert payload["tldw_conversation_id"] == "conv-stream-1"
     assert payload["tldw_message_id"] == "m-1"
+    assert payload["tldw_continuation"]["mode"] == "branch"
 
 
 @pytest.mark.asyncio

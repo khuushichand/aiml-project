@@ -329,7 +329,7 @@ policies:
   - `GET /api/v1/resource-governor/policy/{policy_id}` → `{id, version, updated_at, payload}`
   - `PUT /api/v1/resource-governor/policy/{policy_id}` → upsert JSON payload; optional explicit `version` for optimistic concurrency (auto-increments when omitted; see behavior notes below)
   - `DELETE /api/v1/resource-governor/policy/{policy_id}` → delete policy
-  - Implementation note: in v0.1 these admin endpoints, and the diagnostics endpoints below, are part of the principal-governed admin surfaces described in `Docs/Product/Principal-Governance-PRD.md` (see “Admin Surfaces Governed by Principals” coverage snapshot) and are wired through the claim-first stack:
+  - Implementation note: in v0.1 these admin endpoints, and the diagnostics endpoints below, are part of the principal-governed admin surfaces described in `Docs/Product/Completed/AuthNZ-Refactor/Principal-Governance-PRD.md` (see “Admin Surfaces Governed by Principals” coverage snapshot) and are wired through the claim-first stack:
     - `get_auth_principal` to resolve identity and claims, with principal/claim semantics owned by the Principal & Governance PRD.
     - `require_roles("admin")` (or `principal.is_admin`) as the single gate for admin access, matching the principal-governance rules in that document.
     - Tests in `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` and `tldw_Server_API/tests/Resource_Governance/` lock in 401/403/200 semantics for JWT/API-key flows and single-user mode.

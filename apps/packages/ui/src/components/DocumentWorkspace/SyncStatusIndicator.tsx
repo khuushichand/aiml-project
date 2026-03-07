@@ -1,4 +1,4 @@
-import React from "react"
+import React, { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Tooltip } from "antd"
 import { Cloud, CloudOff, Loader2, AlertCircle, RefreshCw } from "lucide-react"
@@ -25,6 +25,19 @@ export const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({
   const { t } = useTranslation(["option", "common"])
   const syncStatus = useDocumentWorkspaceStore((s) => s.annotationSyncStatus)
   const pendingCount = useDocumentWorkspaceStore((s) => s.pendingAnnotations.length)
+
+  // Track previous status to detect recovery from error
+  const prevStatusRef = useRef<AnnotationSyncStatus>(syncStatus)
+  const [justRecovered, setJustRecovered] = useState(false)
+
+  useEffect(() => {
+    if (prevStatusRef.current === "error" && syncStatus === "synced") {
+      setJustRecovered(true)
+      const timer = setTimeout(() => setJustRecovered(false), 2000)
+      return () => clearTimeout(timer)
+    }
+    prevStatusRef.current = syncStatus
+  }, [syncStatus])
 
   const getStatusConfig = (status: AnnotationSyncStatus) => {
     switch (status) {
@@ -92,14 +105,14 @@ export const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({
     )
   }
 
-  // For synced state, show minimal indicator (or hide entirely)
+  // For synced state, show minimal indicator (pulse briefly after recovery)
   if (syncStatus === "synced") {
     return (
       <Tooltip title={config.tooltip}>
         <div
           className={`
             flex items-center gap-1 px-2 py-1 rounded-md
-            ${config.color} opacity-60 hover:opacity-100
+            ${config.color} ${justRecovered ? "opacity-100 animate-pulse" : "opacity-60"} hover:opacity-100
             transition-opacity cursor-default
             ${className}
           `}

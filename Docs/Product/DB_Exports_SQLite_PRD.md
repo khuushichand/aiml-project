@@ -298,5 +298,5 @@ Feature flag and default behavior: align with Admin Data Ops configuration (TBD)
   - `Media_DB_v2.backup_database(path)`
   - `ChaChaNotes_DB.backup_database(path)`
   - `DB_Backups.create_backup(...)`
-- Related docs: `Docs/Product/Completed/Admin_Data_Ops.md`, `Docs/Design/Content_Collections_PRD.md`, `Docs/Design/Workflows_PRD.md`
+- Related docs: `Docs/Product/Completed/Admin_Data_Ops.md`, `Docs/Product/Completed/Content_Collections_PRD.md`, `Docs/Product/Completed/Workflows_PRD.md`
 - Reference operations guide: `Docs/Published/Deployment/Long_Term_Admin_Guide.md`

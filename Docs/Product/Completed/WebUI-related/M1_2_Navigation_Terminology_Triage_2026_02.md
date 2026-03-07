@@ -4,8 +4,8 @@ Status: Complete (Engineering Closeout)
 Owner: WebUI + Product  
 Milestone: M1.2 (February 18-February 24, 2026)  
 Last Updated: February 13, 2026  
-Related: `Docs/Product/WebUI/M1_Navigation_IA_Execution_Plan_2026_02.md`  
-Related: `Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md`
+Related: `Docs/Product/Completed/WebUI-related/M1_Navigation_IA_Execution_Plan_2026_02.md`  
+Related: `Docs/Product/Completed/WebUI-related/M1_1_Canonical_Route_Inventory_2026_02.md`
 
 ## Purpose
 
@@ -111,12 +111,7 @@ Automated verification:
 - `bunx playwright test e2e/smoke/m1-2-label-evidence.spec.ts --reporter=line` (2 passed, desktop/mobile evidence capture).
 
 Screenshot evidence:
-- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/desktop-chat.png`
-- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/desktop-prompts.png`
-- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/desktop-settings-tldw.png`
-- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/mobile-chat.png`
-- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/mobile-prompts.png`
-- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/mobile-settings-tldw.png`
+- Captured in the February 13 closeout run (`bunx playwright test e2e/smoke/m1-2-label-evidence.spec.ts --reporter=line`); raw screenshot files are not retained in-repo.
 
 ## Change Log
 

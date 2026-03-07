@@ -213,6 +213,18 @@ class UserProfileUpdateService:
         if key == "limits.storage_quota_mb":
             if not dry_run:
                 await _update_user_field(db_conn, user_id, "storage_quota_mb", int(value))
+                try:
+                    from tldw_Server_API.app.services.storage_quota_service import (
+                        invalidate_storage_cache_for_user,
+                    )
+
+                    invalidate_storage_cache_for_user(int(user_id))
+                except Exception as exc:
+                    logger.debug(
+                        "Failed to invalidate storage quota cache for user {}: {}",
+                        user_id,
+                        exc,
+                    )
             return True
 
         if key in {"limits.audio_daily_minutes", "limits.audio_concurrent_jobs"}:

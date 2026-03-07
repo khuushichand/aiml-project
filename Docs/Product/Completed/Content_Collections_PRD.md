@@ -5,7 +5,7 @@ Owner: Core Maintainers (Server/API + WebUI)
 Status: In Progress
 Updated: 2026-01-12
 
-Related: Project_Guidelines.md, AGENTS.md, tldw_Server_API/app/main.py, Docs/Product/Content_Collections_UX_Backlog_PRD.md, Docs/Product/Watchlists-UX-PRD.md
+Related: Project_Guidelines.md, AGENTS.md, tldw_Server_API/app/main.py, Docs/Product/Completed/Content_Collections_UX_Backlog_PRD.md, Docs/Product/Watchlists-UX-PRD.md
 
 ---
 

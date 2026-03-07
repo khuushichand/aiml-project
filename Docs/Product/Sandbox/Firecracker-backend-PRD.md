@@ -152,7 +152,7 @@ Stage-level progress against this PRD:
 
 - `Docs/API-related/Sandbox_API.md`: prerequisites, flags, rootfs/kernel prep, example run, log/exit file semantics, limitations.
 - `Docs/Deployment/Operations/Firecracker_Host_Checklist.md`: host prerequisites, boot flow, and smoke-test checklist.
-- `Docs/Design/Code_Interpreter_Sandbox_PRD.md`: update status, constraints, discovery flags.
+- `Docs/Product/Sandbox/Firecracker-backend-PRD.md`: update status, constraints, discovery flags.
 
 ## Implementation Notes
 

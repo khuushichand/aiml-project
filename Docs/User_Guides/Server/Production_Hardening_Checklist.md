@@ -46,7 +46,7 @@ Observability
 - Metrics: Expose Prometheus metrics as needed; secure the endpoint.
 - Tracing: Configure OpenTelemetry exporters if required.
 - Logs: Centralize logs; avoid logging sensitive data. Set appropriate log levels.
-- Dashboards: Import `Docs/Deployment/Monitoring/security-dashboard.json` into Grafana to visualize HTTP/security metrics.
+- Dashboards: Use `Helper_Scripts/Samples/Grafana/README.md` for provisioning examples and `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md` for metric-to-panel guidance.
 - Request IDs: The app sets/propagates `X-Request-ID` on each response. Configure your proxy to pass it through.
 - Tracing headers: Forward `traceparent` and `tracestate` headers at the proxy if using OpenTelemetry tracing.
  - Alerting: Use Prometheus alert rules from `Samples/Prometheus/alerts.yml` to notify when users approach storage quotas.

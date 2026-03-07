@@ -63,7 +63,7 @@
   - RAG: `Docs/Code_Documentation/RAG-Developer-Guide.md`
   - MCP Unified: `Docs/MCP/Unified/Developer_Guide.md`
   - MCP Doc Ingestion: `Docs/MCP/Unified/Documentation_Ingestion_Playbook.md`
-  - Embeddings: `Docs/Embeddings/Embeddings-Developer-Guide.md`
+  - Embeddings: `Docs/Code_Documentation/Embeddings-Developer-Guide.md`
   - Providers API: `Docs/API-related/Providers_API_Documentation.md`
   - OCR: `Docs/API-related/OCR_API_Documentation.md`
   - Voice Assistant API: `Docs/API/Voice_Assistant.md`

@@ -107,9 +107,9 @@ Before you submit a pull request, check that it meets these guidelines:
 1.  The pull request should include tests.
 2.  If the pull request adds functionality, the docs should be updated. Put
     your new functionality into a function with a docstring, and add the
-    feature to the list in Docs/FEATURES.md
+    feature to the docs index in `Docs/Documentation.md`
 3.  The pull request should work for all Python versions that this project
-    tests against with tox. Tests are ran automatically using Github Actions.
+   tests against with tox. Tests are ran automatically using Github Actions.
 
 Tips
 ----

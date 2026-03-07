@@ -177,7 +177,7 @@ Definition: "Fully implemented" means all domains are migrated to the shared bre
 - Result-based failures are opt-in via `result_classifier` (default is off).
 
 ## 15. Implementation Plan
-Status update (February 16, 2026): stages 1-10 are implemented; circuit breaker registry persistence and cleanup/deprecation removal are complete. Follow-on hardening delivered in `Docs/Plans/IMPLEMENTATION_PLAN_circuit_breaker_distributed_semantics_admin_endpoint_2026_02_16.md`:
+Status update (February 16, 2026): stages 1-10 are implemented; circuit breaker registry persistence and cleanup/deprecation removal are complete. Follow-on hardening delivered in `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_circuit_breaker_distributed_semantics_admin_endpoint_2026_02_16.md`:
 - optimistic-lock merge/retry persistence semantics
 - distributed HALF_OPEN probe lease coordination across workers
 - unified RBAC-protected admin endpoint `GET /api/v1/admin/circuit-breakers`

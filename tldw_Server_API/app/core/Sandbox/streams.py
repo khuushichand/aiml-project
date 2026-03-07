@@ -205,12 +205,18 @@ class RunStreamHub:
                 self._dispatching.add(run_id)
                 self._schedule_dispatch(run_id)
 
+    def reset_loop(self) -> None:
+        """Clear cached event loop reference.  Useful in test fixtures to avoid stale loops."""
+        with self._lock:
+            self._loop = None
+
     def _schedule_dispatch(self, run_id: str) -> None:
         # Choose a loop to trigger the dispatcher; prefer last known loop or any subscriber loop
         with self._lock:
             loop = self._loop
             try:
                 if loop is not None and loop.is_closed():
+                    self._loop = None
                     loop = None
             except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                 pass

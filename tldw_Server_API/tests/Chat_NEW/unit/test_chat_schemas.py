@@ -395,3 +395,38 @@ class TestEdgeCasesAndErrors:
             another_param=123  # Another extra field
         )
         # Should not raise an error due to ConfigDict(extra="allow")
+
+
+class TestContinuationSchema:
+    """Test continuation extension schema and validation."""
+
+    @pytest.mark.unit
+    def test_tldw_continuation_branch_is_accepted(self):
+        request = ChatCompletionRequest(
+            model="gpt-4o-mini",
+            conversation_id="conv-123",
+            messages=[{"role": "user", "content": "Continue from here"}],
+            tldw_continuation={
+                "from_message_id": "msg-456",
+                "mode": "branch",
+                "assistant_prefill": "Partial response ",
+            },
+        )
+
+        assert request.tldw_continuation is not None
+        assert request.tldw_continuation.mode == "branch"
+        assert request.tldw_continuation.from_message_id == "msg-456"
+
+    @pytest.mark.unit
+    def test_tldw_continuation_requires_conversation_id(self):
+        with pytest.raises(ValidationError) as exc_info:
+            ChatCompletionRequest(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "Continue from here"}],
+                tldw_continuation={
+                    "from_message_id": "msg-456",
+                    "mode": "append",
+                },
+            )
+
+        assert "conversation_id is required" in str(exc_info.value)

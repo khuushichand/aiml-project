@@ -5,9 +5,9 @@ Status: Current (validated v0.2.x codebase)
 Updated: 2026-02-14
 
 Related
-- Primary PRD: `Docs/Product/Watchlist_PRD.md`
-- Bridge PRD: `Docs/Product/Watchlists_Subscriptions_Bridge_PRD.md`
-- Filter schema: `Docs/Product/Watchlists_Filters.md`
+- Primary PRD: `Docs/Product/Watchlists/Watchlist_PRD.md`
+- Bridge PRD: `Docs/Product/Watchlists/Watchlists_Subscriptions_Bridge_PRD.md`
+- Filter schema: `Docs/Product/Watchlists/Watchlists_Filters.md`
 - API implementation: `tldw_Server_API/app/api/v1/endpoints/watchlists.py`
 
 ---

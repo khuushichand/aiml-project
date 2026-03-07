@@ -5,10 +5,7 @@ import {
   Button,
   Alert,
   Card,
-  Collapse,
-  Dropdown,
   Input,
-  InputNumber,
   List,
   Segmented,
   Select,
@@ -20,7 +17,7 @@ import {
   notification
 } from "antd"
 import type { DefaultOptionType } from "antd/es/select"
-import { ArrowRight, Copy, Download, Lock, Mic, Pause, Play, Save, Star, Trash2, Unlock } from "lucide-react"
+import { ArrowRight, Copy, Lock, Mic, Pause, Play, Save, Star, Trash2, Unlock } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { PageShell } from "@/components/Common/PageShell"
 import WaveformCanvas from "@/components/Common/WaveformCanvas"
@@ -49,16 +46,21 @@ import {
 } from "@/services/tts"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { copyToClipboard } from "@/utils/clipboard"
-import { TtsProviderPanel } from "@/components/Option/TTS/TtsProviderPanel"
 import { estimateTtsDurationSeconds, splitMessageContent } from "@/utils/tts"
 import { markdownToText } from "@/utils/markdown-to-text"
 import { isTimeoutLikeError } from "@/utils/request-timeout"
 import { withTemplateFallback } from "@/utils/template-guards"
-import { VoiceCloningManager } from "../TTS/VoiceCloningManager"
 import { listCustomVoices, type TldwCustomVoice } from "@/services/tldw/voice-cloning"
 import { normalizeTtsProviderKey, toServerTtsProviderKey } from "@/services/tldw/tts-provider-keys"
 import { TtsJobProgress } from "@/components/Common/TtsJobProgress"
 import { LongformDraftEditor } from "@/components/Common/LongformDraftEditor"
+import { CharacterProgressBar } from "@/components/Common/CharacterProgressBar"
+import { TtsProviderStrip } from "@/components/Option/Speech/TtsProviderStrip"
+import { TtsStickyActionBar } from "@/components/Option/Speech/TtsStickyActionBar"
+import { TtsInspectorPanel } from "@/components/Option/Speech/TtsInspectorPanel"
+import { TtsVoiceTab } from "@/components/Option/Speech/TtsVoiceTab"
+import { TtsOutputTab } from "@/components/Option/Speech/TtsOutputTab"
+import { TtsAdvancedTab } from "@/components/Option/Speech/TtsAdvancedTab"
 
 const { Text, Title, Paragraph } = Typography
 
@@ -1497,6 +1499,29 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     ]
   )
 
+  const [inspectorOpen, setInspectorOpen] = useStorage<boolean>("ttsInspectorOpen", false)
+  const [inspectorTab, setInspectorTab] = useStorage<"voice" | "output" | "advanced">("ttsInspectorTab", "voice")
+  const [inspectorFocusField, setInspectorFocusField] = React.useState<string | null>(null)
+
+  const openInspectorAt = React.useCallback(
+    (tab: "voice" | "output" | "advanced", field?: string) => {
+      setInspectorOpen(true)
+      setInspectorTab(tab)
+      if (field) setInspectorFocusField(field)
+    },
+    [setInspectorOpen, setInspectorTab]
+  )
+
+  // Responsive: use drawer below 1024px
+  const [useDrawerMode, setUseDrawerMode] = React.useState(false)
+  React.useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1023px)")
+    const handler = (e: MediaQueryListEvent | MediaQueryList) => setUseDrawerMode(e.matches)
+    handler(mq)
+    mq.addEventListener("change", handler)
+    return () => mq.removeEventListener("change", handler)
+  }, [])
+
   const requestedStreamFormat = (tldwFormat || ttsSettings?.tldwTtsResponseFormat || "mp3").toLowerCase()
   const streamFormatSupported = STREAMING_FORMATS.has(requestedStreamFormat)
 
@@ -1605,6 +1630,40 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
         : streamStatus === "streaming"
         ? "blue"
         : "default"
+
+  const inspectorBadge = React.useMemo((): "none" | "gray" | "amber" | "red" => {
+    if (inspectorOpen) return "none"
+    if (isTtsDisabled) return "red"
+    if (isTldw && !hasAudio) return "red"
+    if (showElevenLabsHint && !hasElevenLabsKey) return "red"
+    if (showElevenLabsHint && hasElevenLabsKey) return "amber"
+    return "gray"
+  }, [inspectorOpen, isTtsDisabled, isTldw, hasAudio, showElevenLabsHint, hasElevenLabsKey])
+
+  // Keyboard shortcuts: Ctrl/Cmd+Enter (play/stop), Escape (stop), Ctrl/Cmd+. (toggle inspector)
+  React.useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (mode === "speak") return
+      const mod = e.metaKey || e.ctrlKey
+      if (mod && e.key === "Enter") {
+        e.preventDefault()
+        if (isStreamingActive || isTtsJobRunning || segments.length > 0) {
+          handleStop()
+        } else if (!isPlayDisabled) {
+          void handlePlay()
+        }
+      }
+      if (e.key === "Escape") {
+        handleStop()
+      }
+      if (mod && e.key === ".") {
+        e.preventDefault()
+        setInspectorOpen((prev) => !prev)
+      }
+    }
+    document.addEventListener("keydown", handler)
+    return () => document.removeEventListener("keydown", handler)
+  }, [handlePlay, handleStop, isPlayDisabled, isStreamingActive, isTtsJobRunning, mode, segments.length, setInspectorOpen])
 
   const handleElevenLabsApiKeyFocus = React.useCallback(() => {
     const el = document.getElementById("elevenlabs-api-key")
@@ -2111,860 +2170,411 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
           )}
 
           {mode !== "speak" && (
-            <Card className="h-full">
-              <Space orientation="vertical" className="w-full" size="middle">
-                <TtsProviderPanel
-                  withCard={false}
-                  providerLabel={providerLabel}
-                  provider={provider}
-                  ttsSettings={ttsSettings}
-                  isTldw={isTldw}
-                  hasAudio={hasAudio}
-                  activeProviderCaps={activeProviderCaps}
-                  activeVoices={activeVoices}
-                  providersInfo={providersInfo}
-                  currentPreset={ttsPreset}
-                  onSelectPreset={(preset) => {
-                    void applyTtsPreset(preset as TtsPresetKey)
-                  }}
-                />
+            <Card className="h-full overflow-hidden">
+              <div className="flex h-full">
+                {/* Zone 1: Workspace */}
+                <div className="flex-1 flex flex-col min-w-0">
+                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    <TtsProviderStrip
+                      provider={provider}
+                      model={tldwModel || ttsSettings?.tldwTtsModel || ""}
+                      voice={tldwVoice || ttsSettings?.tldwTtsVoice || ""}
+                      format={tldwFormat || ttsSettings?.tldwTtsResponseFormat || "mp3"}
+                      speed={ttsSettings?.tldwTtsSpeed ?? 1}
+                      presetValue={(ttsPreset as TtsPresetKey) || "balanced"}
+                      onPresetChange={(preset) => void applyTtsPreset(preset)}
+                      onLabelClick={openInspectorAt}
+                      onGearClick={() => setInspectorOpen((prev) => !prev)}
+                    />
 
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <Paragraph className="!mb-2 !mr-2">
-                      {t("playground:tts.inputLabel", "Enter some text to hear it spoken.")}
-                    </Paragraph>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        size="small"
-                        checked={useDraftEditor}
-                        onChange={setUseDraftEditor}
+                    {/* Error banners */}
+                    {isTldw && !hasAudio && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        title={t(
+                          "playground:tts.tldwWarningTitle",
+                          "tldw audio/speech API not detected"
+                        )}
+                        description={t(
+                          "playground:tts.tldwWarningBody",
+                          "Ensure your tldw_server version includes /api/v1/audio/speech and that your extension is connected with a valid API key."
+                        )}
                       />
-                      <Text className="text-xs">Draft editor</Text>
-                      <Button
-                        size="small"
-                        onClick={() => {
-                          if (useDraftEditor) {
-                            setTranscriptDraft(SAMPLE_TEXT)
-                          } else {
-                            setTtsText(SAMPLE_TEXT)
-                          }
-                        }}
-                        aria-label={t("playground:tts.sampleText", "Insert sample text") as string}
-                      >
-                        {t("playground:tts.sampleText", "Insert sample text")}
-                      </Button>
-                    </div>
-                  </div>
-                  {useDraftEditor ? (
-                    <LongformDraftEditor
-                      outline={outlineDraft}
-                      transcript={transcriptDraft}
-                      onOutlineChange={(value) => {
-                        setOutlineDraft(value)
-                        if (draftErrors.outline) {
-                          setDraftErrors((prev) => ({ ...prev, outline: undefined }))
-                        }
-                      }}
-                      onTranscriptChange={(value) => {
-                        setTranscriptDraft(value)
-                        if (draftErrors.transcript) {
-                          setDraftErrors((prev) => ({ ...prev, transcript: undefined }))
-                        }
-                      }}
-                      outlineError={draftErrors.outline}
-                      transcriptError={draftErrors.transcript}
-                      preview={normalizedPreviewText}
-                    />
-                  ) : (
-                    <Input.TextArea
-                      aria-label={t("playground:tts.inputLabel", "Enter some text to hear it spoken.") as string}
-                      value={ttsText}
-                      onChange={(e) => setTtsText(e.target.value)}
-                      autoSize={{ minRows: 4, maxRows: 10 }}
-                      placeholder={t(
-                        "playground:tts.inputPlaceholder",
-                        "Type or paste text here, then use Play to listen."
-                      ) as string}
-                    />
-                  )}
-                </div>
+                    )}
 
-                {showElevenLabsHint && (
-                  <Alert
-                    type={hasElevenLabsKey ? "warning" : "info"}
-                    showIcon
-                    title={elevenLabsHintTitle}
-                    description={
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span>
-                          {hasElevenLabsLoadError && isTimeoutLikeError(elevenLabsError)
-                            ? elevenLabsTimeoutBody
-                            : elevenLabsHintBody}
-                        </span>
-                        {hasElevenLabsKey && (
-                          <Button
-                            size="small"
-                            type="link"
-                            onClick={() => {
-                              void refetchElevenLabs()
-                            }}
-                          >
-                            {t("common:retry", "Retry")}
-                          </Button>
-                        )}
-                        <Button
-                          size="small"
-                          type="link"
-                          onClick={handleElevenLabsApiKeyFocus}
-                        >
-                          {t(
-                            "playground:tts.elevenLabsMissingCta",
-                            "Set API key in Settings"
-                          )}
-                        </Button>
-                      </div>
-                    }
-                  />
-                )}
-
-                {ttsSettings?.ttsProvider === "elevenlabs" && elevenLabsData && (
-                  <div className="flex flex-col gap-2">
-                    <Text type="secondary">
-                      {t(
-                        "playground:tts.voiceSelector.elevenLabs",
-                        "Choose an ElevenLabs voice and model for this run."
-                      )}
-                    </Text>
-                    <Space className="flex flex-wrap" size="middle">
-                      <div>
-                        <label
-                          className="block text-xs mb-1 text-text"
-                          htmlFor="speech-eleven-voice"
-                        >
-                          Voice
-                        </label>
-                        <Select
-                          id="speech-eleven-voice"
-                          aria-label="ElevenLabs voice"
-                          style={{ minWidth: 160 }}
-                          placeholder="Select voice"
-                          className="focus-ring"
-                          options={elevenLabsData.voices.map((v: any) => ({
-                            label: v.name,
-                            value: v.voice_id
-                          }))}
-                          value={elevenVoiceId}
-                          onChange={(val) => setElevenVoiceId(val)}
-                        />
-                      </div>
-                      <div>
-                        <label
-                          className="block text-xs mb-1 text-text"
-                          htmlFor="speech-eleven-model"
-                        >
-                          Model
-                        </label>
-                        <Select
-                          id="speech-eleven-model"
-                          aria-label="ElevenLabs model"
-                          style={{ minWidth: 160 }}
-                          placeholder="Select model"
-                          className="focus-ring"
-                          options={elevenLabsData.models.map((m: any) => ({
-                            label: m.name,
-                            value: m.model_id
-                          }))}
-                          value={elevenModelId}
-                          onChange={(val) => setElevenModelId(val)}
-                        />
-                      </div>
-                    </Space>
-                  </div>
-                )}
-
-                {isTldw && (providerVoices.length > 0 || customVoiceOptions.length > 0) && (
-                  <div className="flex flex-col gap-2">
-                    <Text type="secondary">
-                      {t(
-                        "playground:tts.voiceSelector.tldw",
-                        "Choose a server voice and model for this run."
-                      )}
-                    </Text>
-                    <Space className="flex flex-wrap" size="middle">
-                      <div>
-                        <label
-                          className="block text-xs mb-1 text-text"
-                          htmlFor="speech-tldw-voice"
-                        >
-                          Voice
-                        </label>
-                        <Select<string, DefaultOptionType>
-                          id="speech-tldw-voice"
-                          aria-label="tldw server voice"
-                          style={{ minWidth: 200 }}
-                          placeholder="Select voice"
-                          className="focus-ring"
-                          options={tldwVoiceOptions}
-                          value={tldwVoice}
-                          onChange={(val) => {
-                            setTldwVoice(val)
-                            if (typeof val === "string" && val.startsWith("custom:")) {
-                              const match = customVoices.find(
-                                (voice) => `custom:${voice.voice_id}` === val
-                              )
-                              if (match?.provider) {
-                                setTldwModel((prev) =>
-                                  prev && normalizeTtsProviderKey(prev) === normalizeTtsProviderKey(match.provider)
-                                    ? prev
-                                    : match.provider
-                                )
-                              }
-                            }
-                          }}
-                        />
-                      </div>
-                      <div>
-                        <label
-                          className="block text-xs mb-1 text-text"
-                          htmlFor="speech-tldw-model"
-                        >
-                          Model
-                        </label>
-                        {tldwTtsModels && tldwTtsModels.length > 0 ? (
-                          <Select
-                            id="speech-tldw-model"
-                            aria-label="tldw server model"
-                            style={{ minWidth: 160 }}
-                            placeholder="Select model"
-                            showSearch
-                            optionFilterProp="label"
-                            className="focus-ring"
-                            options={tldwTtsModels.map((m) => ({
-                              label: m.label,
-                              value: m.id
-                            }))}
-                            value={tldwModel}
-                            onChange={(val) => setTldwModel(val)}
-                          />
-                        ) : (
-                          <Input
-                            aria-label="tldw server model"
-                            style={{ minWidth: 160 }}
-                            value={tldwModel || ""}
-                            onChange={(e) => setTldwModel(e.target.value)}
-                            placeholder="kokoro"
-                          />
-                        )}
-                      </div>
-                    </Space>
-                  </div>
-                )}
-
-                {isTldw && (providerVoices.length > 0 || customVoiceOptions.length > 0) && (
-                  <div className="rounded-md border border-border p-3 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <Text strong>Voice roles</Text>
-                        <div className="text-xs text-text-subtle">
-                          Assign roles to 1–4 voices for multi-speaker output.
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Switch
-                          size="small"
-                          checked={useVoiceRoles}
-                          onChange={setUseVoiceRoles}
-                          disabled={provider !== "tldw"}
-                        />
-                        <Text className="text-xs">Enable</Text>
-                      </div>
-                    </div>
-
-                    {useVoiceRoles && (
-                      <>
-                        <div>
-                          <label className="block text-xs mb-1 text-text">
-                            Preview text
-                          </label>
-                          <Input
-                            value={voicePreviewText}
-                            onChange={(e) => setVoicePreviewText(e.target.value)}
-                            placeholder="Preview text"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          {voiceCards.map((card) => (
-                            <div
-                              key={card.id}
-                              className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 p-2"
-                            >
-                              <Select
-                                aria-label="Voice role"
-                                className="min-w-[140px]"
-                                options={VOICE_ROLE_OPTIONS}
-                                value={card.role}
-                                onChange={(val) =>
-                                  handleUpdateVoiceCard(card.id, { role: val })
-                                }
-                              />
-                              <Select
-                                aria-label="Voice selection"
-                                className="min-w-[220px] flex-1"
-                                options={tldwVoiceOptions}
-                                value={card.voiceId}
-                                onChange={(val) =>
-                                  handleUpdateVoiceCard(card.id, { voiceId: val })
-                                }
-                              />
+                    {showElevenLabsHint && (
+                      <Alert
+                        type={hasElevenLabsKey ? "warning" : "info"}
+                        showIcon
+                        title={elevenLabsHintTitle}
+                        description={
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span>
+                              {hasElevenLabsLoadError && isTimeoutLikeError(elevenLabsError)
+                                ? elevenLabsTimeoutBody
+                                : elevenLabsHintBody}
+                            </span>
+                            {hasElevenLabsKey && (
                               <Button
                                 size="small"
-                                icon={<Play className="h-3 w-3" />}
-                                loading={voicePreviewingId === card.id}
-                                onClick={() => handleVoicePreview(card)}
-                                disabled={!card.voiceId}
+                                type="link"
+                                onClick={() => {
+                                  void refetchElevenLabs()
+                                }}
                               >
-                                Preview
+                                {t("common:retry", "Retry")}
                               </Button>
-                              <Tooltip title={t("playground:speech.removeVoice", "Remove voice")}>
-                                <Button
-                                  size="small"
-                                  type="text"
-                                  danger
-                                  aria-label={t("playground:speech.removeVoice", "Remove voice")}
-                                  icon={<Trash2 className="h-3 w-3" />}
-                                  onClick={() => handleRemoveVoiceCard(card.id)}
-                                  disabled={voiceCards.length <= 1}
-                                />
-                              </Tooltip>
-                              {voicePreviewCardId === card.id && voicePreviewUrl && (
-                                <audio className="w-full" controls src={voicePreviewUrl} />
+                            )}
+                            <Button
+                              size="small"
+                              type="link"
+                              onClick={handleElevenLabsApiKeyFocus}
+                            >
+                              {t(
+                                "playground:tts.elevenLabsMissingCta",
+                                "Set API key in Settings"
                               )}
-                            </div>
-                          ))}
+                            </Button>
+                          </div>
+                        }
+                      />
+                    )}
+
+                    {/* Text input area */}
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Paragraph className="!mb-2 !mr-2">
+                          {t("playground:tts.inputLabel", "Enter some text to hear it spoken.")}
+                        </Paragraph>
+                        <Button
+                          size="small"
+                          onClick={() => {
+                            if (useDraftEditor) {
+                              setTranscriptDraft(SAMPLE_TEXT)
+                            } else {
+                              setTtsText(SAMPLE_TEXT)
+                            }
+                          }}
+                          aria-label={t("playground:tts.sampleText", "Insert sample text") as string}
+                        >
+                          {t("playground:tts.sampleText", "Insert sample text")}
+                        </Button>
+                      </div>
+                      {useDraftEditor ? (
+                        <LongformDraftEditor
+                          outline={outlineDraft}
+                          transcript={transcriptDraft}
+                          onOutlineChange={(value) => {
+                            setOutlineDraft(value)
+                            if (draftErrors.outline) {
+                              setDraftErrors((prev) => ({ ...prev, outline: undefined }))
+                            }
+                          }}
+                          onTranscriptChange={(value) => {
+                            setTranscriptDraft(value)
+                            if (draftErrors.transcript) {
+                              setDraftErrors((prev) => ({ ...prev, transcript: undefined }))
+                            }
+                          }}
+                          outlineError={draftErrors.outline}
+                          transcriptError={draftErrors.transcript}
+                          preview={normalizedPreviewText}
+                        />
+                      ) : (
+                        <Input.TextArea
+                          aria-label={t("playground:tts.inputLabel", "Enter some text to hear it spoken.") as string}
+                          value={ttsText}
+                          onChange={(e) => setTtsText(e.target.value)}
+                          autoSize={{ minRows: 4, maxRows: 10 }}
+                          placeholder={t(
+                            "playground:tts.inputPlaceholder",
+                            "Type or paste text here, then use Play to listen."
+                          ) as string}
+                        />
+                      )}
+                    </div>
+
+                    {/* Character progress bar */}
+                    <CharacterProgressBar
+                      count={previewCharCount}
+                      max={TTS_CHAR_LIMIT}
+                      warnAt={TTS_CHAR_WARNING}
+                      dangerAt={TTS_CHAR_LIMIT - 2000}
+                    />
+
+                    {/* Stats line */}
+                    <div className="text-xs text-text-subtle">
+                      {previewWordCount} words · {previewSegments.length} segments ({responseSplitting}) · Est. ~{formatDuration(estimatedDurationSeconds)}
+                    </div>
+
+                    {/* Streaming / Job status — when active */}
+                    {canStream && streamStatus !== "idle" && (
+                      <div className="flex flex-wrap items-center gap-2 text-xs" aria-live="polite">
+                        <Tag color={streamStatusColor} bordered>
+                          {streamStatusLabel}
+                        </Tag>
+                        {streamChunks > 0 && <span>{streamChunks} chunks</span>}
+                        {streamBytes > 0 && <span>{formatBytes(streamBytes)}</span>}
+                      </div>
+                    )}
+                    {isTtsJobRunning && (
+                      <TtsJobProgress
+                        title="Long-form TTS"
+                        steps={TTS_JOB_STEPS}
+                        currentStep={ttsJobStepIndex}
+                        percent={ttsJobProgress}
+                        message={ttsJobMessage}
+                        etaSeconds={ttsJobEta}
+                        status="running"
+                        metrics={[
+                          { label: "Segments", value: String(previewSegments.length) },
+                          { label: "Chars", value: String(normalizedPreviewText.length) }
+                        ]}
+                      />
+                    )}
+                    {ttsJobStatus === "success" && ttsJobId != null && (
+                      <TtsJobProgress
+                        title="Long-form TTS"
+                        steps={TTS_JOB_STEPS}
+                        currentStep={ttsJobStepIndex}
+                        percent={ttsJobProgress ?? 100}
+                        message={ttsJobMessage || "tts_completed"}
+                        etaSeconds={0}
+                        status="success"
+                        metrics={[
+                          { label: "Job", value: String(ttsJobId) },
+                          { label: "Segments", value: String(previewSegments.length) }
+                        ]}
+                      />
+                    )}
+                    {ttsJobStatus === "error" && ttsJobError && (
+                      <Alert
+                        type="error"
+                        showIcon
+                        title="Long-form TTS error"
+                        description={ttsJobError}
+                      />
+                    )}
+                    {activeStreamError && (
+                      <Alert
+                        type="error"
+                        showIcon
+                        title="Streaming error"
+                        description={activeStreamError}
+                      />
+                    )}
+
+                    {/* Waveform + Segments */}
+                    {segments.length > 0 && (
+                      <div className="mt-2 space-y-2 w-full">
+                        <div>
+                          <Text strong>{t("playground:tts.outputTitle", "Generated audio segments")}</Text>
+                          <Paragraph className="!mb-1 text-xs text-text-subtle">
+                            {t(
+                              "playground:tts.outputHelp",
+                              "Select a segment, then use the player controls to play, pause, or seek."
+                            )}
+                          </Paragraph>
                         </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Button
-                            size="small"
-                            onClick={handleAddVoiceCard}
-                            disabled={voiceCards.length >= 4}
-                          >
-                            Add voice
-                          </Button>
+                        <div className="border border-border rounded-md p-3 space-y-2">
+                          <audio
+                            ref={audioRef}
+                            controls
+                            className="w-full"
+                            src={
+                              activeSegmentIndex != null
+                                ? segments[activeSegmentIndex]?.url
+                                : segments[0]?.url
+                            }
+                            onTimeUpdate={handleAudioTimeUpdate}
+                          />
+                          <WaveformCanvas
+                            audioRef={audioRef}
+                            active={Boolean(segments.length)}
+                            label={t("playground:speech.playbackWaveform", "Playback waveform") as string}
+                          />
+                          <div className="flex items-center justify-between text-xs text-text-subtle">
+                            <span>
+                              {activeSegmentIndex != null
+                                ? t("playground:tts.currentSegment", "Segment") +
+                                  ` ${activeSegmentIndex + 1}/${segments.length}`
+                                : t("playground:tts.currentSegmentNone", "No segment selected")}
+                            </span>
+                            {duration > 0 && (
+                              <span>
+                                {t("playground:tts.timeLabel", "Time")}: {Math.floor(currentTime)}s /{" "}
+                                {Math.floor(duration)}s
+                              </span>
+                            )}
+                          </div>
+                          {/* Segment navigation with text previews */}
+                          {segments.length > 1 && (
+                            <div className="flex gap-1.5 overflow-x-auto pb-1" role="tablist">
+                              {segments.map((seg, idx) => {
+                                const preview = seg.text
+                                  ? seg.text.slice(0, 25) + (seg.text.length > 25 ? "..." : "")
+                                  : `Segment ${idx + 1}`
+                                return (
+                                  <Button
+                                    key={seg.id}
+                                    role="tab"
+                                    aria-selected={activeSegmentIndex === idx}
+                                    size="small"
+                                    type={
+                                      idx === (activeSegmentIndex != null ? activeSegmentIndex : 0)
+                                        ? "primary"
+                                        : "default"
+                                    }
+                                    onClick={() => handleSegmentSelect(idx)}
+                                  >
+                                    {idx + 1}: &ldquo;{preview}&rdquo;
+                                  </Button>
+                                )
+                              })}
+                            </div>
+                          )}
                           <Text type="secondary" className="text-xs">
-                            {voiceCards.length}/4 voices selected
+                            {t("playground:speech.segmentFormat", "Format")}:{" "}
+                            {(segments[0]?.format || "mp3").toUpperCase()}
                           </Text>
                         </div>
-                        {voiceRoleError && (
-                          <Alert
-                            type="warning"
-                            showIcon
-                            title="Voice roles need attention"
-                            description={voiceRoleError}
-                          />
-                        )}
-                      </>
+                      </div>
                     )}
                   </div>
-                )}
 
-                {ttsSettings?.ttsProvider === "openai" && (
-                  <div className="flex flex-col gap-2">
-                    <Text type="secondary">
-                      {t(
-                        "playground:tts.voiceSelector.openai",
-                        "Choose an OpenAI TTS model and voice for this run."
-                      )}
-                    </Text>
-                    <Space className="flex flex-wrap" size="middle">
-                      <div>
-                        <label
-                          className="block text-xs mb-1 text-text"
-                          htmlFor="speech-openai-model"
-                        >
-                          Model
-                        </label>
-                        <Select
-                          id="speech-openai-model"
-                          aria-label="OpenAI TTS model"
-                          style={{ minWidth: 160 }}
-                          placeholder="Select model"
-                          className="focus-ring"
-                          options={OPENAI_TTS_MODELS}
-                          value={openAiModel}
-                          onChange={(val) => {
-                            setOpenAiModel(val)
-                            const voicesForModel = OPENAI_TTS_VOICES[val] || openAiVoiceOptions
-                            if (
-                              voicesForModel.length > 0 &&
-                              !voicesForModel.find((v) => v.value === openAiVoice)
-                            ) {
-                              setOpenAiVoice(voicesForModel[0].value)
-                            }
-                          }}
-                        />
-                      </div>
-                      <div>
-                        <label
-                          className="block text-xs mb-1 text-text"
-                          htmlFor="speech-openai-voice"
-                        >
-                          Voice
-                        </label>
-                        <Select
-                          id="speech-openai-voice"
-                          aria-label="OpenAI TTS voice"
-                          style={{ minWidth: 160 }}
-                          placeholder="Select voice"
-                          className="focus-ring"
-                          options={openAiVoiceOptions}
-                          value={openAiVoice}
-                          onChange={(val) => setOpenAiVoice(val)}
-                        />
-                      </div>
-                    </Space>
-                  </div>
-                )}
-
-                <div className="flex flex-wrap items-end gap-3">
-                  {isTldw && (
-                    <div>
-                      <label className="block text-xs mb-1 text-text">
-                        Output format
-                      </label>
-                      <Select
-                        aria-label="TTS output format"
-                        style={{ minWidth: 160 }}
-                        placeholder="Select format"
-                        className="focus-ring"
-                        options={tldwFormatOptions}
-                        value={tldwFormat || ttsSettings?.tldwTtsResponseFormat}
-                        onChange={(val) => setTldwFormat(val)}
-                      />
-                    </div>
-                  )}
-                  <div>
-                    <label className="block text-xs mb-1 text-text">
-                      Split by
-                    </label>
-                    <Select
-                      aria-label="TTS response splitting"
-                      style={{ minWidth: 160 }}
-                      placeholder="Select"
-                      className="focus-ring"
-                      options={[
-                        { label: "None", value: "none" },
-                        { label: "Punctuation", value: "punctuation" },
-                        { label: "Paragraph", value: "paragraph" }
-                      ]}
-                      value={responseSplitting}
-                      onChange={(val) => setResponseSplitting(val)}
-                    />
-                  </div>
-                  {isTldw && (
-                    <div>
-                      <label className="block text-xs mb-1 text-text">Preset</label>
-                      <Select
-                        aria-label="TTS preset"
-                        style={{ minWidth: 160 }}
-                        value={ttsPreset}
-                        onChange={(val) => {
-                          void applyTtsPreset(val as TtsPresetKey)
-                        }}
-                        options={Object.entries(TTS_PRESETS).map(([key, preset]) => ({
-                          label: preset.label,
-                          value: key
-                        }))}
-                      />
-                    </div>
-                  )}
-                  {canStream && (
-                    <Tooltip
-                      title={
-                        streamFormatSupported
-                          ? "Stream audio over WebSocket"
-                          : "Streaming supports mp3, opus, aac, flac, wav, or pcm. Change output format to enable."
-                      }
-                    >
-                      <span className="flex items-center gap-2 pb-1">
-                        <Switch
-                          size="small"
-                          checked={tldwStreaming}
-                          disabled={!streamFormatSupported}
-                          onChange={setTldwStreaming}
-                        />
-                        <Text className="text-xs">Stream</Text>
-                      </span>
-                    </Tooltip>
-                  )}
-                  {isTldw && (
-                    <Tooltip title="Use a background job for long text and show progress/ETA.">
-                      <span className="flex items-center gap-2 pb-1">
-                        <Switch
-                          size="small"
-                          checked={useTtsJob}
-                          disabled={tldwStreaming}
-                          onChange={setUseTtsJob}
-                        />
-                        <Text className="text-xs">Background job</Text>
-                      </span>
-                    </Tooltip>
-                  )}
-                  <Button
-                    size="small"
-                    type="text"
-                    onClick={() => setShowSegmentsPreview((prev) => !prev)}
-                  >
-                    {showSegmentsPreview ? "Hide" : "Preview"} segments ({previewSegments.length})
-                  </Button>
+                  {/* Sticky action bar */}
+                  <TtsStickyActionBar
+                    onPlay={() => { void handlePlay() }}
+                    onStop={handleStop}
+                    onDownloadSegment={() => handleDownloadSegment()}
+                    onDownloadAll={handleDownloadAll}
+                    onToggleInspector={() => setInspectorOpen((prev) => !prev)}
+                    isPlayDisabled={isPlayDisabled}
+                    isStopDisabled={!canStop}
+                    isDownloadDisabled={Boolean(downloadDisabledReason)}
+                    playDisabledReason={(playDisabledReason as string) || null}
+                    stopDisabledReason={(stopDisabledReason as string) || null}
+                    downloadDisabledReason={(downloadDisabledReason as string) || null}
+                    streamStatus={streamStatus as "idle" | "connecting" | "streaming" | "complete" | "error"}
+                    inspectorOpen={inspectorOpen ?? false}
+                    inspectorBadge={inspectorBadge}
+                    segmentCount={segments.length}
+                    provider={provider}
+                  />
                 </div>
-                <div className="flex flex-wrap items-center gap-2 text-xs text-text-subtle">
-                  <span>
-                    {previewWordCount} words | {previewCharCount} chars | {previewSegments.length} segments
-                  </span>
-                  <span>Est. duration: {formatDuration(estimatedDurationSeconds)}</span>
-                  {previewCharCount >= TTS_CHAR_LIMIT && (
-                    <Tag color="red" bordered>
-                      Over limit ({TTS_CHAR_LIMIT}+)
-                    </Tag>
-                  )}
-                  {previewCharCount >= TTS_CHAR_WARNING && previewCharCount < TTS_CHAR_LIMIT && (
-                    <Tag color="orange" bordered>
-                      Long input ({TTS_CHAR_WARNING}+)
-                    </Tag>
-                  )}
-                </div>
-                {showSegmentsPreview && previewSegments.length > 0 && (
-                  <div className="border border-border rounded-md p-3 space-y-2">
-                    {previewSegments.map((segment, idx) => (
-                      <div key={`${idx}-${segment.slice(0, 12)}`} className="flex gap-2 text-xs">
-                        <Tag bordered>{idx + 1}</Tag>
-                        <Text>{segment}</Text>
-                      </div>
-                    ))}
-                  </div>
-                )}
 
-                <Collapse
-                  size="small"
-                  items={[
-                    {
-                      key: "advanced",
-                      label: "Advanced controls",
-                      children: (
-                        <div className="space-y-3">
-                          {isTldw && tldwLanguageOptions.length > 0 && (
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <Text className="text-xs text-text-muted">Language</Text>
-                              <Select
-                                aria-label="TTS language"
-                                style={{ minWidth: 180 }}
-                                placeholder="Auto"
-                                allowClear
-                                options={tldwLanguageOptions}
-                                value={tldwLanguage}
-                                onChange={(val) => setTldwLanguage(val)}
-                              />
-                            </div>
-                          )}
-                          {isTldw && activeProviderCaps?.caps.supports_emotion_control && (
-                            <div className="grid gap-2 sm:grid-cols-2">
-                              <div>
-                                <label className="block text-xs mb-1 text-text-muted">
-                                  Emotion
-                                </label>
-                                <Select
-                                  aria-label="Emotion preset"
-                                  allowClear
-                                  placeholder="Default"
-                                  options={[
-                                    { label: "Neutral", value: "neutral" },
-                                    { label: "Calm", value: "calm" },
-                                    { label: "Energetic", value: "energetic" },
-                                    { label: "Happy", value: "happy" },
-                                    { label: "Sad", value: "sad" },
-                                    { label: "Angry", value: "angry" }
-                                  ]}
-                                  value={tldwEmotion}
-                                  onChange={(val) => setTldwEmotion(val)}
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs mb-1 text-text-muted">
-                                  Emotion intensity
-                                </label>
-                                <InputNumber
-                                  min={0.1}
-                                  max={2}
-                                  step={0.1}
-                                  value={tldwEmotionIntensity}
-                                  onChange={(val) => setTldwEmotionIntensity(Number(val || 1))}
-                                />
-                              </div>
-                            </div>
-                          )}
-                          {isTldw && (
-                            <div className="rounded-md border border-border p-3 space-y-2">
-                              <div className="flex items-center justify-between">
-                                <Text className="text-xs text-text-muted">
-                                  Smart normalization
-                                </Text>
-                                <Switch
-                                  size="small"
-                                  checked={tldwNormalize}
-                                  onChange={setTldwNormalize}
-                                />
-                              </div>
-                              {tldwNormalize && (
-                                <div className="grid gap-2 sm:grid-cols-2">
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs text-text-subtle">Units</span>
-                                    <Switch
-                                      size="small"
-                                      checked={tldwNormalizeUnits}
-                                      onChange={setTldwNormalizeUnits}
-                                    />
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs text-text-subtle">URLs</span>
-                                    <Switch
-                                      size="small"
-                                      checked={tldwNormalizeUrls}
-                                      onChange={setTldwNormalizeUrls}
-                                    />
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs text-text-subtle">Emails</span>
-                                    <Switch
-                                      size="small"
-                                      checked={tldwNormalizeEmails}
-                                      onChange={setTldwNormalizeEmails}
-                                    />
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs text-text-subtle">Phone</span>
-                                    <Switch
-                                      size="small"
-                                      checked={tldwNormalizePhones}
-                                      onChange={setTldwNormalizePhones}
-                                    />
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs text-text-subtle">Pluralization</span>
-                                    <Switch
-                                      size="small"
-                                      checked={tldwNormalizePlurals}
-                                      onChange={setTldwNormalizePlurals}
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    },
-                    {
-                      key: "voice-clone",
-                      label: "Voice cloning & custom voices",
-                      children: (
-                        <VoiceCloningManager
-                          providersInfo={providersInfo}
-                          onSelectVoice={(value, voiceProvider) => {
-                            setTldwVoice(value)
-                            if (voiceProvider) {
-                              setTldwModel(voiceProvider)
-                            }
-                          }}
-                          onSelectVoices={(voices) => {
-                            if (!voices.length) return
-                            setUseVoiceRoles(true)
-                            setVoiceCards(
-                              voices.map((voice, idx) => ({
-                                id: `voice-${Date.now()}-${idx}`,
-                                role: voice.role,
-                                voiceId: voice.voiceId
-                              }))
-                            )
-                          }}
-                        />
-                      )
-                    }
-                  ]}
-                />
-
-                <Space>
-                  <Button
-                    type="primary"
-                    onClick={handlePlay}
-                    disabled={isPlayDisabled}
-                    loading={isGenerating || isTtsJobRunning}
-                  >
-                    {isGenerating || isTtsJobRunning
-                      ? t("playground:tts.playing", "Playing…")
-                      : t("playground:tts.play", "Play")}
-                  </Button>
-                  <Button onClick={handleStop} disabled={!canStop}>
-                    {t("playground:tts.stop", "Stop")}
-                  </Button>
-                  <Tooltip
-                    title={downloadDisabledReason as string}
-                    open={Boolean(downloadDisabledReason) ? undefined : false}
-                  >
-                    <span>
-                      <Dropdown menu={downloadMenu} disabled={Boolean(downloadDisabledReason)}>
-                        <Button
-                          icon={<Download className="h-4 w-4" />}
-                          disabled={Boolean(downloadDisabledReason)}
-                        >
-                          {t("playground:speech.download", "Download")}
-                        </Button>
-                      </Dropdown>
-                    </span>
-                  </Tooltip>
-                </Space>
-                <Text type="secondary" className="text-xs">
-                  {playDisabledReason ||
-                    t("playground:tts.playHelper", "Play uses your selected provider, voice, and speed.")}
-                  {!canStop && stopDisabledReason ? ` ${stopDisabledReason}` : ""}
-                </Text>
-                {canStream && streamStatus !== "idle" && (
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <Tag color={streamStatusColor} bordered>
-                      {streamStatusLabel}
-                    </Tag>
-                    {streamChunks > 0 && <span>{streamChunks} chunks</span>}
-                    {streamBytes > 0 && <span>{formatBytes(streamBytes)}</span>}
-                  </div>
-                )}
-                {isTtsJobRunning && (
-                  <TtsJobProgress
-                    title="Long-form TTS"
-                    steps={TTS_JOB_STEPS}
-                    currentStep={ttsJobStepIndex}
-                    percent={ttsJobProgress}
-                    message={ttsJobMessage}
-                    etaSeconds={ttsJobEta}
-                    status="running"
-                    metrics={[
-                      { label: "Segments", value: String(previewSegments.length) },
-                      { label: "Chars", value: String(normalizedPreviewText.length) }
-                    ]}
-                  />
-                )}
-                {ttsJobStatus === "success" && ttsJobId != null && (
-                  <TtsJobProgress
-                    title="Long-form TTS"
-                    steps={TTS_JOB_STEPS}
-                    currentStep={ttsJobStepIndex}
-                    percent={ttsJobProgress ?? 100}
-                    message={ttsJobMessage || "tts_completed"}
-                    etaSeconds={0}
-                    status="success"
-                    metrics={[
-                      { label: "Job", value: String(ttsJobId) },
-                      { label: "Segments", value: String(previewSegments.length) }
-                    ]}
-                  />
-                )}
-                {ttsJobStatus === "error" && ttsJobError && (
-                  <Alert
-                    type="error"
-                    showIcon
-                    title="Long-form TTS error"
-                    description={ttsJobError}
-                  />
-                )}
-                {activeStreamError && (
-                  <Alert
-                    type="error"
-                    showIcon
-                    title="Streaming error"
-                    description={activeStreamError}
-                  />
-                )}
-
-                {segments.length > 0 && (
-                  <div className="mt-2 space-y-2 w-full">
-                    <div>
-                      <Text strong>{t("playground:tts.outputTitle", "Generated audio segments")}</Text>
-                      <Paragraph className="!mb-1 text-xs text-text-subtle">
-                        {t(
-                          "playground:tts.outputHelp",
-                          "Select a segment, then use the player controls to play, pause, or seek."
-                        )}
-                      </Paragraph>
-                    </div>
-                    <div className="border border-border rounded-md p-3 space-y-2">
-                      <audio
-                        ref={audioRef}
-                        controls
-                        className="w-full"
-                        src={
-                          activeSegmentIndex != null
-                            ? segments[activeSegmentIndex]?.url
-                            : segments[0]?.url
+                {/* Zone 2: Inspector */}
+                <TtsInspectorPanel
+                  open={inspectorOpen ?? false}
+                  activeTab={inspectorTab ?? "voice"}
+                  onTabChange={setInspectorTab}
+                  onClose={() => setInspectorOpen(false)}
+                  useDrawer={useDrawerMode}
+                  voiceTab={
+                    <TtsVoiceTab
+                      provider={provider}
+                      model={tldwModel || ttsSettings?.tldwTtsModel || ""}
+                      voice={tldwVoice || ttsSettings?.tldwTtsVoice || ""}
+                      onProviderChange={(val) => {
+                        if (ttsSettings) {
+                          void setTTSSettings({
+                            ...ttsSettings,
+                            ttsProvider: val
+                          }).then(() => {
+                            queryClient.invalidateQueries({ queryKey: ["fetchTTSSettings"] })
+                          })
                         }
-                        onTimeUpdate={handleAudioTimeUpdate}
-                      />
-                      <WaveformCanvas
-                        audioRef={audioRef}
-                        active={Boolean(segments.length)}
-                        label={t("playground:speech.playbackWaveform", "Playback waveform") as string}
-                      />
-                      <div className="flex items-center justify-between text-xs text-text-subtle">
-                        <span>
-                          {activeSegmentIndex != null
-                            ? t("playground:tts.currentSegment", "Segment") +
-                              ` ${activeSegmentIndex + 1}/${segments.length}`
-                            : t("playground:tts.currentSegmentNone", "No segment selected")}
-                        </span>
-                        {duration > 0 && (
-                          <span>
-                            {t("playground:tts.timeLabel", "Time")}: {Math.floor(currentTime)}s /{" "}
-                            {Math.floor(duration)}s
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        {segments.map((seg, idx) => (
-                          <Button
-                            key={seg.id}
-                            size="small"
-                            type={
-                              idx === (activeSegmentIndex != null ? activeSegmentIndex : 0)
-                                ? "primary"
-                                : "default"
-                            }
-                            onClick={() => handleSegmentSelect(idx)}
-                          >
-                            {t("playground:tts.segmentLabel", "Part")} {idx + 1}
-                          </Button>
-                        ))}
-                      </div>
-                      <Text type="secondary" className="text-xs">
-                        {t("playground:speech.segmentFormat", "Format")}:{" "}
-                        {(segments[0]?.format || "mp3").toUpperCase()}
-                      </Text>
-                    </div>
-                  </div>
-                )}
-
-                {isTldw && !hasAudio && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    title={t(
-                      "playground:tts.tldwWarningTitle",
-                      "tldw audio/speech API not detected"
-                    )}
-                    description={t(
-                      "playground:tts.tldwWarningBody",
-                      "Ensure your tldw_server version includes /api/v1/audio/speech and that your extension is connected with a valid API key."
-                    )}
-                  />
-                )}
-              </Space>
+                      }}
+                      onModelChange={(val) => setTldwModel(val)}
+                      onVoiceChange={(val) => setTldwVoice(val)}
+                      modelOptions={
+                        tldwTtsModels && tldwTtsModels.length > 0
+                          ? tldwTtsModels.map((m) => ({ label: m.label, value: m.id }))
+                          : []
+                      }
+                      voiceOptions={tldwVoiceOptions as { label: string; value: string }[]}
+                      language={tldwLanguage}
+                      onLanguageChange={(val) => setTldwLanguage(val)}
+                      languageOptions={tldwLanguageOptions}
+                      emotion={tldwEmotion}
+                      onEmotionChange={(val) => setTldwEmotion(val)}
+                      emotionIntensity={tldwEmotionIntensity}
+                      onEmotionIntensityChange={(val) => setTldwEmotionIntensity(val)}
+                      supportsEmotion={Boolean(isTldw && activeProviderCaps?.caps.supports_emotion_control)}
+                      focusField={inspectorFocusField}
+                      onFocusHandled={() => setInspectorFocusField(null)}
+                    />
+                  }
+                  outputTab={
+                    <TtsOutputTab
+                      format={tldwFormat || ttsSettings?.tldwTtsResponseFormat || "mp3"}
+                      synthesisSpeed={ttsSettings?.tldwTtsSpeed ?? 1}
+                      playbackSpeed={ttsSettings?.playbackSpeed ?? 1}
+                      responseSplitting={responseSplitting}
+                      streaming={tldwStreaming}
+                      canStream={canStream}
+                      streamFormatSupported={streamFormatSupported}
+                      onFormatChange={(val) => setTldwFormat(val)}
+                      onSynthesisSpeedChange={(val) => {
+                        void setTldwTTSSpeed(val).then(() => {
+                          queryClient.invalidateQueries({ queryKey: ["fetchTTSSettings"] })
+                        })
+                      }}
+                      onPlaybackSpeedChange={(val) => {
+                        if (ttsSettings) {
+                          void setTTSSettings({ ...ttsSettings, playbackSpeed: val }).then(() => {
+                            queryClient.invalidateQueries({ queryKey: ["fetchTTSSettings"] })
+                          })
+                        }
+                      }}
+                      onResponseSplittingChange={(val) => setResponseSplitting(val)}
+                      onStreamingChange={(val) => setTldwStreaming(val)}
+                      formatOptions={tldwFormatOptions}
+                      normalize={tldwNormalize}
+                      onNormalizeChange={setTldwNormalize}
+                      normalizeUnits={tldwNormalizeUnits}
+                      onNormalizeUnitsChange={setTldwNormalizeUnits}
+                      normalizeUrls={tldwNormalizeUrls}
+                      onNormalizeUrlsChange={setTldwNormalizeUrls}
+                      normalizeEmails={tldwNormalizeEmails}
+                      onNormalizeEmailsChange={setTldwNormalizeEmails}
+                      normalizePhones={tldwNormalizePhones}
+                      onNormalizePhonesChange={setTldwNormalizePhones}
+                      normalizePlurals={tldwNormalizePlurals}
+                      onNormalizePluralsChange={setTldwNormalizePlurals}
+                      focusField={inspectorFocusField}
+                      onFocusHandled={() => setInspectorFocusField(null)}
+                    />
+                  }
+                  advancedTab={
+                    <TtsAdvancedTab
+                      useDraftEditor={useDraftEditor}
+                      onDraftEditorChange={setUseDraftEditor}
+                      useTtsJob={useTtsJob}
+                      onTtsJobChange={setUseTtsJob}
+                      ssmlEnabled={ttsSettings?.ssmlEnabled ?? false}
+                      onSsmlChange={(val) => {
+                        if (ttsSettings) {
+                          void setTTSSettings({ ...ttsSettings, ssmlEnabled: val }).then(() => {
+                            queryClient.invalidateQueries({ queryKey: ["fetchTTSSettings"] })
+                          })
+                        }
+                      }}
+                      removeReasoning={ttsSettings?.removeReasoningTagTTS ?? true}
+                      onRemoveReasoningChange={(val) => {
+                        if (ttsSettings) {
+                          void setTTSSettings({ ...ttsSettings, removeReasoningTagTTS: val }).then(() => {
+                            queryClient.invalidateQueries({ queryKey: ["fetchTTSSettings"] })
+                          })
+                        }
+                      }}
+                      isTldw={isTldw}
+                      onOpenVoiceCloning={() => openInspectorAt("advanced")}
+                    />
+                  }
+                />
+              </div>
             </Card>
           )}
         </div>

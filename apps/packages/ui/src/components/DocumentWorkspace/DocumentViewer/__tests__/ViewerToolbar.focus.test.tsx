@@ -86,7 +86,7 @@ describe("ViewerToolbar focus-visible contract", () => {
     const controls = [
       screen.getByRole("button", { name: "Zoom out" }),
       screen.getByRole("button", { name: "Zoom in" }),
-      screen.getByRole("button", { name: "Fit width" }),
+      screen.getByRole("button", { name: "Reset zoom" }),
       screen.getByRole("button", { name: "Previous" }),
       screen.getByRole("button", { name: "Next" }),
     ]

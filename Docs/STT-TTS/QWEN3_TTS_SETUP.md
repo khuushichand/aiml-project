@@ -141,4 +141,4 @@ Tokenizer endpoints require the `audio.tokenizer` scope.
 ## Useful Files
 - Adapter: `tldw_Server_API/app/core/TTS/adapters/qwen3_tts_adapter.py`
 - Provider config: `tldw_Server_API/Config_Files/tts_providers_config.yaml`
-- PRD: `Docs/Product/PRD_Qwen3_TTS.md`
+- PRD: `Docs/Product/Completed/PRD_Qwen3_TTS.md`

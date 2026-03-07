@@ -268,7 +268,7 @@ Data consistency
 
 ## Open Questions / Next Steps
 
-- Align with generic Jobs module (`Docs/Design/Jobs-Module-1.md`): reuse leases/DB persistence where appropriate or keep Redis Streams for this pipeline and bridge via adapters.
+- Align with generic Jobs module (`Docs/Code_Documentation/Jobs_Module.md`): reuse leases/DB persistence where appropriate or keep Redis Streams for this pipeline and bridge via adapters.
 - Define DLQ schema and operator workflows.
 - Formalize idempotency keys/constraints at storage layer.
 - [ ] Build user dashboard for job tracking

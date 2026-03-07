@@ -24,7 +24,7 @@ Define the release rationale and route-by-route scope for baseline (`*-basics`) 
 1. Prioritize P0 routes where first-run confusion is highest (`/chat`, `/workspace-playground`, `/media`, `/knowledge`, `/characters`).
 2. Ensure each route has one clear entry tutorial before expanding to advanced/tutorial chains.
 3. Keep route ownership explicit via one canonical basics ID per page to simplify QA and completion tracking.
-4. Gate release readiness on this map plus the manual QA checklist in `Docs/Plans/MANUAL_QA_CHECKLIST_quick_chat_tutorials_section_2026_02_21.md`.
+4. Gate release readiness on this map plus the manual QA checklist in `Docs/Design/Tutorial_Per_Page_Coverage.md`.
 
 ## Release Review Checklist
 

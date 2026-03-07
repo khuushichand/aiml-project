@@ -853,7 +853,7 @@ Finding IDs: `11.1` through `11.8`
 - Added regression coverage for version-history modal open/load/revert flow in:
   - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.chatIntegrationStage3.test.tsx`
 - Added sharing/community roadmap + trust-boundary and RBAC model definition in:
-  - `Docs/Design/CHAT_DICTIONARY_SHARING_COMPOSITION_ROADMAP_2026_02_18.md`
+  - `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_11_information_gaps_missing_functionality_2026_02_18.md`
 - Verification completed with:
   - `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Chat/unit/test_chat_dictionary_endpoints.py` (`28 passed`)
   - `cd apps/packages/ui && bunx vitest run src/components/Option/Dictionaries/__tests__/Manager.chatIntegrationStage3.test.tsx --reporter=verbose` (`7 passed`)
@@ -872,13 +872,13 @@ Finding IDs: `11.1` through `11.8`
 **Status**: Complete
 **Progress Notes (2026-02-18)**:
 - Added end-user documentation for templates, category/tags organization, keyboard shortcuts, and regex helper examples in:
-  - `Docs/User_Guides/Chat_Dictionaries_Guide.md`
+  - `Docs/User_Guides/WebUI_Extension/Chat_Dictionaries_Guide.md`
 - Documented composition precedence contract and version-history retention policy in:
-  - `Docs/Design/CHAT_DICTIONARY_SHARING_COMPOSITION_ROADMAP_2026_02_18.md`
+  - `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_11_information_gaps_missing_functionality_2026_02_18.md`
 - Added rollout checklist with feature flags and migration guards in:
-  - `Docs/Design/CHAT_DICTIONARY_SHARING_COMPOSITION_ROADMAP_2026_02_18.md`
+  - `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_11_information_gaps_missing_functionality_2026_02_18.md`
 - Defined adoption/reliability success metrics including template adoption, shortcut usage, and revert events in:
-  - `Docs/Design/CHAT_DICTIONARY_SHARING_COMPOSITION_ROADMAP_2026_02_18.md`
+  - `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_11_information_gaps_missing_functionality_2026_02_18.md`
 
 ## Dependencies
 

@@ -266,6 +266,23 @@ class SandboxStore:
     ) -> int:
         raise NotImplementedError
 
+    def _coerce_created_at(self, value: str | int | float) -> float:
+        """Coerce created_at filter to epoch seconds.
+
+        Accepts ISO-8601 strings (including trailing 'Z'), ints, or floats.
+        Raises ValueError if not parseable.
+        """
+        txt = str(value).strip()
+        if txt.endswith("Z"):
+            txt = txt[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(txt).timestamp()
+        except ValueError:
+            try:
+                return float(txt)
+            except (TypeError, ValueError):
+                raise ValueError(f"Invalid created_at filter: {value!r}") from None
+
     # Optional: TTL GC for idempotency
     def gc_idempotency(self) -> int:
         """Garbage-collect expired idempotency records.
@@ -948,24 +965,6 @@ class SQLiteStore(SandboxStore):
             _ensure_sqlite_column("sandbox_acp_sessions", "workspace_id", "TEXT")
             _ensure_sqlite_column("sandbox_acp_sessions", "workspace_group_id", "TEXT")
             _ensure_sqlite_column("sandbox_acp_sessions", "scope_snapshot_id", "TEXT")
-
-    def _coerce_created_at(self, value: str | int | float) -> float:
-        """Coerce created_at filter to epoch seconds.
-
-        Accepts ISO-8601 strings (including trailing 'Z'), ints, or floats.
-        Raises ValueError if not parseable.
-        """
-        txt = str(value).strip()
-        if txt.endswith("Z"):
-            txt = txt[:-1] + "+00:00"
-        from datetime import datetime
-        try:
-            return datetime.fromisoformat(txt).timestamp()
-        except ValueError:
-            try:
-                return float(txt)
-            except (TypeError, ValueError):
-                raise ValueError(f"Invalid created_at filter: {value!r}") from None
 
     def _fp(self, body: dict[str, Any]) -> str:
         """

@@ -209,9 +209,9 @@ with httpx.Client(timeout=None) as client:
 - Community repo (source models & demos):
   - `https://github.com/vibevoice-community/VibeVoice`
 - Project installation & advanced tuning:
-  - `Docs/VIBEVOICE_INSTALLATION.md`
+  - `Docs/STT-TTS/VIBEVOICE_INSTALLATION.md`
 - Adapter configuration (speaker mapping, warmup):
-  - `Docs/TTS-SETUP-GUIDE.md`
+  - `Docs/STT-TTS/TTS-SETUP-GUIDE.md`
 
 ## 12) Web UI Vignette (Click-Through)
 

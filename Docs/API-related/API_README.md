@@ -62,6 +62,17 @@ For comprehensive documentation, see:
 - [RAG API Consumer Guide](RAG-API-Guide.md) - Complete API reference with examples
 - [RAG Developer Guide](../Development/RAG-Developer-Guide.md) - Architecture and implementation details
 
+#### Text2SQL - `/api/v1/text2sql`
+
+- `POST /api/v1/text2sql/query` - Run guarded read-only SQL retrieval
+  - Request body: `query`, `target_id` (currently `media_db`), optional `max_rows`, `timeout_ms`, `include_sql`
+  - RBAC: requires `sql.read`
+  - ACL: target must pass connector ACL checks (returns `403` with `unauthorized_target` when denied)
+  - SQL policy: single read-only statement with guardrails and deterministic limit enforcement
+
+Notes:
+- Unified RAG can include SQL retrieval by setting `sources` to include `sql` and optionally `sql_target_id` in `POST /api/v1/rag/search`.
+
 #### Media Ingestion - `/api/v1/media`
 
 - `POST /api/v1/media/add` - ingest and persist media (synchronous)

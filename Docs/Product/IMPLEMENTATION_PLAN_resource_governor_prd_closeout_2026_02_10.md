@@ -5,7 +5,7 @@
 This tracker is the closeout plan for the remaining work to fully complete:
 
 - `Docs/Product/Completed/AuthNZ-Refactor/Resource_Governor_PRD.md`
-- `Docs/Plans/IMPLEMENTATION_PLAN_authnz_refactor_remaining_items.md` (Stage 5)
+- `Docs/Product/Completed/AuthNZ-PRDs_POST_V0_1_TRACKER.md` (Stage 5)
 - `Docs/Product/Completed/AuthNZ-PRDs_POST_V0_1_TRACKER.md` (Stage 9A/9B/9C operational tracker)
 
 As of 2026-02-10, Stage 4 is complete and Stage 5 is in progress. The primary blocker for full PRD closure is release-window evidence for near-zero RG shadow mismatch on representative traffic.
@@ -99,7 +99,7 @@ pytest -q \
 **Goal**: Close the PRD with traceable evidence and status updates.
 
 **Success Criteria**:
-- Stage 5 marked complete in `Docs/Plans/IMPLEMENTATION_PLAN_authnz_refactor_remaining_items.md`.
+- Stage 5 marked complete in `Docs/Product/Completed/AuthNZ-PRDs_POST_V0_1_TRACKER.md`.
 - PRD/tracker docs include closure date, evidence links, and final verification command output summary.
 - Any intentional deferred items are documented with owner and rationale.
 

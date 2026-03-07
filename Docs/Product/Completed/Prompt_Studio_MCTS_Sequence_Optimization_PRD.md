@@ -271,7 +271,7 @@ Validation:
 
 ## Documentation
 
-- This PRD (Docs/Design/Prompt_Studio_MCTS_Sequence_Optimization_PRD.md).
+- This PRD (Docs/Product/Completed/Prompt_Studio_MCTS_Sequence_Optimization_PRD.md).
 - API docs: extend Prompt Studio Optimization section with mcts strategy params and examples.
 - Examples under `Docs/Examples/PromptStudio/mcts/`.
 

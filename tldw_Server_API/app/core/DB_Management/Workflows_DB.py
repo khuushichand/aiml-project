@@ -394,7 +394,6 @@ class WorkflowsBackendConnection:
 
     def __init__(self, db: WorkflowsDatabase) -> None:
         self._db = db
-        self.row_factory = None  # compatibility shim
 
     def cursor(self) -> WorkflowsBackendCursor:
         return WorkflowsBackendCursor(self._db)

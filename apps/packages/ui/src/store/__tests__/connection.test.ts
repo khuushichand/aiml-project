@@ -188,4 +188,68 @@ describe("connection store stability", () => {
     expect(state.lastError).toContain("Likely CORS mismatch")
     expect(state.lastError).toContain("ALLOWED_ORIGINS")
   })
+
+  it("recovers from stale LAN host by switching to current browser host when probe succeeds", async () => {
+    setConnectionState({
+      phase: ConnectionPhase.SEARCHING,
+      serverUrl: "http://192.168.5.186:8000",
+      isConnected: false,
+      isChecking: false,
+      lastCheckedAt: Date.now() - 60_000,
+      consecutiveFailures: 0
+    })
+    mockedClient.getConfig.mockResolvedValue({
+      serverUrl: "http://192.168.5.186:8000",
+      authMode: "single-user",
+      apiKey: "test-key"
+    } as any)
+    mockedApiSend
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 0,
+        error: "NetworkError when attempting to fetch resource."
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: { status: "alive" }
+      })
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue({
+        ok: true,
+        status: 200
+      } as Response)
+
+    const originalWindow = globalThis.window
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        location: {
+          origin: "http://192.168.5.184:3000",
+          hostname: "192.168.5.184"
+        }
+      },
+      configurable: true
+    })
+
+    try {
+      await useConnectionStore.getState().checkOnce()
+    } finally {
+      fetchMock.mockRestore()
+      Object.defineProperty(globalThis, "window", {
+        value: originalWindow,
+        configurable: true
+      })
+    }
+
+    const state = useConnectionStore.getState().state
+    expect(mockedClient.updateConfig).toHaveBeenCalledWith({
+      serverUrl: "http://192.168.5.184:8000"
+    })
+    expect(state.phase).toBe(ConnectionPhase.CONNECTED)
+    expect(state.isConnected).toBe(true)
+    expect(state.serverUrl).toBe("http://192.168.5.184:8000")
+    expect(mockedApiSend).toHaveBeenCalledTimes(2)
+  })
 })

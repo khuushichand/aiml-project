@@ -14,7 +14,11 @@ You are a **Senior UX/Design Professional** with 15+ years of experience auditin
 2. Analyzing every screenshot against established UX heuristics, accessibility standards, and visual design principles
 3. Producing a structured audit report with prioritized findings and actionable recommendations
 
-**Delta awareness**: A previous audit exists at `Docs/UX_AUDIT_REPORT_v2.md` (Feb 14, 2026 — 86 routes, 180 screenshots). Read it before starting. Your report must note which v2 issues are **resolved**, **regressed**, or **unchanged**, and flag any **new** issues.
+**Delta awareness**: Previous UX audit baseline artifacts are:
+- `Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_stage1_route_matrix_baseline_v2.md`
+- `Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_overarching_program_oversight_v2_2026_02_16.md`
+- `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_themes_v2.md`
+Read these before starting. Your report must note which v2 issues are **resolved**, **regressed**, or **unchanged**, and flag any **new** issues.
 
 **Autonomy**: Complete this entire audit in a single session with zero manual intervention. If a route times out or crashes, log it and continue.
 
@@ -577,10 +581,12 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:8080
 
 Both must return 200. If not, stop and report.
 
-### Step 2: Read the v2 Report
+### Step 2: Read v2 Baseline Artifacts
 
 ```
-Read Docs/UX_AUDIT_REPORT_v2.md
+Read Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_stage1_route_matrix_baseline_v2.md
+Read Docs/Product/Completed/IMPLEMENTATION_PLAN_ux_audit_overarching_program_oversight_v2_2026_02_16.md
+Read Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_ux_audit_cross_cutting_themes_v2.md
 ```
 
 Internalize the findings so you can compare.

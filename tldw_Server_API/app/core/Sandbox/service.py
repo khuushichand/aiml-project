@@ -62,10 +62,11 @@ _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS = (
 
 
 class SandboxService:
-    """High-level orchestrator facade for sandbox operations (scaffold).
+    """High-level orchestrator facade for sandbox operations.
 
-    Provides feature discovery and minimal ID generation for sessions/runs.
-    Actual execution is intentionally not implemented at this stage.
+    Manages session lifecycle, run queuing/dispatch, background execution,
+    artifact management, and admin APIs.  Delegates container/VM lifecycle
+    to the configured runner (Docker, Firecracker, or Lima).
     """
 
     def __init__(self, policy: SandboxPolicy | None = None, *, enable_background_tasks: bool = False) -> None:
