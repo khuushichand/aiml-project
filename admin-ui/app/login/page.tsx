@@ -18,8 +18,9 @@ import {
 
 type AuthMode = 'password' | 'apikey';
 
+const API_KEY_LOGIN_ENABLED = process.env.NEXT_PUBLIC_ALLOW_ADMIN_API_KEY_LOGIN === 'true';
 const DEFAULT_AUTH_MODE: AuthMode =
-  process.env.NEXT_PUBLIC_DEFAULT_AUTH_MODE === 'apikey' ? 'apikey' : 'password';
+  API_KEY_LOGIN_ENABLED && process.env.NEXT_PUBLIC_DEFAULT_AUTH_MODE === 'apikey' ? 'apikey' : 'password';
 const APIKEY_MODE_VALUES = new Set(['apikey', 'api_key', 'api-key']);
 
 export default function LoginPage() {
@@ -140,7 +141,7 @@ export default function LoginPage() {
     document.body.dataset.loginHydrated = 'true';
     const params = new URLSearchParams(window.location.search);
     const modeParam = params.get('mode') || params.get('auth');
-    if (modeParam && APIKEY_MODE_VALUES.has(modeParam.toLowerCase())) {
+    if (API_KEY_LOGIN_ENABLED && modeParam && APIKEY_MODE_VALUES.has(modeParam.toLowerCase())) {
       setAuthMode('apikey');
     }
     setRedirectTarget(getRedirectTargetFromSearch(window.location.search));
@@ -173,21 +174,23 @@ export default function LoginPage() {
             >
               Username & Password
             </button>
-            <button
-              type="button"
-              id="apikey-tab"
-              role="tab"
-              aria-selected={authMode === 'apikey'}
-              aria-controls="apikey-panel"
-              onClick={() => handleModeChange('apikey')}
-              className={`flex-1 pb-2 text-sm font-medium ${
-                authMode === 'apikey'
-                  ? 'border-b-2 border-primary text-primary'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              API Key
-            </button>
+            {API_KEY_LOGIN_ENABLED ? (
+              <button
+                type="button"
+                id="apikey-tab"
+                role="tab"
+                aria-selected={authMode === 'apikey'}
+                aria-controls="apikey-panel"
+                onClick={() => handleModeChange('apikey')}
+                className={`flex-1 pb-2 text-sm font-medium ${
+                  authMode === 'apikey'
+                    ? 'border-b-2 border-primary text-primary'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                API Key
+              </button>
+            ) : null}
           </div>
 
           {authMode === 'password' ? (

@@ -40,6 +40,9 @@ NEXT_PUBLIC_DEFAULT_AUTH_MODE=password
 ```
 
 `NEXT_PUBLIC_DEFAULT_AUTH_MODE` supports `password` (JWT) or `apikey` (single-user).
+`NEXT_PUBLIC_ALLOW_ADMIN_API_KEY_LOGIN=true` is required before the UI will expose the API-key login
+tab, and `ADMIN_UI_ALLOW_API_KEY_LOGIN=true` is required before the server-side route will accept it.
+Leave both disabled for enterprise/live-customer admin use.
 
 Optional JWT local verification (middleware) reads `JWT_SECRET_KEY`, `JWT_SECONDARY_SECRET`,
 and `JWT_ALGORITHM` (HS256/384/512). If missing or invalid, the middleware falls back
@@ -56,7 +59,8 @@ Open `http://localhost:3001`.
 ## Authentication
 
 - **Single-user mode**: API key login remains supported, but the validated key is moved into an
-  `httpOnly` session cookie after login instead of being persisted in web storage.
+  `httpOnly` session cookie after login instead of being persisted in web storage. This path is
+  disabled by default and should only be re-enabled for local/single-user deployments.
 - **Multi-user mode**: username/password login is exchanged through Next route handlers that set
   `httpOnly` session cookies. Browser JavaScript never stores or reads admin bearer tokens.
 - **Authenticated API calls**: the UI sends privileged requests through `/api/proxy/*` on the same

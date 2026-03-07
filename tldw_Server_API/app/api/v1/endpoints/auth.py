@@ -477,6 +477,11 @@ def _is_pytest_context() -> bool:
     return False
 
 
+def _is_enterprise_admin_ui_mode() -> bool:
+    raw_value = os.getenv("ADMIN_UI_ENTERPRISE_MODE", "")
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _auth_request_client_ip(request: Request) -> str:
     try:
         settings = get_settings()
@@ -1200,6 +1205,11 @@ async def login(
 
         # Generate tokens based on auth mode
         if settings.AUTH_MODE == "single_user":
+            if _is_enterprise_admin_ui_mode():
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Enterprise Admin UI requires multi-user authentication; single-user login is disabled.",
+                )
             # For single-user mode, return the configured API key as the access token.
             single_user_key = (
                 settings.SINGLE_USER_API_KEY
