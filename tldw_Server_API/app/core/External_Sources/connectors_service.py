@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -32,6 +33,157 @@ _CONNECTORS_NONCRITICAL_EXCEPTIONS = (
 )
 
 FILE_SYNC_PROVIDERS = frozenset({"drive"})
+_SYNC_STATE_FIELDS = (
+    "sync_mode",
+    "cursor",
+    "cursor_kind",
+    "last_bootstrap_at",
+    "last_sync_started_at",
+    "last_sync_succeeded_at",
+    "last_sync_failed_at",
+    "last_error",
+    "retry_backoff_count",
+    "webhook_status",
+    "webhook_subscription_id",
+    "webhook_expires_at",
+    "needs_full_rescan",
+    "active_job_id",
+    "active_job_started_at",
+)
+_EXTERNAL_ITEM_BINDING_FIELDS = (
+    "name",
+    "mime",
+    "size",
+    "modified_at",
+    "version",
+    "hash",
+    "media_id",
+    "sync_status",
+    "current_version_number",
+    "remote_parent_id",
+    "remote_path",
+    "last_seen_at",
+    "last_content_sync_at",
+    "last_metadata_sync_at",
+    "remote_deleted_at",
+    "access_revoked_at",
+    "provider_metadata",
+)
+
+
+def _utc_now_text() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _normalize_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return False
+
+
+def _row_to_dict(row: Any) -> dict[str, Any]:
+    if row is None:
+        return {}
+    if isinstance(row, dict):
+        return dict(row)
+    keys = getattr(row, "keys", None)
+    if callable(keys):
+        return {key: row[key] for key in row.keys()}
+    return dict(row)
+
+
+def _json_loads(value: Any, default: Any) -> Any:
+    if value in (None, ""):
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
+        return default
+
+
+def _normalize_sync_state_row(row: Any) -> dict[str, Any] | None:
+    if not row:
+        return None
+    data = _row_to_dict(row)
+    data["needs_full_rescan"] = _normalize_bool(data.get("needs_full_rescan"))
+    return data
+
+
+def _normalize_external_item_row(row: Any) -> dict[str, Any] | None:
+    if not row:
+        return None
+    data = _row_to_dict(row)
+    if "provider_metadata" in data:
+        data["provider_metadata"] = _json_loads(data.get("provider_metadata"), {})
+    if "sync_status" not in data or data.get("sync_status") is None:
+        data["sync_status"] = "active"
+    return data
+
+
+async def _sqlite_column_names(db, table_name: str) -> set[str]:
+    cur = await db.execute(f"PRAGMA table_info({table_name})")
+    rows = await cur.fetchall()
+    names: set[str] = set()
+    for row in rows:
+        if hasattr(row, "keys"):
+            names.add(str(row["name"]))
+        else:
+            names.add(str(row[1]))
+    return names
+
+
+async def _ensure_sqlite_column(db, table_name: str, column_name: str, column_sql: str) -> None:
+    if column_name in await _sqlite_column_names(db, table_name):
+        return
+    await db.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
+
+
+async def _mark_sources_needing_rescan(db, *, is_pg: bool) -> None:
+    if is_pg:
+        await db.execute(
+            """
+            INSERT INTO external_source_sync_state (
+                source_id,
+                sync_mode,
+                needs_full_rescan
+            )
+            SELECT DISTINCT source_id, 'manual', TRUE
+            FROM external_items
+            WHERE media_id IS NULL
+            ON CONFLICT (source_id) DO UPDATE SET
+                needs_full_rescan = TRUE
+            """
+        )
+        return
+    await db.execute(
+        """
+        INSERT OR IGNORE INTO external_source_sync_state (
+            source_id,
+            sync_mode,
+            needs_full_rescan
+        )
+        SELECT DISTINCT source_id, 'manual', 1
+        FROM external_items
+        WHERE media_id IS NULL
+        """
+    )
+    await db.execute(
+        """
+        UPDATE external_source_sync_state
+        SET needs_full_rescan = 1
+        WHERE source_id IN (
+            SELECT DISTINCT source_id
+            FROM external_items
+            WHERE media_id IS NULL
+        )
+        """
+    )
 
 
 def _is_db_pool_object(db: Any) -> bool:
@@ -163,6 +315,51 @@ async def _ensure_tables(db) -> None:
                 )
                 """
             )
+            await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS media_id INTEGER")
+            await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS sync_status TEXT")
+            await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS current_version_number INTEGER")
+            await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS remote_parent_id TEXT")
+            await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS remote_path TEXT")
+            await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP NULL")
+            await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS last_content_sync_at TIMESTAMP NULL")
+            await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS last_metadata_sync_at TIMESTAMP NULL")
+            await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS remote_deleted_at TIMESTAMP NULL")
+            await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS access_revoked_at TIMESTAMP NULL")
+            await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS provider_metadata JSONB")
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS external_source_sync_state (
+                    source_id INTEGER PRIMARY KEY REFERENCES external_sources(id) ON DELETE CASCADE,
+                    sync_mode TEXT NOT NULL DEFAULT 'manual',
+                    cursor TEXT,
+                    cursor_kind TEXT,
+                    last_bootstrap_at TIMESTAMP NULL,
+                    last_sync_started_at TIMESTAMP NULL,
+                    last_sync_succeeded_at TIMESTAMP NULL,
+                    last_sync_failed_at TIMESTAMP NULL,
+                    last_error TEXT,
+                    retry_backoff_count INTEGER DEFAULT 0,
+                    webhook_status TEXT,
+                    webhook_subscription_id TEXT,
+                    webhook_expires_at TIMESTAMP NULL,
+                    needs_full_rescan BOOLEAN DEFAULT FALSE,
+                    active_job_id TEXT,
+                    active_job_started_at TIMESTAMP NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS external_item_events (
+                    id SERIAL PRIMARY KEY,
+                    external_item_id INTEGER NOT NULL REFERENCES external_items(id) ON DELETE CASCADE,
+                    event_type TEXT NOT NULL,
+                    job_id TEXT,
+                    payload_json JSONB,
+                    occurred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
         else:
             await db.execute(
                 """
@@ -244,6 +441,55 @@ async def _ensure_tables(db) -> None:
                 )
                 """,
             )
+            await _ensure_sqlite_column(db, "external_items", "media_id", "media_id INTEGER")
+            await _ensure_sqlite_column(db, "external_items", "sync_status", "sync_status TEXT")
+            await _ensure_sqlite_column(db, "external_items", "current_version_number", "current_version_number INTEGER")
+            await _ensure_sqlite_column(db, "external_items", "remote_parent_id", "remote_parent_id TEXT")
+            await _ensure_sqlite_column(db, "external_items", "remote_path", "remote_path TEXT")
+            await _ensure_sqlite_column(db, "external_items", "last_seen_at", "last_seen_at TEXT")
+            await _ensure_sqlite_column(db, "external_items", "last_content_sync_at", "last_content_sync_at TEXT")
+            await _ensure_sqlite_column(db, "external_items", "last_metadata_sync_at", "last_metadata_sync_at TEXT")
+            await _ensure_sqlite_column(db, "external_items", "remote_deleted_at", "remote_deleted_at TEXT")
+            await _ensure_sqlite_column(db, "external_items", "access_revoked_at", "access_revoked_at TEXT")
+            await _ensure_sqlite_column(db, "external_items", "provider_metadata", "provider_metadata TEXT")
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS external_source_sync_state (
+                    source_id INTEGER PRIMARY KEY,
+                    sync_mode TEXT NOT NULL DEFAULT 'manual',
+                    cursor TEXT,
+                    cursor_kind TEXT,
+                    last_bootstrap_at TEXT,
+                    last_sync_started_at TEXT,
+                    last_sync_succeeded_at TEXT,
+                    last_sync_failed_at TEXT,
+                    last_error TEXT,
+                    retry_backoff_count INTEGER DEFAULT 0,
+                    webhook_status TEXT,
+                    webhook_subscription_id TEXT,
+                    webhook_expires_at TEXT,
+                    needs_full_rescan INTEGER DEFAULT 0,
+                    active_job_id TEXT,
+                    active_job_started_at TEXT
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS external_item_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    external_item_id INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    job_id TEXT,
+                    payload_json TEXT,
+                    occurred_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+            )
+            await getattr(db, "commit", lambda: None)()
+        await _mark_sources_needing_rescan(db, is_pg=is_pg)
+        if not is_pg:
+            await getattr(db, "commit", lambda: None)()
     except _CONNECTORS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to ensure connector tables: {e}")
         raise
@@ -681,6 +927,492 @@ async def get_source_by_id(db, user_id: int, source_id: int) -> dict[str, Any] |
         return dict(r)
 
 
+async def get_source_sync_state(db, *, source_id: int) -> dict[str, Any] | None:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        row = await db.fetchrow(
+            "SELECT * FROM external_source_sync_state WHERE source_id = $1",
+            source_id,
+        )
+        return _normalize_sync_state_row(row)
+    cur = await db.execute(
+        "SELECT * FROM external_source_sync_state WHERE source_id = ?",
+        (source_id,),
+    )
+    row = await cur.fetchone()
+    return _normalize_sync_state_row(row)
+
+
+async def upsert_source_sync_state(db, *, source_id: int, **updates: Any) -> dict[str, Any]:
+    await _ensure_tables(db)
+    existing = await get_source_sync_state(db, source_id=source_id) or {}
+    data = {"source_id": source_id, "sync_mode": "manual", **existing}
+    for field in _SYNC_STATE_FIELDS:
+        if field in updates and updates[field] is not None:
+            data[field] = updates[field]
+
+    is_pg = _is_postgres_connection(db)
+    values = [
+        data.get("source_id"),
+        data.get("sync_mode") or "manual",
+        data.get("cursor"),
+        data.get("cursor_kind"),
+        data.get("last_bootstrap_at"),
+        data.get("last_sync_started_at"),
+        data.get("last_sync_succeeded_at"),
+        data.get("last_sync_failed_at"),
+        data.get("last_error"),
+        int(data.get("retry_backoff_count") or 0),
+        data.get("webhook_status"),
+        data.get("webhook_subscription_id"),
+        data.get("webhook_expires_at"),
+        bool(data.get("needs_full_rescan")),
+        data.get("active_job_id"),
+        data.get("active_job_started_at"),
+    ]
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            INSERT INTO external_source_sync_state (
+                source_id,
+                sync_mode,
+                cursor,
+                cursor_kind,
+                last_bootstrap_at,
+                last_sync_started_at,
+                last_sync_succeeded_at,
+                last_sync_failed_at,
+                last_error,
+                retry_backoff_count,
+                webhook_status,
+                webhook_subscription_id,
+                webhook_expires_at,
+                needs_full_rescan,
+                active_job_id,
+                active_job_started_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8,
+                $9, $10, $11, $12, $13, $14, $15, $16
+            )
+            ON CONFLICT (source_id) DO UPDATE SET
+                sync_mode = EXCLUDED.sync_mode,
+                cursor = EXCLUDED.cursor,
+                cursor_kind = EXCLUDED.cursor_kind,
+                last_bootstrap_at = EXCLUDED.last_bootstrap_at,
+                last_sync_started_at = EXCLUDED.last_sync_started_at,
+                last_sync_succeeded_at = EXCLUDED.last_sync_succeeded_at,
+                last_sync_failed_at = EXCLUDED.last_sync_failed_at,
+                last_error = EXCLUDED.last_error,
+                retry_backoff_count = EXCLUDED.retry_backoff_count,
+                webhook_status = EXCLUDED.webhook_status,
+                webhook_subscription_id = EXCLUDED.webhook_subscription_id,
+                webhook_expires_at = EXCLUDED.webhook_expires_at,
+                needs_full_rescan = EXCLUDED.needs_full_rescan,
+                active_job_id = EXCLUDED.active_job_id,
+                active_job_started_at = EXCLUDED.active_job_started_at
+            RETURNING *
+            """,
+            *values,
+        )
+        return _normalize_sync_state_row(row) or {}
+
+    await db.execute(
+        """
+        INSERT INTO external_source_sync_state (
+            source_id,
+            sync_mode,
+            cursor,
+            cursor_kind,
+            last_bootstrap_at,
+            last_sync_started_at,
+            last_sync_succeeded_at,
+            last_sync_failed_at,
+            last_error,
+            retry_backoff_count,
+            webhook_status,
+            webhook_subscription_id,
+            webhook_expires_at,
+            needs_full_rescan,
+            active_job_id,
+            active_job_started_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_id) DO UPDATE SET
+            sync_mode = excluded.sync_mode,
+            cursor = excluded.cursor,
+            cursor_kind = excluded.cursor_kind,
+            last_bootstrap_at = excluded.last_bootstrap_at,
+            last_sync_started_at = excluded.last_sync_started_at,
+            last_sync_succeeded_at = excluded.last_sync_succeeded_at,
+            last_sync_failed_at = excluded.last_sync_failed_at,
+            last_error = excluded.last_error,
+            retry_backoff_count = excluded.retry_backoff_count,
+            webhook_status = excluded.webhook_status,
+            webhook_subscription_id = excluded.webhook_subscription_id,
+            webhook_expires_at = excluded.webhook_expires_at,
+            needs_full_rescan = excluded.needs_full_rescan,
+            active_job_id = excluded.active_job_id,
+            active_job_started_at = excluded.active_job_started_at
+        """,
+        (
+            values[0],
+            values[1],
+            values[2],
+            values[3],
+            values[4],
+            values[5],
+            values[6],
+            values[7],
+            values[8],
+            values[9],
+            values[10],
+            values[11],
+            values[12],
+            1 if values[13] else 0,
+            values[14],
+            values[15],
+        ),
+    )
+    await getattr(db, "commit", lambda: None)()
+    return await get_source_sync_state(db, source_id=source_id) or {}
+
+
+async def get_external_item_binding(
+    db,
+    *,
+    source_id: int,
+    provider: str,
+    external_id: str,
+) -> dict[str, Any] | None:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            SELECT *
+            FROM external_items
+            WHERE source_id = $1 AND provider = $2 AND external_id = $3
+            """,
+            source_id,
+            provider,
+            external_id,
+        )
+        return _normalize_external_item_row(row)
+    cur = await db.execute(
+        """
+        SELECT *
+        FROM external_items
+        WHERE source_id = ? AND provider = ? AND external_id = ?
+        """,
+        (source_id, provider, external_id),
+    )
+    row = await cur.fetchone()
+    return _normalize_external_item_row(row)
+
+
+async def list_external_items_for_source(db, *, source_id: int) -> list[dict[str, Any]]:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        rows = await db.fetch(
+            "SELECT * FROM external_items WHERE source_id = $1 ORDER BY id ASC",
+            source_id,
+        )
+        return [_normalize_external_item_row(row) or {} for row in rows]
+    cur = await db.execute(
+        "SELECT * FROM external_items WHERE source_id = ? ORDER BY id ASC",
+        (source_id,),
+    )
+    rows = await cur.fetchall()
+    return [_normalize_external_item_row(row) or {} for row in rows]
+
+
+async def upsert_external_item_binding(
+    db,
+    *,
+    source_id: int,
+    provider: str,
+    external_id: str,
+    name: str | None = None,
+    mime: str | None = None,
+    size: int | None = None,
+    version: str | None = None,
+    modified_at: str | None = None,
+    content_hash: str | None = None,
+    media_id: int | None = None,
+    sync_status: str | None = None,
+    current_version_number: int | None = None,
+    remote_parent_id: str | None = None,
+    remote_path: str | None = None,
+    last_seen_at: str | None = None,
+    last_content_sync_at: str | None = None,
+    last_metadata_sync_at: str | None = None,
+    remote_deleted_at: str | None = None,
+    access_revoked_at: str | None = None,
+    provider_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    last_seen_value = last_seen_at or _utc_now_text()
+    provider_metadata_value = provider_metadata or None
+    sqlite_provider_metadata = json.dumps(provider_metadata_value) if provider_metadata_value is not None else None
+    sync_status_value = sync_status or "active"
+
+    if is_pg:
+        await db.execute(
+            """
+            INSERT INTO external_items (
+                source_id,
+                provider,
+                external_id,
+                name,
+                mime,
+                size,
+                modified_at,
+                version,
+                hash,
+                last_ingested_at,
+                media_id,
+                sync_status,
+                current_version_number,
+                remote_parent_id,
+                remote_path,
+                last_seen_at,
+                last_content_sync_at,
+                last_metadata_sync_at,
+                remote_deleted_at,
+                access_revoked_at,
+                provider_metadata
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP,
+                $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+            )
+            ON CONFLICT (source_id, provider, external_id) DO UPDATE SET
+                name = COALESCE(EXCLUDED.name, external_items.name),
+                mime = COALESCE(EXCLUDED.mime, external_items.mime),
+                size = COALESCE(EXCLUDED.size, external_items.size),
+                modified_at = COALESCE(EXCLUDED.modified_at, external_items.modified_at),
+                version = COALESCE(EXCLUDED.version, external_items.version),
+                hash = COALESCE(EXCLUDED.hash, external_items.hash),
+                last_ingested_at = CURRENT_TIMESTAMP,
+                media_id = COALESCE(EXCLUDED.media_id, external_items.media_id),
+                sync_status = COALESCE(EXCLUDED.sync_status, external_items.sync_status),
+                current_version_number = COALESCE(EXCLUDED.current_version_number, external_items.current_version_number),
+                remote_parent_id = COALESCE(EXCLUDED.remote_parent_id, external_items.remote_parent_id),
+                remote_path = COALESCE(EXCLUDED.remote_path, external_items.remote_path),
+                last_seen_at = COALESCE(EXCLUDED.last_seen_at, external_items.last_seen_at),
+                last_content_sync_at = COALESCE(EXCLUDED.last_content_sync_at, external_items.last_content_sync_at),
+                last_metadata_sync_at = COALESCE(EXCLUDED.last_metadata_sync_at, external_items.last_metadata_sync_at),
+                remote_deleted_at = COALESCE(EXCLUDED.remote_deleted_at, external_items.remote_deleted_at),
+                access_revoked_at = COALESCE(EXCLUDED.access_revoked_at, external_items.access_revoked_at),
+                provider_metadata = COALESCE(EXCLUDED.provider_metadata, external_items.provider_metadata)
+            """,
+            source_id,
+            provider,
+            external_id,
+            name,
+            mime,
+            size,
+            modified_at,
+            version,
+            content_hash,
+            media_id,
+            sync_status_value,
+            current_version_number,
+            remote_parent_id,
+            remote_path,
+            last_seen_value,
+            last_content_sync_at,
+            last_metadata_sync_at,
+            remote_deleted_at,
+            access_revoked_at,
+            provider_metadata_value,
+        )
+    else:
+        await db.execute(
+            """
+            INSERT INTO external_items (
+                source_id,
+                provider,
+                external_id,
+                name,
+                mime,
+                size,
+                modified_at,
+                version,
+                hash,
+                last_ingested_at,
+                media_id,
+                sync_status,
+                current_version_number,
+                remote_parent_id,
+                remote_path,
+                last_seen_at,
+                last_content_sync_at,
+                last_metadata_sync_at,
+                remote_deleted_at,
+                access_revoked_at,
+                provider_metadata
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            ON CONFLICT(source_id, provider, external_id) DO UPDATE SET
+                name = COALESCE(excluded.name, external_items.name),
+                mime = COALESCE(excluded.mime, external_items.mime),
+                size = COALESCE(excluded.size, external_items.size),
+                modified_at = COALESCE(excluded.modified_at, external_items.modified_at),
+                version = COALESCE(excluded.version, external_items.version),
+                hash = COALESCE(excluded.hash, external_items.hash),
+                last_ingested_at = CURRENT_TIMESTAMP,
+                media_id = COALESCE(excluded.media_id, external_items.media_id),
+                sync_status = COALESCE(excluded.sync_status, external_items.sync_status),
+                current_version_number = COALESCE(excluded.current_version_number, external_items.current_version_number),
+                remote_parent_id = COALESCE(excluded.remote_parent_id, external_items.remote_parent_id),
+                remote_path = COALESCE(excluded.remote_path, external_items.remote_path),
+                last_seen_at = COALESCE(excluded.last_seen_at, external_items.last_seen_at),
+                last_content_sync_at = COALESCE(excluded.last_content_sync_at, external_items.last_content_sync_at),
+                last_metadata_sync_at = COALESCE(excluded.last_metadata_sync_at, external_items.last_metadata_sync_at),
+                remote_deleted_at = COALESCE(excluded.remote_deleted_at, external_items.remote_deleted_at),
+                access_revoked_at = COALESCE(excluded.access_revoked_at, external_items.access_revoked_at),
+                provider_metadata = COALESCE(excluded.provider_metadata, external_items.provider_metadata)
+            """,
+            (
+                source_id,
+                provider,
+                external_id,
+                name,
+                mime,
+                size,
+                modified_at,
+                version,
+                content_hash,
+                media_id,
+                sync_status_value,
+                current_version_number,
+                remote_parent_id,
+                remote_path,
+                last_seen_value,
+                last_content_sync_at,
+                last_metadata_sync_at,
+                remote_deleted_at,
+                access_revoked_at,
+                sqlite_provider_metadata,
+            ),
+        )
+        await getattr(db, "commit", lambda: None)()
+
+    return await get_external_item_binding(
+        db,
+        source_id=source_id,
+        provider=provider,
+        external_id=external_id,
+    ) or {}
+
+
+async def record_item_event(
+    db,
+    *,
+    external_item_id: int,
+    event_type: str,
+    job_id: str | None = None,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            INSERT INTO external_item_events (
+                external_item_id,
+                event_type,
+                job_id,
+                payload_json
+            ) VALUES ($1, $2, $3, $4)
+            RETURNING *
+            """,
+            external_item_id,
+            event_type,
+            job_id,
+            payload or {},
+        )
+        out = _row_to_dict(row)
+        out["payload_json"] = _json_loads(out.get("payload_json"), {})
+        return out
+    cur = await db.execute(
+        """
+        INSERT INTO external_item_events (
+            external_item_id,
+            event_type,
+            job_id,
+            payload_json
+        ) VALUES (?, ?, ?, ?)
+        """,
+        (
+            external_item_id,
+            event_type,
+            job_id,
+            json.dumps(payload or {}),
+        ),
+    )
+    await getattr(db, "commit", lambda: None)()
+    row_id = cur.lastrowid
+    cur2 = await db.execute(
+        "SELECT * FROM external_item_events WHERE id = ?",
+        (row_id,),
+    )
+    row = await cur2.fetchone()
+    out = _row_to_dict(row)
+    out["payload_json"] = _json_loads(out.get("payload_json"), {})
+    return out
+
+
+async def mark_external_item_archived(
+    db,
+    *,
+    source_id: int,
+    provider: str,
+    external_id: str,
+    sync_status: str = "archived_upstream_removed",
+) -> dict[str, Any] | None:
+    await _ensure_tables(db)
+    deleted_at = _utc_now_text()
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        await db.execute(
+            """
+            UPDATE external_items
+            SET sync_status = $1,
+                remote_deleted_at = COALESCE(remote_deleted_at, $2),
+                last_metadata_sync_at = $2
+            WHERE source_id = $3 AND provider = $4 AND external_id = $5
+            """,
+            sync_status,
+            deleted_at,
+            source_id,
+            provider,
+            external_id,
+        )
+    else:
+        await db.execute(
+            """
+            UPDATE external_items
+            SET sync_status = ?,
+                remote_deleted_at = COALESCE(remote_deleted_at, ?),
+                last_metadata_sync_at = ?
+            WHERE source_id = ? AND provider = ? AND external_id = ?
+            """,
+            (sync_status, deleted_at, deleted_at, source_id, provider, external_id),
+        )
+        await getattr(db, "commit", lambda: None)()
+    return await get_external_item_binding(
+        db,
+        source_id=source_id,
+        provider=provider,
+        external_id=external_id,
+    )
+
+
 async def should_ingest_item(
     db, *, source_id: int, provider: str, external_id: str, version: str | None, modified_at: str | None, content_hash: str | None
 ) -> bool:
@@ -711,32 +1443,20 @@ async def should_ingest_item(
 async def record_ingested_item(
     db, *, source_id: int, provider: str, external_id: str, name: str | None, mime: str | None, size: int | None, version: str | None, modified_at: str | None, content_hash: str | None
 ) -> None:
-    await _ensure_tables(db)
-    is_pg = _is_postgres_connection(db)
-    if is_pg:
-        await db.execute(
-            """
-            INSERT INTO external_items (source_id, provider, external_id, name, mime, size, modified_at, version, hash, last_ingested_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, CURRENT_TIMESTAMP)
-            ON CONFLICT (source_id, provider, external_id) DO UPDATE SET
-                name=EXCLUDED.name, mime=EXCLUDED.mime, size=EXCLUDED.size,
-                modified_at=EXCLUDED.modified_at, version=EXCLUDED.version, hash=EXCLUDED.hash,
-                last_ingested_at=CURRENT_TIMESTAMP
-            """,
-            source_id, provider, external_id, name, mime, int(size or 0), modified_at, version, content_hash,
-        )
-        return
-    await db.execute(
-        """
-        INSERT OR REPLACE INTO external_items (id, source_id, provider, external_id, name, mime, size, modified_at, version, hash, last_ingested_at)
-        VALUES (
-            COALESCE((SELECT id FROM external_items WHERE source_id = ? AND provider = ? AND external_id = ?), NULL),
-            ?,?,?,?,?,?,?,?, ?, CURRENT_TIMESTAMP
-        )
-        """,
-        (source_id, provider, external_id, source_id, provider, external_id, name, mime, int(size or 0), modified_at, version, content_hash),
+    await upsert_external_item_binding(
+        db,
+        source_id=source_id,
+        provider=provider,
+        external_id=external_id,
+        name=name,
+        mime=mime,
+        size=int(size or 0),
+        version=version,
+        modified_at=modified_at,
+        content_hash=content_hash,
+        sync_status="active",
+        last_content_sync_at=_utc_now_text(),
     )
-    await getattr(db, "commit", lambda: None)()
 
 
 def _today_utc_start_str() -> str:

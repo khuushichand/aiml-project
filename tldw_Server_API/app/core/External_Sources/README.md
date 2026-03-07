@@ -7,6 +7,8 @@
   - OAuth linking, account listing/removal
   - Browsing remote sources (Drive folders, Notion pages/databases)
   - Creating sources with per-org policy enforcement; queuing import jobs
+  - Source-level sync cursors, webhook state, and legacy-import rescan markers
+  - Canonical remote-to-media bindings and append-only item sync events
   - Org policy admin: allowed providers, paths, domains, quotas
 - Inputs/Outputs:
   - Inputs: OAuth code/state, provider selection, source path/IDs, policy documents
@@ -29,7 +31,8 @@
   - Internal: AuthNZ DB pool, policy helpers, Logging context
   - External: Google/Notion APIs (networked); tokens stored via DB
 - Data Models & DB:
-  - AuthNZ DB tables: `external_accounts`, `external_sources`, `external_items`, `org_connector_policy`, `external_oauth_state` (SQLite/PG variants)
+  - AuthNZ DB tables: `external_accounts`, `external_sources`, `external_items`, `external_source_sync_state`, `external_item_events`, `org_connector_policy`, `external_oauth_state` (SQLite/PG variants)
+  - `external_items` is the canonical remote binding row; legacy rows without `media_id` are marked for full rescan during migration
 - Configuration:
   - `CONNECTOR_REDIRECT_BASE_URL` for OAuth callbacks (fallback to request host/connector redirect base); provider keys via env/config
   - `CONNECTOR_OAUTH_STATE_TTL_MINUTES` to control OAuth state validity (default: 10)
@@ -56,4 +59,4 @@
 - Pitfalls & Gotchas:
   - Quotas per role; pagination cursors; workspace and domain constraints
 - Roadmap/TODOs:
-  - Additional providers; bulk sync workers with backpressure
+  - Additional providers; shared sync coordinator, delta polling, and webhook reconciliation
