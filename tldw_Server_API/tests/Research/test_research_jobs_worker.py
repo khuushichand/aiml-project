@@ -24,6 +24,35 @@ class _ProviderStub:
         return list(self._records)
 
 
+class _SynthesisProviderStub:
+    def __init__(self, response=None, *, error: Exception | None = None):
+        self._response = response
+        self._error = error
+        self.calls: list[dict[str, object]] = []
+
+    async def summarize(
+        self,
+        *,
+        plan,
+        source_registry,
+        evidence_notes,
+        collection_summary,
+        config,
+    ):
+        self.calls.append(
+            {
+                "plan": plan,
+                "source_registry": list(source_registry),
+                "evidence_notes": list(evidence_notes),
+                "collection_summary": dict(collection_summary or {}),
+                "config": dict(config),
+            }
+        )
+        if self._error is not None:
+            raise self._error
+        return self._response
+
+
 @pytest.mark.asyncio
 async def test_planning_job_writes_plan_and_opens_checkpoint(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
@@ -585,6 +614,161 @@ async def test_synthesizing_job_advances_autonomous_run_to_packaging(tmp_path):
     assert updated is not None
     assert updated.phase == "packaging"
     assert result["phase"] == "packaging"
+
+
+@pytest.mark.asyncio
+async def test_synthesizing_job_uses_provider_config_and_writes_llm_backed_summary(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+    from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Provider-backed synthesizing",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="synthesizing",
+        status="queued",
+    )
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="plan.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["background"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="provider_config.json",
+        payload={
+            "local": {"top_k": 5, "sources": ["media_db"]},
+            "academic": {"providers": ["arxiv"], "max_results": 2},
+            "web": {"engine": "duckduckgo", "result_count": 3},
+            "synthesis": {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2},
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="source_registry.json",
+        payload={
+            "sources": [
+                {
+                    "source_id": "src_1",
+                    "focus_area": "background",
+                    "source_type": "local_document",
+                    "provider": "local_corpus",
+                    "title": "Internal source",
+                    "url": None,
+                    "snippet": "Internal note summary",
+                    "published_at": None,
+                    "retrieved_at": "2026-03-07T00:00:00+00:00",
+                    "fingerprint": "fp_1",
+                    "trust_tier": "internal",
+                    "metadata": {},
+                }
+            ]
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_jsonl(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="evidence_notes.jsonl",
+        records=[
+            {
+                "note_id": "note_1",
+                "source_id": "src_1",
+                "focus_area": "background",
+                "kind": "summary",
+                "text": "Internal evidence remains aligned.",
+                "citation_locator": None,
+                "confidence": 0.8,
+                "metadata": {},
+            }
+        ],
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="collection_summary.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["background"],
+            "source_count": 1,
+            "evidence_note_count": 1,
+            "remaining_gaps": [],
+            "collection_metrics": {"lane_counts": {"local": 1, "academic": 0, "web": 0}, "deduped_sources": 0},
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+
+    provider = _SynthesisProviderStub(
+        {
+            "outline_sections": [
+                {
+                    "title": "Background",
+                    "focus_area": "background",
+                    "source_ids": ["src_1"],
+                    "note_ids": ["note_1"],
+                }
+            ],
+            "claims": [
+                {
+                    "text": "Supported claim",
+                    "focus_area": "background",
+                    "source_ids": ["src_1"],
+                    "citations": [{"source_id": "src_1"}],
+                    "confidence": 0.81,
+                }
+            ],
+            "report_sections": [
+                {"title": "Background", "markdown": "Evidence-backed section text."}
+            ],
+            "unresolved_questions": [],
+            "summary": {"mode": "llm_backed"},
+        }
+    )
+
+    result = await handle_research_phase_job(
+        {
+            "id": 81,
+            "payload": {
+                "session_id": session.id,
+                "phase": "synthesizing",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        synthesizer=ResearchSynthesizer(synthesis_provider=provider),
+    )
+
+    summary = store.read_json(session_id=session.id, artifact_name="synthesis_summary.json")
+
+    assert result["phase"] == "packaging"
+    assert provider.calls[0]["config"] == {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2}
+    assert summary is not None
+    assert summary["mode"] == "llm_backed"
 
 
 @pytest.mark.asyncio

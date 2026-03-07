@@ -331,6 +331,7 @@ async def _handle_synthesizing_phase(
     synthesizer: ResearchSynthesizer,
 ) -> dict[str, Any]:
     plan = _load_effective_plan(session=session, artifact_store=artifact_store)
+    provider_config = _load_provider_config(session=session, artifact_store=artifact_store)
     source_registry_payload = artifact_store.read_json(session_id=session.id, artifact_name="source_registry.json")
     if source_registry_payload is None:
         raise ValueError(f"missing source registry artifact for session {session.id}")
@@ -352,11 +353,12 @@ async def _handle_synthesizing_phase(
         if isinstance(record, dict)
     ]
 
-    result = synthesizer.synthesize(
+    result = await synthesizer.synthesize(
         plan=plan,
         source_registry=source_registry,
         evidence_notes=evidence_notes,
         collection_summary=collection_summary,
+        provider_config=provider_config,
     )
 
     outline_payload = {

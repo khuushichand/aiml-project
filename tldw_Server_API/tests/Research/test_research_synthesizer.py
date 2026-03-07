@@ -4,6 +4,35 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
+class _SynthesisProviderStub:
+    def __init__(self, response=None, *, error: Exception | None = None):
+        self._response = response
+        self._error = error
+        self.calls: list[dict[str, object]] = []
+
+    async def summarize(
+        self,
+        *,
+        plan,
+        source_registry,
+        evidence_notes,
+        collection_summary,
+        config,
+    ):
+        self.calls.append(
+            {
+                "plan": plan,
+                "source_registry": list(source_registry),
+                "evidence_notes": list(evidence_notes),
+                "collection_summary": dict(collection_summary or {}),
+                "config": dict(config),
+            }
+        )
+        if self._error is not None:
+            raise self._error
+        return self._response
+
+
 def _plan(focus_areas: list[str]):
     from tldw_Server_API.app.core.Research.models import ResearchPlan
 
@@ -50,11 +79,12 @@ def _note(note_id: str, source_id: str, focus_area: str, text: str):
     )
 
 
-def test_synthesizer_groups_notes_into_sections_and_claims():
+@pytest.mark.asyncio
+async def test_synthesizer_groups_notes_into_sections_and_claims():
     from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
 
     synthesizer = ResearchSynthesizer()
-    result = synthesizer.synthesize(
+    result = await synthesizer.synthesize(
         plan=_plan(["background", "counterevidence"]),
         source_registry=[
             _source("src_background", "background"),
@@ -67,6 +97,7 @@ def test_synthesizer_groups_notes_into_sections_and_claims():
         collection_summary={
             "remaining_gaps": [],
         },
+        provider_config={"synthesis": {"provider": None, "model": None, "temperature": 0.2}},
     )
 
     assert [section.focus_area for section in result.outline_sections] == ["background", "counterevidence"]
@@ -79,11 +110,12 @@ def test_synthesizer_groups_notes_into_sections_and_claims():
     assert result.synthesis_summary["coverage"]["missing_focus_areas"] == []
 
 
-def test_synthesizer_omits_unsupported_claims_and_carries_unresolved_questions():
+@pytest.mark.asyncio
+async def test_synthesizer_omits_unsupported_claims_and_carries_unresolved_questions():
     from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
 
     synthesizer = ResearchSynthesizer()
-    result = synthesizer.synthesize(
+    result = await synthesizer.synthesize(
         plan=_plan(["background", "missing evidence"]),
         source_registry=[
             _source("src_background", "background"),
@@ -95,6 +127,7 @@ def test_synthesizer_omits_unsupported_claims_and_carries_unresolved_questions()
         collection_summary={
             "remaining_gaps": ["weak_external_coverage"],
         },
+        provider_config={"synthesis": {"provider": None, "model": None, "temperature": 0.2}},
     )
 
     assert len(result.claims) == 1
@@ -102,3 +135,120 @@ def test_synthesizer_omits_unsupported_claims_and_carries_unresolved_questions()
     assert "weak_external_coverage" in result.unresolved_questions
     assert "missing evidence" in result.synthesis_summary["coverage"]["missing_focus_areas"]
     assert any("missing evidence" in item for item in result.unresolved_questions)
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_uses_provider_payload_when_references_are_valid():
+    from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
+
+    provider = _SynthesisProviderStub(
+        {
+            "outline_sections": [
+                {
+                    "title": "Background",
+                    "focus_area": "background",
+                    "source_ids": ["src_background"],
+                    "note_ids": ["note_background"],
+                }
+            ],
+            "claims": [
+                {
+                    "text": "Supported claim",
+                    "focus_area": "background",
+                    "source_ids": ["src_background"],
+                    "citations": [{"source_id": "src_background"}],
+                    "confidence": 0.81,
+                }
+            ],
+            "report_sections": [
+                {
+                    "title": "Background",
+                    "markdown": "Evidence-backed section text.",
+                }
+            ],
+            "unresolved_questions": [],
+            "summary": {"mode": "llm_backed"},
+        }
+    )
+
+    synthesizer = ResearchSynthesizer(synthesis_provider=provider)
+    result = await synthesizer.synthesize(
+        plan=_plan(["background"]),
+        source_registry=[_source("src_background", "background")],
+        evidence_notes=[_note("note_background", "src_background", "background", "Grounded evidence.")],
+        collection_summary={"remaining_gaps": []},
+        provider_config={"synthesis": {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2}},
+    )
+
+    assert provider.calls[0]["config"] == {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2}
+    assert [section.title for section in result.outline_sections] == ["Background"]
+    assert result.claims[0].text == "Supported claim"
+    assert result.report_markdown == "# Research Report\n\n## Background\n\nEvidence-backed section text."
+    assert result.synthesis_summary["mode"] == "llm_backed"
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_falls_back_when_provider_references_unknown_ids():
+    from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
+
+    provider = _SynthesisProviderStub(
+        {
+            "outline_sections": [
+                {
+                    "title": "Background",
+                    "focus_area": "background",
+                    "source_ids": ["src_missing"],
+                    "note_ids": ["note_missing"],
+                }
+            ],
+            "claims": [
+                {
+                    "text": "Unsupported claim",
+                    "focus_area": "background",
+                    "source_ids": ["src_missing"],
+                    "citations": [{"source_id": "src_missing"}],
+                    "confidence": 0.2,
+                }
+            ],
+            "report_sections": [
+                {
+                    "title": "Background",
+                    "markdown": "Invalid references should trigger fallback.",
+                }
+            ],
+            "unresolved_questions": [],
+            "summary": {"mode": "llm_backed"},
+        }
+    )
+
+    synthesizer = ResearchSynthesizer(synthesis_provider=provider)
+    result = await synthesizer.synthesize(
+        plan=_plan(["background"]),
+        source_registry=[_source("src_background", "background")],
+        evidence_notes=[_note("note_background", "src_background", "background", "Grounded evidence.")],
+        collection_summary={"remaining_gaps": []},
+        provider_config={"synthesis": {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2}},
+    )
+
+    assert result.synthesis_summary["mode"] == "deterministic_fallback"
+    assert "unknown source_id" in result.synthesis_summary["fallback_reason"]
+    assert "unknown note_id" in result.synthesis_summary["fallback_reason"]
+    assert result.claims[0].source_ids == ["src_background"]
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_falls_back_when_provider_raises():
+    from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
+
+    provider = _SynthesisProviderStub(error=RuntimeError("provider unavailable"))
+    synthesizer = ResearchSynthesizer(synthesis_provider=provider)
+    result = await synthesizer.synthesize(
+        plan=_plan(["background"]),
+        source_registry=[_source("src_background", "background")],
+        evidence_notes=[_note("note_background", "src_background", "background", "Grounded evidence.")],
+        collection_summary={"remaining_gaps": []},
+        provider_config={"synthesis": {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2}},
+    )
+
+    assert result.synthesis_summary["mode"] == "deterministic_fallback"
+    assert "provider unavailable" in result.synthesis_summary["fallback_reason"]

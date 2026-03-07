@@ -1,9 +1,16 @@
-"""Deterministic synthesis for deep research artifacts."""
+"""Deterministic and provider-backed synthesis for deep research artifacts."""
 
 from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
+from typing import Any
+
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    parse_structured_output,
+)
+from tldw_Server_API.app.core.Research.providers.synthesis import SynthesisProvider
 
 from .models import (
     ResearchEvidenceNote,
@@ -24,10 +31,235 @@ def _title_for_focus_area(focus_area: str) -> str:
     return focus_area.replace("_", " ").strip().title()
 
 
-class ResearchSynthesizer:
-    """Build deterministic synthesis artifacts from normalized research evidence."""
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    for item in value:
+        candidate = str(item or "").strip()
+        if candidate and candidate not in normalized:
+            normalized.append(candidate)
+    return normalized
 
-    def synthesize(
+
+def _fallback_reason(exc: Exception) -> str:
+    return str(exc).strip() or exc.__class__.__name__
+
+
+class ResearchSynthesizer:
+    """Build synthesis artifacts from normalized research evidence."""
+
+    def __init__(self, *, synthesis_provider: Any | None = None) -> None:
+        self._synthesis_provider = synthesis_provider or SynthesisProvider()
+
+    async def synthesize(
+        self,
+        *,
+        plan: ResearchPlan,
+        source_registry: list[ResearchSourceRecord],
+        evidence_notes: list[ResearchEvidenceNote],
+        collection_summary: dict[str, object] | None = None,
+        provider_config: dict[str, Any] | None = None,
+    ) -> ResearchSynthesisResult:
+        deterministic = self._synthesize_deterministic(
+            plan=plan,
+            source_registry=source_registry,
+            evidence_notes=evidence_notes,
+            collection_summary=collection_summary,
+        )
+        synthesis_config = self._resolve_synthesis_config(provider_config)
+        provider = str(synthesis_config.get("provider") or "").strip()
+        model = str(synthesis_config.get("model") or "").strip()
+        if not provider or not model:
+            return self._with_summary_mode(deterministic, mode="deterministic")
+
+        try:
+            payload = await self._synthesis_provider.summarize(
+                plan=plan,
+                source_registry=source_registry,
+                evidence_notes=evidence_notes,
+                collection_summary=collection_summary,
+                config=synthesis_config,
+            )
+            return self._build_provider_result(
+                payload=payload,
+                plan=plan,
+                source_registry=source_registry,
+                evidence_notes=evidence_notes,
+            )
+        except Exception as exc:
+            return self._with_summary_mode(
+                deterministic,
+                mode="deterministic_fallback",
+                fallback_reason=_fallback_reason(exc),
+            )
+
+    @staticmethod
+    def _resolve_synthesis_config(provider_config: dict[str, Any] | None) -> dict[str, Any]:
+        if isinstance(provider_config, dict):
+            nested = provider_config.get("synthesis")
+            if isinstance(nested, dict):
+                return dict(nested)
+            if "provider" in provider_config or "model" in provider_config:
+                return dict(provider_config)
+        return {}
+
+    def _build_provider_result(
+        self,
+        *,
+        payload: Any,
+        plan: ResearchPlan,
+        source_registry: list[ResearchSourceRecord],
+        evidence_notes: list[ResearchEvidenceNote],
+    ) -> ResearchSynthesisResult:
+        parsed = parse_structured_output(
+            payload,
+            options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+        )
+        if not isinstance(parsed, dict):
+            raise ValueError("synthesis payload must be a JSON object")
+
+        source_index = {source.source_id: source for source in source_registry}
+        note_index = {note.note_id: note for note in evidence_notes}
+        unknown_source_ids: set[str] = set()
+        unknown_note_ids: set[str] = set()
+
+        outline_sections_payload = parsed.get("outline_sections")
+        claims_payload = parsed.get("claims")
+        report_sections_payload = parsed.get("report_sections")
+        if not isinstance(outline_sections_payload, list):
+            raise ValueError("missing outline_sections")
+        if not isinstance(claims_payload, list):
+            raise ValueError("missing claims")
+        if not isinstance(report_sections_payload, list):
+            raise ValueError("missing report_sections")
+
+        outline_sections: list[ResearchOutlineSection] = []
+        for item in outline_sections_payload:
+            if not isinstance(item, dict):
+                continue
+            source_ids = _normalize_string_list(item.get("source_ids"))
+            note_ids = _normalize_string_list(item.get("note_ids"))
+            unknown_source_ids.update(source_id for source_id in source_ids if source_id not in source_index)
+            unknown_note_ids.update(note_id for note_id in note_ids if note_id not in note_index)
+            outline_sections.append(
+                ResearchOutlineSection(
+                    title=str(item.get("title") or _title_for_focus_area(str(item.get("focus_area") or ""))).strip(),
+                    focus_area=str(item.get("focus_area") or "").strip(),
+                    source_ids=source_ids,
+                    note_ids=note_ids,
+                )
+            )
+
+        claims: list[ResearchSynthesizedClaim] = []
+        for item in claims_payload:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            focus_area = str(item.get("focus_area") or "").strip()
+            source_ids = _normalize_string_list(item.get("source_ids"))
+            citations_raw = item.get("citations") if isinstance(item.get("citations"), list) else []
+            citations: list[dict[str, Any]] = []
+            unknown_source_ids.update(source_id for source_id in source_ids if source_id not in source_index)
+            for citation in citations_raw:
+                if not isinstance(citation, dict):
+                    continue
+                source_id = str(citation.get("source_id") or "").strip()
+                if not source_id:
+                    continue
+                citations.append({"source_id": source_id})
+                if source_id not in source_index:
+                    unknown_source_ids.add(source_id)
+            claims.append(
+                ResearchSynthesizedClaim(
+                    claim_id=str(item.get("claim_id") or f"clm_{_stable_digest(text, *source_ids)[:12]}"),
+                    text=text,
+                    focus_area=focus_area,
+                    source_ids=source_ids,
+                    citations=citations,
+                    confidence=float(item.get("confidence") or 0.0),
+                )
+            )
+
+        if unknown_source_ids or unknown_note_ids:
+            reason_parts: list[str] = []
+            if unknown_source_ids:
+                reason_parts.append(f"unknown source_id(s): {', '.join(sorted(unknown_source_ids))}")
+            if unknown_note_ids:
+                reason_parts.append(f"unknown note_id(s): {', '.join(sorted(unknown_note_ids))}")
+            raise ValueError("; ".join(reason_parts))
+
+        report_markdown = self._build_report_markdown(report_sections_payload)
+        unresolved_questions = _normalize_string_list(parsed.get("unresolved_questions"))
+        covered_focus_areas = [section.focus_area for section in outline_sections if section.focus_area]
+        missing_focus_areas = [
+            focus_area
+            for focus_area in plan.focus_areas
+            if focus_area not in covered_focus_areas
+        ]
+        for focus_area in missing_focus_areas:
+            unresolved = f"missing evidence for focus area: {focus_area}"
+            if unresolved not in unresolved_questions:
+                unresolved_questions.append(unresolved)
+
+        summary = dict(parsed.get("summary") or {})
+        summary.update(
+            {
+                "mode": "llm_backed",
+                "query": plan.query,
+                "focus_areas": list(plan.focus_areas),
+                "section_count": len(outline_sections),
+                "claim_count": len(claims),
+                "source_count": len(source_registry),
+                "unresolved_questions": list(unresolved_questions),
+                "coverage": {
+                    "covered_focus_areas": covered_focus_areas,
+                    "missing_focus_areas": missing_focus_areas,
+                },
+            }
+        )
+        return ResearchSynthesisResult(
+            outline_sections=outline_sections,
+            claims=claims,
+            report_markdown=report_markdown,
+            unresolved_questions=unresolved_questions,
+            synthesis_summary=summary,
+        )
+
+    @staticmethod
+    def _build_report_markdown(report_sections: list[dict[str, Any]]) -> str:
+        lines = ["# Research Report"]
+        for section in report_sections:
+            if not isinstance(section, dict):
+                continue
+            title = str(section.get("title") or "").strip()
+            markdown = str(section.get("markdown") or "").strip()
+            if title:
+                lines.extend(["", f"## {title}", ""])
+            if markdown:
+                lines.append(markdown)
+        return "\n".join(lines).strip()
+
+    def _with_summary_mode(
+        self,
+        result: ResearchSynthesisResult,
+        *,
+        mode: str,
+        fallback_reason: str | None = None,
+    ) -> ResearchSynthesisResult:
+        summary = dict(result.synthesis_summary or {})
+        summary["mode"] = mode
+        if fallback_reason:
+            summary["fallback_reason"] = fallback_reason
+        return ResearchSynthesisResult(
+            outline_sections=result.outline_sections,
+            claims=result.claims,
+            report_markdown=result.report_markdown,
+            unresolved_questions=result.unresolved_questions,
+            synthesis_summary=summary,
+        )
+
+    def _synthesize_deterministic(
         self,
         *,
         plan: ResearchPlan,
