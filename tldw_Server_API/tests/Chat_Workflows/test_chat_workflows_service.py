@@ -46,6 +46,35 @@ def test_start_run_uses_template_snapshot(fake_chat_workflows_db):
     assert json.loads(run["template_snapshot_json"])["steps"][0]["id"] == "goal"
 
 
+def test_start_run_preserves_step_context_refs_from_saved_template_rows(fake_chat_workflows_db):
+    service = ChatWorkflowService(db=fake_chat_workflows_db, question_renderer=None)
+
+    run = service.start_run(
+        tenant_id="default",
+        user_id="user-1",
+        template={
+            "id": 10,
+            "title": "Discovery",
+            "version": 3,
+            "steps": [
+                {
+                    "step_id": "goal",
+                    "step_index": 0,
+                    "base_question": "What do you want?",
+                    "question_mode": "stock",
+                    "context_refs_json": '[{"kind":"note","id":"note-1"}]',
+                }
+            ],
+        },
+        source_mode="saved_template",
+        selected_context_refs=[],
+    )
+
+    snapshot = json.loads(run["template_snapshot_json"])
+
+    assert snapshot["steps"][0]["context_refs"] == [{"kind": "note", "id": "note-1"}]
+
+
 def test_renderer_falls_back_to_base_question_on_error(fake_chat_workflows_db):
     class FailingRenderer:
         async def render_question(self, **kwargs):
@@ -465,3 +494,166 @@ async def test_respond_to_round_marks_round_failed_when_orchestrator_errors(fake
 
     assert rounds[0]["status"] == "failed"
     assert refreshed_run["active_round_index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_respond_to_round_allows_retry_after_failed_attempt_with_same_idempotency_key(
+    fake_chat_workflows_db,
+):
+    class FlakyDialogueOrchestrator:
+        def __init__(self):
+            self.calls = 0
+
+        async def run_round(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("provider offline")
+            return {
+                "debate_llm_message": "Your premise still has gaps.",
+                "moderator_decision": "finish",
+                "moderator_summary": "The round completed after retry.",
+                "next_user_prompt": None,
+            }
+
+    orchestrator = FlakyDialogueOrchestrator()
+    service = ChatWorkflowService(
+        db=fake_chat_workflows_db,
+        question_renderer=None,
+        dialogue_orchestrator=orchestrator,
+    )
+    run = service.start_run(
+        tenant_id="default",
+        user_id="user-1",
+        template={
+            "id": 23,
+            "title": "Socratic",
+            "version": 1,
+            "steps": [
+                {
+                    "id": "debate",
+                    "step_index": 0,
+                    "step_type": "dialogue_round_step",
+                    "base_question": "State your thesis.",
+                    "question_mode": "stock",
+                    "context_refs": [],
+                    "dialogue_config": {
+                        "goal_prompt": "Stress-test the thesis.",
+                        "opening_prompt_mode": "base_question",
+                        "user_role_label": "Author",
+                        "debate_llm_config": {"provider": "openai", "model": "gpt-4o-mini"},
+                        "moderator_llm_config": {"provider": "openai", "model": "gpt-4o-mini"},
+                        "max_rounds": 4,
+                        "finish_conditions": ["clear compromise"],
+                        "context_refs": [],
+                        "debate_instruction_prompt": "Challenge weak assumptions.",
+                        "moderator_instruction_prompt": "Return structured control output only.",
+                    },
+                }
+            ],
+        },
+        source_mode="saved_template",
+        selected_context_refs=[],
+    )
+
+    with pytest.raises(RuntimeError, match="provider offline"):
+        await service.respond_to_round(
+            run_id=run["run_id"],
+            round_index=0,
+            user_message="My thesis is sound.",
+            idempotency_key="round-1",
+        )
+
+    retried = await service.respond_to_round(
+        run_id=run["run_id"],
+        round_index=0,
+        user_message="My thesis is sound.",
+        idempotency_key="round-1",
+    )
+
+    rounds = fake_chat_workflows_db.list_rounds(run["run_id"], 0)
+
+    assert retried["status"] == "completed"
+    assert orchestrator.calls == 2
+    assert len(rounds) == 1
+    assert rounds[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_respond_to_round_preserves_current_prompt_when_continue_omits_next_prompt(
+    fake_chat_workflows_db,
+):
+    class PromptingDialogueOrchestrator:
+        def __init__(self):
+            self.calls = 0
+
+        async def run_round(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "debate_llm_message": "Counterargument one.",
+                    "moderator_decision": "continue",
+                    "moderator_summary": "Push on the weakest premise.",
+                    "next_user_prompt": "Defend your evidence.",
+                }
+            return {
+                "debate_llm_message": "Counterargument two.",
+                "moderator_decision": "continue",
+                "moderator_summary": "Stay on the current point.",
+                "next_user_prompt": None,
+            }
+
+    service = ChatWorkflowService(
+        db=fake_chat_workflows_db,
+        question_renderer=None,
+        dialogue_orchestrator=PromptingDialogueOrchestrator(),
+    )
+    run = service.start_run(
+        tenant_id="default",
+        user_id="user-1",
+        template={
+            "id": 24,
+            "title": "Socratic",
+            "version": 1,
+            "steps": [
+                {
+                    "id": "debate",
+                    "step_index": 0,
+                    "step_type": "dialogue_round_step",
+                    "base_question": "State your thesis.",
+                    "question_mode": "stock",
+                    "context_refs": [],
+                    "dialogue_config": {
+                        "goal_prompt": "Stress-test the thesis.",
+                        "opening_prompt_mode": "base_question",
+                        "user_role_label": "Author",
+                        "debate_llm_config": {"provider": "openai", "model": "gpt-4o-mini"},
+                        "moderator_llm_config": {"provider": "openai", "model": "gpt-4o-mini"},
+                        "max_rounds": 4,
+                        "finish_conditions": ["clear compromise"],
+                        "context_refs": [],
+                        "debate_instruction_prompt": "Challenge weak assumptions.",
+                        "moderator_instruction_prompt": "Return structured control output only.",
+                    },
+                }
+            ],
+        },
+        source_mode="saved_template",
+        selected_context_refs=[],
+    )
+
+    first = await service.respond_to_round(
+        run_id=run["run_id"],
+        round_index=0,
+        user_message="My thesis is sound.",
+        idempotency_key="round-1",
+    )
+    second = await service.respond_to_round(
+        run_id=run["run_id"],
+        round_index=1,
+        user_message="Here is my evidence.",
+        idempotency_key="round-2",
+    )
+
+    assert first["current_prompt"] == "Defend your evidence."
+    assert second["current_prompt"] == "Defend your evidence."
+    assert second["current_round_index"] == 2

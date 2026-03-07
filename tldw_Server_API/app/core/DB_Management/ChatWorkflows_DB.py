@@ -645,6 +645,47 @@ class ChatWorkflowsDatabase:
             ).fetchone()
             if existing is not None:
                 existing_round = dict(existing)
+                existing_status = str(existing_round.get("status") or "").strip().lower()
+                same_attempt = (
+                    existing_round.get("idempotency_key") == idempotency_key
+                    and existing_round.get("user_message") == user_message
+                )
+                if existing_status == "failed" and same_attempt:
+                    conn.execute(
+                        """
+                        UPDATE chat_workflow_rounds
+                        SET user_message = ?,
+                            debate_llm_message = NULL,
+                            moderator_decision = NULL,
+                            moderator_summary = NULL,
+                            next_user_prompt = NULL,
+                            status = 'pending',
+                            updated_at = ?
+                        WHERE run_id = ? AND step_index = ? AND round_index = ?
+                        """,
+                        (
+                            user_message,
+                            now,
+                            run_id,
+                            step_index,
+                            round_index,
+                        ),
+                    )
+                    round_row = conn.execute(
+                        """
+                        SELECT id, run_id, step_index, round_index, user_message, debate_llm_message,
+                               moderator_decision, moderator_summary, next_user_prompt, status,
+                               idempotency_key, created_at, updated_at
+                        FROM chat_workflow_rounds
+                        WHERE run_id = ? AND step_index = ? AND round_index = ?
+                        """,
+                        (run_id, step_index, round_index),
+                    ).fetchone()
+                    return {
+                        "outcome": "claimed",
+                        "round": dict(round_row) if round_row is not None else None,
+                        "run": dict(run_row),
+                    }
                 if idempotency_key is not None and existing_round.get("idempotency_key") == idempotency_key:
                     return {"outcome": "replayed", "round": existing_round, "run": dict(run_row)}
                 return {"outcome": "conflict", "round": existing_round, "run": dict(run_row)}

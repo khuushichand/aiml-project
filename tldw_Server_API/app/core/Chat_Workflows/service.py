@@ -418,7 +418,7 @@ class ChatWorkflowService:
             next_status = "active"
             step_runtime_state = {
                 "current_prompt": normalized_round_result["next_user_prompt"]
-                or self._get_dialogue_opening_prompt(step),
+                or current_prompt,
             }
             completed_at = None
 
@@ -469,6 +469,9 @@ class ChatWorkflowService:
         normalized_steps: list[dict[str, Any]] = []
         for index, step in enumerate(template.get("steps", [])):
             step_type = self._get_step_type(step)
+            context_refs = step.get("context_refs")
+            if context_refs is None:
+                context_refs = _json_loads(step.get("context_refs_json"), default=[])
             normalized_steps.append(
                 {
                     "id": str(step.get("id") or step.get("step_id") or f"step-{index + 1}"),
@@ -478,7 +481,7 @@ class ChatWorkflowService:
                     "base_question": str(step["base_question"]).strip(),
                     "question_mode": str(step.get("question_mode", "stock")).strip().lower().replace("-", "_"),
                     "phrasing_instructions": step.get("phrasing_instructions"),
-                    "context_refs": list(step.get("context_refs", [])),
+                    "context_refs": list(context_refs if isinstance(context_refs, list) else []),
                     "dialogue_config": (
                         self._normalize_dialogue_config(
                             step.get("dialogue_config")
