@@ -79,7 +79,7 @@ Legend:
 
 ## Data and Persistence
 - Store `greetingScope`, `presetScope`, `memoryScope`, `chatPresetOverrideId`, and `characterMemoryById` in per-chat settings.
-- Use the shared sync and migration rules described in `Docs/Product/Character_Chat_Greeting_Picker_PRD.md`.
+- Use the shared sync and migration rules described in `Docs/Product/Completed/Character_Chat_Greeting_Picker_PRD.md`.
 
 ## UX Notes
 - Scope labels must be explicit and visible in chat settings.

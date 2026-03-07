@@ -3,7 +3,7 @@
 Status: Updated Baseline (Runtime Overlay Guard + Full Smoke Parity + Key-Nav/Wayfinding Stable + Route-Boundary Slice Stable + Invalid-Key Degradation Gate Stable + Post-M3.3 Toolbar/Component Regression Stable + Post-All-Theme-Hard-Gate Regression Stable + Week 2 Controlled Alias Rollup + Week 3 Passive Natural Sample)  
 Owner: WebUI  
 Roadmap Link: `Docs/Product/WebUI/WebUI_UX_Strategic_Roadmap_2026_02.md`  
-Execution Plan Link: `Docs/Product/WebUI/M1_Navigation_IA_Execution_Plan_2026_02.md`
+Execution Plan Link: `Docs/Product/Completed/WebUI-related/M1_Navigation_IA_Execution_Plan_2026_02.md`
 
 ## 1) Snapshot Summary
 
@@ -13,8 +13,8 @@ This snapshot now includes the February 13, 2026 stabilization reruns that close
 
 | Metric | Value | Source |
 |---|---|---|
-| Canonical route inventory published | Yes | `Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md` |
-| Documented alias redirect routes | 19 | `Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md` |
+| Canonical route inventory published | Yes | `Docs/Product/Completed/WebUI-related/M1_1_Canonical_Route_Inventory_2026_02.md` |
+| Documented alias redirect routes | 19 | `Docs/Product/Completed/WebUI-related/M1_1_Canonical_Route_Inventory_2026_02.md` |
 | Alias telemetry helper present | Yes | `apps/packages/ui/src/utils/route-alias-telemetry.ts` |
 | Redirect instrumentation present | Yes | `apps/tldw-frontend/components/navigation/RouteRedirect.tsx` |
 | Alias weekly rollup helper present | Yes | `apps/packages/ui/src/utils/route-alias-telemetry.ts` |
@@ -75,7 +75,7 @@ Smoke execution (chronological):
    - Outcome: `150 passed` (1.8m)
 10. Week 3 passive natural alias rollup capture:
    - Command: `bunx playwright test e2e/smoke/alias-rollup-natural-capture.spec.ts --reporter=line`
-   - Outcome: `1 passed` (2.3s), artifact updated at `Docs/Product/WebUI/M1_4_Alias_Rollup_Week3_Natural_2026_02_13.json`
+   - Outcome: `1 passed` (2.3s), artifact updated at `Docs/Product/Completed/WebUI-related/M1_4_Alias_Rollup_Week3_Natural_2026_02_13.json`
 11. Expanded non-core forced-error route-boundary slice:
    - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Smoke Tests - Route Error Boundaries" --reporter=line`
    - Outcome: `15 passed` (22.4s)
@@ -157,7 +157,7 @@ Capture command:
 
 Artifact:
 
-- `Docs/Product/WebUI/M1_4_Alias_Rollup_Week2_Controlled_2026_02_13.json`
+- `Docs/Product/Completed/WebUI-related/M1_4_Alias_Rollup_Week2_Controlled_2026_02_13.json`
 
 Capture timestamp:
 
@@ -186,7 +186,7 @@ Capture command:
 
 Artifact:
 
-- `Docs/Product/WebUI/M1_4_Alias_Rollup_Week3_Natural_2026_02_13.json`
+- `Docs/Product/Completed/WebUI-related/M1_4_Alias_Rollup_Week3_Natural_2026_02_13.json`
 
 Capture timestamp:
 

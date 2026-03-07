@@ -6,17 +6,17 @@ This index coordinates execution and reporting across all 11 category plans crea
 
 ## Linked Plans
 
-1. `Docs/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_01_dictionary_list_overview_2026_02_18.md`
-2. `Docs/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_02_entry_management_2026_02_18.md`
-3. `Docs/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_03_probability_timed_effects_configuration_2026_02_18.md`
-4. `Docs/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_04_validation_testing_2026_02_18.md`
-5. `Docs/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_05_import_export_2026_02_18.md`
-6. `Docs/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_06_statistics_usage_insights_2026_02_18.md`
-7. `Docs/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_07_connection_to_character_chat_2026_02_18.md`
-8. `Docs/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_08_error_handling_edge_cases_2026_02_18.md`
-9. `Docs/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_09_responsive_mobile_experience_2026_02_18.md`
-10. `Docs/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_10_accessibility_2026_02_18.md`
-11. `Docs/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_11_information_gaps_missing_functionality_2026_02_18.md`
+1. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_01_dictionary_list_overview_2026_02_18.md`
+2. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_02_entry_management_2026_02_18.md`
+3. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_03_probability_timed_effects_configuration_2026_02_18.md`
+4. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_04_validation_testing_2026_02_18.md`
+5. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_05_import_export_2026_02_18.md`
+6. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_06_statistics_usage_insights_2026_02_18.md`
+7. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_07_connection_to_character_chat_2026_02_18.md`
+8. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_08_error_handling_edge_cases_2026_02_18.md`
+9. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_09_responsive_mobile_experience_2026_02_18.md`
+10. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_10_accessibility_2026_02_18.md`
+11. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_chat_dictionaries_11_information_gaps_missing_functionality_2026_02_18.md`
 
 ## Stage 1: Program Baseline and Sequencing
 **Goal**: Establish a dependency-aware execution order that minimizes rework.

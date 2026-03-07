@@ -199,6 +199,86 @@ const getCurrentBrowserOrigin = (): string | null => {
   }
 }
 
+const getCurrentBrowserHostname = (): string | null => {
+  if (typeof window === "undefined") return null
+  try {
+    const hostname = window.location?.hostname
+    if (!hostname) return null
+    return String(hostname).trim().toLowerCase() || null
+  } catch {
+    return null
+  }
+}
+
+const parsePrivateIpv4Host = (value: string | null | undefined): number[] | null => {
+  if (!value) return null
+  const normalized = String(value).trim().toLowerCase()
+  const match = normalized.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (!match) return null
+  const parts = match.slice(1).map((raw) => Number(raw))
+  if (parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
+    return null
+  }
+  const [a, b] = parts
+  if (a === 10) return parts
+  if (a === 192 && b === 168) return parts
+  if (a === 172 && b >= 16 && b <= 31) return parts
+  return null
+}
+
+const deriveCurrentHostRecoveryServerUrl = (
+  configuredServerUrl: string | null | undefined
+): string | null => {
+  if (!configuredServerUrl) return null
+  const browserHostname = getCurrentBrowserHostname()
+  if (!browserHostname) return null
+  try {
+    const parsed = new URL(String(configuredServerUrl))
+    const configuredHost = String(parsed.hostname || "").trim().toLowerCase()
+    if (!configuredHost || configuredHost === browserHostname) return null
+    const configuredPrivateIp = parsePrivateIpv4Host(configuredHost)
+    const browserPrivateIp = parsePrivateIpv4Host(browserHostname)
+    if (!configuredPrivateIp || !browserPrivateIp) return null
+    const port = parsed.port || "8000"
+    return `${parsed.protocol}//${browserHostname}:${port}`
+  } catch {
+    return null
+  }
+}
+
+const isNetworkTransportFailure = (value: string | null | undefined): boolean => {
+  if (!value) return false
+  const text = String(value)
+  return NETWORK_BLOCK_PATTERNS.some((pattern) => pattern.test(text))
+}
+
+const probeServerLiveness = async (
+  serverUrl: string,
+  timeoutMs: number
+): Promise<boolean> => {
+  if (!serverUrl || typeof fetch === "undefined") return false
+  const safeTimeoutMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 3000
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
+  try {
+    if (controller) {
+      timeoutId = setTimeout(() => controller.abort(), safeTimeoutMs)
+    }
+    const response = await fetch(`${String(serverUrl).replace(/\/$/, "")}${HEALTH_LIVENESS_PATH}`, {
+      method: "GET",
+      credentials: "omit",
+      signal: controller?.signal
+    })
+    return Boolean(response?.ok)
+  } catch {
+    return false
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+    }
+  }
+}
+
 const CORS_ERROR_PATTERNS = [
   /cors/i,
   /cross-origin/i,
@@ -510,17 +590,67 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           return { ok: false, status: 0, error: (e as Error)?.message || 'Network error' }
         }
       })()
-      const raced = await Promise.race([
+      let healthResult = await Promise.race([
         healthPromise,
         new Promise<{ ok: boolean; status: number; error: string | null }>((resolve) =>
           setTimeout(() => resolve({ ok: false, status: 0, error: 'timeout' }), CONNECTION_TIMEOUT_MS)
         )
       ])
-      console.log('[CONN_DEBUG] health check result', { ok: raced.ok, status: raced.status, error: raced.error })
-      const ok = raced.ok
+      console.log('[CONN_DEBUG] health check result', { ok: healthResult.ok, status: healthResult.status, error: healthResult.error })
+
+      const fallbackServerUrl = deriveCurrentHostRecoveryServerUrl(serverUrl)
+      if (
+        !healthResult.ok &&
+        healthResult.status === 0 &&
+        isNetworkTransportFailure(healthResult.error) &&
+        fallbackServerUrl
+      ) {
+        console.log("[CONN_DEBUG] attempting stale-host recovery probe", {
+          from: serverUrl,
+          to: fallbackServerUrl
+        })
+        const probeOk = await probeServerLiveness(
+          fallbackServerUrl,
+          Math.min(5_000, CONNECTION_TIMEOUT_MS)
+        )
+        console.log("[CONN_DEBUG] stale-host recovery probe result", {
+          serverUrl: fallbackServerUrl,
+          ok: probeOk
+        })
+        if (probeOk) {
+          await tldwClient.updateConfig({ serverUrl: fallbackServerUrl })
+          serverUrl = fallbackServerUrl
+          cfg = {
+            ...(cfg || {}),
+            serverUrl: fallbackServerUrl
+          } as TldwConfig
+          const fallbackNoAuth = !cfg ||
+            (!cfg.apiKey &&
+              !cfg.accessToken &&
+              cfg.authMode !== "multi-user")
+          const fallbackResp = await apiSend({
+            path: HEALTH_LIVENESS_PATH,
+            method: "GET",
+            timeoutMs: CONNECTION_TIMEOUT_MS,
+            noAuth: fallbackNoAuth
+          })
+          healthResult = {
+            ok: Boolean(fallbackResp?.ok),
+            status: Number(fallbackResp?.status) || 0,
+            error: fallbackResp?.ok ? null : (fallbackResp?.error || null)
+          }
+          console.log("[CONN_DEBUG] stale-host recovery health result", {
+            ok: healthResult.ok,
+            status: healthResult.status,
+            error: healthResult.error
+          })
+        }
+      }
+
+      const ok = healthResult.ok
       const resolvedHealthError = maybeAnnotateCorsMismatchError({
-        error: raced.error,
-        status: raced.status,
+        error: healthResult.error,
+        status: healthResult.status,
         serverUrl
       })
 
@@ -575,7 +705,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           errorKind = "none"
         }
       } else {
-        const status = raced.status
+        const status = healthResult.status
         if (status === 401 || status === 403) {
           errorKind = "auth"
         } else {
@@ -600,7 +730,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             offlineBypass: false,
             lastCheckedAt: Date.now(),
             lastError: resolvedHealthError || "transient-health-check-failure",
-            lastStatusCode: raced.status || 0,
+            lastStatusCode: healthResult.status || 0,
             errorKind: "partial",
             consecutiveFailures: nextConsecutiveFailures
           }
@@ -631,7 +761,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           offlineBypass: false,
           lastCheckedAt: Date.now(),
           lastError: ok ? null : (resolvedHealthError || 'timeout-or-offline'),
-          lastStatusCode: ok ? null : raced.status,
+          lastStatusCode: ok ? null : healthResult.status,
           knowledgeStatus,
           knowledgeLastCheckedAt,
           knowledgeError,

@@ -114,7 +114,7 @@ jobs:
 
       - name: Upload watchlists e2e artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: watchlists-extension-e2e-artifacts
           if-no-files-found: ignore

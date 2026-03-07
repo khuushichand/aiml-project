@@ -3,7 +3,7 @@
 Status: Complete  
 Owner: WebUI + Accessibility  
 Date: February 13, 2026  
-Execution Plan: `Docs/Product/WebUI/M3_Design_System_A11y_Execution_Plan_2026_02.md`
+Execution Plan: `Docs/Product/Completed/WebUI-related/M3_Design_System_A11y_Execution_Plan_2026_02.md`
 
 ## 1) Scope
 
@@ -95,7 +95,7 @@ Resolution status (February 13, 2026):
 - Non-core theme token remediations implemented in `apps/packages/ui/src/themes/presets.ts`.
 - All built-in themes now enforced in `apps/packages/ui/src/themes/__tests__/contrast-baseline.test.ts`.
 - Measured pair-level ratio evidence documented in:
-  - `Docs/Product/WebUI/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`.
+  - `Docs/Product/Completed/WebUI-related/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`.
 
 ## 7) Exit Criteria for M3.1
 

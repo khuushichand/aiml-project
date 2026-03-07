@@ -174,6 +174,13 @@ def test_user_profile_update_default_character_preference_type_validation(
 def test_admin_profile_update_storage_quota(auth_headers) -> None:
     with TestClient(app) as client:
         user_id = _get_user_id(client, auth_headers)
+        warm_resp = client.get(
+            f"/api/v1/admin/users/{user_id}/profile",
+            params={"sections": "quotas"},
+            headers=auth_headers,
+        )
+        assert warm_resp.status_code == 200
+
         resp = client.patch(
             f"/api/v1/admin/users/{user_id}/profile",
             headers=auth_headers,

@@ -1826,6 +1826,116 @@ async def moderate_input_messages(
         logger.warning(f"Moderation input processing error: {e}")
 
 
+def _extract_tldw_continuation_spec(request_data: Any) -> tuple[str, str, str | None] | None:
+    """Return normalized continuation tuple (anchor_id, mode, assistant_prefill)."""
+    raw_spec = getattr(request_data, "tldw_continuation", None)
+    if raw_spec is None:
+        return None
+
+    if hasattr(raw_spec, "model_dump"):
+        try:
+            spec_dict = raw_spec.model_dump(exclude_none=True)
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
+            spec_dict = {}
+    elif isinstance(raw_spec, dict):
+        spec_dict = raw_spec
+    else:
+        return None
+
+    from_message_id = str(spec_dict.get("from_message_id") or "").strip()
+    mode = str(spec_dict.get("mode") or "").strip().lower()
+    assistant_prefill_raw = spec_dict.get("assistant_prefill")
+    assistant_prefill = assistant_prefill_raw if isinstance(assistant_prefill_raw, str) else None
+
+    if not from_message_id or mode not in {"branch", "append"}:
+        return None
+    return from_message_id, mode, assistant_prefill
+
+
+async def _resolve_tldw_continuation_history(
+    *,
+    chat_db: Any,
+    loop: Any,
+    conversation_id: str,
+    from_message_id: str,
+    mode: str,
+    history_limit: int,
+    history_order: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Resolve continuation anchor/chain and return history records + metadata."""
+    anchor_record = await loop.run_in_executor(None, chat_db.get_message_by_id, from_message_id)
+    if not anchor_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Continuation anchor message was not found.",
+        )
+    if str(anchor_record.get("conversation_id") or "") != str(conversation_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Continuation anchor does not belong to the requested conversation.",
+        )
+
+    if mode == "append":
+        latest_message = await loop.run_in_executor(
+            None,
+            chat_db.get_latest_message_for_conversation,
+            conversation_id,
+        )
+        latest_id = str((latest_message or {}).get("id") or "")
+        if latest_id != from_message_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Append continuation requires the anchor to be the latest "
+                    "message in the conversation."
+                ),
+            )
+
+    chain_reversed: list[dict[str, Any]] = []
+    visited_ids: set[str] = set()
+    current_record = anchor_record
+    while current_record:
+        message_id = str(current_record.get("id") or "")
+        if not message_id:
+            break
+        if message_id in visited_ids:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Detected a cycle while resolving continuation ancestry.",
+            )
+        visited_ids.add(message_id)
+        chain_reversed.append(current_record)
+
+        parent_id_raw = current_record.get("parent_message_id")
+        parent_id = parent_id_raw.strip() if isinstance(parent_id_raw, str) else ""
+        if not parent_id:
+            break
+        parent_record = await loop.run_in_executor(None, chat_db.get_message_by_id, parent_id)
+        if not parent_record:
+            break
+        if str(parent_record.get("conversation_id") or "") != str(conversation_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Continuation parent chain crossed conversation boundary.",
+            )
+        current_record = parent_record
+
+    ordered_chain = list(reversed(chain_reversed))
+    if history_limit > 0:
+        ordered_chain = ordered_chain[-history_limit:]
+    else:
+        ordered_chain = []
+    if history_order == "desc":
+        ordered_chain = list(reversed(ordered_chain))
+
+    metadata = {
+        "applied": True,
+        "mode": mode,
+        "from_message_id": from_message_id,
+    }
+    return ordered_chain, metadata
+
+
 async def build_context_and_messages(
     chat_db: Any,
     request_data: Any,
@@ -1834,6 +1944,7 @@ async def build_context_and_messages(
     default_save_to_db: bool,
     final_conversation_id: str | None,
     save_message_fn: Any,
+    runtime_state: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int | None, str, bool, list[dict[str, Any]], bool]:
     """Resolve character/conversation context, load history, save current messages, and return LLM-ready payload.
 
@@ -1894,6 +2005,18 @@ async def build_context_and_messages(
     if not conv_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish conversation context.")
 
+    continuation_spec = _extract_tldw_continuation_spec(request_data)
+    continuation_metadata: dict[str, Any] | None = None
+    assistant_parent_message_id: str | None = None
+    assistant_prefill: str | None = None
+    if continuation_spec:
+        assistant_parent_message_id, _mode, assistant_prefill = continuation_spec
+        if conversation_created:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="conversation_id is required for continuation and must reference an existing conversation.",
+            )
+
     # History loading (configurable limit/order; filter missing roles, normalize assistant names)
     requested_history_limit = getattr(request_data, "history_message_limit", None)
     if requested_history_limit is None:
@@ -1915,15 +2038,31 @@ async def build_context_and_messages(
     db_order = "ASC" if history_order == "asc" else "DESC"
 
     historical_msgs: list[dict[str, Any]] = []
-    if conv_id and (not conversation_created) and history_limit > 0:
-        raw_hist = await loop.run_in_executor(
-            None,
-            chat_db.get_messages_for_conversation,
-            conv_id,
-            history_limit,
-            0,
-            db_order,
-        )
+    if conv_id and (not conversation_created):
+        raw_hist: list[dict[str, Any]] = []
+        if continuation_spec:
+            from_message_id, mode, assistant_prefill = continuation_spec
+            resolved_hist, continuation_metadata = await _resolve_tldw_continuation_history(
+                chat_db=chat_db,
+                loop=loop,
+                conversation_id=conv_id,
+                from_message_id=from_message_id,
+                mode=mode,
+                history_limit=(history_limit if history_limit > 0 else _MAX_HISTORY_MESSAGES),
+                history_order=history_order,
+            )
+            if history_limit > 0:
+                raw_hist = resolved_hist
+            continuation_metadata["anchor_message_id"] = from_message_id
+        elif history_limit > 0:
+            raw_hist = await loop.run_in_executor(
+                None,
+                chat_db.get_messages_for_conversation,
+                conv_id,
+                history_limit,
+                0,
+                db_order,
+            )
         for db_msg in raw_hist:
             sender_val = str(db_msg.get("sender", "") or "")
             metadata = None
@@ -2123,6 +2262,25 @@ async def build_context_and_messages(
             if name:
                 msg_for_llm["name"] = name
         current_turn.append(msg_for_llm)
+
+    if continuation_spec and assistant_prefill:
+        prefill_payload: dict[str, Any] = {
+            "role": "assistant",
+            "content": assistant_prefill,
+        }
+        if character_card and character_card.get("name"):
+            prefill_name = sanitize_sender_name(character_card.get("name"))
+            if prefill_name:
+                prefill_payload["name"] = prefill_name
+        current_turn.append(prefill_payload)
+        if continuation_metadata is not None:
+            continuation_metadata["assistant_prefill"] = assistant_prefill
+            continuation_metadata["assistant_prefill_applied"] = True
+
+    if runtime_state is not None and continuation_spec and continuation_metadata is not None:
+        runtime_state["tldw_continuation"] = continuation_metadata
+        if assistant_parent_message_id:
+            runtime_state["assistant_parent_message_id"] = assistant_parent_message_id
 
     # Preserve requested history ordering (DB fetch already honors ASC/DESC).
     historical_msgs_for_payload = historical_msgs
@@ -2330,6 +2488,8 @@ async def execute_streaming_call(
     on_success: Callable[[str], Awaitable[None]] | None = None,
     self_monitoring_service: Any | None = None,
     on_stream_full_reply: Callable[[str], Awaitable[None] | None] | None = None,
+    assistant_parent_message_id: str | None = None,
+    continuation_metadata: dict[str, Any] | None = None,
 ) -> StreamingResponse:
     """Execute a streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -2340,6 +2500,11 @@ async def execute_streaming_call(
     - usage logging and audit success
     """
     llm_start_time = time.time()
+    normalized_continuation_metadata = (
+        dict(continuation_metadata)
+        if isinstance(continuation_metadata, dict) and continuation_metadata
+        else None
+    )
     stream_metrics_recorded = False
     stream_failure_recorded = False
     raw_stream_iter: AsyncIterator[str] | Iterator[str] | None = None
@@ -2567,6 +2732,8 @@ async def execute_streaming_call(
                     payload["tldw_conversation_id"] = final_conversation_id
                     if system_message_id:
                         payload["tldw_system_message_id"] = system_message_id
+                    if normalized_continuation_metadata:
+                        payload["tldw_continuation"] = normalized_continuation_metadata
                 yield f"data: {_json.dumps(payload)}\n\n"
             except _CHAT_NONCRITICAL_EXCEPTIONS:
                 # Fallback string serialization
@@ -2663,6 +2830,8 @@ async def execute_streaming_call(
                     payload["tldw_conversation_id"] = final_conversation_id
                     if system_message_id:
                         payload["tldw_system_message_id"] = system_message_id
+                    if normalized_continuation_metadata:
+                        payload["tldw_continuation"] = normalized_continuation_metadata
                 yield f"data: {_json.dumps(payload)}\n\n"
             except _CHAT_NONCRITICAL_EXCEPTIONS:
                 if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
@@ -2875,6 +3044,8 @@ async def execute_streaming_call(
                 "role": "assistant",
                 "name": asst_name,
             }
+            if assistant_parent_message_id:
+                message_payload["parent_message_id"] = assistant_parent_message_id
             if full_reply_to_save is not None:
                 message_payload["content"] = full_reply_to_save
             if tool_calls:
@@ -3285,6 +3456,7 @@ async def execute_streaming_call(
                 heartbeat_interval=CHAT_HEARTBEAT_INTERVAL,
                 text_transform=_out_transform,
                 system_message_id=system_message_id,
+                continuation_metadata=normalized_continuation_metadata,
             )
             try:
                 async for chunk in generator:
@@ -3401,12 +3573,19 @@ async def execute_non_stream_call(
     moderation_getter: Callable[[], Any] | None = None,
     on_success: Callable[[str], Awaitable[None]] | None = None,
     self_monitoring_service: Any | None = None,
+    assistant_parent_message_id: str | None = None,
+    continuation_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute a non-streaming LLM call with queue, failover, moderation, and persistence.
 
     Returns the encoded payload (dict) ready to be wrapped by JSONResponse.
     """
     llm_start_time = time.time()
+    normalized_continuation_metadata = (
+        dict(continuation_metadata)
+        if isinstance(continuation_metadata, dict) and continuation_metadata
+        else None
+    )
     llm_response = None
     metrics_recorded = False
     queue_failure_recorded = False
@@ -3851,6 +4030,8 @@ async def execute_non_stream_call(
             character_card_for_context.get("name") if character_card_for_context else None
         )
         message_payload: dict[str, Any] = {"role": "assistant", "name": asst_name}
+        if assistant_parent_message_id:
+            message_payload["parent_message_id"] = assistant_parent_message_id
         if content_to_save is not None:
             message_payload["content"] = content_to_save
         if tool_calls_to_save is not None:
@@ -4023,6 +4204,8 @@ async def execute_non_stream_call(
             encoded_payload["tldw_tool_results"] = tool_execution_payload
         if tool_auto_continue_meta is not None:
             encoded_payload["tldw_tool_auto_continue"] = tool_auto_continue_meta
+        if normalized_continuation_metadata is not None:
+            encoded_payload["tldw_continuation"] = normalized_continuation_metadata
 
     # Audit success
     if audit_service and audit_context:

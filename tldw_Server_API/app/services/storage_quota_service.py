@@ -64,6 +64,11 @@ class StorageQuotaService:
         self._initialized = True
         logger.info("StorageQuotaService initialized")
 
+    def invalidate_user_cache(self, user_id: int) -> None:
+        """Invalidate in-memory quota/storage cache entries for a user."""
+        self.quota_cache.pop(f"quota:{user_id}", None)
+        self.storage_cache.pop(f"storage_calc:{user_id}", None)
+
     def _is_postgres_backend(self) -> bool:
         """
         Return True when the underlying DatabasePool is using PostgreSQL.
@@ -1082,6 +1087,17 @@ async def get_storage_service() -> StorageQuotaService:
         _storage_service = StorageQuotaService()
         await _storage_service.initialize()
     return _storage_service
+
+
+def invalidate_storage_cache_for_user(user_id: int) -> None:
+    """Best-effort invalidation for module-level storage service singletons."""
+    candidates: list[StorageQuotaService] = []
+    if _storage_service is not None:
+        candidates.append(_storage_service)
+    if _quota_service is not None and _quota_service is not _storage_service:
+        candidates.append(_quota_service)
+    for service in candidates:
+        service.invalidate_user_cache(int(user_id))
 
 
 async def reset_storage_service() -> None:

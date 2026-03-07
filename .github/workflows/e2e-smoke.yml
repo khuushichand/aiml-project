@@ -37,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
@@ -90,7 +90,7 @@ jobs:
           PY
       - name: Upload server log (single-user)
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: server-log-single-${{ matrix.os }}-py${{ matrix.python-version }}
           path: server-single.log
@@ -131,7 +131,7 @@ jobs:
           PY
       - name: Upload server log (multi-user)
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: server-log-multi-${{ matrix.os }}-py${{ matrix.python-version }}
           path: server-multi.log

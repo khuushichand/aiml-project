@@ -327,7 +327,7 @@ Resolution details:
 1. Implement DB table, schemas, endpoints, and guardrails.
 2. Add privilege catalog entries; wire `rbac_rate_limit`.
 3. Add unit and integration tests; verify perf locally with synthetic data.
-4. Add minimal docs under `Docs/Notes/Graph.md` and link from README.
+4. Add minimal docs under `Docs/Product/Graphing-Notes-PRD.md` and link from README.
 5. Release behind `NOTES_GRAPH_ENABLED` (true by default); monitor metrics.
 
 ## 18. Testing and Acceptance Criteria

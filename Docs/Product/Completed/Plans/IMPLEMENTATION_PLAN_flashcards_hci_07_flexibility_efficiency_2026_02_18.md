@@ -156,7 +156,7 @@ Finding IDs: `H7-1` through `H7-5`
 
 ## Post-Completion Remediation (2026-02-19)
 
-- Follow-up plan: `Docs/Plans/IMPLEMENTATION_PLAN_flashcards_findings_remediation_2026_02_19.md` (Stages 3 and 4).
+- Follow-up plan: `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_flashcards_hci_index_2026_02_18.md` (Stages 3 and 4).
 - Resolved generated-card partial-save retention bug in `ImportExportTab`:
   - previous behavior removed drafts by aggregate success count;
   - updated behavior removes only successfully saved drafts by stable draft ID, preserving failed drafts for retry.

@@ -64,6 +64,19 @@ Key fields:
 - Tools: `tools`, `tool_choice` (provider-dependent tool/function calling). `tool_choice` requires `tools` or the request is rejected.
 - `response_format`: `{ "type": "text" | "json_object" }` (provider-dependent).
 - Chat extensions: `character_id`, `conversation_id` (context hooks), `save_to_db` (persistence toggle).
+- Continuation controls (tldw extension): `tldw_continuation` (optional).
+  - Shape:
+    - `from_message_id` (string, required): anchor message ID (max 128 chars).
+    - `mode` (`branch` | `append`, required):
+      - `branch`: rebuilds history from anchor ancestry (root -> ... -> anchor), excluding sibling/descendant branches past anchor.
+      - `append`: anchor must be the current conversation tip; otherwise request fails with `409`.
+    - `assistant_prefill` (string, optional): assistant prefix injected before generation (provider behavior may vary).
+  - Requirements:
+    - `conversation_id` is required when `tldw_continuation` is present.
+    - `conversation_id` must reference an existing conversation.
+  - Persistence behavior:
+    - When `save_to_db=true`, the generated assistant message is saved with `parent_message_id=<from_message_id>`.
+    - `assistant_prefill` is context-only and is not saved as a separate message turn.
 
 Provider-specific extensions:
 - Bedrock guardrails:
@@ -137,6 +150,40 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
   }'
 ```
 
+Continuation example (branch):
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+    "model": "openai/gpt-4o",
+    "conversation_id": "conv_123",
+    "save_to_db": true,
+    "messages": [{"role":"user","content":"Continue from this point."}],
+    "tldw_continuation": {
+      "from_message_id": "msg_anchor_456",
+      "mode": "branch"
+    }
+  }'
+```
+
+Continuation example (append + assistant prefill):
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+    "model": "openai/gpt-4o",
+    "conversation_id": "conv_123",
+    "messages": [{"role":"user","content":"Refine the draft."}],
+    "tldw_continuation": {
+      "from_message_id": "msg_latest_tip",
+      "mode": "append",
+      "assistant_prefill": "Draft: "
+    }
+  }'
+```
+
 ## Provider Selection
 - If `model` includes a provider prefix (`provider/model`), that provider is used unless `api_provider` is explicitly set.
 - If no provider is specified, the server uses `DEFAULT_LLM_PROVIDER`.
@@ -171,6 +218,8 @@ data: [DONE]
 
 Errors during streaming are emitted as SSE `data:` frames with an `{"error": {"message": "..."}}` payload; the server then terminates with a single `data: [DONE]`.
 
+When continuation is active, stream metadata payloads include `tldw_continuation` (for example in `stream_start`, chunk payload metadata, `tool_results`, `stream_end`, and stream error frames).
+
 Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum client compatibility.
 
 ### Streaming Event Format
@@ -186,6 +235,11 @@ Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum cl
 
 ## Responses
 - Non-streaming JSON uses OpenAI’s `choices` shape and includes `tldw_conversation_id` to help clients track state.
+- When continuation is applied, non-streaming responses include `tldw_continuation`, for example:
+  - `applied: true`
+  - `mode: "branch" | "append"`
+  - `from_message_id: "<anchor_id>"`
+  - `assistant_prefill` and `assistant_prefill_applied` when prefill was used
 
 ## Persistence
 - Default behavior is ephemeral (no DB writes).
@@ -235,8 +289,8 @@ Image message example:
 ### Non-streaming (`stream = false`)
 - `400` Invalid request (schema, limits, bad params)
 - `401` Missing/invalid authentication
-- `404` Resource not found (e.g., invalid character reference)
-- `409` Conflict while persisting
+- `404` Resource not found (e.g., invalid character reference, continuation anchor not found, or anchor not in the requested conversation)
+- `409` Conflict while persisting or continuation constraint conflict (for example `append` anchor is not latest message)
 - `413` Request payload too large (e.g., too many messages/images, text too long)
 - `429` Rate limit exceeded (endpoint or upstream)
 - `500` Internal server error (unexpected failure)

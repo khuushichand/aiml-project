@@ -37,7 +37,7 @@ def test_db():
             db.close()
         except Exception:
             try:
-                db.conn.close()
+                db.close_connection()
             except Exception:
                 _ = None
         try:

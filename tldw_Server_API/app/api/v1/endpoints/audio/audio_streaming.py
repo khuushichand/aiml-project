@@ -81,6 +81,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
 )
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry, increment_counter
+from tldw_Server_API.app.core.Streaming.phrase_chunker import PhraseChunker
 from tldw_Server_API.app.core.Streaming import speech_chat_service
 from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.TTS.realtime_session import RealtimeSessionConfig
@@ -1171,6 +1172,7 @@ async def websocket_audio_chat_stream(
     aio = _shim_asyncio()
     wait_for = getattr(aio, "wait_for", asyncio.wait_for)
     iscoroutine = getattr(aio, "iscoroutine", asyncio.iscoroutine)
+    create_task = getattr(aio, "create_task", asyncio.create_task)
 
     # Wrap websocket for consistent metrics/heartbeats; keep connection open across turns
     _outer_stream = None
@@ -1701,6 +1703,11 @@ async def websocket_audio_chat_stream(
                 return payload
 
         processing_turn = False
+        active_turn_id: Optional[str] = None
+        active_turn_cancelled = False
+        active_turn_task: Optional[asyncio.Task] = None
+        active_tts_sender_task: Optional[asyncio.Task] = None
+        turn_sequence = 0
 
         async def _iter_stream_lines(stream_obj):
             if hasattr(stream_obj, "__aiter__"):
@@ -1710,8 +1717,14 @@ async def websocket_audio_chat_stream(
                 for line in stream_obj:
                     yield line
 
-        async def _stream_llm(transcript_text: str) -> tuple[str, Optional[str], Optional[dict[str, Any]]]:
+        async def _stream_llm(
+            transcript_text: str,
+            on_delta: Optional[Any] = None,
+            turn_id: Optional[str] = None,
+        ) -> tuple[str, Optional[str], Optional[dict[str, Any]]]:
             nonlocal chat_history
+            nonlocal active_turn_cancelled
+            nonlocal active_turn_id
             def _fallback_resolver(name: str) -> Optional[str]:
                 try:
                     return _shim_get_api_keys().get(name)
@@ -1814,6 +1827,8 @@ async def websocket_audio_chat_stream(
             usage_payload: Optional[dict[str, Any]] = None
 
             async for raw_line in _iter_stream_lines(llm_stream):
+                if turn_id is not None and (active_turn_cancelled or active_turn_id != turn_id):
+                    break
                 try:
                     line_str = (
                         raw_line.decode("utf-8", errors="ignore")
@@ -1848,27 +1863,27 @@ async def websocket_audio_chat_stream(
                     continue
                 choices = payload.get("choices") or []
                 for choice in choices:
+                    if turn_id is not None and (active_turn_cancelled or active_turn_id != turn_id):
+                        break
                     delta = choice.get("delta") or choice.get("message") or {}
                     content = delta.get("content") or delta.get("text") if isinstance(delta, dict) else None
                     if content:
                         deltas.append(content)
                         if _outer_stream:
                             await _outer_stream.send_json({"type": "llm_delta", "delta": content})
+                        if on_delta is not None:
+                            try:
+                                maybe_result = on_delta(content)
+                                if iscoroutine(maybe_result):
+                                    await maybe_result
+                            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as cb_exc:
+                                logger.debug(f"audio.chat.stream on_delta callback failed: {cb_exc}")
                     if choice.get("finish_reason"):
                         finish_reason = choice.get("finish_reason")
                 if payload.get("usage"):
                     usage_payload = payload.get("usage")
 
             assistant_text = "".join(deltas).strip()
-            if _outer_stream:
-                await _outer_stream.send_json(
-                    {
-                        "type": "llm_message",
-                        "text": assistant_text,
-                        "finish_reason": finish_reason,
-                        "usage": usage_payload,
-                    }
-                )
             chat_history.append({"role": "user", "content": transcript_text})
             if assistant_text:
                 chat_history.append({"role": "assistant", "content": assistant_text})
@@ -1968,8 +1983,15 @@ async def websocket_audio_chat_stream(
                             f"audio.chat.stream tts_done frame send failed: error={send_exc}"
                         )
 
-        async def _finalize_turn(commit_at: Optional[float], *, auto: bool = False) -> None:
+        async def _finalize_turn(
+            commit_at: Optional[float],
+            *,
+            auto: bool = False,
+            turn_id: Optional[str] = None,
+        ) -> None:
             nonlocal processing_turn
+            nonlocal active_turn_cancelled
+            nonlocal active_tts_sender_task
             if processing_turn:
                 return
             processing_turn = True
@@ -2012,7 +2034,132 @@ async def websocket_audio_chat_stream(
                         exc,
                     )
 
-                assistant_text, finish_reason, usage_payload = await _stream_llm(transcript_text)
+                overlap_session = None
+                overlap_sender_task = None
+                overlap_chunker: Optional[PhraseChunker] = None
+                overlap_provider = tts_provider or "auto"
+
+                try:
+                    tts_service = await _shim_get_tts_service()
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as tts_exc:
+                    logger.debug(f"audio.chat.stream overlap session skipped (tts service unavailable): {tts_exc}")
+                    tts_service = None
+
+                if tts_service is not None and callable(getattr(tts_service, "open_realtime_session", None)):
+                    try:
+                        rt_config = RealtimeSessionConfig(
+                            model=str(tts_model),
+                            voice=str(tts_voice),
+                            response_format=str(response_format),
+                            speed=float(tts_speed),
+                            lang_code=None,
+                            extra_params=tts_extra_params,
+                            provider=str(tts_provider) if tts_provider else None,
+                        )
+                        rt_handle = await tts_service.open_realtime_session(
+                            config=rt_config,
+                            provider_hint=str(tts_provider) if tts_provider else None,
+                            route="audio.chat.stream",
+                            user_id=int(user_id_for_usage) if user_id_for_usage else None,
+                        )
+                        overlap_session = getattr(rt_handle, "session", None)
+                        overlap_provider = (
+                            getattr(rt_handle, "provider", None)
+                            or tts_provider
+                            or "auto"
+                        )
+                        overlap_warning = getattr(rt_handle, "warning", None)
+                        overlap_chunker = PhraseChunker()
+                        if _outer_stream:
+                            await _outer_stream.send_json(
+                                {
+                                    "type": "tts_start",
+                                    "format": response_format,
+                                    "provider": overlap_provider,
+                                    "voice": tts_voice,
+                                }
+                            )
+                            if overlap_warning:
+                                await _outer_stream.send_json(
+                                    {"type": "warning", "message": str(overlap_warning)}
+                                )
+
+                        async def _overlap_audio_sender() -> None:
+                            try:
+                                async for chunk in overlap_session.audio_stream():
+                                    if not chunk:
+                                        continue
+                                    if turn_id is not None and (active_turn_cancelled or active_turn_id != turn_id):
+                                        continue
+                                    await websocket.send_bytes(chunk)
+                                    if _outer_stream:
+                                        _outer_stream.mark_activity()
+                            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
+                                logger.debug(f"audio.chat.stream overlap audio sender failed: {send_exc}")
+
+                        overlap_sender_task = create_task(_overlap_audio_sender())
+                        active_tts_sender_task = overlap_sender_task
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as overlap_exc:
+                        logger.debug(f"audio.chat.stream overlap init failed: {overlap_exc}")
+                        overlap_session = None
+                        overlap_chunker = None
+                        overlap_sender_task = None
+
+                async def _on_overlap_delta(delta: str) -> None:
+                    if overlap_session is None or overlap_chunker is None:
+                        return
+                    if turn_id is not None and (active_turn_cancelled or active_turn_id != turn_id):
+                        return
+                    phrases = overlap_chunker.push(delta)
+                    for phrase in phrases:
+                        if turn_id is not None and (active_turn_cancelled or active_turn_id != turn_id):
+                            return
+                        await overlap_session.push_text(phrase)
+                        await overlap_session.commit()
+                        await asyncio.sleep(0)
+
+                assistant_text, finish_reason, usage_payload = await _stream_llm(
+                    transcript_text,
+                    on_delta=_on_overlap_delta if overlap_session is not None else None,
+                    turn_id=turn_id,
+                )
+
+                if overlap_session is not None and overlap_chunker is not None:
+                    try:
+                        tail = overlap_chunker.flush().strip()
+                        if tail and not (turn_id is not None and (active_turn_cancelled or active_turn_id != turn_id)):
+                            await overlap_session.push_text(tail)
+                            await overlap_session.commit()
+                        await overlap_session.finish()
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as overlap_finish_exc:
+                        logger.debug(f"audio.chat.stream overlap finish failed: {overlap_finish_exc}")
+                    finally:
+                        if overlap_sender_task is not None:
+                            try:
+                                await overlap_sender_task
+                            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as overlap_wait_exc:
+                                logger.debug(f"audio.chat.stream overlap sender wait failed: {overlap_wait_exc}")
+                        if _outer_stream:
+                            try:
+                                await _outer_stream.send_json({"type": "tts_done"})
+                            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
+                                logger.debug(f"audio.chat.stream tts_done send failed: {send_exc}")
+                        if active_tts_sender_task is overlap_sender_task:
+                            active_tts_sender_task = None
+
+                if _outer_stream and not (turn_id is not None and (active_turn_cancelled or active_turn_id != turn_id)):
+                    await _outer_stream.send_json(
+                        {
+                            "type": "llm_message",
+                            "text": assistant_text,
+                            "finish_reason": finish_reason,
+                            "usage": usage_payload,
+                        }
+                    )
+
+                if turn_id is not None and (active_turn_cancelled or active_turn_id != turn_id):
+                    return
+
                 action_result = await _maybe_run_action(transcript_text)
                 if _outer_stream:
                     await _outer_stream.send_json(
@@ -2031,13 +2178,45 @@ async def websocket_audio_chat_stream(
                     if _outer_stream:
                         await _outer_stream.send_json({"type": "action_result", **action_result})
                 await _persist_turn(transcript_text, assistant_text, action_result)
-                await _stream_tts(assistant_text, eos_detected_at)
+                if overlap_session is None:
+                    await _stream_tts(assistant_text, eos_detected_at)
             finally:
                 try:
                     transcriber.reset()
                 except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                     logger.debug(f"audio.chat.stream transcriber.reset() failed in finalize_turn: {exc}")
                 processing_turn = False
+
+        async def _start_turn(commit_at: Optional[float], *, auto: bool) -> Optional[str]:
+            nonlocal active_turn_task
+            nonlocal active_turn_id
+            nonlocal active_turn_cancelled
+            nonlocal turn_sequence
+
+            if active_turn_task is not None and not active_turn_task.done():
+                return active_turn_id
+
+            turn_sequence += 1
+            turn_id = f"turn-{turn_sequence}"
+            active_turn_id = turn_id
+            active_turn_cancelled = False
+
+            async def _runner() -> None:
+                nonlocal active_turn_task
+                nonlocal active_turn_id
+                try:
+                    await _finalize_turn(commit_at, auto=auto, turn_id=turn_id)
+                except asyncio.CancelledError:
+                    logger.debug(f"audio.chat.stream turn cancelled: turn_id={turn_id}")
+                finally:
+                    if active_turn_id == turn_id:
+                        active_turn_id = None
+                    if active_turn_task is task_ref:
+                        active_turn_task = None
+
+            task_ref = create_task(_runner())
+            active_turn_task = task_ref
+            return turn_id
 
         try:
             while True:
@@ -2129,7 +2308,7 @@ async def websocket_audio_chat_stream(
                         if _outer_stream:
                             await _outer_stream.send_json(result)
                     if auto_commit_triggered:
-                        await _finalize_turn(
+                        await _start_turn(
                             commit_at=getattr(turn_detector, "last_trigger_at", None)
                             if turn_detector
                             else time.time(),
@@ -2137,7 +2316,28 @@ async def websocket_audio_chat_stream(
                         )
 
                 elif msg_type == "commit":
-                    await _finalize_turn(time.time(), auto=False)
+                    await _start_turn(time.time(), auto=False)
+                elif msg_type == "interrupt":
+                    reason = str(data.get("reason") or "client_cancel")
+                    interrupted_turn_id = active_turn_id
+                    active_turn_cancelled = True
+                    if active_turn_task is not None and not active_turn_task.done():
+                        active_turn_task.cancel()
+                    if active_tts_sender_task is not None and not active_tts_sender_task.done():
+                        active_tts_sender_task.cancel()
+                        with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
+                            await active_tts_sender_task
+                        active_tts_sender_task = None
+                    payload = {
+                        "type": "interrupted",
+                        "turn_id": interrupted_turn_id,
+                        "phase": "both",
+                        "reason": reason,
+                    }
+                    if _outer_stream:
+                        await _outer_stream.send_json(payload)
+                    else:
+                        await websocket.send_json(payload)
                 elif msg_type == "reset":
                     try:
                         transcriber.reset()
@@ -2146,6 +2346,9 @@ async def websocket_audio_chat_stream(
                     if _outer_stream:
                         await _outer_stream.send_json({"type": "status", "state": "reset"})
                 elif msg_type == "stop":
+                    if active_turn_task is not None and not active_turn_task.done():
+                        with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
+                            await active_turn_task
                     if _outer_stream:
                         await _outer_stream.done()
                     break
@@ -2655,9 +2858,9 @@ async def websocket_tts_realtime(
         if handle.warning:
             await _send_json({"type": "warning", "message": handle.warning, "request_id": request_id})
 
-        async def _audio_sender() -> None:
+        async def _audio_sender(session_obj: Any) -> None:
             try:
-                async for chunk in session.audio_stream():
+                async for chunk in session_obj.audio_stream():
                     if not chunk:
                         continue
                     await websocket.send_bytes(chunk)
@@ -2666,7 +2869,7 @@ async def websocket_tts_realtime(
             except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"TTS realtime audio sender failed: {exc}")
 
-        sender_task = create_task(_audio_sender())
+        sender_task = create_task(_audio_sender(session))
 
         # Handle the initial frame as text if provided
         initial_text = first.get("delta") or first.get("text") or first.get("input")
@@ -2724,6 +2927,51 @@ async def websocket_tts_realtime(
                 buffered_chars = 0
                 buffered_tokens = 0
                 last_input_ts = None
+            elif msg_type == "interrupt":
+                reason = str(data.get("reason") or "client_cancel")
+                with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
+                    await session.finish()
+                if sender_task and not sender_task.done():
+                    sender_task.cancel()
+                    with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
+                        await sender_task
+
+                try:
+                    handle = await tts_service.open_realtime_session(
+                        config=config,
+                        provider_hint=str(provider_hint) if provider_hint else None,
+                        route="audio.stream.tts.realtime",
+                        user_id=user_id_for_usage,
+                    )
+                    session = handle.session
+                    if handle.provider:
+                        provider_allowed = _allowed_formats_for(handle.provider)
+                        if response_format not in provider_allowed:
+                            await _send_error(
+                                "bad_request",
+                                f"Unsupported format '{response_format}' for provider '{handle.provider}'",
+                                close=True,
+                                close_code=4400,
+                            )
+                            with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
+                                await session.finish()
+                            return
+                    sender_task = create_task(_audio_sender(session))
+                    buffered_chars = 0
+                    buffered_tokens = 0
+                    last_input_ts = None
+                    await _send_json(
+                        {
+                            "type": "interrupted",
+                            "phase": "tts",
+                            "reason": reason,
+                            "request_id": request_id,
+                        }
+                    )
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as interrupt_exc:
+                    logger.error(f"TTS realtime interrupt recovery failed: {interrupt_exc}", exc_info=True)
+                    await _send_error("internal_error", "Failed to recover realtime TTS session", close=True)
+                    return
             elif msg_type == "final":
                 await session.finish()
                 break

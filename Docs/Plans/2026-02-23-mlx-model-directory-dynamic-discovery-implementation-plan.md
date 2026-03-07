@@ -314,9 +314,9 @@ git commit -m "feat+test: wire MLX discovered model selection into admin UI"
 ### Task 7: Update docs and run verification suite
 
 **Files:**
-- Modify: `Docs/User_Guides/Server/Installation-Setup-Guide.md`
-- Modify: `Docs/Published/User_Guides/Server/Installation-Setup-Guide.md`
-- Optional: `Docs/API-related/llm_providers.md` (if MLX admin endpoints documented there)
+- Modify: `Docs/User_Guides/Server/Authentication_Setup.md`
+- Modify: `Docs/Published/User_Guides/Server/Authentication_Setup.md`
+- Optional: `Docs/API-related/Providers_API_Documentation.md` (if MLX admin endpoints documented there)
 
 **Step 1: Document new behavior**
 - Add `MLX_MODEL_DIR` config guidance.
@@ -344,7 +344,7 @@ Expected:
 **Step 3: Commit**
 
 ```bash
-git add Docs/User_Guides/Server/Installation-Setup-Guide.md Docs/Published/User_Guides/Server/Installation-Setup-Guide.md
+git add Docs/User_Guides/Server/Authentication_Setup.md Docs/Published/User_Guides/Server/Authentication_Setup.md
 git commit -m "docs: add MLX model directory discovery and model_id loading guidance"
 ```
 

@@ -6,15 +6,9 @@ This folder contains provisioning examples for Grafana so it can auto-load a Pro
   - `provisioning/datasources/prometheus.yml`
   - `provisioning/dashboards/dashboards.yml`
 
-Dashboards to load (copy into `/var/lib/grafana/dashboards` in your Grafana container/host):
-- `Docs/Deployment/Monitoring/Grafana_LLM_Cost_Top_Providers.json`
-- `Docs/Deployment/Monitoring/Grafana_LLM_Daily_Spend.json`
-- `Docs/Deployment/Monitoring/overview.json`
-- `Docs/Deployment/Monitoring/app-observability-dashboard.json`
-- `Docs/Deployment/Monitoring/mcp-dashboard.json`
-- `Docs/Deployment/Monitoring/web-scraping-dashboard.json`
-- `Docs/Deployment/Monitoring/streaming-dashboard.json`
-- `Docs/Deployment/Monitoring/chatbook-tools-dashboard.json`
+Dashboards to load (copy your dashboard JSON exports into `/var/lib/grafana/dashboards` in your Grafana container/host):
+- Keep dashboard JSONs in a mounted folder (for example `Docs/Deployment/Monitoring`), then update `provisioning/dashboards/dashboards.yml` to point at that path.
+- This repo provides provisioning scaffolding and alert examples; dashboard JSON payloads are environment-specific and should be generated/exported from your Grafana setup.
 
 Docker Compose snippet:
 

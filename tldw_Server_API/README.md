@@ -56,7 +56,7 @@ See `app/main.py` for router includes and full route namespaces.
 ## Further API Docs
 
 - Chat API: `Docs/API-related/Chat_API_Documentation.md`
-- Character Chat API: `Docs/CHARACTER_CHAT_API_DOCUMENTATION.md`
+- Character Chat API: `Docs/API-related/CHARACTER_CHAT_API_DOCUMENTATION.md`
 - OCR Providers: `Docs/OCR/OCR_Providers.md`
 
 ## Adding a New Endpoint

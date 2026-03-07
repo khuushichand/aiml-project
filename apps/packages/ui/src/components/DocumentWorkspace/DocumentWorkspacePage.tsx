@@ -21,7 +21,7 @@ import {
   Plus
 } from "lucide-react"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
-import { useMobile } from "@/hooks/useMediaQuery"
+import { useMobile, useTablet } from "@/hooks/useMediaQuery"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { bgRequest } from "@/services/background-proxy"
 import { tldwClient } from "@/services/tldw"
@@ -318,6 +318,7 @@ const DOCUMENT_FILE_TIMEOUT_MS = 30 * 1000
 export const DocumentWorkspacePage: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const isMobile = useMobile()
+  const isTablet = useTablet()
   const message = useAntdMessage()
 
   // Get active document for hooks
@@ -378,15 +379,49 @@ export const DocumentWorkspacePage: React.FC = () => {
     setPickerOpen(false)
   }, [])
 
-  // Listen for "?" key to open shortcuts modal
+  // Workspace-level keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger if typing in an input or if modal is already open
       const target = e.target as HTMLElement
       const isInputField =
         target.tagName === "INPUT" ||
         target.tagName === "TEXTAREA" ||
         target.isContentEditable
+
+      const mod = e.metaKey || e.ctrlKey
+
+      // Shortcuts that work even in input fields
+      if (mod) {
+        // Cmd+[ → toggle left sidebar
+        if (e.key === "[") {
+          e.preventDefault()
+          handleToggleLeftPane()
+          return
+        }
+        // Cmd+] → toggle right panel
+        if (e.key === "]") {
+          e.preventDefault()
+          handleToggleRightPane()
+          return
+        }
+        // Cmd+/ → focus chat input
+        if (e.key === "/") {
+          e.preventDefault()
+          if (isMobile) {
+            setActiveTab("chat")
+          } else {
+            setRightPaneOpen(true)
+          }
+          // Focus the chat textarea after a tick
+          setTimeout(() => {
+            const textarea = document.querySelector<HTMLTextAreaElement>(
+              '[aria-label*="Ask about this document"]'
+            )
+            textarea?.focus()
+          }, 100)
+          return
+        }
+      }
 
       if (isInputField) return
 
@@ -399,10 +434,10 @@ export const DocumentWorkspacePage: React.FC = () => {
 
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [])
+  }, [activeDocumentId, isMobile])
 
   const handleToggleLeftPane = () => {
-    if (isMobile) {
+    if (isMobile || isTablet) {
       setLeftDrawerOpen(!leftDrawerOpen)
     } else {
       setLeftPaneOpen(!leftPaneOpen)
@@ -410,7 +445,7 @@ export const DocumentWorkspacePage: React.FC = () => {
   }
 
   const handleToggleRightPane = () => {
-    if (isMobile) {
+    if (isMobile || isTablet) {
       setRightDrawerOpen(!rightDrawerOpen)
     } else {
       setRightPaneOpen(!rightPaneOpen)
@@ -670,48 +705,27 @@ export const DocumentWorkspacePage: React.FC = () => {
       </div>
     ) : null
 
-  // Mobile tab items
-  const mobileTabItems = [
-    {
-      key: "sidebar",
-      label: (
-        <span className="flex items-center gap-1.5">
-          <List className="h-4 w-4" />
-          <span>{t("option:documentWorkspace.sidebar", "Sidebar")}</span>
-        </span>
-      ),
-      children: <LeftSidebarContent />
-    },
-    {
-      key: "viewer",
-      label: (
-        <span className="flex items-center gap-1.5">
-          <FileText className="h-4 w-4" />
-          <span>{t("option:documentWorkspace.document", "Document")}</span>
-        </span>
-      ),
-      children: (
+  // Mobile layout (< 768px): Bottom navigation bar
+  if (isMobile) {
+    const mobileNavItems = [
+      { key: "sidebar" as const, icon: <List className="h-5 w-5" />, label: t("option:documentWorkspace.sidebar", "Sidebar") },
+      { key: "viewer" as const, icon: <FileText className="h-5 w-5" />, label: t("option:documentWorkspace.document", "Document") },
+      { key: "chat" as const, icon: <MessageSquare className="h-5 w-5" />, label: t("option:documentWorkspace.chat", "Chat") }
+    ]
+
+    const mobileContent = {
+      sidebar: <LeftSidebarContent />,
+      viewer: (
         <DocumentViewer
+          loadingDocumentId={loadingDocumentId}
           onOpenLibrary={() => handleOpenPicker("library")}
           onOpenUpload={() => handleOpenPicker("upload")}
           onReloadDocument={openDocumentById}
         />
-      )
-    },
-    {
-      key: "chat",
-      label: (
-        <span className="flex items-center gap-1.5">
-          <MessageSquare className="h-4 w-4" />
-          <span>{t("option:documentWorkspace.chat", "Chat")}</span>
-        </span>
       ),
-      children: <RightPanelContent />
+      chat: <RightPanelContent />
     }
-  ]
 
-  // Mobile layout (< 768px): Tab navigation
-  if (isMobile) {
     return (
       <DocumentWorkspaceErrorBoundary>
         <div className="flex h-full min-h-0 flex-col bg-bg text-text">
@@ -742,16 +756,30 @@ export const DocumentWorkspacePage: React.FC = () => {
           {loadingAlert}
           {healthAlert}
 
-          <Tabs
-            activeKey={activeTab}
-            onChange={(key) =>
-              setActiveTab(key as "sidebar" | "viewer" | "chat")
-            }
-            items={mobileTabItems}
-            centered
-            className="flex-1 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content-holder]:flex-1 [&_.ant-tabs-tabpane]:h-full"
-            tabBarStyle={{ marginBottom: 0, borderBottom: "1px solid var(--border)" }}
-          />
+          {/* Content area */}
+          <div className="flex-1 min-h-0 overflow-hidden">
+            {mobileContent[activeTab]}
+          </div>
+
+          {/* Fixed bottom navigation bar */}
+          <nav className="flex h-12 shrink-0 items-stretch border-t border-border bg-surface" role="tablist">
+            {mobileNavItems.map((item) => (
+              <button
+                key={item.key}
+                role="tab"
+                aria-selected={activeTab === item.key}
+                onClick={() => setActiveTab(item.key)}
+                className={`flex flex-1 flex-col items-center justify-center gap-0.5 transition-colors ${
+                  activeTab === item.key
+                    ? "text-primary"
+                    : "text-text-muted hover:text-text"
+                }`}
+              >
+                {item.icon}
+                <span className="text-[10px] font-medium leading-none">{item.label}</span>
+              </button>
+            ))}
+          </nav>
         </div>
       </DocumentWorkspaceErrorBoundary>
     )
@@ -809,7 +837,7 @@ export const DocumentWorkspacePage: React.FC = () => {
             placement="left"
             onClose={() => setLeftDrawerOpen(false)}
             open={leftDrawerOpen}
-            size={320}
+            width={Math.min(360, typeof window !== "undefined" ? window.innerWidth * 0.85 : 360)}
             className="lg:hidden"
             styles={{ body: { padding: 0, height: "100%", display: "flex", flexDirection: "column" } }}
           >
@@ -819,6 +847,7 @@ export const DocumentWorkspacePage: React.FC = () => {
           {/* Center pane - Document Viewer */}
           <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg">
             <DocumentViewer
+              loadingDocumentId={loadingDocumentId}
               onOpenLibrary={() => handleOpenPicker("library")}
               onOpenUpload={() => handleOpenPicker("upload")}
               onReloadDocument={openDocumentById}
@@ -843,7 +872,7 @@ export const DocumentWorkspacePage: React.FC = () => {
             placement="right"
             onClose={() => setRightDrawerOpen(false)}
             open={rightDrawerOpen}
-            size={360}
+            width={Math.min(360, typeof window !== "undefined" ? window.innerWidth * 0.85 : 360)}
             className="lg:hidden"
             styles={{ body: { padding: 0 } }}
           >

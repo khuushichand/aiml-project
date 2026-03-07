@@ -6,7 +6,7 @@ Updated: 2025-10-29
 
 Related:
 - Docs/Product/Watchlists/Watchlist_PRD.md (primary PRD)
-- Docs/Product/Content_Collections_PRD.md
+- Docs/Product/Completed/Content_Collections_PRD.md
 - Docs/Operations/Watchlists_Migration_Notes.md (migration notes)
 - SUBS/01_OVERVIEW.md, SUBS/02_ARCHITECTURE.md, SUBS/03_DATABASE_SCHEMA.md, SUBS/04_API_DESIGN.md, SUBS/05_IMPLEMENTATION_PHASES.md, SUBS/06_RSS_YOUTUBE_INTEGRATION.md, SUBS/07_BACKGROUND_TASKS.md, SUBS/08_UI_MOCKUPS.md
 

@@ -2,7 +2,7 @@
 
 Status: Draft
 Owner: Core Maintainers
-Source PRD: Docs/Product/Job_System_Unification_PRD.md
+Source PRD: Docs/Product/Completed/Job_System_Unification_PRD.md
 
 ## Canonical Jobs Statuses
 `queued`, `processing`, `completed`, `failed`, `cancelled`, `quarantined`

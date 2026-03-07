@@ -132,6 +132,7 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
     message: string
     mediaId?: number
   } | null>(null)
+  const [isDragOver, setIsDragOver] = React.useState(false)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
 
   React.useEffect(() => {
@@ -186,17 +187,38 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
     void loadMedia(debouncedQuery)
   }, [open, activeTab, debouncedQuery, loadMedia, showAllMedia])
 
+  // Recent documents from localStorage
+  const RECENT_DOCS_KEY = "document-workspace-recent"
+  const MAX_RECENT = 10
+
+  const getRecentDocs = (): Array<{ id: number; title: string; type?: string }> => {
+    try {
+      const raw = localStorage.getItem(RECENT_DOCS_KEY)
+      return raw ? JSON.parse(raw) : []
+    } catch {
+      return []
+    }
+  }
+
+  const addToRecent = (item: MediaListItem) => {
+    const recent = getRecentDocs().filter((r) => r.id !== item.id)
+    recent.unshift({ id: item.id, title: item.title || `Media #${item.id}`, type: item.type })
+    localStorage.setItem(RECENT_DOCS_KEY, JSON.stringify(recent.slice(0, MAX_RECENT)))
+  }
+
+  const [recentDocs] = React.useState(() => getRecentDocs())
+
   const handleOpen = async (item: MediaListItem) => {
     if (!item?.id) return
     const docType = getDocType(item)
     if (!isSupportedDocType(docType)) {
-      // Route to Media review for unsupported types
       await setSetting(LAST_MEDIA_ID_SETTING, String(item.id))
       navigate("/media-multi")
       onClose()
       return
     }
 
+    addToRecent(item)
     setOpeningId(item.id)
     try {
       await onOpenDocument(item.id, docType)
@@ -218,6 +240,14 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
   ) => {
     const file = event.target.files?.[0]
     if (!file) return
+
+    // Validate file type before uploading
+    const ext = file.name.toLowerCase().split(".").pop()
+    if (ext !== "pdf" && ext !== "epub") {
+      setError(t("option:documentWorkspace.unsupportedFileType", "Only PDF and EPUB files are supported."))
+      if (event.target) event.target.value = ""
+      return
+    }
 
     setUploading(true)
     setError(null)
@@ -302,6 +332,28 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
         />
       </div>
 
+      {/* Recent documents */}
+      {!searchQuery && recentDocs.length > 0 && (
+        <div className="mb-3">
+          <p className="mb-1.5 text-xs font-medium text-text-muted">
+            {t("option:documentWorkspace.recentDocuments", "Recently opened")}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {recentDocs.slice(0, 5).map((doc) => (
+              <Button
+                key={doc.id}
+                size="small"
+                icon={<FileText className="h-3.5 w-3.5" />}
+                onClick={() => handleOpen({ id: doc.id, title: doc.title, type: doc.type })}
+                loading={openingId === doc.id}
+              >
+                <span className="max-w-[150px] truncate">{doc.title}</span>
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex justify-center py-8">
           <Spin />
@@ -368,15 +420,58 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
     </div>
   )
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+  }
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+
+    const file = e.dataTransfer.files?.[0]
+    if (!file) return
+
+    // Validate file type
+    const ext = file.name.toLowerCase().split(".").pop()
+    if (ext !== "pdf" && ext !== "epub") {
+      setError(t("option:documentWorkspace.unsupportedFileType", "Only PDF and EPUB files are supported."))
+      return
+    }
+
+    // Reuse the same upload logic
+    const fakeEvent = {
+      target: { files: [file], value: "" }
+    } as unknown as React.ChangeEvent<HTMLInputElement>
+    await handleFileSelected(fakeEvent)
+  }
+
   const uploadPane = () => (
     <div className="space-y-4">
-      <div className="rounded-lg border border-dashed border-border bg-surface2 p-6 text-center">
-        <UploadCloud className="mx-auto mb-3 h-8 w-8 text-primary" />
+      <div
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
+          isDragOver
+            ? "border-primary bg-primary/5"
+            : "border-border bg-surface2"
+        }`}
+      >
+        <UploadCloud className={`mx-auto mb-3 h-8 w-8 ${isDragOver ? "text-primary animate-bounce" : "text-primary"}`} />
         <p className="text-sm text-text">
-          {t(
-            "option:documentWorkspace.uploadHint",
-            "Upload a PDF or EPUB file to start reading"
-          )}
+          {isDragOver
+            ? t("option:documentWorkspace.dropHere", "Drop file here")
+            : t("option:documentWorkspace.uploadHint", "Upload a PDF or EPUB file to start reading")}
         </p>
         <p className="text-xs text-text-muted">
           {t(

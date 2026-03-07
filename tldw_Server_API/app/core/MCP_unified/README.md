@@ -529,7 +529,7 @@ How it works
 - User Guide: `Docs/MCP/Unified/User_Guide.md`
 - Module Authoring: `Docs/MCP/Unified/Modules.md`
 - Documentation Ingestion Playbook: `Docs/MCP/Unified/Documentation_Ingestion_Playbook.md`
-- Context search design (FTS-first): `Docs/Design/context_mcp_search.md`
+- Context search design (FTS-first): `Docs/User_Guides/WebUI_Extension/context_mcp_search.md`
 - API documentation available at `/docs` when server is running
 
 ## 🤝 Contributing

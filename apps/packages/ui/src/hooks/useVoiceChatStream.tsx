@@ -189,6 +189,9 @@ export const useVoiceChatStream = ({
       const ws = wsRef.current
       if (!ws || ws.readyState !== WebSocket.OPEN) return
       try {
+        if (voiceChatBargeIn && stateRef.current === "speaking") {
+          ws.send(JSON.stringify({ type: "interrupt", reason: "barge_in" }))
+        }
         const base64 = arrayBufferToBase64(chunk)
         ws.send(JSON.stringify({ type: "audio", data: base64 }))
       } catch {
@@ -378,6 +381,12 @@ export const useVoiceChatStream = ({
       if (msgType === "tts_done") {
         audioFinish()
         pendingResumeRef.current = true
+        return
+      }
+
+      if (msgType === "interrupted") {
+        pendingResumeRef.current = false
+        updateState(activeRef.current ? "listening" : "idle")
         return
       }
 

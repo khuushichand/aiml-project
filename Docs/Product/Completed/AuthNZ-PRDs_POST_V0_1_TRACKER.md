@@ -2,11 +2,11 @@
 
 This file tracks **post‑v0.1** follow-ups for the AuthNZ PRD set:
 
-- `Docs/Product/Resource_Governor_PRD.md`
-- `Docs/Product/User-Auth-Deps-PRD.md`
-- `Docs/Product/User-Unification-PRD.md`
+- `Docs/Product/Completed/AuthNZ-Refactor/Resource_Governor_PRD.md`
+- `Docs/Product/Completed/AuthNZ-Refactor/User-Auth-Deps-PRD.md`
+- `Docs/Product/Completed/User-Unification-PRD.md`
 
-The v0.1 implementation is complete per `Docs/Product/AuthNZ-PRDs_IMPLEMENTATION_PLAN.md`. The items below are the remaining “Stage 9 / long-tail” work to fully retire legacy shims and reduce remaining tech debt safely.
+The v0.1 implementation is complete per `Docs/Product/Completed/AuthNZ-Refactor/AuthNZ-PRDs_IMPLEMENTATION_PLAN.md`. The items below are the remaining “Stage 9 / long-tail” work to fully retire legacy shims and reduce remaining tech debt safely.
 
 ---
 

@@ -659,6 +659,27 @@ class ResponseFormat(BaseModel):
     type: Literal["text", "json_object"] = Field("text", description="Must be one of `text` or `json_object`.")
 
 
+# --- Continuation Controls (tldw extension) ---
+class TLDWContinuationSpec(BaseModel):
+    """Optional continuation controls for anchored append/branch generation."""
+
+    from_message_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="Anchor message ID to continue from.",
+    )
+    mode: Literal["branch", "append"] = Field(
+        ...,
+        description="Continuation mode: `branch` creates an alternate path; `append` continues at the current tip.",
+    )
+    assistant_prefill: Optional[str] = Field(
+        None,
+        max_length=MAX_MESSAGE_CONTENT_LENGTH,
+        description="Optional assistant text prefix to prefill before generation.",
+    )
+
+
 # --- Main Request Model ---
 class ChatCompletionRequest(BaseModel):
     """
@@ -781,6 +802,13 @@ class ChatCompletionRequest(BaseModel):
         ),
     )
     conversation_id: Optional[str] = Field(None, description="Optional ID of the conversation to use for context.")
+    tldw_continuation: Optional[TLDWContinuationSpec] = Field(
+        None,
+        description=(
+            "[Extension] Optional continuation controls for anchored generation. "
+            "Requires `conversation_id` when provided."
+        ),
+    )
     persona_exemplar_budget_tokens: Optional[int] = Field(
         None,
         ge=1,
@@ -844,6 +872,8 @@ class ChatCompletionRequest(BaseModel):
                 values["tools"] = None
                 if isinstance(tool_choice, str) and tool_choice.strip().lower() == "auto":
                     values["tool_choice"] = "none"
+            if values.get("tldw_continuation") and not values.get("conversation_id"):
+                raise ValueError("conversation_id is required when tldw_continuation is provided")
         logprobs = values.get("logprobs")
         top_logprobs = values.get("top_logprobs")
         if top_logprobs is not None and not logprobs:

@@ -354,6 +354,7 @@ class StreamingResponseHandler:
         self.function_call_accumulator: Optional[dict[str, Any]] = None
         self.saved_message_id: Optional[str] = None
         self.system_message_id: Optional[str] = None
+        self.continuation_metadata: Optional[dict[str, Any]] = None
         # Lock for thread-safe state modifications
         self._state_lock = asyncio.Lock()
 
@@ -369,6 +370,8 @@ class StreamingResponseHandler:
             payload.setdefault("tldw_system_message_id", self.system_message_id)
         if self.saved_message_id:
             payload.setdefault("tldw_message_id", self.saved_message_id)
+        if self.continuation_metadata:
+            payload.setdefault("tldw_continuation", self.continuation_metadata)
         return payload
 
     def _parse_save_callback_result(self, save_result: Any) -> tuple[Optional[str], list[dict[str, Any]]]:
@@ -1042,6 +1045,7 @@ async def create_streaming_response_with_timeout(
     heartbeat_interval: int = HEARTBEAT_INTERVAL,
     text_transform: Optional[callable] = None,
     system_message_id: Optional[str] = None,
+    continuation_metadata: Optional[dict[str, Any]] = None,
 ) -> AsyncIterator[str]:
     """
     Create a streaming response with timeout and error handling.
@@ -1055,6 +1059,7 @@ async def create_streaming_response_with_timeout(
         idle_timeout: Timeout for idle connections
         heartbeat_interval: Interval for heartbeat messages
         system_message_id: Optional system message ID to echo in stream_end payload
+        continuation_metadata: Optional continuation metadata to attach to stream payloads
 
     Yields:
         SSE formatted messages
@@ -1067,6 +1072,8 @@ async def create_streaming_response_with_timeout(
         text_transform=text_transform,
     )
     handler.system_message_id = system_message_id
+    if isinstance(continuation_metadata, dict) and continuation_metadata:
+        handler.continuation_metadata = dict(continuation_metadata)
 
     # Create tasks for streaming and optional heartbeat using persistent generator instances
     async def stream_with_heartbeat():

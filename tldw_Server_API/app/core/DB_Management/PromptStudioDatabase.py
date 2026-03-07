@@ -405,16 +405,6 @@ class BackendPromptStudioDatabaseBase:
         self._write_lock = threading.RLock()
         self._sync_log_available: Optional[bool] = None
 
-        class _ConnCloseProxy:
-            def __init__(self, outer: 'BackendPromptStudioDatabaseBase'):
-                self._outer = outer
-
-            def close(self) -> None:  # pragma: no cover - compatibility shim
-                with suppress(_PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS):
-                    self._outer.close_connection()
-
-        self.conn = _ConnCloseProxy(self)
-
     # --- Connection handling ---
     def _open_new_connection(self):
         try:

@@ -19,22 +19,22 @@ This index coordinates execution across all 12 Knowledge QA category plans creat
   - Export share links are now active for server-backed threads and resolve via `/knowledge/thread/:threadId`.
   - Conversation thread now includes side-by-side comparison of earlier versus latest turns.
 - Supplemental verification plan:
-  - `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_verification_gap_closure_2026_02_19.md`
+  - `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_verification_gap_closure_2026_02_19.md`
 
 ## Linked Plans
 
-1. `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_01_search_experience_2026_02_18.md`
-2. `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_02_ai_answer_display_2026_02_18.md`
-3. `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_03_source_cards_retrieved_documents_2026_02_18.md`
-4. `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_04_follow_up_questions_2026_02_18.md`
-5. `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_05_history_thread_management_2026_02_18.md`
-6. `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_06_rag_settings_configuration_2026_02_18.md`
-7. `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_07_export_sharing_2026_02_18.md`
-8. `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_08_responsive_mobile_experience_2026_02_18.md`
-9. `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_09_performance_perceived_speed_2026_02_18.md`
-10. `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_10_error_handling_edge_cases_2026_02_18.md`
-11. `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_11_information_gaps_missing_functionality_2026_02_18.md`
-12. `Docs/Plans/IMPLEMENTATION_PLAN_knowledge_qa_12_accessibility_2026_02_18.md`
+1. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_01_search_experience_2026_02_18.md`
+2. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_02_ai_answer_display_2026_02_18.md`
+3. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_03_source_cards_retrieved_documents_2026_02_18.md`
+4. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_04_follow_up_questions_2026_02_18.md`
+5. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_05_history_thread_management_2026_02_18.md`
+6. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_06_rag_settings_configuration_2026_02_18.md`
+7. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_07_export_sharing_2026_02_18.md`
+8. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_08_responsive_mobile_experience_2026_02_18.md`
+9. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_09_performance_perceived_speed_2026_02_18.md`
+10. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_10_error_handling_edge_cases_2026_02_18.md`
+11. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_11_information_gaps_missing_functionality_2026_02_18.md`
+12. `Docs/Product/Completed/Plans/IMPLEMENTATION_PLAN_knowledge_qa_12_accessibility_2026_02_18.md`
 
 ## Team Lanes
 

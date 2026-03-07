@@ -116,6 +116,37 @@ def test_chat_completion_request_invalid_api_provider():
         )
 
 
+@pytest.mark.unit
+def test_chat_completion_request_accepts_tldw_continuation_branch():
+    req = ChatCompletionRequest(
+        model="test-m",
+        conversation_id="conv-1",
+        messages=[ChatCompletionUserMessageParam(role="user", content="continue")],
+        tldw_continuation={
+            "from_message_id": "msg-1",
+            "mode": "branch",
+            "assistant_prefill": "Draft: ",
+        },
+    )
+    assert req.tldw_continuation is not None
+    assert req.tldw_continuation.mode == "branch"
+    assert req.tldw_continuation.from_message_id == "msg-1"
+
+
+@pytest.mark.unit
+def test_chat_completion_request_requires_conversation_for_tldw_continuation():
+    with pytest.raises(ValidationError) as exc_info:
+        ChatCompletionRequest(
+            model="test-m",
+            messages=[ChatCompletionUserMessageParam(role="user", content="continue")],
+            tldw_continuation={
+                "from_message_id": "msg-1",
+                "mode": "append",
+            },
+        )
+    assert "conversation_id is required" in str(exc_info.value)
+
+
 # --- Tests for FunctionDefinition Parameter Validation ---
 
 @pytest.mark.unit

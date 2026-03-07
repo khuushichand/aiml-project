@@ -285,7 +285,7 @@ Outstanding (next):
 
 ## 20. Open Questions
 - Priority providers to ship first (default: Drive + Notion)?
-- Default export formats for Google Docs/Slides/Sheets and Notion pages?
+- Default export formats for Google Docs, Slides, and Sheets plus Notion pages?
 - v1 scope: one-off import only, or minimal continuous sync for Drive?
 - Where to store OAuth client secrets in production (per-deployment policy)?
 - Data retention for `external_items` cache (how long; per-user purge controls)?

@@ -105,15 +105,15 @@ def expand_allowlist_to_targets(
                 _ = ipaddress.ip_network(tok, strict=False)
                 results.add(str(tok))
                 continue
-        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
-            pass
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug("network policy: CIDR parse failed for %s: %s", tok, e)
         # Literal IP
         try:
             ipaddress.ip_address(tok)
             results.add(f"{tok}/32")
             continue
-        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
-            pass
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug("network policy: IP parse failed for %s: %s", tok, e)
         # Hostname (supports wildcard prefix "*." and suffix ".domain")
         host, is_wild, _is_suffix = _normalize_host_token(tok)
         if not host:
@@ -162,14 +162,14 @@ def pin_dns_map(
                 ipaddress.ip_network(tok, strict=False)
                 out.setdefault(tok, [])
                 continue
-        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
-            pass
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug("network policy: CIDR parse failed for %s: %s", tok, e)
         try:
             ipaddress.ip_address(tok)
             out.setdefault(tok, [tok])
             continue
-        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
-            pass
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug("network policy: IP parse failed for %s: %s", tok, e)
         # Host tokens
         host, is_wild, _is_suffix = _normalize_host_token(tok)
         if not host:
@@ -260,8 +260,8 @@ def apply_egress_rules_atomic(container_ip: str, targets: Sequence[str], label: 
                 "-m", "comment", "--comment", label,
             ], check=False)
             rule_specs.append(f"DOCKER-USER -s {container_ip} -d {dspec} -j ACCEPT -m comment --comment {label}")
-        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
-            pass
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug("network policy: iptables ACCEPT rule failed for %s -> %s: %s", container_ip, dspec, e)
     try:
         subprocess.run([
             "iptables", "-A", "DOCKER-USER",
@@ -269,8 +269,8 @@ def apply_egress_rules_atomic(container_ip: str, targets: Sequence[str], label: 
             "-m", "comment", "--comment", label,
         ], check=False)
         rule_specs.append(f"DOCKER-USER -s {container_ip} -j DROP -m comment --comment {label}")
-    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
-        pass
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS as e:
+        logger.debug("network policy: iptables DROP rule failed for %s: %s", container_ip, e)
     return rule_specs
 
 
@@ -296,8 +296,8 @@ def delete_rules_by_label(label: str) -> None:
             with contextlib.suppress(_SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS):
                 subprocess.run(["iptables", "-D", "DOCKER-USER", str(num)], check=False)
         return
-    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
-        pass
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS as e:
+        logger.debug("network policy: delete_rules_by_label line-number path failed for %s: %s", label, e)
     # Fallback: translate `iptables -S` specs into deletions
     try:
         out2 = subprocess.check_output(["iptables", "-S", "DOCKER-USER"], text=True)
@@ -308,5 +308,5 @@ def delete_rules_by_label(label: str) -> None:
                     parts[0] = "-D"
                     with contextlib.suppress(_SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS):
                         subprocess.run(["iptables"] + parts, check=False)
-    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
-        pass
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS as e:
+        logger.debug("network policy: delete_rules_by_label -S fallback failed for %s: %s", label, e)

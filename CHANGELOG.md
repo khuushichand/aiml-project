@@ -43,6 +43,37 @@ and this project adheres to Some kind of Versioning
 - Fixed `InlineRecentSessions` crash on invalid timestamp strings (added `NaN` guard in `formatRelativeTime`).
 - Fixed `CompactToolbar` source summary using magic number — extracted `ALL_SOURCES_THRESHOLD` constant.
 - Fixed evidence rail auto-open loop where `useEffect` would immediately reopen rail after user closed it.
+- Voice-streaming interruption + overlap protocol additions:
+  - Added additive client `interrupt` and server `interrupted` frame handling for `/api/v1/audio/chat/stream`.
+  - Added active turn identifiers (`turn_id`) for interruption acknowledgements.
+  - Added `interrupt` recovery flow for `/api/v1/audio/stream/tts/realtime` that rotates to a fresh realtime session without closing the socket.
+- Added streaming phrase chunker utility:
+  - `tldw_Server_API/app/core/Streaming/phrase_chunker.py`
+- Added backend regression coverage for voice overlap/cancellation:
+  - `tldw_Server_API/tests/Audio/test_ws_audio_chat_stream.py` now covers idle interrupt safety, overlap ordering (`tts_start`/audio before final `llm_message`), inflight cancellation, and stale-audio suppression after interrupt.
+  - `tldw_Server_API/tests/Audio/test_ws_tts_realtime_endpoint.py` now covers realtime TTS interrupt handling and post-interrupt continuation.
+- Added frontend regression coverage for barge-in interruption behavior:
+  - `apps/packages/ui/src/hooks/__tests__/useVoiceChatStream.interrupt.test.tsx`
+
+### Changed
+
+- `/api/v1/audio/chat/stream` now supports overlapped LLM->TTS streaming by incrementally chunking LLM deltas into phrase commits against realtime TTS sessions.
+- `/api/v1/audio/chat/stream` turn finalization now runs as cancellable per-turn tasks, enabling barge-in interruption and stale-output guards.
+- `/api/v1/audio/stream/tts/realtime` now supports in-session `interrupt` by finishing/cancelling the active synthesis window, reopening a session with the same config, and continuing on the same WebSocket.
+- `apps/packages/ui/src/hooks/useVoiceChatStream.tsx` now sends `interrupt` on barge-in while speaking and transitions back to `listening` on server `interrupted` frames.
+- Updated audio protocol/docs to document new frames and overlap behavior:
+  - `Docs/API/Audio_Chat.md`
+  - `Docs/Audio_Streaming_Protocol.md`
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed stale/cancelled turn output leakage by dropping outdated audio/LLM emissions after interruption.
+- Fixed realtime TTS interruption flow to allow continued text commits without requiring WebSocket reconnect.
+- Fixed voice websocket test stability in local environments by stubbing heavyweight STT dependency imports in targeted WS test modules.
 
 ## [0.1.29] 2026-03-05
 
@@ -491,10 +522,7 @@ and this project adheres to Some kind of Versioning
 - Locale rollout completion for persona unsaved-draft prompts:
   - Added localized `persona.unsavedState*` prompt copy for remaining non-English sidepanel locales:
     - `ar`, `da`, `fa`, `it`, `ko`, `ml`, `no`, `pt-BR`, `ru`, `sv`, `uk`, `zh-TW`.
-- Added implementation-plan docs for this session’s persona slices:
-  - `Docs/Plans/IMPLEMENTATION_PLAN_persona_unsaved_draft_locale_rollout_stage23_2026_02_22.md`
-  - `Docs/Plans/IMPLEMENTATION_PLAN_persona_memory_namespace_fallback_stage24_2026_02_22.md`
-  - `Docs/Plans/IMPLEMENTATION_PLAN_persona_namespace_legacy_backfill_stage25_2026_02_22.md`
+- Added implementation-plan docs for this session’s persona slices (stage 23 locale rollout, stage 24 namespace fallback, and stage 25 legacy namespace backfill).
 - Watchlists UX IA/onboarding improvements:
   - Aligned user-facing Watchlists terminology for Activity/Reports across tabs, overview cards, and help labels.
   - Added always-visible Watchlists task shortcuts (`Set up feeds`, `Configure monitors`, `Check activity`, `Review articles`, `View reports`) for direct navigation.
@@ -533,8 +561,7 @@ and this project adheres to Some kind of Versioning
   - Added release-gate checklist pass-rate tracking for Watchlists accessibility categories and recorded residual non-critical/manual review items.
   - Confirmed accessibility regression matrix remains green in touched flows with no critical keyboard/SR defects.
 - Watchlists coordinated UX program closeout:
-  - Added cross-stream closeout report with verification summary and owned deferred backlog:
-    - `Docs/Plans/WATCHLISTS_UX_PROGRAM_CLOSEOUT_2026_02_22.md`
+  - Added a cross-stream closeout report with verification summary and owned deferred backlog.
 - Chat rich-text regression coverage additions:
   - Added `st_compat` LaTeX rendering regression test for inline and block math in:
     - `apps/packages/ui/src/utils/__tests__/chat-rich-text.test.ts`

@@ -418,7 +418,7 @@ Both gauges are also exported to OTEL when enabled; search for these instrument 
 
 - Nightly quality dashboards: enable `RAG_QUALITY_EVAL_ENABLED=true` to run a small nightly eval set and export:
   - `rag_eval_faithfulness_score{dataset}` and `rag_eval_coverage_score{dataset}`
-  - Grafana JSON: `Docs/Deployment/Monitoring/rag-quality-dashboard.json`
+  - Monitoring reference: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
 
 ## Security & Safety
 

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from "react"
+import React, { useState, useMemo, useCallback, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import {
   Empty,
@@ -8,8 +8,8 @@ import {
   Input,
   Modal,
   Tooltip,
-  Popconfirm,
-  Segmented
+  Segmented,
+  message
 } from "antd"
 import type { MenuProps } from "antd"
 import {
@@ -110,7 +110,7 @@ const AnnotationCard: React.FC<AnnotationCardProps> = ({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <Tooltip title={t("common:edit", "Edit")}>
             <button
               onClick={onEdit}
@@ -119,17 +119,14 @@ const AnnotationCard: React.FC<AnnotationCardProps> = ({
               <Edit3 className="h-3.5 w-3.5 text-text-secondary" />
             </button>
           </Tooltip>
-          <Popconfirm
-            title={t("option:documentWorkspace.deleteAnnotation", "Delete annotation?")}
-            onConfirm={onDelete}
-            okText={t("common:delete", "Delete")}
-            cancelText={t("common:cancel", "Cancel")}
-            okButtonProps={{ danger: true }}
-          >
-            <button className="rounded p-1 hover:bg-hover">
+          <Tooltip title={t("common:delete", "Delete")}>
+            <button
+              onClick={onDelete}
+              className="rounded p-1 hover:bg-hover"
+            >
               <Trash2 className="h-3.5 w-3.5 text-text-secondary hover:text-danger" />
             </button>
-          </Popconfirm>
+          </Tooltip>
         </div>
       </div>
 
@@ -370,13 +367,65 @@ export const AnnotationsPanel: React.FC = () => {
     setEditingAnnotation(null)
   }, [editingAnnotation, activeDocumentId, updateMutation])
 
-  const handleDelete = useCallback(async (annotation: Annotation) => {
+  // Soft-delete with undo: remove from UI immediately, delay server delete by 5s
+  const pendingDeleteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  const handleDelete = useCallback((annotation: Annotation) => {
     if (!activeDocumentId) return
-    await deleteMutation.mutateAsync({
-      mediaId: activeDocumentId,
-      annotationId: annotation.id
+
+    // Capture full annotation for undo (preserves original id)
+    const savedAnnotation = { ...annotation }
+
+    // Remove from local store immediately
+    const removeAnnotation = useDocumentWorkspaceStore.getState().removeAnnotation
+    removeAnnotation(annotation.id)
+
+    // Show undo toast
+    const key = `delete-${annotation.id}`
+    message.info({
+      key,
+      content: (
+        <span>
+          {t("option:documentWorkspace.annotationDeleted", "Annotation deleted")}{" "}
+          <Button
+            type="link"
+            size="small"
+            onClick={() => {
+              // Cancel the pending server delete
+              const timer = pendingDeleteTimers.current.get(annotation.id)
+              if (timer) {
+                clearTimeout(timer)
+                pendingDeleteTimers.current.delete(annotation.id)
+              }
+              // Restore with original id to stay in sync with server
+              useDocumentWorkspaceStore.setState((state) => ({
+                annotations: [...state.annotations, savedAnnotation]
+              }))
+              message.destroy(key)
+            }}
+          >
+            {t("common:undo", "Undo")}
+          </Button>
+        </span>
+      ),
+      duration: 5
     })
-  }, [activeDocumentId, deleteMutation])
+
+    // Schedule server-side delete after 5s
+    const timer = setTimeout(async () => {
+      pendingDeleteTimers.current.delete(annotation.id)
+      try {
+        await deleteMutation.mutateAsync({
+          mediaId: activeDocumentId,
+          annotationId: annotation.id
+        })
+      } catch {
+        // If server delete fails, the annotation was already removed from UI
+        // It will re-appear on next sync
+      }
+    }, 5000)
+    pendingDeleteTimers.current.set(annotation.id, timer)
+  }, [activeDocumentId, deleteMutation, t])
 
   // Color filter menu
   const colorFilterItems: MenuProps["items"] = [

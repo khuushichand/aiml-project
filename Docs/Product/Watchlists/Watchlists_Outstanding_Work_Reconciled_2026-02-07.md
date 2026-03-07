@@ -70,4 +70,4 @@ Decision-derived implementation follow-ups (still open):
   - `Docs/Operations/Watchlists_Migration_Notes.md:3`
   - `Docs/Product/Watchlists/Watch_IMPLEMENTATION_PLAN.md:51`
 - Stage 5 scale/reliability matrix is complete per its own plan document.
-  - `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_scale_validation_dedup_ui.md:1`
+  - `Docs/Product/Completed/Watchlists_Subscriptions_Migration_Runbook.md:1`

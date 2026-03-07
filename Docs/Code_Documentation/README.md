@@ -2,7 +2,7 @@ Code Documentation
 
 Purpose
 - High-level code map and extension notes for the API, chat/streaming, moderation/guardrails, metrics, audit, and WebUI admin pieces.
-- Complements feature docs in Docs/; see also Docs/Moderation-Guardrails.md.
+- Complements feature docs in Docs/; see also Docs/Code_Documentation/Moderation-Guardrails.md.
 
 Entry Points
 - FastAPI app: tldw_Server_API/app/main.py
@@ -60,7 +60,7 @@ Moderation/Guardrails
   - action: Optional[str] per pattern
   - replacement: Optional[str] (used when action=redact)
   - categories: Optional[set[str]] (e.g., {"pii","pii_email"})
-- Extended blocklist line grammar (see Docs/Moderation-Guardrails.md):
+- Extended blocklist line grammar (see Docs/Code_Documentation/Moderation-Guardrails.md):
   - literal
   - /regex/
   - literal -> block|warn
@@ -111,7 +111,7 @@ Extensibility Notes
 - To integrate external moderation services, wrap results into PatternRule or extend evaluate_action to consult providers.
 
 Related Docs
-- Moderation/Guardrails details: Docs/Moderation-Guardrails.md
+- Moderation/Guardrails details: Docs/Code_Documentation/Moderation-Guardrails.md
 
 Audit Export API
 - Endpoint: `GET /api/v1/audit/export` (admin only; single-user mode treats the sole user as admin)

@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.tldw.ai/chatbooks/manifest/v1.json",
+  "title": "Chatbooks manifest v1",
+  "type": "object",
+  "required": [
+    "version",
+    "metadata",
+    "entries"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "created_at",
+        "exported_by",
+        "app_version"
+      ],
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "exported_by": {
+          "type": "string"
+        },
+        "app_version": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "locale": {
+          "type": "string"
+        },
+        "binary_limits": {
+          "type": "object"
+        },
+        "template_mode": {
+          "type": "string"
+        },
+        "template_defaults": {
+          "type": "object"
+        },
+        "template_timezone": {
+          "type": "string"
+        },
+        "template_locale": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "content": {},
+          "references": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "sha256": {
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "type": "integer"
+                },
+                "bundled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "provenance": {
+            "type": "object"
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "overwrite",
+              "rename",
+              "merge"
+            ]
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "type"
+        ],
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

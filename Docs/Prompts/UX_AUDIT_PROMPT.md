@@ -646,7 +646,7 @@ For **every page**, evaluate against:
 ### Batch Processing Order
 
 Process screenshots in this order. For each batch, read ALL desktop and mobile screenshots
-for the routes listed, analyze them, and write findings to `Docs/UX_AUDIT_REPORT_v2.md`
+for the routes listed, analyze them, and write findings to `Docs/UX_AUDIT_REPORT.md`
 incrementally (append each batch's findings).
 
 Also read `ux-audit/screenshots-v2/manifest.json` first to understand status codes,
@@ -688,13 +688,13 @@ For each batch:
 - **Recommendation**: [Specific, actionable fix]
 ```
 
-5. Append the batch findings to `Docs/UX_AUDIT_REPORT_v2.md`
+5. Append the batch findings to `Docs/UX_AUDIT_REPORT.md`
 
 ---
 
 ## Phase 4 --- Write the Final Report
 
-After all 10 batches are analyzed, compile the final report at `Docs/UX_AUDIT_REPORT_v2.md`
+After all 10 batches are analyzed, compile the final report at `Docs/UX_AUDIT_REPORT.md`
 with this structure:
 
 ### Report Structure

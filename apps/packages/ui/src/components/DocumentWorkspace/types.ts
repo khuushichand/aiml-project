@@ -266,7 +266,7 @@ export const DEFAULT_DOCUMENT_WORKSPACE_STATE: DocumentWorkspaceState = {
   openDocuments: [],
   leftSidebarCollapsed: false,
   rightPanelCollapsed: false,
-  activeSidebarTab: "toc",
+  activeSidebarTab: "insights",
   activeRightTab: "chat",
   currentPage: 1,
   totalPages: 0,

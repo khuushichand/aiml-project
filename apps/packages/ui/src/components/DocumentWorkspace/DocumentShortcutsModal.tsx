@@ -113,8 +113,7 @@ export function DocumentShortcutsModal({
       {
         title: "General",
         shortcuts: [
-          { label: "Show shortcuts", keys: "?" },
-          { label: "Close document", keys: `${modKey} + W` }
+          { label: "Show shortcuts", keys: "?" }
         ]
       }
     ],
