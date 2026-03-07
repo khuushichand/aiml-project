@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.30] 2026-03-06
+
+### Added
+
+- Watchlists UX redesign — progressive disclosure layout (PR #813):
+  - Restructured watchlists from 8 horizontal tabs to 3 primary tabs (Feeds, Articles, Reports) with inline expandable secondary views (Monitors, Activity, Templates).
+  - Added persistent collapsible health bar replacing the Overview tab, with 30s auto-refresh, health cards, and attention badges.
+  - Added settings drawer (gear icon) replacing the Settings tab.
+  - Added Cmd/Ctrl+K command palette with categorized commands (navigate, create, action) and fuzzy search.
+  - Added keyboard shortcuts: 1/2/3 (tab switch), N (new entity), R (refresh), / (focus search), ? (help panel).
+  - Added rich per-entity empty states with contextual descriptions and CTAs for feeds, monitors, activity, articles, reports, and templates.
+  - Added "Show all views" toggle to restore original 8-tab layout for power users (persisted to localStorage).
+  - Added mobile responsive layout: Select dropdown for tabs at <768px, full-width settings drawer on mobile.
+  - Added run failure "common causes" section in RunDetailDrawer, pattern-matched by failure kind (auth, rate limit, timeout, network, TLS).
+  - Added retry button to failed run notification toasts.
+  - Added deep-link backward compatibility: old URL params (`?tab=sources`, `?tab=items`) map to new equivalents (`?tab=feeds`, `?tab=articles`).
+  - Added 89 new i18n locale keys for all new UI elements.
+
+### Changed
+
+- Renamed watchlist tabs in UI to user-task language: Sources→Feeds, Jobs→Monitors, Runs→Activity, Items→Articles, Outputs→Reports.
+- Updated first-run copy contract test to match "monitor health" terminology (was "run health").
+
+### Fixed
+
+- Extracted `InlineSecondarySection` component outside render function to prevent unnecessary React remounts.
+- Stabilized `useWatchlistsCommands` actions object with `useMemo` to prevent command list recomputation on every render.
+- Removed redundant `useEffect` for `writeSecondaryExpanded` (already persisted in toggle callback).
+
 ## [0.1.29] 2026-03-05
 
 ### Added
