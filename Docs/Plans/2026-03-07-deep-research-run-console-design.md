@@ -80,15 +80,27 @@ The endpoint should:
 
 - authenticate like the existing research run endpoints
 - return only the current user’s sessions
-- order by newest first
+- order by `created_at DESC` in v1 because this page is a newly-created run console, not a most-recently-updated operations board
 - default to a bounded recent list in v1
-- reuse the `ResearchRunResponse` shape for each item
+- return a dedicated list-item shape with at least:
+  - `id`
+  - `query`
+  - `status`
+  - `phase`
+  - `control_state`
+  - `progress_percent`
+  - `progress_message`
+  - `active_job_id`
+  - `latest_checkpoint_id`
+  - `completed_at`
+  - `created_at`
+  - `updated_at`
 
 This requires a small expansion in the research DB/service layer:
 
 - owner-scoped session listing in `ResearchSessionsDB`
 - a `ResearchService.list_sessions(...)` helper
-- a list response schema or list endpoint reuse of `ResearchRunResponse`
+- a dedicated `ResearchRunListItemResponse` schema instead of reusing `ResearchRunResponse`
 
 No new write-side research domain objects are needed.
 
@@ -170,6 +182,16 @@ The stream reducer should:
 
 The stream should be the primary source of truth for the selected run’s live state. Polling remains useful for initial load and recovery.
 
+State ownership should be explicit:
+
+- React Query owns fetch lifecycles for:
+  - recent-runs list
+  - selected-run initial detail
+  - lazy artifact reads
+  - lazy bundle reads
+- a local reducer owns the live selected-run view after the initial fetch
+- user actions should invalidate the list/detail queries, but the selected-run reducer remains the immediate live UI source while SSE is connected
+
 ### Checkpoint Approval
 
 For v1, checkpoint handling should be:
@@ -203,14 +225,18 @@ The current frontend helper in:
 
 is chat-oriented. It ignores `event:` semantics and does not surface SSE `id:` values. That is not sufficient for research replay.
 
-This slice should generalize the SSE helper so research clients can consume:
+This repo also already has a richer SSE parser/subscriber pattern in:
+
+- `apps/tldw-frontend/lib/api/notifications.ts`
+
+This slice should extract a shared low-level structured SSE reader from that stronger notifications-style path, then let research clients consume:
 
 - `event`
 - `id`
 - parsed JSON payloads
 - completion markers
 
-The research UI should not parse SSE frames ad hoc inside the page. A small shared structured SSE helper is the right seam, especially because the notifications code already uses a richer dedicated SSE parser pattern.
+The research UI should not parse SSE frames ad hoc inside the page. A small shared structured SSE helper is the right seam, and `streamSSE(...)` can remain as a compatibility wrapper for chat-style consumers.
 
 ## Error Handling
 
@@ -258,6 +284,10 @@ For the new list endpoint:
 
 Add focused tests for:
 
+- a minimal reusable page test wrapper that provides the providers this page needs:
+  - QueryClient
+  - toast context
+  - a lightweight layout/router-safe shell
 - create-run form selecting the new run
 - recent-runs list rendering
 - selected-run detail load

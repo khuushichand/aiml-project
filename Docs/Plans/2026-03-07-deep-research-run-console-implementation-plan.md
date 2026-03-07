@@ -4,7 +4,7 @@
 
 **Goal:** Add a dedicated `/research` web console that lets users create deep-research runs, browse recent runs, watch a selected run live, approve checkpoints, and read artifacts and bundles.
 
-**Architecture:** Extend the research backend with one owner-scoped recent-runs list endpoint, then build a frontend research client around `apiClient` plus a structured SSE helper. The page itself should use React Query for list/detail reads, one replayable SSE subscription for the selected run, and lazy artifact/bundle reads to keep the UI responsive.
+**Architecture:** Extend the research backend with one owner-scoped recent-runs list endpoint and a dedicated list-item schema that includes query and timestamps, ordered by creation time descending. On the frontend, extract a shared structured SSE reader from the stronger notifications-style pattern, then build a research client and a `/research` page that uses React Query for fetch lifecycles plus a local reducer for selected-run live state.
 
 **Tech Stack:** FastAPI, SQLite-backed `ResearchSessionsDB`, `ResearchService`, React, Next.js pages router, `@tanstack/react-query`, Axios `apiClient`, fetch-based SSE, Vitest, pytest, Bandit.
 
@@ -18,6 +18,7 @@
 - Modify: `tldw_Server_API/app/core/DB_Management/ResearchSessionsDB.py`
 - Modify: `tldw_Server_API/app/core/Research/service.py`
 - Modify: `tldw_Server_API/app/api/v1/endpoints/research_runs.py`
+- Modify: `tldw_Server_API/app/api/v1/schemas/research_runs_schemas.py`
 - Modify: `tldw_Server_API/tests/Research/test_research_sessions_db.py`
 - Modify: `tldw_Server_API/tests/Research/test_research_jobs_service.py`
 - Modify: `tldw_Server_API/tests/Research/test_research_runs_endpoint.py`
@@ -26,10 +27,11 @@
 
 Add DB, service, and endpoint tests that verify:
 
-- `ResearchSessionsDB.list_sessions(owner_user_id, limit=...)` returns newest-first rows
+- `ResearchSessionsDB.list_sessions(owner_user_id, limit=...)` returns `created_at DESC` rows
 - owner-scoped reads do not leak sessions on a shared DB path
-- `ResearchService.list_sessions(...)` returns `ResearchSessionRow` items suitable for `ResearchRunResponse`
+- `ResearchService.list_sessions(...)` returns rows suitable for a dedicated list-item schema
 - `GET /api/v1/research/runs` returns only the current user’s recent runs
+- each list item includes `query`, `created_at`, and `updated_at`
 
 Example assertion shape:
 
@@ -52,12 +54,13 @@ Implement:
 - `ResearchSessionsDB.list_sessions(owner_user_id, limit=...)`
 - `ResearchService.list_sessions(owner_user_id, limit=...)`
 - `GET /api/v1/research/runs`
+- `ResearchRunListItemResponse`
 - a small bounded default limit in the endpoint, such as `25`
 
 Keep the response shape as:
 
 ```python
-list[ResearchRunResponse]
+list[ResearchRunListItemResponse]
 ```
 
 Do not add pagination in this slice.
@@ -71,16 +74,17 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/core/DB_Management/ResearchSessionsDB.py tldw_Server_API/app/core/Research/service.py tldw_Server_API/app/api/v1/endpoints/research_runs.py tldw_Server_API/tests/Research/test_research_sessions_db.py tldw_Server_API/tests/Research/test_research_jobs_service.py tldw_Server_API/tests/Research/test_research_runs_endpoint.py
+git add tldw_Server_API/app/core/DB_Management/ResearchSessionsDB.py tldw_Server_API/app/core/Research/service.py tldw_Server_API/app/api/v1/endpoints/research_runs.py tldw_Server_API/app/api/v1/schemas/research_runs_schemas.py tldw_Server_API/tests/Research/test_research_sessions_db.py tldw_Server_API/tests/Research/test_research_jobs_service.py tldw_Server_API/tests/Research/test_research_runs_endpoint.py
 git commit -m "feat(research): add run history list api"
 ```
 
-### Task 2: Generalize The Frontend SSE Helper For Replayable Events
+### Task 2: Extract A Shared Structured SSE Reader
 
 **Status:** Not Started
 
 **Files:**
 - Modify: `apps/tldw-frontend/lib/sse.ts`
+- Modify: `apps/tldw-frontend/lib/api/notifications.ts`
 - Create: `apps/tldw-frontend/lib/__tests__/sse.test.ts`
 
 **Step 1: Write the failing tests**
@@ -108,20 +112,22 @@ expect(events).toEqual([
 
 Run: `cd apps/tldw-frontend && bunx vitest run lib/__tests__/sse.test.ts`
 
-Expected: FAIL because `lib/sse.ts` does not currently expose structured event parsing.
+Expected: FAIL because there is no shared structured SSE reader yet.
 
 **Step 3: Write minimal implementation**
 
 Implement in `lib/sse.ts`:
 
-- a structured SSE frame reader, such as `streamStructuredSSE(...)`
+- a shared structured SSE frame reader, such as `streamStructuredSSE(...)`
 - event objects containing:
   - `event`
   - `id`
   - `payload`
 - compatibility-preserving behavior for the existing `streamSSE(...)` wrapper
 
-Prefer one shared parser in this file rather than duplicating stream parsing logic inside the research page.
+Refactor `apps/tldw-frontend/lib/api/notifications.ts` to consume the shared reader instead of carrying its own private parser loop.
+
+Prefer extracting the stronger notifications-style behavior into the shared helper, not upgrading the weaker chat helper in isolation.
 
 **Step 4: Run tests to verify they pass**
 
@@ -132,7 +138,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-git add apps/tldw-frontend/lib/sse.ts apps/tldw-frontend/lib/__tests__/sse.test.ts
+git add apps/tldw-frontend/lib/sse.ts apps/tldw-frontend/lib/api/notifications.ts apps/tldw-frontend/lib/__tests__/sse.test.ts
 git commit -m "feat(frontend): add structured sse helper"
 ```
 
@@ -207,7 +213,50 @@ git add apps/tldw-frontend/lib/api/researchRuns.ts apps/tldw-frontend/lib/__test
 git commit -m "feat(frontend): add research run client"
 ```
 
-### Task 4: Build The `/research` Run Console Page
+### Task 4: Add A Minimal Frontend Page Test Harness
+
+**Status:** Not Started
+
+**Files:**
+- Create: `apps/tldw-frontend/__tests__/testUtils/renderWithProviders.tsx`
+- Modify: `apps/tldw-frontend/__tests__/pages/research-run-console.test.tsx`
+
+**Step 1: Write the failing test**
+
+Add one small harness test or first page test that fails because the current frontend page-test setup does not provide the providers this page needs.
+
+The wrapper should include:
+
+- `QueryClientProvider`
+- toast provider or a lightweight mock seam
+- a layout-safe shell
+
+Do not try to solve every future page-test problem here. This harness should be just enough for the research console page tests in this slice.
+
+**Step 2: Run test to verify it fails**
+
+Run: `cd apps/tldw-frontend && bunx vitest run __tests__/pages/research-run-console.test.tsx`
+
+Expected: FAIL because the wrapper does not exist yet.
+
+**Step 3: Write minimal implementation**
+
+Implement a small reusable render helper for page tests. Keep it local to `__tests__/testUtils` and avoid importing full app bootstrap code.
+
+**Step 4: Run test to verify it passes**
+
+Run: `cd apps/tldw-frontend && bunx vitest run __tests__/pages/research-run-console.test.tsx`
+
+Expected: PASS or at least fail for the next real page-behavior reason instead of missing providers.
+
+**Step 5: Commit**
+
+```bash
+git add apps/tldw-frontend/__tests__/testUtils/renderWithProviders.tsx apps/tldw-frontend/__tests__/pages/research-run-console.test.tsx
+git commit -m "test(frontend): add research page test harness"
+```
+
+### Task 5: Build The `/research` Run Console Page
 
 **Status:** Not Started
 
@@ -248,7 +297,7 @@ Implement a dedicated page that:
 
 - renders a create-run form
 - renders a recent-runs list
-- keeps one selected run in local state
+- keeps one selected run in a local reducer-backed state model
 - uses React Query for:
   - recent runs
   - selected run detail
@@ -261,6 +310,12 @@ Implement a dedicated page that:
   - bundle section for completed runs
 
 Keep the page stacked and direct. Do not add a complex tab system or structured checkpoint editors in this slice.
+
+Make state ownership explicit:
+
+- React Query owns fetch lifecycles and cache invalidation
+- the selected run reducer owns immediate live UI state after the initial load
+- list polling remains separate from selected-run live SSE updates
 
 **Step 4: Run tests to verify they pass**
 
@@ -275,7 +330,7 @@ git add apps/tldw-frontend/pages/research/index.tsx apps/tldw-frontend/__tests__
 git commit -m "feat(frontend): add research run console"
 ```
 
-### Task 5: Verify The Run Console Slice
+### Task 6: Verify The Run Console Slice
 
 **Status:** Not Started
 
@@ -304,7 +359,7 @@ Expected: JSON report written with `0` new findings in the touched backend code.
 
 Mark every task in this plan complete and note residual risk, especially:
 
-- run history remains a bounded recent list in v1
+- run history remains a bounded newly-created list in v1
 - checkpoint editing is still approve-only
 - the selected-run detail is SSE-driven while the list remains polling-driven
 - the page is accessible by direct route and does not yet add broader navigation changes
