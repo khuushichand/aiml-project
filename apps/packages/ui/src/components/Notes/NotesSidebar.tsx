@@ -433,7 +433,7 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                     data-testid="notes-view-mode-moodboard"
                   >
                     {t('option:notesSearch.viewModeMoodboard', {
-                      defaultValue: 'Moodboard'
+                      defaultValue: 'Collection'
                     })}
                   </Button>
                 </div>
@@ -445,7 +445,7 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                     <div className="flex items-center justify-between">
                       <Typography.Text className="text-[11px] uppercase tracking-[0.08em] text-text-muted">
                         {t('option:notesSearch.moodboardLabel', {
-                          defaultValue: 'Moodboard'
+                          defaultValue: 'Collection'
                         })}
                       </Typography.Text>
                       {isMoodboardsFetching && <Spin size="small" />}
@@ -470,7 +470,7 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                       {moodboards.length === 0 ? (
                         <option value="">
                           {t('option:notesSearch.moodboardEmptyOption', {
-                            defaultValue: 'No moodboards yet'
+                            defaultValue: 'No collections yet'
                           })}
                         </option>
                       ) : null}
@@ -526,7 +526,90 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                         ? String(selectedMoodboard.description)
                         : t('option:notesSearch.moodboardHelperDefault', {
                             defaultValue:
-                              'Pin notes manually or use smart rules to populate this board.'
+                              'Pin notes manually or use smart rules to populate this collection.'
+                          })}
+                    </Typography.Text>
+                  </div>
+                )}
+                {listMode === 'active' && (
+                  <div className="space-y-1">
+                    <Typography.Text
+                      type="secondary"
+                      className="block text-[11px] text-text-muted"
+                    >
+                      {t('option:notesSearch.notebookLabel', {
+                        defaultValue: 'Smart collection'
+                      })}
+                    </Typography.Text>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={selectedNotebookId == null ? '' : String(selectedNotebookId)}
+                        onChange={(event) => {
+                          const raw = String(event.target.value || '').trim()
+                          if (!raw) {
+                            setSelectedNotebookId(null)
+                            setPage(1)
+                            return
+                          }
+                          const parsed = Number(raw)
+                          if (!Number.isFinite(parsed)) {
+                            setSelectedNotebookId(null)
+                            return
+                          }
+                          setSelectedNotebookId(Math.floor(parsed))
+                          setPage(1)
+                        }}
+                        className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+                        data-testid="notes-notebook-select"
+                      >
+                        <option value="">
+                          {t('option:notesSearch.notebookAllOption', {
+                            defaultValue: 'All smart collections'
+                          })}
+                        </option>
+                        {notebookOptions.map((notebook) => (
+                          <option key={notebook.id} value={notebook.id}>
+                            {`${notebook.name} (${notebook.keywords.length})`}
+                          </option>
+                        ))}
+                      </select>
+                      <Button
+                        size="small"
+                        onClick={createNotebookFromCurrentKeywords}
+                        disabled={keywordTokens.length === 0}
+                        data-testid="notes-save-notebook"
+                      >
+                        {t('option:notesSearch.notebookSaveAction', {
+                          defaultValue: 'Save'
+                        })}
+                      </Button>
+                      <Button
+                        size="small"
+                        danger
+                        onClick={() => {
+                          void removeSelectedNotebook()
+                        }}
+                        disabled={selectedNotebookId == null}
+                        data-testid="notes-remove-notebook"
+                      >
+                        {t('option:notesSearch.notebookRemoveAction', {
+                          defaultValue: 'Remove'
+                        })}
+                      </Button>
+                    </div>
+                    <Typography.Text
+                      type="secondary"
+                      className="block text-[11px] text-text-muted"
+                      data-testid="notes-notebook-helper-text"
+                    >
+                      {selectedNotebook
+                        ? t('option:notesSearch.notebookHelperSelected', {
+                            defaultValue: 'Smart collection applies {{count}} keyword filters.',
+                            count: selectedNotebook.keywords.length
+                          })
+                        : t('option:notesSearch.notebookHelperDefault', {
+                            defaultValue:
+                              'Save current keyword filters as smart collections.'
                           })}
                     </Typography.Text>
                   </div>
@@ -664,87 +747,6 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                         value: keyword
                       }))}
                     />
-                    <div className="space-y-1">
-                      <Typography.Text
-                        type="secondary"
-                        className="block text-[11px] text-text-muted"
-                      >
-                        {t('option:notesSearch.notebookLabel', {
-                          defaultValue: 'Notebook'
-                        })}
-                      </Typography.Text>
-                      <div className="flex items-center gap-2">
-                        <select
-                          value={selectedNotebookId == null ? '' : String(selectedNotebookId)}
-                          onChange={(event) => {
-                            const raw = String(event.target.value || '').trim()
-                            if (!raw) {
-                              setSelectedNotebookId(null)
-                              setPage(1)
-                              return
-                            }
-                            const parsed = Number(raw)
-                            if (!Number.isFinite(parsed)) {
-                              setSelectedNotebookId(null)
-                              return
-                            }
-                            setSelectedNotebookId(Math.floor(parsed))
-                            setPage(1)
-                          }}
-                          className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
-                          data-testid="notes-notebook-select"
-                        >
-                          <option value="">
-                            {t('option:notesSearch.notebookAllOption', {
-                              defaultValue: 'All notebooks'
-                            })}
-                          </option>
-                          {notebookOptions.map((notebook) => (
-                            <option key={notebook.id} value={notebook.id}>
-                              {`${notebook.name} (${notebook.keywords.length})`}
-                            </option>
-                          ))}
-                        </select>
-                        <Button
-                          size="small"
-                          onClick={createNotebookFromCurrentKeywords}
-                          disabled={keywordTokens.length === 0}
-                          data-testid="notes-save-notebook"
-                        >
-                          {t('option:notesSearch.notebookSaveAction', {
-                            defaultValue: 'Save'
-                          })}
-                        </Button>
-                        <Button
-                          size="small"
-                          danger
-                          onClick={() => {
-                            void removeSelectedNotebook()
-                          }}
-                          disabled={selectedNotebookId == null}
-                          data-testid="notes-remove-notebook"
-                        >
-                          {t('option:notesSearch.notebookRemoveAction', {
-                            defaultValue: 'Remove'
-                          })}
-                        </Button>
-                      </div>
-                      <Typography.Text
-                        type="secondary"
-                        className="block text-[11px] text-text-muted"
-                        data-testid="notes-notebook-helper-text"
-                      >
-                        {selectedNotebook
-                          ? t('option:notesSearch.notebookHelperSelected', {
-                              defaultValue: 'Notebook adds {{count}} keyword filters.',
-                              count: selectedNotebook.keywords.length
-                            })
-                          : t('option:notesSearch.notebookHelperDefault', {
-                              defaultValue:
-                                'Save current keyword filters as reusable notebooks.'
-                            })}
-                      </Typography.Text>
-                    </div>
                     <div className="flex items-center justify-between gap-2">
                       <Button
                         size="small"
@@ -941,7 +943,7 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                     data-testid="notes-moodboard-empty-selection"
                   >
                     {t('option:notesSearch.moodboardSelectPrompt', {
-                      defaultValue: 'Create or select a moodboard to start.'
+                      defaultValue: 'Create or select a collection to start.'
                     })}
                   </div>
                 ) : isFetching ? (
@@ -949,7 +951,7 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                     <Spin size="small" />
                     <span>
                       {t('option:notesSearch.moodboardLoading', {
-                        defaultValue: 'Loading moodboard...'
+                        defaultValue: 'Loading collection...'
                       })}
                     </span>
                   </div>
@@ -959,7 +961,7 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                     data-testid="notes-moodboard-empty"
                   >
                     {t('option:notesSearch.moodboardEmpty', {
-                      defaultValue: 'No notes in this moodboard yet.'
+                      defaultValue: 'No notes in this collection yet.'
                     })}
                   </div>
                 ) : (
@@ -1054,7 +1056,7 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                           className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text"
                           data-testid="notes-moodboard-page-size"
                           aria-label={t('option:notesSearch.moodboardPageSizeAria', {
-                            defaultValue: 'Moodboard page size'
+                            defaultValue: 'Collection page size'
                           })}
                         >
                           {[10, 20, 50, 100].map((size) => (

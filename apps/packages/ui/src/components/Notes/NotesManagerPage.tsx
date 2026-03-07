@@ -1333,7 +1333,7 @@ const NotesManagerPage: React.FC = () => {
     if (selectedNotebook != null) {
       details.push(
         `${t('option:notesSearch.summaryNotebookLabel', {
-          defaultValue: 'Notebook'
+          defaultValue: 'Smart collection'
         })}: ${selectedNotebook.name}`
       )
     }
@@ -4111,12 +4111,12 @@ const NotesManagerPage: React.FC = () => {
     if (typeof window === 'undefined') return
 
     const defaultName = buildNotebookDefaultName(normalizedKeywords)
-    const rawName = window.prompt('Notebook name', defaultName)
+    const rawName = window.prompt('Smart collection name', defaultName)
     if (rawName == null) return
 
     const notebookName = normalizeNotebookName(rawName)
     if (!notebookName) {
-      message.warning('Notebook name cannot be empty.')
+      message.warning('Smart collection name cannot be empty.')
       return
     }
 
@@ -4154,7 +4154,7 @@ const NotesManagerPage: React.FC = () => {
     }
     setKeywordTokens([])
     setPage(1)
-    message.success(`Saved notebook "${notebookName}"`)
+    message.success(`Saved smart collection "${notebookName}"`)
 
     if (isOnline && selectedNotebookAfterSave) {
       try {

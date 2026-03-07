@@ -305,7 +305,7 @@ describe("NotesManagerPage stage 39 organization model", () => {
     })
 
     expect(screen.getByTestId("notes-active-filter-summary-details")).toHaveTextContent(
-      "Notebook: Research"
+      "Smart collection: Research"
     )
   })
 
@@ -321,7 +321,7 @@ describe("NotesManagerPage stage 39 organization model", () => {
     fireEvent.click(screen.getByTestId("notes-save-notebook"))
 
     await waitFor(() => {
-      expect(mockMessageSuccess).toHaveBeenCalledWith('Saved notebook "Research Notebook"')
+      expect(mockMessageSuccess).toHaveBeenCalledWith('Saved smart collection "Research Notebook"')
     })
 
     expect(mockBgRequest).toHaveBeenCalledWith(
@@ -340,7 +340,7 @@ describe("NotesManagerPage stage 39 organization model", () => {
     })
     expect(notebookPersistCall).toBeTruthy()
     expect(screen.getByTestId("notes-active-filter-summary-details")).toHaveTextContent(
-      "Notebook: Research Notebook"
+      "Smart collection: Research Notebook"
     )
 
     promptSpy.mockRestore()
