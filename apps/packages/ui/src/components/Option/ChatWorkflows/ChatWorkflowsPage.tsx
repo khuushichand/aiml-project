@@ -16,32 +16,46 @@ import {
 import {
   ClipboardList,
   CopyPlus,
+  MessageCircleMore,
   PencilLine,
+  Play,
   Plus,
-  Sparkles
+  Sparkles,
+  XCircle
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
 import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import { PageShell } from "@/components/Common/PageShell"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import {
+  useCancelChatWorkflowRun,
+  useChatWorkflowRun,
   useChatWorkflowTemplates,
+  useChatWorkflowTranscript,
+  useContinueChatWorkflowRun,
   useCreateChatWorkflowTemplate,
   useGenerateChatWorkflowDraft,
+  useStartChatWorkflowRun,
+  useSubmitChatWorkflowAnswer,
   useUpdateChatWorkflowTemplate
 } from "@/hooks/useChatWorkflows"
 import { useServerOnline } from "@/hooks/useServerOnline"
+import { CHAT_PATH } from "@/routes/route-paths"
 import type {
+  ChatWorkflowRun,
   ChatWorkflowTemplate,
   ChatWorkflowTemplateDraft,
-  ChatWorkflowTemplateStep
+  ChatWorkflowTemplateStep,
+  ChatWorkflowTranscriptMessage
 } from "@/types/chat-workflows"
+import { SETTINGS_SERVER_CHAT_ID_PARAM } from "@/utils/settings-return"
 
 const { Text, Title } = Typography
 const { TextArea } = Input
 
-type ChatWorkflowTabKey = "library" | "builder" | "generate"
+type ChatWorkflowTabKey = "library" | "builder" | "generate" | "run"
 
 const createStepId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -108,8 +122,34 @@ const duplicateDraft = (template: ChatWorkflowTemplate): ChatWorkflowTemplateDra
   }
 }
 
+const buildRunHistoryMessages = (
+  run: ChatWorkflowRun | undefined,
+  transcriptMessages: ChatWorkflowTranscriptMessage[] | undefined
+): ChatWorkflowTranscriptMessage[] => {
+  if (Array.isArray(transcriptMessages) && transcriptMessages.length > 0) {
+    return transcriptMessages
+  }
+  if (!run) {
+    return []
+  }
+
+  return run.answers.flatMap((answer) => [
+    {
+      role: "assistant",
+      content: answer.displayed_question,
+      step_index: answer.step_index
+    },
+    {
+      role: "user",
+      content: answer.answer_text,
+      step_index: answer.step_index
+    }
+  ])
+}
+
 export const ChatWorkflowsPage: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
+  const navigate = useNavigate()
   const notification = useAntdNotification()
   const isOnline = useServerOnline()
   const [activeTab, setActiveTab] = React.useState<ChatWorkflowTabKey>("library")
@@ -122,6 +162,10 @@ export const ChatWorkflowsPage: React.FC = () => {
   const [generateGoal, setGenerateGoal] = React.useState("")
   const [generateBaseQuestion, setGenerateBaseQuestion] = React.useState("")
   const [desiredStepCount, setDesiredStepCount] = React.useState(4)
+  const [activeRunId, setActiveRunId] = React.useState<string | null>(null)
+  const [activeRunTemplate, setActiveRunTemplate] =
+    React.useState<ChatWorkflowTemplateDraft | null>(null)
+  const [runAnswerText, setRunAnswerText] = React.useState("")
 
   const templatesQuery = useChatWorkflowTemplates()
   const createTemplateMutation = useCreateChatWorkflowTemplate()
@@ -129,6 +173,16 @@ export const ChatWorkflowsPage: React.FC = () => {
     editingTemplateId || 0
   )
   const generateDraftMutation = useGenerateChatWorkflowDraft()
+  const startRunMutation = useStartChatWorkflowRun()
+  const activeRunQuery = useChatWorkflowRun(activeRunId, {
+    enabled: Boolean(activeRunId)
+  })
+  const activeTranscriptQuery = useChatWorkflowTranscript(activeRunId, {
+    enabled: Boolean(activeRunId)
+  })
+  const submitAnswerMutation = useSubmitChatWorkflowAnswer(activeRunId || "")
+  const cancelRunMutation = useCancelChatWorkflowRun(activeRunId || "")
+  const continueRunMutation = useContinueChatWorkflowRun(activeRunId || "")
 
   const openNewTemplate = React.useCallback(() => {
     setEditingTemplateId(null)
@@ -202,20 +256,32 @@ export const ChatWorkflowsPage: React.FC = () => {
     })
   }, [])
 
+  const validateDraft = React.useCallback(
+    (candidate: ChatWorkflowTemplateDraft): ChatWorkflowTemplateDraft | null => {
+      const payload = normalizeDraftForSubmit(candidate)
+      if (!payload.title) {
+        notification.error({
+          message: t("common:error", "Error"),
+          description: "Template title is required."
+        })
+        return null
+      }
+      if (payload.steps.some((step) => !step.base_question)) {
+        notification.error({
+          message: t("common:error", "Error"),
+          description:
+            "Each step needs a question before you can start or save the workflow."
+        })
+        return null
+      }
+      return payload
+    },
+    [notification, t]
+  )
+
   const saveTemplate = React.useCallback(async () => {
-    const payload = normalizeDraftForSubmit(draft)
-    if (!payload.title) {
-      notification.error({
-        message: t("common:error", "Error"),
-        description: "Template title is required."
-      })
-      return
-    }
-    if (payload.steps.some((step) => !step.base_question)) {
-      notification.error({
-        message: t("common:error", "Error"),
-        description: "Each step needs a question before you can save the template."
-      })
+    const payload = validateDraft(draft)
+    if (!payload) {
       return
     }
 
@@ -252,7 +318,8 @@ export const ChatWorkflowsPage: React.FC = () => {
     editingTemplateId,
     notification,
     t,
-    updateTemplateMutation
+    updateTemplateMutation,
+    validateDraft
   ])
 
   const generateDraft = React.useCallback(async () => {
@@ -287,6 +354,163 @@ export const ChatWorkflowsPage: React.FC = () => {
     notification,
     t
   ])
+
+  const startRunFromTemplate = React.useCallback(
+    async (template: ChatWorkflowTemplate) => {
+      try {
+        const run = await startRunMutation.mutateAsync({
+          template_id: template.id,
+          selected_context_refs: []
+        })
+        setActiveRunId(run.run_id)
+        setActiveRunTemplate(cloneTemplateToDraft(template))
+        setRunAnswerText("")
+        setActiveTab("run")
+        notification.success({
+          message: "Workflow started",
+          description: "Answer each prompt in sequence to complete the run."
+        })
+      } catch (error) {
+        notification.error({
+          message: t("common:error", "Error"),
+          description:
+            error instanceof Error
+              ? error.message
+              : "Unable to start the workflow run."
+        })
+      }
+    },
+    [notification, startRunMutation, t]
+  )
+
+  const startRunFromDraft = React.useCallback(async () => {
+    const payload = validateDraft(draft)
+    if (!payload) {
+      return
+    }
+
+    try {
+      const run = await startRunMutation.mutateAsync({
+        template_draft: payload,
+        selected_context_refs: []
+      })
+      setActiveRunId(run.run_id)
+      setActiveRunTemplate(payload)
+      setRunAnswerText("")
+      setActiveTab("run")
+      notification.success({
+        message: "Draft started as a run",
+        description: "This execution uses the current draft snapshot."
+      })
+    } catch (error) {
+      notification.error({
+        message: t("common:error", "Error"),
+        description:
+          error instanceof Error
+            ? error.message
+            : "Unable to start the workflow run."
+      })
+    }
+  }, [draft, notification, startRunMutation, t, validateDraft])
+
+  const activeRun = activeRunQuery.data
+  const runHistoryMessages = buildRunHistoryMessages(
+    activeRun,
+    activeTranscriptQuery.data?.messages
+  )
+  const totalRunSteps =
+    activeRunTemplate?.steps.length ??
+    Math.max(activeRun?.answers.length || 0, activeRun?.current_step_index || 0, 1)
+  const completedRunSteps =
+    activeRun?.status === "completed"
+      ? totalRunSteps
+      : activeRun?.answers.length || 0
+
+  const submitCurrentAnswer = React.useCallback(async () => {
+    if (!activeRunId || !activeRun) {
+      return
+    }
+
+    const answer = runAnswerText.trim()
+    if (!answer) {
+      notification.error({
+        message: t("common:error", "Error"),
+        description: "Write an answer before moving to the next step."
+      })
+      return
+    }
+
+    try {
+      const nextRun = await submitAnswerMutation.mutateAsync({
+        step_index: activeRun.current_step_index,
+        answer_text: answer
+      })
+      setRunAnswerText("")
+      if (nextRun.status === "completed") {
+        notification.success({
+          message: "Workflow complete",
+          description: "You can stop here or continue into normal chat."
+        })
+      }
+    } catch (error) {
+      notification.error({
+        message: t("common:error", "Error"),
+        description:
+          error instanceof Error
+            ? error.message
+            : "Unable to submit the workflow answer."
+      })
+    }
+  }, [
+    activeRun,
+    activeRunId,
+    notification,
+    runAnswerText,
+    submitAnswerMutation,
+    t
+  ])
+
+  const cancelActiveRun = React.useCallback(async () => {
+    if (!activeRunId) {
+      return
+    }
+
+    try {
+      await cancelRunMutation.mutateAsync()
+      notification.success({
+        message: "Workflow canceled",
+        description: "The run has been stopped and will not ask more questions."
+      })
+    } catch (error) {
+      notification.error({
+        message: t("common:error", "Error"),
+        description:
+          error instanceof Error ? error.message : "Unable to cancel the workflow."
+      })
+    }
+  }, [activeRunId, cancelRunMutation, notification, t])
+
+  const continueToChat = React.useCallback(async () => {
+    if (!activeRunId) {
+      return
+    }
+
+    try {
+      const response = await continueRunMutation.mutateAsync()
+      const params = new URLSearchParams({
+        [SETTINGS_SERVER_CHAT_ID_PARAM]: response.conversation_id
+      })
+      navigate(`${CHAT_PATH}?${params.toString()}`)
+    } catch (error) {
+      notification.error({
+        message: t("common:error", "Error"),
+        description:
+          error instanceof Error
+            ? error.message
+            : "Unable to continue the workflow in normal chat."
+      })
+    }
+  }, [activeRunId, continueRunMutation, navigate, notification, t])
 
   const templates = templatesQuery.data || []
 
@@ -330,12 +554,13 @@ export const ChatWorkflowsPage: React.FC = () => {
       <DismissibleBetaAlert
         storageKey="beta-dismissed:chat-workflows"
         message="Beta feature"
-        description="Template authoring is ready. Guided run playback and free-chat handoff land in the next stage."
+        description="Template authoring, guided run playback, and free-chat handoff are ready. Context pickers and resumable runs land next."
         className="mb-6"
       />
 
       <Tabs
         activeKey={activeTab}
+        destroyOnHidden
         onChange={(key) => setActiveTab(key as ChatWorkflowTabKey)}
         items={[
           {
@@ -347,7 +572,7 @@ export const ChatWorkflowsPage: React.FC = () => {
                   type="info"
                   showIcon
                   title="Reusable templates"
-                  description="Keep authored workflows here, then send them into a guided run once the run screen is wired up."
+                  description="Keep authored workflows here, then launch a guided run whenever you want the assistant to ask one question at a time."
                 />
                 {templatesQuery.isLoading ? (
                   <div className="flex min-h-[240px] items-center justify-center">
@@ -398,6 +623,13 @@ export const ChatWorkflowsPage: React.FC = () => {
                               onClick={() => openTemplateAsCopy(template)}>
                               Load as Copy
                             </Button>
+                            <Button
+                              type="primary"
+                              icon={<Play className="h-4 w-4" />}
+                              onClick={() => void startRunFromTemplate(template)}
+                              loading={startRunMutation.isPending}>
+                              Start Run
+                            </Button>
                           </Space>
                         </div>
                       </Card>
@@ -421,6 +653,12 @@ export const ChatWorkflowsPage: React.FC = () => {
                   extra={
                     <Space>
                       <Button onClick={openNewTemplate}>Reset Draft</Button>
+                      <Button
+                        icon={<Play className="h-4 w-4" />}
+                        onClick={() => void startRunFromDraft()}
+                        loading={startRunMutation.isPending}>
+                        Start Run
+                      </Button>
                       <Button
                         type="primary"
                         onClick={saveTemplate}
@@ -568,14 +806,14 @@ export const ChatWorkflowsPage: React.FC = () => {
                         Keep each step narrow. If a question could produce two different kinds of answer, split it into two steps.
                       </p>
                       <p>
-                        Save deterministic templates here first. The run screen will freeze a snapshot before execution so later edits do not change in-flight sessions.
+                        Starting a run from the builder freezes the current draft, so later edits in the template do not mutate the live session.
                       </p>
                     </div>
                   </Card>
-                  <Card title="Next stage">
+                  <Card title="Run behavior">
                     <div className="space-y-2 text-sm text-text-muted">
                       <p>
-                        After this builder is saved, the next task wires the guided run screen, transcript view, answer submission, and free-chat handoff.
+                        Saved templates can be launched from the library. Unsaved drafts can also run immediately when you want to validate the question flow before saving it.
                       </p>
                     </div>
                   </Card>
@@ -651,6 +889,179 @@ export const ChatWorkflowsPage: React.FC = () => {
                   </div>
                 </div>
               </Card>
+            )
+          },
+          {
+            key: "run",
+            label: "Run",
+            children: !activeRunId ? (
+              <Empty description="Start a workflow from the library or builder to open the guided run screen." />
+            ) : activeRunQuery.isLoading && !activeRun ? (
+              <div className="flex min-h-[280px] items-center justify-center">
+                <Spin />
+              </div>
+            ) : activeRunQuery.isError ? (
+              <Alert
+                type="error"
+                showIcon
+                title="Unable to load the active workflow run."
+                description={activeRunQuery.error?.message || "Try starting the run again."}
+              />
+            ) : activeRun ? (
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.85fr)]">
+                <Card
+                  title="Run in progress"
+                  extra={
+                    <Space wrap>
+                      <Tag
+                        color={
+                          activeRun.status === "completed"
+                            ? "green"
+                            : activeRun.status === "canceled"
+                              ? "default"
+                              : "blue"
+                        }>
+                        {activeRun.status}
+                      </Tag>
+                      <Button onClick={() => setActiveTab("library")}>Back to Library</Button>
+                    </Space>
+                  }>
+                  <div className="space-y-5">
+                    <div className="rounded-2xl border border-border bg-surface p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <Text strong className="block">
+                            {activeRunTemplate?.title || "Current workflow"}
+                          </Text>
+                          <Text className="text-sm text-text-muted">
+                            {completedRunSteps} of {totalRunSteps} steps answered
+                          </Text>
+                        </div>
+                        <Tag>
+                          {activeRun.status === "active"
+                            ? `Step ${Math.min(activeRun.current_step_index + 1, totalRunSteps)} of ${totalRunSteps}`
+                            : `${completedRunSteps} / ${totalRunSteps}`}
+                        </Tag>
+                      </div>
+                    </div>
+
+                    {activeRun.status === "completed" ? (
+                      <Alert
+                        type="success"
+                        showIcon
+                        title="Workflow complete"
+                        description="The guided run is finished. Continue into chat only if you want to leave the structured flow."
+                      />
+                    ) : null}
+
+                    {activeRun.status === "canceled" ? (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        title="Workflow canceled"
+                        description="This run has been stopped. You can return to the library or launch a fresh run."
+                      />
+                    ) : null}
+
+                    <Card size="small" title="Run history" className="border border-border bg-surface">
+                      {runHistoryMessages.length === 0 ? (
+                        <Empty
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                          description="Answers will appear here as the workflow progresses."
+                        />
+                      ) : (
+                        <div className="space-y-3">
+                          {runHistoryMessages.map((message, index) => (
+                            <div
+                              key={`${message.role}-${message.step_index ?? "free"}-${index}`}
+                              className="rounded-xl border border-border px-4 py-3">
+                              <Text strong className="block text-xs uppercase text-text-muted">
+                                {message.role === "assistant"
+                                  ? `Question ${typeof message.step_index === "number" ? message.step_index + 1 : ""}`.trim()
+                                  : `Answer ${typeof message.step_index === "number" ? message.step_index + 1 : ""}`.trim()}
+                              </Text>
+                              <Text className="block whitespace-pre-wrap text-sm">
+                                {message.content}
+                              </Text>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </Card>
+
+                    {activeRun.status === "active" && activeRun.current_question ? (
+                      <Card size="small" title="Current question" className="border border-border">
+                        <div className="space-y-4">
+                          <Text className="block whitespace-pre-wrap text-base">
+                            {activeRun.current_question}
+                          </Text>
+                          <label className="block">
+                            <span className="mb-1 block text-sm font-medium">
+                              Answer for current step
+                            </span>
+                            <TextArea
+                              aria-label="Answer for current step"
+                              autoSize={{ minRows: 4, maxRows: 8 }}
+                              placeholder="Write the answer you want saved for this step."
+                              value={runAnswerText}
+                              onChange={(event) => setRunAnswerText(event.target.value)}
+                            />
+                          </label>
+                          <Space wrap>
+                            <Button
+                              type="primary"
+                              icon={<Play className="h-4 w-4" />}
+                              onClick={() => void submitCurrentAnswer()}
+                              loading={submitAnswerMutation.isPending}>
+                              Submit Answer
+                            </Button>
+                            <Button
+                              danger
+                              icon={<XCircle className="h-4 w-4" />}
+                              onClick={() => void cancelActiveRun()}
+                              loading={cancelRunMutation.isPending}>
+                              Cancel Run
+                            </Button>
+                          </Space>
+                        </div>
+                      </Card>
+                    ) : null}
+                  </div>
+                </Card>
+
+                <div className="space-y-4">
+                  <Card title="Run controls">
+                    <div className="space-y-3 text-sm text-text-muted">
+                      <p>
+                        Workflow runs are immutable snapshots. Editing the template later does not change this execution.
+                      </p>
+                      <p>
+                        The free-chat handoff is explicit and only appears after the workflow reaches a completed state.
+                      </p>
+                    </div>
+                    {activeRun.status === "completed" ? (
+                      <div className="mt-4">
+                        <Button
+                          type="primary"
+                          icon={<MessageCircleMore className="h-4 w-4" />}
+                          onClick={() => void continueToChat()}
+                          loading={continueRunMutation.isPending}>
+                          Continue to Chat
+                        </Button>
+                      </div>
+                    ) : null}
+                  </Card>
+                  <Card title="Context">
+                    <div className="space-y-2 text-sm text-text-muted">
+                      <p>
+                        Attached context selection stays explicit in v1. This screen currently uses the authored template snapshot and prior answers only.
+                      </p>
+                    </div>
+                  </Card>
+                </div>
+              </div>
+            ) : (
+              <Empty description="Start a workflow to load the run screen." />
             )
           }
         ]}

@@ -28,6 +28,13 @@ const state = vi.hoisted(() => {
     createMutateAsync: vi.fn(),
     updateMutateAsync: vi.fn(),
     generateMutateAsync: vi.fn(),
+    startRunMutateAsync: vi.fn(),
+    submitAnswerMutateAsync: vi.fn(),
+    cancelRunMutateAsync: vi.fn(),
+    continueRunMutateAsync: vi.fn(),
+    activeRun: null as any,
+    transcript: null as any,
+    navigate: vi.fn(),
     notification: {
       success: vi.fn(),
       error: vi.fn()
@@ -53,6 +60,34 @@ vi.mock("@/hooks/useChatWorkflows", () => ({
   useGenerateChatWorkflowDraft: () => ({
     mutateAsync: state.generateMutateAsync,
     isPending: false
+  }),
+  useStartChatWorkflowRun: () => ({
+    mutateAsync: state.startRunMutateAsync,
+    isPending: false
+  }),
+  useChatWorkflowRun: () => ({
+    data: state.activeRun,
+    isLoading: false,
+    isError: false,
+    error: null
+  }),
+  useChatWorkflowTranscript: () => ({
+    data: state.transcript,
+    isLoading: false,
+    isError: false,
+    error: null
+  }),
+  useSubmitChatWorkflowAnswer: () => ({
+    mutateAsync: state.submitAnswerMutateAsync,
+    isPending: false
+  }),
+  useCancelChatWorkflowRun: () => ({
+    mutateAsync: state.cancelRunMutateAsync,
+    isPending: false
+  }),
+  useContinueChatWorkflowRun: () => ({
+    mutateAsync: state.continueRunMutateAsync,
+    isPending: false
   })
 }))
 
@@ -69,6 +104,16 @@ vi.mock("react-i18next", () => ({
     t: (_key: string, fallback?: string) => fallback || _key
   })
 }))
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>(
+    "react-router-dom"
+  )
+  return {
+    ...actual,
+    useNavigate: () => state.navigate
+  }
+})
 
 import { ChatWorkflowsPage } from "../ChatWorkflowsPage"
 
@@ -106,6 +151,71 @@ describe("ChatWorkflowsPage", () => {
         ]
       }
     })
+    state.startRunMutateAsync.mockImplementation(async () => {
+      state.activeRun = {
+        run_id: "run-123",
+        template_id: 1,
+        template_version: 1,
+        status: "active",
+        current_step_index: 0,
+        current_question: "What outcome are we aiming for?",
+        selected_context_refs: [],
+        answers: []
+      }
+      state.transcript = {
+        run_id: "run-123",
+        messages: []
+      }
+      return state.activeRun
+    })
+    state.submitAnswerMutateAsync.mockImplementation(async (payload) => {
+      state.activeRun = {
+        ...state.activeRun,
+        status: "completed",
+        current_step_index: 1,
+        current_question: null,
+        completed_at: "2026-03-07T00:00:00Z",
+        answers: [
+          {
+            step_id: "goal",
+            step_index: 0,
+            displayed_question: "What outcome are we aiming for?",
+            answer_text: payload.answer_text,
+            question_generation_meta: {}
+          }
+        ]
+      }
+      state.transcript = {
+        run_id: "run-123",
+        messages: [
+          {
+            role: "assistant",
+            content: "What outcome are we aiming for?",
+            step_index: 0
+          },
+          {
+            role: "user",
+            content: payload.answer_text,
+            step_index: 0
+          }
+        ]
+      }
+      return state.activeRun
+    })
+    state.cancelRunMutateAsync.mockImplementation(async () => {
+      state.activeRun = {
+        ...state.activeRun,
+        status: "canceled",
+        current_question: null,
+        canceled_at: "2026-03-07T00:00:00Z"
+      }
+      return state.activeRun
+    })
+    state.continueRunMutateAsync.mockResolvedValue({
+      conversation_id: "server-chat-456"
+    })
+    state.activeRun = null
+    state.transcript = null
   })
 
   it("loads a library template into the builder", async () => {
@@ -168,5 +278,80 @@ describe("ChatWorkflowsPage", () => {
       )
     })
     expect(state.notification.success).toHaveBeenCalled()
+  })
+
+  it("starts a guided run from the library and shows the first question", async () => {
+    render(<ChatWorkflowsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Run" }))
+
+    await waitFor(() => {
+      expect(state.startRunMutateAsync).toHaveBeenCalledWith({
+        template_id: 1,
+        selected_context_refs: []
+      })
+    })
+    expect(screen.getByText("Run in progress")).toBeInTheDocument()
+    expect(screen.getByText("What outcome are we aiming for?")).toBeInTheDocument()
+  })
+
+  it("starts a guided run from the current builder draft", async () => {
+    render(<ChatWorkflowsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "New Template" }))
+    fireEvent.change(screen.getByLabelText("Template title"), {
+      target: { value: "Intake draft" }
+    })
+    fireEvent.change(screen.getByLabelText("Question for step 1"), {
+      target: { value: "What do we need to learn first?" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Start Run" }))
+
+    await waitFor(() => {
+      expect(state.startRunMutateAsync).toHaveBeenCalledWith({
+        template_draft: expect.objectContaining({
+          title: "Intake draft",
+          steps: [
+            expect.objectContaining({
+              step_index: 0,
+              base_question: "What do we need to learn first?"
+            })
+          ]
+        }),
+        selected_context_refs: []
+      })
+    })
+  })
+
+  it("hands a completed workflow off to free chat", async () => {
+    render(<ChatWorkflowsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Run" }))
+
+    await waitFor(() => {
+      expect(screen.getByText("What outcome are we aiming for?")).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByLabelText("Answer for current step"), {
+      target: { value: "Ship a feature" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Submit Answer" }))
+
+    await waitFor(() => {
+      expect(state.submitAnswerMutateAsync).toHaveBeenCalledWith({
+        step_index: 0,
+        answer_text: "Ship a feature"
+      })
+    })
+    expect(screen.getByText("Workflow complete")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Chat" }))
+
+    await waitFor(() => {
+      expect(state.continueRunMutateAsync).toHaveBeenCalled()
+    })
+    expect(state.navigate).toHaveBeenCalledWith(
+      "/chat?settingsServerChatId=server-chat-456"
+    )
   })
 })
