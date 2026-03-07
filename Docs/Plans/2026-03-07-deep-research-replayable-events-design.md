@@ -58,13 +58,19 @@ Extend the existing endpoint to:
 Behavior:
 
 - always emit a fresh `snapshot` first from current run state
+- include `latest_event_id` in that snapshot so reconnecting clients know the current persisted watermark
 - if `after_id > 0`, replay persisted research events with `id > after_id`
 - emit replayed rows in ascending `id` order
+- emit each replayed or live persisted event with SSE `id: <row_id>`
+- include `event_id` in the JSON payload for every replayable event
+- mark replayed rows with `replayed: true` and live-tail rows with `replayed: false`
 - remember the highest emitted event ID
 - continue tailing new persisted rows after that cursor
 - close after emitting a terminal event once the run is terminal and no newer events remain
 
 If `after_id` is ahead of the current event log, the endpoint should not fail. It should emit `snapshot` and then wait for future rows after that cursor.
+
+The `snapshot` is the authoritative current-state baseline. Replayed rows after `snapshot` are historical catch-up events and should not be treated as newer than the opening snapshot unless their `event_id` exceeds the snapshot's `latest_event_id`.
 
 ## Event Log Model
 
@@ -83,8 +89,8 @@ Suggested columns:
 
 Indexes:
 
-- `(session_id, id ASC)` for replay
-- `(owner_user_id, session_id, id ASC)` if future ownership-scoped reads need a cheap filter
+- `(owner_user_id, session_id, id ASC)` for replay and ownership enforcement
+- `(session_id, id ASC)` only if a narrower session-local lookup is still useful internally
 
 The event vocabulary should match the existing SSE contract:
 
@@ -100,15 +106,24 @@ The event vocabulary should match the existing SSE contract:
 - it would blur “current state” vs “historical event”
 - replay only needs the current live snapshot once per connection
 
+Replay reads should always be scoped by both `owner_user_id` and `session_id`, even though many deployments use per-user DB files. The service already supports injected shared DB paths, so ownership filtering must be part of the event-read contract rather than an optional optimization.
+
 ## Event Payload Rules
 
 Persist compact payloads only.
+
+Every replayable event emitted over SSE should carry:
+
+- SSE `id:` equal to the persisted event row ID
+- `event_id` in the JSON payload with the same numeric value
+- `replayed` in the JSON payload to distinguish catch-up rows from live tail rows
+
+The stored `event_payload_json` remains compact metadata and does not need to redundantly store `replayed`.
 
 ### `status`
 
 Payload:
 
-- `id`
 - `status`
 - `phase`
 - `control_state`
@@ -120,7 +135,6 @@ Payload:
 
 Payload:
 
-- `id`
 - `progress_percent`
 - `progress_message`
 
@@ -131,8 +145,9 @@ Payload:
 - `checkpoint_id`
 - `checkpoint_type`
 - `status`
-- `proposed_payload`
 - `resolution`
+- `phase`
+- `has_proposed_payload`
 
 ### `artifact`
 
@@ -174,13 +189,29 @@ In `tldw_Server_API/app/core/Research/service.py`, append:
 
 ### Artifact Registration
 
-In `tldw_Server_API/app/core/Research/artifact_store.py` or the DB layer behind it, append:
+In `tldw_Server_API/app/core/Research/artifact_store.py`, append:
 
 - `artifact` whenever a new artifact version is recorded
 
 ### Checkpoint Creation / Resolution
 
-When checkpoint rows are created or resolved, persist `checkpoint` events using the compact checkpoint payload.
+When checkpoint rows are created or resolved, persist `checkpoint` events using compact metadata only. The full checkpoint payload remains available through the snapshot/read APIs and checkpoint rows themselves.
+
+## Atomicity And Consistency
+
+State mutation and event persistence must be transactionally consistent.
+
+For session and checkpoint transitions:
+
+- the state update and the event insert should happen in the same SQLite transaction
+- the stream should never observe an event row describing a transition that the current session/checkpoint rows do not yet reflect
+- the system should never commit a session/checkpoint transition without the corresponding event row
+
+For artifact writes:
+
+- write the file payload to disk first
+- then, in a single DB transaction, record the artifact manifest row and append the `artifact` event row
+- if the DB transaction fails after the file write, the orphaned file is acceptable and a retry may overwrite the same path safely, but the manifest and event rows must remain consistent with each other
 
 ## Dedupe And Retry Safety
 
@@ -208,6 +239,12 @@ Recommended flow:
 5. Emit them in order
 6. When a `terminal` event is emitted and the run is terminal, close
 
+If a client connects to an already-terminal run and `after_id` is already at or beyond the stored terminal row, the stream should still emit:
+
+1. `snapshot`
+2. one synthetic `terminal` event derived from current state
+3. close
+
 The stream may still consult current session state for:
 
 - the opening `snapshot`
@@ -222,7 +259,7 @@ Extend `ResearchSessionsDB._ensure_schema()` with additive migration for the new
 The migration should:
 
 - create `research_run_events` if it does not exist
-- create the replay index on `(session_id, id)`
+- create the replay index on `(owner_user_id, session_id, id)`
 - avoid destructive changes
 
 This should follow the same in-place SQLite migration style already used for research sessions.
@@ -236,8 +273,10 @@ Add three layers of coverage.
 For the research DB and service layer:
 
 - event rows append successfully
-- `list_research_run_events_after(session_id, after_id)` returns ordered rows
+- `list_research_run_events_after(owner_user_id, session_id, after_id)` returns ordered rows
+- ownership-scoped reads do not leak rows across users
 - latest-event dedupe suppresses identical retries
+- transaction-bound writes do not persist state without the matching event row
 
 ### Endpoint Tests
 
@@ -245,6 +284,8 @@ For the SSE endpoint:
 
 - `after_id=0` emits `snapshot` then current/future rows
 - `after_id=N` replays only newer rows
+- replayed rows expose both SSE `id:` and JSON `event_id`
+- `snapshot` includes `latest_event_id`
 - missing session maps to `404`
 - terminal run with replay emits `snapshot`, remaining replay rows, `terminal`, and closes
 
