@@ -17,35 +17,19 @@ from tldw_Server_API.app.core.Research.models import (
     ResearchSourceRecord,
 )
 from tldw_Server_API.app.core.Research.planner import build_initial_plan
+from tldw_Server_API.app.core.Research.providers.academic import AcademicResearchProvider
+from tldw_Server_API.app.core.Research.providers.config import resolve_provider_config
+from tldw_Server_API.app.core.Research.providers.local import LocalResearchProvider
+from tldw_Server_API.app.core.Research.providers.web import WebResearchProvider
 from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
 
 RESEARCH_DOMAIN = "research"
 RESEARCH_JOB_TYPE = "research_phase"
 RESEARCH_QUEUE = "default"
 
-_DEFAULT_PROVIDER_CONFIG = {
-    "local": {"top_k": 5, "sources": ["media_db"]},
-    "web": {"engine": "duckduckgo", "result_count": 5},
-    "academic": {"providers": ["arxiv", "pubmed", "crossref"], "max_results": 5},
-    "synthesis": {"provider": None, "model": None, "temperature": 0.2},
-}
-
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _resolve_provider_config(raw_overrides: dict[str, Any] | None) -> dict[str, Any]:
-    resolved = {section: dict(values) for section, values in _DEFAULT_PROVIDER_CONFIG.items()}
-    overrides = raw_overrides if isinstance(raw_overrides, dict) else {}
-    for section, values in overrides.items():
-        if section not in resolved or not isinstance(values, dict):
-            continue
-        for key, value in values.items():
-            if key not in resolved[section]:
-                continue
-            resolved[section][key] = value
-    return resolved
 
 
 def enqueue_research_phase_job(
@@ -116,7 +100,11 @@ async def handle_research_phase_job(
             db=db,
             artifact_store=artifact_store,
             job_id=job_id,
-            broker=broker or ResearchBroker(),
+            broker=broker or ResearchBroker(
+                local_provider=LocalResearchProvider(),
+                academic_provider=AcademicResearchProvider(),
+                web_provider=WebResearchProvider(),
+            ),
         )
     if phase == "synthesizing":
         return await _handle_synthesizing_phase(
@@ -161,7 +149,7 @@ async def _handle_planning_phase(
         owner_user_id=session.owner_user_id,
         session_id=session.id,
         artifact_name="provider_config.json",
-        payload=_resolve_provider_config(session.provider_overrides_json),
+        payload=resolve_provider_config(session.provider_overrides_json),
         phase=session.phase,
         job_id=job_id,
     )
@@ -198,12 +186,15 @@ async def _handle_collecting_phase(
     broker: ResearchBroker,
 ) -> dict[str, Any]:
     plan = _load_effective_plan(session=session, artifact_store=artifact_store)
+    provider_config = _load_provider_config(session=session, artifact_store=artifact_store)
 
     sources_by_fingerprint: dict[str, dict[str, Any]] = {}
     evidence_notes: list[dict[str, Any]] = []
     remaining_gaps: list[str] = []
     gap_set: set[str] = set()
     lane_counts = {"local": 0, "academic": 0, "web": 0}
+    lane_attempts = {"local": 0, "academic": 0, "web": 0}
+    lane_errors: list[dict[str, str]] = []
     deduped_sources = 0
 
     for focus_area in plan.focus_areas:
@@ -212,6 +203,7 @@ async def _handle_collecting_phase(
             owner_user_id=session.owner_user_id,
             focus_area=focus_area,
             plan=plan,
+            provider_config=provider_config,
             context={},
         )
         for source in result.sources:
@@ -226,6 +218,18 @@ async def _handle_collecting_phase(
         lane_metrics = metrics.get("lane_counts") if isinstance(metrics.get("lane_counts"), dict) else {}
         for lane in lane_counts:
             lane_counts[lane] += int(lane_metrics.get(lane, 0) or 0)
+        lane_attempt_metrics = metrics.get("lane_attempts") if isinstance(metrics.get("lane_attempts"), dict) else {}
+        for lane in lane_attempts:
+            lane_attempts[lane] += int(lane_attempt_metrics.get(lane, 0) or 0)
+        lane_error_records = metrics.get("lane_errors")
+        if isinstance(lane_error_records, list):
+            lane_errors.extend(
+                item
+                for item in lane_error_records
+                if isinstance(item, dict)
+                and str(item.get("lane") or "").strip()
+                and str(item.get("message") or "").strip()
+            )
         deduped_sources += int(metrics.get("deduped_sources", 0) or 0)
         for gap in result.remaining_gaps:
             if gap not in gap_set:
@@ -233,6 +237,10 @@ async def _handle_collecting_phase(
                 remaining_gaps.append(gap)
 
     source_registry = list(sources_by_fingerprint.values())
+    attempted_lane_total = sum(lane_attempts.values())
+    if not source_registry and attempted_lane_total > 0 and len(lane_errors) == attempted_lane_total:
+        raise ValueError("all attempted collection lanes failed")
+
     collection_summary = {
         "query": plan.query,
         "focus_areas": plan.focus_areas,
@@ -240,8 +248,10 @@ async def _handle_collecting_phase(
         "source_count": len(source_registry),
         "evidence_note_count": len(evidence_notes),
         "remaining_gaps": remaining_gaps,
+        "lane_errors": lane_errors,
         "collection_metrics": {
             "lane_counts": lane_counts,
+            "lane_attempts": lane_attempts,
             "deduped_sources": deduped_sources,
         },
     }
@@ -299,6 +309,17 @@ async def _handle_collecting_phase(
         "checkpoint_id": checkpoint_id,
         "artifacts_written": 3,
     }
+
+
+def _load_provider_config(
+    *,
+    session: Any,
+    artifact_store: ResearchArtifactStore,
+) -> dict[str, Any]:
+    provider_config = artifact_store.read_json(session_id=session.id, artifact_name="provider_config.json")
+    if isinstance(provider_config, dict):
+        return provider_config
+    return resolve_provider_config(session.provider_overrides_json)
 
 
 async def _handle_synthesizing_phase(

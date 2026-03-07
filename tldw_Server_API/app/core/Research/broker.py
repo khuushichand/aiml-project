@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Protocol
 
 from tldw_Server_API.app.core.testing import is_test_mode
 
@@ -17,6 +16,17 @@ from .models import (
 )
 
 LaneFn = Callable[..., Awaitable[list[dict[str, Any]]]]
+
+
+class ResearchLaneProvider(Protocol):
+    async def search(
+        self,
+        *,
+        focus_area: str,
+        query: str,
+        owner_user_id: str,
+        config: dict[str, Any],
+    ) -> list[dict[str, Any]]: ...
 
 
 def _utc_now() -> str:
@@ -38,10 +48,16 @@ class ResearchBroker:
     def __init__(
         self,
         *,
+        local_provider: ResearchLaneProvider | None = None,
+        academic_provider: ResearchLaneProvider | None = None,
+        web_provider: ResearchLaneProvider | None = None,
         local_search_fn: LaneFn | None = None,
         academic_search_fn: LaneFn | None = None,
         web_search_fn: LaneFn | None = None,
     ) -> None:
+        self._local_provider = local_provider
+        self._academic_provider = academic_provider
+        self._web_provider = web_provider
         self._local_search_fn = local_search_fn or self._default_local_search
         self._academic_search_fn = academic_search_fn or self._default_academic_search
         self._web_search_fn = web_search_fn or self._default_web_search
@@ -53,14 +69,17 @@ class ResearchBroker:
         owner_user_id: str,
         focus_area: str,
         plan: ResearchPlan,
+        provider_config: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
     ) -> ResearchCollectionResult:
         context = dict(context or {})
-        lanes = await self._collect_lanes_for_policy(
+        resolved_provider_config = provider_config if isinstance(provider_config, dict) else {}
+        lanes, lane_errors, lane_attempts = await self._collect_lanes_for_policy(
             source_policy=plan.source_policy,
             focus_area=focus_area,
             query=plan.query,
             owner_user_id=owner_user_id,
+            provider_config=resolved_provider_config,
             context=context,
         )
 
@@ -91,7 +110,11 @@ class ResearchBroker:
         remaining_gaps: list[str] = []
         if not sources_by_fingerprint:
             remaining_gaps.append("no_sources_collected")
-        if plan.source_policy in {"balanced", "local_first"} and len(sources_by_fingerprint) < 2:
+        external_count = sum(
+            len([item for lane, items in lanes if lane == lane_name for item in items])
+            for lane_name in ("academic", "web")
+        )
+        if plan.source_policy in {"balanced", "local_first"} and external_count == 0:
             remaining_gaps.append("weak_external_coverage")
 
         lane_counts = {
@@ -105,6 +128,8 @@ class ResearchBroker:
             evidence_notes=evidence_notes,
             collection_metrics={
                 "lane_counts": lane_counts,
+                "lane_attempts": lane_attempts,
+                "lane_errors": lane_errors,
                 "deduped_sources": deduped_sources,
                 "source_policy": plan.source_policy,
             },
@@ -118,52 +143,127 @@ class ResearchBroker:
         focus_area: str,
         query: str,
         owner_user_id: str,
+        provider_config: dict[str, Any],
         context: dict[str, Any],
-    ) -> list[tuple[str, list[dict[str, Any]]]]:
-        local_records = await self._local_search_fn(
+    ) -> tuple[list[tuple[str, list[dict[str, Any]]]], list[dict[str, str]], dict[str, int]]:
+        lane_errors: list[dict[str, str]] = []
+        lane_attempts = {"local": 0, "academic": 0, "web": 0}
+
+        local_records, local_error = await self._run_lane(
+            lane_name="local",
+            provider=self._local_provider,
+            search_fn=self._local_search_fn,
             focus_area=focus_area,
             query=query,
             owner_user_id=owner_user_id,
+            config=provider_config.get("local", {}) if isinstance(provider_config.get("local"), dict) else {},
             context=context,
         )
+        lane_attempts["local"] += 1
+        if local_error is not None:
+            lane_errors.append(local_error)
 
         if source_policy == "local_only":
-            return [("local", local_records)]
+            return [("local", local_records)], lane_errors, lane_attempts
 
         if source_policy == "external_only":
-            academic_records = await self._academic_search_fn(
+            academic_records, academic_error = await self._run_lane(
+                lane_name="academic",
+                provider=self._academic_provider,
+                search_fn=self._academic_search_fn,
                 focus_area=focus_area,
                 query=query,
                 owner_user_id=owner_user_id,
+                config=provider_config.get("academic", {}) if isinstance(provider_config.get("academic"), dict) else {},
                 context=context,
             )
-            web_records = await self._web_search_fn(
+            lane_attempts["academic"] += 1
+            if academic_error is not None:
+                lane_errors.append(academic_error)
+
+            web_records, web_error = await self._run_lane(
+                lane_name="web",
+                provider=self._web_provider,
+                search_fn=self._web_search_fn,
                 focus_area=focus_area,
                 query=query,
                 owner_user_id=owner_user_id,
+                config=provider_config.get("web", {}) if isinstance(provider_config.get("web"), dict) else {},
                 context=context,
             )
-            return [("academic", academic_records), ("web", web_records)]
+            lane_attempts["web"] += 1
+            if web_error is not None:
+                lane_errors.append(web_error)
+            return [("academic", academic_records), ("web", web_records)], lane_errors, lane_attempts
 
         if source_policy == "local_first" and len(local_records) >= 2:
-            return [("local", local_records)]
+            return [("local", local_records)], lane_errors, lane_attempts
 
-        academic_records = await self._academic_search_fn(
+        academic_records, academic_error = await self._run_lane(
+            lane_name="academic",
+            provider=self._academic_provider,
+            search_fn=self._academic_search_fn,
             focus_area=focus_area,
             query=query,
             owner_user_id=owner_user_id,
+            config=provider_config.get("academic", {}) if isinstance(provider_config.get("academic"), dict) else {},
             context=context,
         )
-        web_records = await self._web_search_fn(
+        lane_attempts["academic"] += 1
+        if academic_error is not None:
+            lane_errors.append(academic_error)
+
+        web_records, web_error = await self._run_lane(
+            lane_name="web",
+            provider=self._web_provider,
+            search_fn=self._web_search_fn,
             focus_area=focus_area,
             query=query,
             owner_user_id=owner_user_id,
+            config=provider_config.get("web", {}) if isinstance(provider_config.get("web"), dict) else {},
             context=context,
         )
+        lane_attempts["web"] += 1
+        if web_error is not None:
+            lane_errors.append(web_error)
 
         if source_policy == "external_first":
-            return [("academic", academic_records), ("web", web_records), ("local", local_records)]
-        return [("local", local_records), ("academic", academic_records), ("web", web_records)]
+            return [("academic", academic_records), ("web", web_records), ("local", local_records)], lane_errors, lane_attempts
+        return [("local", local_records), ("academic", academic_records), ("web", web_records)], lane_errors, lane_attempts
+
+    async def _run_lane(
+        self,
+        *,
+        lane_name: str,
+        provider: ResearchLaneProvider | None,
+        search_fn: LaneFn,
+        focus_area: str,
+        query: str,
+        owner_user_id: str,
+        config: dict[str, Any],
+        context: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
+        try:
+            if provider is not None:
+                records = await provider.search(
+                    focus_area=focus_area,
+                    query=query,
+                    owner_user_id=owner_user_id,
+                    config=dict(config),
+                )
+            else:
+                records = await search_fn(
+                    focus_area=focus_area,
+                    query=query,
+                    owner_user_id=owner_user_id,
+                    context=context,
+                )
+        except Exception as exc:
+            message = str(exc).strip() or exc.__class__.__name__
+            return [], {"focus_area": focus_area, "lane": lane_name, "message": message}
+
+        normalized_records = [record for record in records if isinstance(record, dict)]
+        return normalized_records, None
 
     def _normalize_source(
         self,
@@ -178,11 +278,14 @@ class ResearchBroker:
             "academic": "academic_paper",
             "web": "web_page",
         }[lane_name]
-        provider = {
-            "local": "local_corpus",
-            "academic": "academic_search",
-            "web": "web_search",
-        }[lane_name]
+        provider = str(
+            raw.get("provider")
+            or {
+                "local": "local_corpus",
+                "academic": "academic_search",
+                "web": "web_search",
+            }[lane_name]
+        ).strip()
 
         title = str(raw.get("title") or raw.get("name") or focus_area).strip()
         url = raw.get("url")

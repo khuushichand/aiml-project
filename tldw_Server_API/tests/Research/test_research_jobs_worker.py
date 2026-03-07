@@ -4,6 +4,26 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
+class _ProviderStub:
+    def __init__(self, records=None, *, error: Exception | None = None):
+        self._records = list(records or [])
+        self._error = error
+        self.calls: list[dict[str, object]] = []
+
+    async def search(self, *, focus_area: str, query: str, owner_user_id: str, config: dict[str, object]):
+        self.calls.append(
+            {
+                "focus_area": focus_area,
+                "query": query,
+                "owner_user_id": owner_user_id,
+                "config": dict(config),
+            }
+        )
+        if self._error is not None:
+            raise self._error
+        return list(self._records)
+
+
 @pytest.mark.asyncio
 async def test_planning_job_writes_plan_and_opens_checkpoint(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
@@ -202,6 +222,169 @@ async def test_collecting_job_advances_autonomous_run_to_synthesizing(tmp_path):
     assert updated is not None
     assert updated.phase == "synthesizing"
     assert result["phase"] == "synthesizing"
+
+
+@pytest.mark.asyncio
+async def test_collecting_job_reads_provider_config_and_passes_lane_settings(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.broker import ResearchBroker
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Test collecting config",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="collecting",
+        status="queued",
+    )
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="plan.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["evidence alignment"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+        phase="collecting",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="provider_config.json",
+        payload={
+            "local": {"top_k": 4, "sources": ["media_db"]},
+            "academic": {"providers": ["arxiv"], "max_results": 2},
+            "web": {"engine": "kagi", "result_count": 3},
+            "synthesis": {"provider": None, "model": None, "temperature": 0.2},
+        },
+        phase="collecting",
+        job_id=None,
+    )
+
+    local_provider = _ProviderStub(
+        [{"id": "doc-1", "title": "Internal source", "content": "Internal note summary", "provider": "local_corpus"}]
+    )
+    academic_provider = _ProviderStub(
+        [{"doi": "10.1000/example", "title": "Academic source", "summary": "paper", "provider": "arxiv"}]
+    )
+    web_provider = _ProviderStub(
+        [{"url": "https://example.com/report", "title": "Web source", "snippet": "report", "provider": "kagi"}]
+    )
+
+    result = await handle_research_phase_job(
+        {
+            "id": 70,
+            "payload": {
+                "session_id": session.id,
+                "phase": "collecting",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        broker=ResearchBroker(
+            local_provider=local_provider,
+            academic_provider=academic_provider,
+            web_provider=web_provider,
+        ),
+    )
+
+    assert result["phase"] == "synthesizing"
+    assert local_provider.calls[0]["config"] == {"top_k": 4, "sources": ["media_db"]}
+    assert academic_provider.calls[0]["config"] == {"providers": ["arxiv"], "max_results": 2}
+    assert web_provider.calls[0]["config"] == {"engine": "kagi", "result_count": 3}
+
+
+@pytest.mark.asyncio
+async def test_collecting_job_records_lane_errors_and_still_advances_when_one_lane_succeeds(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.broker import ResearchBroker
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Test collecting lane errors",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="collecting",
+        status="queued",
+    )
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="plan.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["evidence alignment"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+        phase="collecting",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="provider_config.json",
+        payload={
+            "local": {"top_k": 5, "sources": ["media_db"]},
+            "academic": {"providers": ["arxiv"], "max_results": 2},
+            "web": {"engine": "duckduckgo", "result_count": 3},
+            "synthesis": {"provider": None, "model": None, "temperature": 0.2},
+        },
+        phase="collecting",
+        job_id=None,
+    )
+
+    broker = ResearchBroker(
+        local_provider=_ProviderStub(
+            [{"id": "doc-1", "title": "Internal source", "content": "Internal note summary", "provider": "local_corpus"}]
+        ),
+        academic_provider=_ProviderStub([]),
+        web_provider=_ProviderStub(error=RuntimeError("web search failed")),
+    )
+
+    result = await handle_research_phase_job(
+        {
+            "id": 71,
+            "payload": {
+                "session_id": session.id,
+                "phase": "collecting",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        broker=broker,
+    )
+
+    collection_summary = store.read_json(session_id=session.id, artifact_name="collection_summary.json")
+
+    assert result["phase"] == "synthesizing"
+    assert collection_summary is not None
+    assert collection_summary["lane_errors"] == [
+        {
+            "focus_area": "evidence alignment",
+            "lane": "web",
+            "message": "web search failed",
+        }
+    ]
 
 
 @pytest.mark.asyncio

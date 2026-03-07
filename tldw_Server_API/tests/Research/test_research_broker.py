@@ -132,3 +132,129 @@ async def test_broker_dedupes_sources_across_lanes():
     assert len(result.sources) == 1
     assert len(result.evidence_notes) == 1
     assert result.collection_metrics["deduped_sources"] == 1
+
+
+class _ProviderStub:
+    def __init__(self, records=None, *, error: Exception | None = None):
+        self._records = list(records or [])
+        self._error = error
+        self.calls: list[dict[str, object]] = []
+
+    async def search(self, *, focus_area: str, query: str, owner_user_id: str, config: dict[str, object]):
+        self.calls.append(
+            {
+                "focus_area": focus_area,
+                "query": query,
+                "owner_user_id": owner_user_id,
+                "config": dict(config),
+            }
+        )
+        if self._error is not None:
+            raise self._error
+        return list(self._records)
+
+
+@pytest.mark.asyncio
+async def test_broker_passes_resolved_provider_config_and_preserves_provider_identity():
+    from tldw_Server_API.app.core.Research.broker import ResearchBroker
+
+    local_provider = _ProviderStub(
+        [
+            {
+                "id": "doc-1",
+                "title": "Internal note",
+                "content": "Internal note summary",
+                "provider": "local_corpus",
+            }
+        ]
+    )
+    academic_provider = _ProviderStub(
+        [
+            {
+                "doi": "10.1000/example",
+                "title": "Academic source",
+                "summary": "paper",
+                "provider": "arxiv",
+            }
+        ]
+    )
+    web_provider = _ProviderStub(
+        [
+            {
+                "url": "https://example.com/report",
+                "title": "Web source",
+                "snippet": "report",
+                "provider": "kagi",
+            }
+        ]
+    )
+
+    broker = ResearchBroker(
+        local_provider=local_provider,
+        academic_provider=academic_provider,
+        web_provider=web_provider,
+    )
+
+    result = await broker.collect_focus_area(
+        session_id="rs_1",
+        owner_user_id="1",
+        focus_area="evidence alignment",
+        plan=_plan("balanced"),
+        provider_config={
+            "local": {"top_k": 4, "sources": ["media_db"]},
+            "academic": {"providers": ["arxiv"], "max_results": 2},
+            "web": {"engine": "kagi", "result_count": 3},
+        },
+        context={},
+    )
+
+    assert local_provider.calls[0]["config"] == {"top_k": 4, "sources": ["media_db"]}
+    assert academic_provider.calls[0]["config"] == {"providers": ["arxiv"], "max_results": 2}
+    assert web_provider.calls[0]["config"] == {"engine": "kagi", "result_count": 3}
+    assert {source.provider for source in result.sources} == {"local_corpus", "arxiv", "kagi"}
+
+
+@pytest.mark.asyncio
+async def test_broker_records_structured_lane_errors_without_failing_collection():
+    from tldw_Server_API.app.core.Research.broker import ResearchBroker
+
+    local_provider = _ProviderStub(
+        [
+            {
+                "id": "doc-1",
+                "title": "Internal note",
+                "content": "Internal note summary",
+                "provider": "local_corpus",
+            }
+        ]
+    )
+    academic_provider = _ProviderStub([])
+    web_provider = _ProviderStub(error=RuntimeError("web search failed"))
+
+    broker = ResearchBroker(
+        local_provider=local_provider,
+        academic_provider=academic_provider,
+        web_provider=web_provider,
+    )
+
+    result = await broker.collect_focus_area(
+        session_id="rs_1",
+        owner_user_id="1",
+        focus_area="evidence alignment",
+        plan=_plan("balanced"),
+        provider_config={
+            "local": {"top_k": 5, "sources": ["media_db"]},
+            "academic": {"providers": ["arxiv"], "max_results": 2},
+            "web": {"engine": "duckduckgo", "result_count": 3},
+        },
+        context={},
+    )
+
+    assert len(result.sources) == 1
+    assert result.collection_metrics["lane_errors"] == [
+        {
+            "focus_area": "evidence alignment",
+            "lane": "web",
+            "message": "web search failed",
+        }
+    ]
