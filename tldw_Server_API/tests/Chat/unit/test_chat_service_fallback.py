@@ -239,6 +239,87 @@ async def test_execute_non_stream_call_refreshes_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_non_stream_call_attaches_continuation_metadata_and_parent_id(monkeypatch):
+    async def fake_log_llm_usage(**_kwargs):
+        return None
+
+    monkeypatch.setattr(chat_service, "log_llm_usage", fake_log_llm_usage)
+    monkeypatch.setattr(chat_service, "get_topic_monitoring_service", lambda: None)
+
+    metrics = _DummyMetrics()
+    save_payloads: list[dict[str, object]] = []
+
+    def llm_call_func():
+        return {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "continued"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+
+    async def save_message_fn(*_args, **_kwargs):
+        payload = _args[2] if len(_args) > 2 else _kwargs.get("payload", {})
+        if isinstance(payload, dict):
+            save_payloads.append(payload)
+        return "msg-cont-1"
+
+    request = SimpleNamespace(
+        method="POST",
+        url=SimpleNamespace(path="/api/v1/chat/completions"),
+        headers={},
+        state=SimpleNamespace(user_id=None, api_key_id=None),
+    )
+
+    continuation_meta = {
+        "applied": True,
+        "mode": "branch",
+        "from_message_id": "anchor-msg-1",
+    }
+
+    response = await execute_non_stream_call(
+        current_loop=asyncio.get_running_loop(),
+        cleaned_args={
+            "api_endpoint": "openai",
+            "api_key": "test-key",
+            "messages_payload": [{"role": "user", "content": "continue"}],
+            "model": "gpt-4o-mini",
+            "streaming": False,
+        },
+        selected_provider="openai",
+        provider="openai",
+        model="gpt-4o-mini",
+        request_json="{}",
+        request=request,
+        metrics=metrics,
+        provider_manager=None,
+        templated_llm_payload=[{"role": "user", "content": "continue"}],
+        should_persist=True,
+        final_conversation_id="conv-123",
+        character_card_for_context={"name": "Test"},
+        chat_db=SimpleNamespace(),
+        save_message_fn=save_message_fn,
+        audit_service=None,
+        audit_context=None,
+        client_id="client",
+        queue_execution_enabled=False,
+        enable_provider_fallback=False,
+        llm_call_func=llm_call_func,
+        refresh_provider_params=lambda *_args, **_kwargs: None,
+        moderation_getter=lambda: _DummyModeration(),
+        assistant_parent_message_id="anchor-msg-1",
+        continuation_metadata=continuation_meta,
+    )
+
+    assert save_payloads
+    assert save_payloads[0]["parent_message_id"] == "anchor-msg-1"
+    assert response["tldw_continuation"] == continuation_meta
+    assert response["tldw_message_id"] == "msg-cont-1"
+
+
+@pytest.mark.asyncio
 async def test_execute_streaming_call_preserves_http_exception(monkeypatch):
     metrics = _DummyMetrics()
     provider_manager = _DummyProviderManager()

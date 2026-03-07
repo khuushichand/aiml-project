@@ -1558,6 +1558,12 @@ async def _save_message_turn_to_db(
     sender = role or "assistant"
     if role == "tool":
         sender = "tool"
+    parent_message_id_raw = message_obj.get("parent_message_id")
+    parent_message_id = (
+        parent_message_id_raw.strip()
+        if isinstance(parent_message_id_raw, str)
+        else None
+    )
     db_payload = {
         "conversation_id": conversation_id,
         "sender": sender,
@@ -1566,6 +1572,8 @@ async def _save_message_turn_to_db(
         "image_mime_type": primary_image_mime,
         "client_id": db.client_id,
     }
+    if parent_message_id:
+        db_payload["parent_message_id"] = parent_message_id
     timestamp = _normalize_message_timestamp(message_obj.get("timestamp"))
     if timestamp:
         db_payload["timestamp"] = timestamp
@@ -2621,6 +2629,7 @@ async def create_chat_completion(
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
             # --- Character/Conversation Context, History, and Current Turn ---
+            continuation_runtime: dict[str, Any] = {}
             (
                 character_card_for_context,
                 character_db_id_for_context,
@@ -2636,6 +2645,17 @@ async def create_chat_completion(
                 default_save_to_db=DEFAULT_SAVE_TO_DB,
                 final_conversation_id=final_conversation_id,
                 save_message_fn=_save_message_turn_to_db,
+                runtime_state=continuation_runtime,
+            )
+            continuation_meta = (
+                continuation_runtime.get("tldw_continuation")
+                if isinstance(continuation_runtime.get("tldw_continuation"), dict)
+                else None
+            )
+            assistant_parent_message_id = (
+                str(continuation_runtime.get("assistant_parent_message_id"))
+                if continuation_runtime.get("assistant_parent_message_id")
+                else None
             )
 
             # --- Prompt Templating (system + content transforms) ---
@@ -3275,6 +3295,8 @@ async def create_chat_completion(
                         if _rg_handle_id else None
                     ),
                     self_monitoring_service=_self_mon_service,
+                    assistant_parent_message_id=assistant_parent_message_id,
+                    continuation_metadata=continuation_meta,
                 )
                 if persona_debug_requested and persona_debug_meta and persona_debug_meta.get("debug_id"):
                     try:
@@ -3314,6 +3336,8 @@ async def create_chat_completion(
                     moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
                     self_monitoring_service=_self_mon_service,
+                    assistant_parent_message_id=assistant_parent_message_id,
+                    continuation_metadata=continuation_meta,
                 )
                 persona_telemetry: dict[str, Any] | None = None
                 if isinstance(encoded_payload, dict) and character_db_id_for_context is not None:
