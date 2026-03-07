@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import json
 
 from tldw_Server_API.app.core.DB_Management import DB_Manager
@@ -92,3 +93,33 @@ def test_create_chat_workflows_database_uses_explicit_db_path(tmp_path):
 
     assert isinstance(db, ChatWorkflowsDatabase)
     assert db.db_path == str(tmp_path / "factory_chat_workflows.db")
+
+
+def test_append_event_assigns_unique_sequences_under_concurrency(tmp_path):
+    db = ChatWorkflowsDatabase(db_path=tmp_path / "chat_workflows.db", client_id="test")
+    run_id = db.create_run(
+        tenant_id="default",
+        user_id="user-1",
+        template_id=None,
+        template_version=1,
+        source_mode="generated_draft",
+        status="active",
+        template_snapshot={"steps": [{"id": "step-1", "base_question": "Why?"}]},
+        selected_context_refs=[],
+        resolved_context_snapshot=[],
+    )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        seqs = list(
+            executor.map(
+                lambda index: db.append_event(
+                    run_id,
+                    "test_event",
+                    {"index": index},
+                ),
+                range(20),
+            )
+        )
+
+    assert sorted(seqs) == list(range(1, 21))
+    assert [event["seq"] for event in db.list_events(run_id)] == list(range(1, 21))

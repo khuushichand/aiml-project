@@ -1,5 +1,8 @@
+"""REST endpoints for managing chat workflow templates and runs."""
+
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +17,7 @@ from tldw_Server_API.app.api.v1.API_Deps.chat_workflows_deps import (
 )
 from tldw_Server_API.app.api.v1.schemas.chat_workflows import (
     ChatWorkflowRunResponse,
+    ChatWorkflowTranscriptResponse,
     ChatWorkflowTemplateCreate,
     ChatWorkflowTemplateDraft,
     ChatWorkflowTemplateResponse,
@@ -32,7 +36,10 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 from tldw_Server_API.app.core.Chat_Workflows.question_renderer import (
     ChatWorkflowQuestionRenderer,
 )
-from tldw_Server_API.app.core.Chat_Workflows.service import ChatWorkflowService
+from tldw_Server_API.app.core.Chat_Workflows.service import (
+    ChatWorkflowConflictError,
+    ChatWorkflowService,
+)
 from tldw_Server_API.app.core.DB_Management.ChatWorkflows_DB import (
     ChatWorkflowsDatabase,
 )
@@ -42,10 +49,12 @@ router = APIRouter(prefix="/api/v1/chat-workflows", tags=["chat-workflows"])
 
 
 def _utcnow_iso() -> str:
+    """Return the current UTC timestamp in ISO-8601 format."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def _json_loads(value: str | None, *, default: Any) -> Any:
+    """Decode optional JSON text and fall back to a caller-provided default."""
     if not value:
         return default
     try:
@@ -57,18 +66,21 @@ def _json_loads(value: str | None, *, default: Any) -> Any:
 async def _get_user_context(
     user_context: dict[str, Any] = Depends(get_chat_workflows_user),
 ) -> dict[str, Any]:
+    """Expose the authenticated chat-workflows user context."""
     return user_context
 
 
 async def _get_db(
     db: ChatWorkflowsDatabase = Depends(get_chat_workflows_db),
 ) -> ChatWorkflowsDatabase:
+    """Expose the chat workflows persistence adapter."""
     return db
 
 
 async def _get_service(
     db: ChatWorkflowsDatabase = Depends(_get_db),
 ) -> ChatWorkflowService:
+    """Build the chat workflows service for the current request."""
     return ChatWorkflowService(
         db=db,
         question_renderer=ChatWorkflowQuestionRenderer(),
@@ -76,11 +88,13 @@ async def _get_service(
 
 
 def _tenant_id_for(user_context: dict[str, Any]) -> str:
+    """Normalize the caller tenant identifier for persistence filtering."""
     tenant_id = user_context.get("tenant_id")
     return str(tenant_id) if tenant_id is not None else "default"
 
 
 def _is_admin(user_context: dict[str, Any]) -> bool:
+    """Return whether the current caller bypasses per-user ownership checks."""
     return bool(user_context.get("is_admin", False))
 
 
@@ -89,6 +103,7 @@ def _require_template_access(
     *,
     user_context: dict[str, Any],
 ) -> dict[str, Any]:
+    """Enforce caller access to a workflow template or raise 404."""
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
     if _is_admin(user_context):
@@ -105,6 +120,7 @@ def _require_run_access(
     *,
     user_context: dict[str, Any],
 ) -> dict[str, Any]:
+    """Enforce caller access to a workflow run or raise 404."""
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     if _is_admin(user_context):
@@ -117,6 +133,7 @@ def _require_run_access(
 
 
 def _db_call(db: ChatWorkflowsDatabase, method_name: str, *args: Any, **kwargs: Any) -> Any:
+    """Invoke a DB adapter method or raise a 503 when storage is unavailable."""
     method = getattr(db, method_name, None)
     if not callable(method):
         raise HTTPException(
@@ -126,7 +143,18 @@ def _db_call(db: ChatWorkflowsDatabase, method_name: str, *args: Any, **kwargs: 
     return method(*args, **kwargs)
 
 
+async def _db_call_async(
+    db: ChatWorkflowsDatabase,
+    method_name: str,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Run a synchronous chat workflows DB call on a worker thread."""
+    return await asyncio.to_thread(_db_call, db, method_name, *args, **kwargs)
+
+
 def _serialize_template(template: dict[str, Any]) -> dict[str, Any]:
+    """Convert a raw DB template row into the API response shape."""
     serialized_steps: list[dict[str, Any]] = []
     for step in sorted(template.get("steps", []), key=lambda row: int(row.get("step_index", 0))):
         serialized_steps.append(
@@ -153,6 +181,7 @@ def _serialize_template(template: dict[str, Any]) -> dict[str, Any]:
 
 
 def _serialize_answer(answer: dict[str, Any]) -> dict[str, Any]:
+    """Convert a raw DB answer row into the API response shape."""
     return {
         "step_id": answer["step_id"],
         "step_index": int(answer["step_index"]),
@@ -172,7 +201,11 @@ async def _build_run_response(
     service: ChatWorkflowService,
     run: dict[str, Any],
 ) -> dict[str, Any]:
-    answers = [_serialize_answer(answer) for answer in db.list_answers(run["run_id"])]
+    """Build the canonical run response, including current question state."""
+    answers = [
+        _serialize_answer(answer)
+        for answer in await _db_call_async(db, "list_answers", run["run_id"])
+    ]
     current_question: str | None = None
     if run.get("status") == "active":
         current_step = await service.get_current_step(run["run_id"])
@@ -206,7 +239,8 @@ async def create_template(
     user_context: dict[str, Any] = Depends(_get_user_context),
     db: ChatWorkflowsDatabase = Depends(_get_db),
 ) -> dict[str, Any]:
-    template_id = _db_call(
+    """Create a workflow template owned by the authenticated user."""
+    template_id = await _db_call_async(
         db,
         "create_template",
         tenant_id=_tenant_id_for(user_context),
@@ -215,13 +249,13 @@ async def create_template(
         description=payload.description,
         version=payload.version,
     )
-    _db_call(
+    await _db_call_async(
         db,
         "replace_template_steps",
         template_id,
         [step.model_dump() for step in payload.steps],
     )
-    return _serialize_template(_db_call(db, "get_template", template_id) or {})
+    return _serialize_template(await _db_call_async(db, "get_template", template_id) or {})
 
 
 @router.get(
@@ -233,21 +267,22 @@ async def list_templates(
     user_context: dict[str, Any] = Depends(_get_user_context),
     db: ChatWorkflowsDatabase = Depends(_get_db),
 ) -> list[dict[str, Any]]:
-    templates = _db_call(
+    """List the caller's workflow templates in reverse update order."""
+    templates = await _db_call_async(
         db,
         "list_templates",
         tenant_id=_tenant_id_for(user_context),
         user_id=str(user_context["user_id"]),
     )
-    return [
-        _serialize_template(
-            _require_template_access(
-                _db_call(db, "get_template", int(template["id"])),
-                user_context=user_context,
+    serialized: list[dict[str, Any]] = []
+    for template in templates:
+        full_template = await _db_call_async(db, "get_template", int(template["id"]))
+        serialized.append(
+            _serialize_template(
+                _require_template_access(full_template, user_context=user_context)
             )
         )
-        for template in templates
-    ]
+    return serialized
 
 
 @router.get(
@@ -260,7 +295,11 @@ async def get_template(
     user_context: dict[str, Any] = Depends(_get_user_context),
     db: ChatWorkflowsDatabase = Depends(_get_db),
 ) -> dict[str, Any]:
-    template = _require_template_access(_db_call(db, "get_template", template_id), user_context=user_context)
+    """Fetch a single workflow template visible to the caller."""
+    template = _require_template_access(
+        await _db_call_async(db, "get_template", template_id),
+        user_context=user_context,
+    )
     return _serialize_template(template)
 
 
@@ -275,13 +314,17 @@ async def update_template(
     user_context: dict[str, Any] = Depends(_get_user_context),
     db: ChatWorkflowsDatabase = Depends(_get_db),
 ) -> dict[str, Any]:
-    existing = _require_template_access(_db_call(db, "get_template", template_id), user_context=user_context)
+    """Update mutable template fields and bump version on content changes."""
+    existing = _require_template_access(
+        await _db_call_async(db, "get_template", template_id),
+        user_context=user_context,
+    )
     content_changed = any(
         value is not None
         for value in (payload.title, payload.description, payload.steps)
     )
     version = int(existing.get("version", 1)) + 1 if content_changed else None
-    _db_call(
+    await _db_call_async(
         db,
         "update_template",
         template_id,
@@ -291,13 +334,16 @@ async def update_template(
         version=version,
     )
     if payload.steps is not None:
-        _db_call(
+        await _db_call_async(
             db,
             "replace_template_steps",
             template_id,
             [step.model_dump() for step in payload.steps],
         )
-    updated = _require_template_access(_db_call(db, "get_template", template_id), user_context=user_context)
+    updated = _require_template_access(
+        await _db_call_async(db, "get_template", template_id),
+        user_context=user_context,
+    )
     return _serialize_template(updated)
 
 
@@ -311,8 +357,12 @@ async def delete_template(
     user_context: dict[str, Any] = Depends(_get_user_context),
     db: ChatWorkflowsDatabase = Depends(_get_db),
 ) -> Response:
-    _require_template_access(_db_call(db, "get_template", template_id), user_context=user_context)
-    _db_call(db, "delete_template", template_id)
+    """Delete a workflow template owned by the authenticated user."""
+    _require_template_access(
+        await _db_call_async(db, "get_template", template_id),
+        user_context=user_context,
+    )
+    await _db_call_async(db, "delete_template", template_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -325,6 +375,7 @@ async def generate_draft(
     payload: GenerateDraftRequest,
     service: ChatWorkflowService = Depends(_get_service),
 ) -> dict[str, Any]:
+    """Generate a temporary linear workflow draft from a goal statement."""
     try:
         draft = service.generate_draft(
             goal=payload.goal,
@@ -347,20 +398,22 @@ async def start_run(
     db: ChatWorkflowsDatabase = Depends(_get_db),
     service: ChatWorkflowService = Depends(_get_service),
 ) -> dict[str, Any]:
+    """Start a new workflow run from a saved template or generated draft."""
     template: dict[str, Any]
     source_mode: str
     if payload.template_id is not None:
         template = _require_template_access(
-            _db_call(db, "get_template", payload.template_id),
+            await _db_call_async(db, "get_template", payload.template_id),
             user_context=user_context,
         )
-        source_mode = "template"
+        source_mode = "saved_template"
     else:
         template = payload.template_draft.model_dump() if payload.template_draft is not None else {}
-        source_mode = "generated_snapshot"
+        source_mode = "generated_draft"
 
     try:
-        created_run = service.start_run(
+        created_run = await asyncio.to_thread(
+            service.start_run,
             tenant_id=_tenant_id_for(user_context),
             user_id=str(user_context["user_id"]),
             template=template,
@@ -371,7 +424,10 @@ async def start_run(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    run = _require_run_access(_db_call(db, "get_run", created_run["run_id"]), user_context=user_context)
+    run = _require_run_access(
+        await _db_call_async(db, "get_run", created_run["run_id"]),
+        user_context=user_context,
+    )
     return await _build_run_response(db=db, service=service, run=run)
 
 
@@ -386,12 +442,17 @@ async def get_run(
     db: ChatWorkflowsDatabase = Depends(_get_db),
     service: ChatWorkflowService = Depends(_get_service),
 ) -> dict[str, Any]:
-    run = _require_run_access(_db_call(db, "get_run", run_id), user_context=user_context)
+    """Return the current state of a workflow run."""
+    run = _require_run_access(
+        await _db_call_async(db, "get_run", run_id),
+        user_context=user_context,
+    )
     return await _build_run_response(db=db, service=service, run=run)
 
 
 @router.get(
     "/runs/{run_id}/transcript",
+    response_model=ChatWorkflowTranscriptResponse,
     dependencies=[Depends(auth_deps.require_permissions(CHAT_WORKFLOWS_READ))],
 )
 async def get_run_transcript(
@@ -400,9 +461,13 @@ async def get_run_transcript(
     db: ChatWorkflowsDatabase = Depends(_get_db),
     service: ChatWorkflowService = Depends(_get_service),
 ) -> dict[str, Any]:
-    run = _require_run_access(_db_call(db, "get_run", run_id), user_context=user_context)
+    """Render the structured run as assistant/user transcript messages."""
+    run = _require_run_access(
+        await _db_call_async(db, "get_run", run_id),
+        user_context=user_context,
+    )
     messages: list[dict[str, Any]] = []
-    for answer in db.list_answers(run_id):
+    for answer in await _db_call_async(db, "list_answers", run_id):
         messages.append(
             {
                 "role": "assistant",
@@ -444,23 +509,28 @@ async def answer_run_step(
     db: ChatWorkflowsDatabase = Depends(_get_db),
     service: ChatWorkflowService = Depends(_get_service),
 ) -> dict[str, Any]:
-    run = _require_run_access(_db_call(db, "get_run", run_id), user_context=user_context)
-    if run.get("status") != "active":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only active runs can accept answers",
-        )
+    """Submit an answer for the run's current step."""
+    run = _require_run_access(
+        await _db_call_async(db, "get_run", run_id),
+        user_context=user_context,
+    )
 
     try:
         await service.record_answer(
             run_id=run_id,
             step_index=payload.step_index,
             answer_text=payload.answer_text,
+            idempotency_key=payload.idempotency_key,
         )
+    except ChatWorkflowConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    updated_run = _require_run_access(_db_call(db, "get_run", run_id), user_context=user_context)
+    updated_run = _require_run_access(
+        await _db_call_async(db, "get_run", run_id),
+        user_context=user_context,
+    )
     return await _build_run_response(db=db, service=service, run=updated_run)
 
 
@@ -475,23 +545,30 @@ async def cancel_run(
     db: ChatWorkflowsDatabase = Depends(_get_db),
     service: ChatWorkflowService = Depends(_get_service),
 ) -> dict[str, Any]:
-    run = _require_run_access(_db_call(db, "get_run", run_id), user_context=user_context)
+    """Cancel an active or not-yet-finished workflow run."""
+    run = _require_run_access(
+        await _db_call_async(db, "get_run", run_id),
+        user_context=user_context,
+    )
     if run.get("status") == "completed":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Completed runs cannot be canceled",
         )
     if run.get("status") != "canceled":
-        _db_call(
+        await _db_call_async(
             db,
             "update_run",
             run_id,
             status="canceled",
             canceled_at=_utcnow_iso(),
         )
-        _db_call(db, "append_event", run_id, "run_canceled", {"status": "canceled"})
+        await _db_call_async(db, "append_event", run_id, "run_canceled", {"status": "canceled"})
 
-    updated_run = _require_run_access(_db_call(db, "get_run", run_id), user_context=user_context)
+    updated_run = _require_run_access(
+        await _db_call_async(db, "get_run", run_id),
+        user_context=user_context,
+    )
     return await _build_run_response(db=db, service=service, run=updated_run)
 
 
@@ -505,7 +582,11 @@ async def continue_chat(
     user_context: dict[str, Any] = Depends(_get_user_context),
     db: ChatWorkflowsDatabase = Depends(_get_db),
 ) -> dict[str, Any]:
-    run = _require_run_access(_db_call(db, "get_run", run_id), user_context=user_context)
+    """Create or return the free-chat handoff conversation for a completed run."""
+    run = _require_run_access(
+        await _db_call_async(db, "get_run", run_id),
+        user_context=user_context,
+    )
     if run.get("status") != "completed":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -515,8 +596,8 @@ async def continue_chat(
     conversation_id = run.get("free_chat_conversation_id")
     if not conversation_id:
         conversation_id = str(uuid4())
-        _db_call(db, "update_run", run_id, free_chat_conversation_id=conversation_id)
-        _db_call(
+        await _db_call_async(db, "update_run", run_id, free_chat_conversation_id=conversation_id)
+        await _db_call_async(
             db,
             "append_event",
             run_id,

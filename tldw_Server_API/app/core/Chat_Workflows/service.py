@@ -25,6 +25,10 @@ def _json_loads(value: str | None, *, default: Any) -> Any:
     return json.loads(value)
 
 
+class ChatWorkflowConflictError(ValueError):
+    """Raised when a duplicate answer conflicts with the stored workflow state."""
+
+
 class ChatWorkflowService:
     """Orchestrates chat workflow runs on top of the persistence adapter."""
 
@@ -36,6 +40,11 @@ class ChatWorkflowService:
     ) -> None:
         self.db = db
         self.question_renderer = question_renderer
+
+    async def _db_call_async(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Run a synchronous DB adapter method on a worker thread."""
+        method = getattr(self.db, method_name)
+        return await asyncio.to_thread(method, *args, **kwargs)
 
     def start_run(
         self,
@@ -117,7 +126,7 @@ class ChatWorkflowService:
         }
 
     async def get_current_step(self, run_id: str) -> dict[str, Any] | None:
-        run = self._require_run(run_id)
+        run = await self._require_run_async(run_id)
         template_snapshot = self._get_template_snapshot(run)
         current_step_index = int(run["current_step_index"])
         steps = template_snapshot["steps"]
@@ -125,18 +134,24 @@ class ChatWorkflowService:
             return None
 
         step = steps[current_step_index]
-        cached_question = self._get_rendered_question_cache(run_id, current_step_index)
+        cached_question = await self._get_rendered_question_cache_async(
+            run_id,
+            current_step_index,
+        )
         if cached_question is None:
             cached_question = await self._render_question_async(
+                run_id=run_id,
+                step_index=current_step_index,
                 step=step,
-                prior_answers=self.db.list_answers(run_id),
+                prior_answers=await self._db_call_async("list_answers", run_id),
                 context_snapshot=_json_loads(
                     run.get("resolved_context_snapshot_json"),
                     default=[],
                 ),
                 model=run.get("question_renderer_model"),
             )
-            self.db.append_event(
+            await self._db_call_async(
+                "append_event",
                 run_id,
                 "question_rendered",
                 {
@@ -159,13 +174,36 @@ class ChatWorkflowService:
         run_id: str,
         step_index: int,
         answer_text: str,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        run = self._require_run(run_id)
+        if idempotency_key is not None:
+            existing_by_key = await self._db_call_async(
+                "get_answer_by_idempotency_key",
+                run_id,
+                idempotency_key,
+            )
+            if existing_by_key is not None:
+                self._validate_replayed_answer(
+                    existing_answer=existing_by_key,
+                    step_index=step_index,
+                    answer_text=answer_text,
+                )
+                return await self._build_run_result(run_id)
+
+        run = await self._require_run_async(run_id)
         current_step_index = int(run["current_step_index"])
         if step_index != current_step_index:
+            existing_answer = await self._db_call_async("get_answer", run_id, step_index)
+            if existing_answer is not None and existing_answer["answer_text"] == answer_text:
+                return await self._build_run_result(run_id)
             raise ValueError(
                 f"invalid step submission: expected step submission for index {current_step_index}"
             )
+        if run.get("status") != "active":
+            existing_answer = await self._db_call_async("get_answer", run_id, step_index)
+            if existing_answer is not None and existing_answer["answer_text"] == answer_text:
+                return await self._build_run_result(run_id)
+            raise ValueError("run is not active")
 
         template_snapshot = self._get_template_snapshot(run)
         steps = template_snapshot["steps"]
@@ -173,18 +211,24 @@ class ChatWorkflowService:
             raise ValueError("run is already complete")
 
         step = steps[current_step_index]
-        rendered_question = self._get_rendered_question_cache(run_id, current_step_index)
+        rendered_question = await self._get_rendered_question_cache_async(
+            run_id,
+            current_step_index,
+        )
         if rendered_question is None:
             rendered_question = await self._render_question_async(
+                run_id=run_id,
+                step_index=current_step_index,
                 step=step,
-                prior_answers=self.db.list_answers(run_id),
+                prior_answers=await self._db_call_async("list_answers", run_id),
                 context_snapshot=_json_loads(
                     run.get("resolved_context_snapshot_json"),
                     default=[],
                 ),
                 model=run.get("question_renderer_model"),
             )
-            self.db.append_event(
+            await self._db_call_async(
+                "append_event",
                 run_id,
                 "question_rendered",
                 {
@@ -194,38 +238,49 @@ class ChatWorkflowService:
                 },
             )
 
-        self.db.add_answer(
+        next_step_index = current_step_index + 1
+        is_final_step = next_step_index >= len(steps)
+        transition = await self._db_call_async(
+            "record_answer_transition",
             run_id=run_id,
+            expected_step_index=current_step_index,
+            next_step_index=next_step_index,
+            next_status="completed" if is_final_step else "active",
+            completed_at=_utcnow_iso() if is_final_step else None,
             step_id=step["id"],
-            step_index=current_step_index,
             displayed_question=rendered_question["displayed_question"],
             answer_text=answer_text,
             question_generation_meta=rendered_question.get("question_generation_meta", {}),
+            idempotency_key=idempotency_key,
         )
 
-        next_step_index = current_step_index + 1
-        if next_step_index >= len(steps):
-            self.db.update_run(
-                run_id,
-                status="completed",
-                current_step_index=next_step_index,
-                completed_at=_utcnow_iso(),
+        if transition["outcome"] == "replayed":
+            return await self._build_run_result(run_id)
+        if transition["outcome"] == "stale":
+            raise ValueError(
+                f"invalid step submission: expected step submission for index "
+                f"{int(transition['run']['current_step_index'])}"
             )
-            self.db.append_event(
+        if transition["outcome"] == "conflict":
+            raise ChatWorkflowConflictError(
+                "idempotency key has already been used for a different answer"
+                if transition.get("reason") == "idempotency_key_reused"
+                else "step already contains a different answer"
+            )
+
+        if is_final_step:
+            await self._db_call_async(
+                "append_event",
                 run_id,
                 "run_completed",
                 {
                     "final_step_index": current_step_index,
-                    "answer_count": len(self.db.list_answers(run_id)),
+                    "answer_count": len(await self._db_call_async("list_answers", run_id)),
                 },
             )
         else:
-            self.db.update_run(
-                run_id,
-                status="active",
-                current_step_index=next_step_index,
-            )
-            self.db.append_event(
+            await self._db_call_async(
+                "append_event",
                 run_id,
                 "step_answered",
                 {
@@ -234,12 +289,7 @@ class ChatWorkflowService:
                 },
             )
 
-        updated_run = self._require_run(run_id)
-        result = dict(updated_run)
-        result["answers"] = self.db.list_answers(run_id)
-        if result["status"] == "active":
-            result["current_step"] = await self.get_current_step(run_id)
-        return result
+        return await self._build_run_result(run_id)
 
     def _normalize_template(self, template: dict[str, Any]) -> dict[str, Any]:
         normalized_steps: list[dict[str, Any]] = []
@@ -269,6 +319,36 @@ class ChatWorkflowService:
             raise ValueError(f"run not found: {run_id}")
         return run
 
+    async def _require_run_async(self, run_id: str) -> dict[str, Any]:
+        run = await self._db_call_async("get_run", run_id)
+        if run is None:
+            raise ValueError(f"run not found: {run_id}")
+        return run
+
+    async def _build_run_result(self, run_id: str) -> dict[str, Any]:
+        run = await self._require_run_async(run_id)
+        result = dict(run)
+        result["answers"] = await self._db_call_async("list_answers", run_id)
+        if result["status"] == "active":
+            result["current_step"] = await self.get_current_step(run_id)
+        return result
+
+    def _validate_replayed_answer(
+        self,
+        *,
+        existing_answer: dict[str, Any],
+        step_index: int,
+        answer_text: str,
+    ) -> None:
+        if int(existing_answer["step_index"]) != step_index:
+            raise ChatWorkflowConflictError(
+                "idempotency key has already been used for a different step"
+            )
+        if existing_answer["answer_text"] != answer_text:
+            raise ChatWorkflowConflictError(
+                "idempotency key has already been used for a different answer"
+            )
+
     def _get_template_snapshot(self, run: dict[str, Any]) -> dict[str, Any]:
         snapshot = _json_loads(run.get("template_snapshot_json"), default={})
         steps = snapshot.get("steps", [])
@@ -276,12 +356,12 @@ class ChatWorkflowService:
             raise ValueError("run template snapshot is invalid")
         return snapshot
 
-    def _get_rendered_question_cache(
+    async def _get_rendered_question_cache_async(
         self,
         run_id: str,
         step_index: int,
     ) -> dict[str, Any] | None:
-        events = self.db.list_events(run_id)
+        events = await self._db_call_async("list_events", run_id)
         for event in reversed(events):
             if event["event_type"] != "question_rendered":
                 continue
@@ -298,6 +378,8 @@ class ChatWorkflowService:
     async def _render_question_async(
         self,
         *,
+        run_id: str,
+        step_index: int,
         step: dict[str, Any],
         prior_answers: list[dict[str, Any]],
         context_snapshot: list[dict[str, Any]] | list[Any],
@@ -331,7 +413,15 @@ class ChatWorkflowService:
                 "fallback_used": bool(rendered.get("fallback_used", False)),
             }
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Falling back to base question for chat workflow step: {}", exc)
+            logger.warning(
+                "Falling back to base question for chat workflow step "
+                "run_id={} step_index={} step_id={} model={} error={}",
+                run_id,
+                step_index,
+                step.get("id"),
+                model,
+                exc,
+            )
             return {
                 "displayed_question": base_question,
                 "question_generation_meta": {
@@ -354,6 +444,8 @@ class ChatWorkflowService:
         except RuntimeError:
             return asyncio.run(
                 self._render_question_async(
+                    run_id="sync-preview",
+                    step_index=int(step.get("step_index", 0)),
                     step=step,
                     prior_answers=prior_answers,
                     context_snapshot=context_snapshot,

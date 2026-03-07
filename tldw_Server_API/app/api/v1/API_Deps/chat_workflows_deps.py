@@ -1,3 +1,4 @@
+import asyncio
 import threading
 from pathlib import Path
 from typing import Any, Optional
@@ -137,6 +138,18 @@ async def get_chat_workflows_user(
 async def get_chat_workflows_db(
     user_context: dict[str, Any] = Depends(get_chat_workflows_user),
 ) -> ChatWorkflowsDatabase:
+    """Resolve or create the caller's chat workflows DB adapter off the event loop."""
     user_id = user_context["user_id"]
     client_id = user_context["client_id"]
-    return _get_or_create_chat_workflows_db(user_id, client_id)
+    return await asyncio.to_thread(_get_or_create_chat_workflows_db, user_id, client_id)
+
+
+def shutdown_chat_workflows_deps() -> None:
+    """Close cached chat workflows DB instances and clear the dependency cache."""
+    with _db_lock:
+        for db_instance in list(_db_instances_cache.values()):
+            try:
+                db_instance.close()
+            except _CHAT_WORKFLOWS_DB_EXCEPTIONS as exc:
+                logger.error("Failed to close ChatWorkflowsDatabase during shutdown: {}", exc)
+        _db_instances_cache.clear()

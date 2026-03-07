@@ -40,3 +40,13 @@ def test_template_step_normalizes_llm_phrased_question_mode():
 def test_start_run_request_requires_template_reference():
     with pytest.raises(ValidationError):
         StartRunRequest(selected_context_refs=[])
+
+
+def test_submit_answer_request_strips_idempotency_key():
+    req = SubmitAnswerRequest(
+        step_index=0,
+        answer_text="Ship a feature",
+        idempotency_key="  replay-1  ",
+    )
+
+    assert req.idempotency_key == "replay-1"

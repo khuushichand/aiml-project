@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from uuid import uuid4
 
 from loguru import logger
@@ -40,6 +41,7 @@ class ChatWorkflowsDatabase:
         self.client_id = client_id
         self.backend = backend
         self.db_path = str(db_path)
+        self._lock = threading.RLock()
 
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -50,17 +52,21 @@ class ChatWorkflowsDatabase:
         self._create_schema()
 
     @contextmanager
-    def transaction(self):
-        try:
-            yield self._conn
-            self._conn.commit()
-        except Exception:
-            self._conn.rollback()
-            raise
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """Open a serialized write transaction on the shared SQLite connection."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._conn
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def _create_schema(self) -> None:
-        self._conn.executescript(
-            """
+        with self._lock:
+            self._conn.executescript(
+                """
             CREATE TABLE IF NOT EXISTS chat_workflow_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tenant_id TEXT NOT NULL,
@@ -117,6 +123,7 @@ class ChatWorkflowsDatabase:
                 displayed_question TEXT NOT NULL,
                 answer_text TEXT NOT NULL,
                 question_generation_meta_json TEXT NOT NULL DEFAULT '{}',
+                idempotency_key TEXT,
                 answered_at TEXT NOT NULL,
                 FOREIGN KEY (run_id) REFERENCES chat_workflow_runs(run_id) ON DELETE CASCADE,
                 UNIQUE (run_id, step_index)
@@ -141,12 +148,17 @@ class ChatWorkflowsDatabase:
 
             CREATE INDEX IF NOT EXISTS idx_chat_workflow_answers_run
             ON chat_workflow_answers(run_id, step_index);
+            
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_workflow_answers_idempotency
+            ON chat_workflow_answers(run_id, idempotency_key)
+            WHERE idempotency_key IS NOT NULL;
             """
-        )
-        self._conn.commit()
+            )
+            self._conn.commit()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def create_template(
         self,
@@ -207,8 +219,9 @@ class ChatWorkflowsDatabase:
                 )
 
     def list_template_steps(self, template_id: int) -> list[dict[str, Any]]:
-        cursor = self._conn.execute(
-            """
+        with self._lock:
+            rows = self._conn.execute(
+                """
             SELECT id, template_id, step_id, step_index, label, base_question,
                    question_mode, phrasing_instructions, context_refs_json,
                    created_at, updated_at
@@ -216,21 +229,21 @@ class ChatWorkflowsDatabase:
             WHERE template_id = ?
             ORDER BY step_index ASC
             """,
-            (template_id,),
-        )
-        return [dict(row) for row in cursor.fetchall()]
+                (template_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_template(self, template_id: int) -> dict[str, Any] | None:
-        cursor = self._conn.execute(
-            """
+        with self._lock:
+            row = self._conn.execute(
+                """
             SELECT id, tenant_id, user_id, title, description, status, version,
                    created_at, updated_at
             FROM chat_workflow_templates
             WHERE id = ?
             """,
-            (template_id,),
-        )
-        row = cursor.fetchone()
+                (template_id,),
+            ).fetchone()
         if row is None:
             return None
         data = dict(row)
@@ -255,8 +268,9 @@ class ChatWorkflowsDatabase:
             query += " AND status = ?"
             params.append(status)
         query += " ORDER BY updated_at DESC, id DESC"
-        cursor = self._conn.execute(query, tuple(params))
-        return [dict(row) for row in cursor.fetchall()]
+        with self._lock:
+            rows = self._conn.execute(query, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
 
     def update_template(
         self,
@@ -341,8 +355,9 @@ class ChatWorkflowsDatabase:
         return run_identifier
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
-        cursor = self._conn.execute(
-            """
+        with self._lock:
+            row = self._conn.execute(
+                """
             SELECT run_id, tenant_id, user_id, template_id, template_version, source_mode, status,
                    current_step_index, template_snapshot_json, selected_context_refs_json,
                    resolved_context_snapshot_json, question_renderer_model, started_at,
@@ -350,9 +365,8 @@ class ChatWorkflowsDatabase:
             FROM chat_workflow_runs
             WHERE run_id = ?
             """,
-            (run_id,),
-        )
-        row = cursor.fetchone()
+                (run_id,),
+            ).fetchone()
         return dict(row) if row is not None else None
 
     def update_run(
@@ -410,14 +424,15 @@ class ChatWorkflowsDatabase:
         displayed_question: str,
         answer_text: str,
         question_generation_meta: dict[str, Any],
+        idempotency_key: str | None = None,
     ) -> int:
         with self.transaction() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO chat_workflow_answers (
                     run_id, step_id, step_index, displayed_question, answer_text,
-                    question_generation_meta_json, answered_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    question_generation_meta_json, idempotency_key, answered_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -426,32 +441,242 @@ class ChatWorkflowsDatabase:
                     displayed_question,
                     answer_text,
                     _json_dumps(question_generation_meta),
+                    idempotency_key,
                     _utcnow_iso(),
                 ),
             )
         return int(cursor.lastrowid)
 
     def list_answers(self, run_id: str) -> list[dict[str, Any]]:
-        cursor = self._conn.execute(
-            """
+        with self._lock:
+            rows = self._conn.execute(
+                """
             SELECT id, run_id, step_id, step_index, displayed_question, answer_text,
-                   question_generation_meta_json, answered_at
+                   question_generation_meta_json, idempotency_key, answered_at
             FROM chat_workflow_answers
             WHERE run_id = ?
             ORDER BY step_index ASC
             """,
-            (run_id,),
-        )
-        return [dict(row) for row in cursor.fetchall()]
+                (run_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_answer(self, run_id: str, step_index: int) -> dict[str, Any] | None:
+        """Return the persisted answer for a run step, if it exists."""
+        with self._lock:
+            cursor = self._conn.execute(
+                """
+                SELECT id, run_id, step_id, step_index, displayed_question, answer_text,
+                       question_generation_meta_json, idempotency_key, answered_at
+                FROM chat_workflow_answers
+                WHERE run_id = ? AND step_index = ?
+                """,
+                (run_id, step_index),
+            )
+            row = cursor.fetchone()
+        return dict(row) if row is not None else None
+
+    def get_answer_by_idempotency_key(
+        self,
+        run_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        """Return a previously stored answer for a run-level idempotency key."""
+        with self._lock:
+            cursor = self._conn.execute(
+                """
+                SELECT id, run_id, step_id, step_index, displayed_question, answer_text,
+                       question_generation_meta_json, idempotency_key, answered_at
+                FROM chat_workflow_answers
+                WHERE run_id = ? AND idempotency_key = ?
+                """,
+                (run_id, idempotency_key),
+            )
+            row = cursor.fetchone()
+        return dict(row) if row is not None else None
+
+    def record_answer_transition(
+        self,
+        *,
+        run_id: str,
+        expected_step_index: int,
+        next_step_index: int,
+        next_status: str,
+        completed_at: str | None,
+        step_id: str,
+        displayed_question: str,
+        answer_text: str,
+        question_generation_meta: dict[str, Any],
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist an answer and advance run state atomically.
+
+        Returns a dict containing `outcome`, `run`, and `answer`. The outcome is
+        one of `inserted`, `replayed`, `stale`, or `conflict`.
+        """
+
+        def _select_run(conn: sqlite3.Connection) -> sqlite3.Row | None:
+            return conn.execute(
+                """
+                SELECT run_id, tenant_id, user_id, template_id, template_version, source_mode, status,
+                       current_step_index, template_snapshot_json, selected_context_refs_json,
+                       resolved_context_snapshot_json, question_renderer_model, started_at,
+                       completed_at, canceled_at, free_chat_conversation_id
+                FROM chat_workflow_runs
+                WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+
+        def _select_answer_by_step(conn: sqlite3.Connection) -> sqlite3.Row | None:
+            return conn.execute(
+                """
+                SELECT id, run_id, step_id, step_index, displayed_question, answer_text,
+                       question_generation_meta_json, idempotency_key, answered_at
+                FROM chat_workflow_answers
+                WHERE run_id = ? AND step_index = ?
+                """,
+                (run_id, expected_step_index),
+            ).fetchone()
+
+        def _select_answer_by_key(conn: sqlite3.Connection) -> sqlite3.Row | None:
+            if idempotency_key is None:
+                return None
+            return conn.execute(
+                """
+                SELECT id, run_id, step_id, step_index, displayed_question, answer_text,
+                       question_generation_meta_json, idempotency_key, answered_at
+                FROM chat_workflow_answers
+                WHERE run_id = ? AND idempotency_key = ?
+                """,
+                (run_id, idempotency_key),
+            ).fetchone()
+
+        with self.transaction() as conn:
+            run_row = _select_run(conn)
+            if run_row is None:
+                raise ValueError(f"run not found: {run_id}")
+
+            existing_by_key = _select_answer_by_key(conn)
+            if existing_by_key is not None:
+                existing_answer = dict(existing_by_key)
+                if (
+                    int(existing_answer["step_index"]) != expected_step_index
+                    or existing_answer["answer_text"] != answer_text
+                ):
+                    return {
+                        "outcome": "conflict",
+                        "reason": "idempotency_key_reused",
+                        "run": dict(run_row),
+                        "answer": existing_answer,
+                    }
+                return {
+                    "outcome": "replayed",
+                    "run": dict(run_row),
+                    "answer": existing_answer,
+                }
+
+            current_step_index = int(run_row["current_step_index"])
+            if current_step_index != expected_step_index:
+                existing_answer_row = _select_answer_by_step(conn)
+                existing_answer = dict(existing_answer_row) if existing_answer_row is not None else None
+                if existing_answer is not None and existing_answer["answer_text"] == answer_text:
+                    return {
+                        "outcome": "replayed",
+                        "run": dict(run_row),
+                        "answer": existing_answer,
+                    }
+                return {
+                    "outcome": "stale",
+                    "run": dict(run_row),
+                    "answer": existing_answer,
+                }
+
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO chat_workflow_answers (
+                        run_id, step_id, step_index, displayed_question, answer_text,
+                        question_generation_meta_json, idempotency_key, answered_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        step_id,
+                        expected_step_index,
+                        displayed_question,
+                        answer_text,
+                        _json_dumps(question_generation_meta),
+                        idempotency_key,
+                        _utcnow_iso(),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                existing_by_key = _select_answer_by_key(conn)
+                if existing_by_key is not None:
+                    existing_answer = dict(existing_by_key)
+                    if (
+                        int(existing_answer["step_index"]) != expected_step_index
+                        or existing_answer["answer_text"] != answer_text
+                    ):
+                        return {
+                            "outcome": "conflict",
+                            "reason": "idempotency_key_reused",
+                            "run": dict(_select_run(conn) or run_row),
+                            "answer": existing_answer,
+                        }
+                    return {
+                        "outcome": "replayed",
+                        "run": dict(_select_run(conn) or run_row),
+                        "answer": existing_answer,
+                    }
+
+                existing_answer_row = _select_answer_by_step(conn)
+                existing_answer = dict(existing_answer_row) if existing_answer_row is not None else None
+                if existing_answer is not None and existing_answer["answer_text"] == answer_text:
+                    return {
+                        "outcome": "replayed",
+                        "run": dict(_select_run(conn) or run_row),
+                        "answer": existing_answer,
+                    }
+                raise
+
+            conn.execute(
+                """
+                UPDATE chat_workflow_runs
+                SET status = ?,
+                    current_step_index = ?,
+                    completed_at = CASE WHEN ? THEN ? ELSE completed_at END
+                WHERE run_id = ?
+                """,
+                (
+                    next_status,
+                    next_step_index,
+                    completed_at is not None,
+                    completed_at,
+                    run_id,
+                ),
+            )
+
+            updated_run = dict(_select_run(conn) or run_row)
+            inserted_answer_row = _select_answer_by_step(conn)
+            return {
+                "outcome": "inserted",
+                "run": updated_run,
+                "answer": dict(inserted_answer_row) if inserted_answer_row is not None else None,
+            }
 
     def append_event(self, run_id: str, event_type: str, payload: dict[str, Any]) -> int:
-        cursor = self._conn.execute(
-            "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM chat_workflow_run_events WHERE run_id = ?",
-            (run_id,),
-        )
-        row = cursor.fetchone()
-        next_seq = int(row["next_seq"]) if row is not None else 1
         with self.transaction() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq
+                FROM chat_workflow_run_events
+                WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            next_seq = int(row["next_seq"]) if row is not None else 1
             conn.execute(
                 """
                 INSERT INTO chat_workflow_run_events (
@@ -482,8 +707,9 @@ class ChatWorkflowsDatabase:
         if limit is not None:
             query += " LIMIT ?"
             params.append(limit)
-        cursor = self._conn.execute(query, tuple(params))
-        return [dict(row) for row in cursor.fetchall()]
+        with self._lock:
+            rows = self._conn.execute(query, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
 
     def __del__(self) -> None:  # pragma: no cover - defensive cleanup
         try:

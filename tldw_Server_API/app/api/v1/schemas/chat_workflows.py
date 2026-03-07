@@ -1,11 +1,14 @@
+"""Pydantic request and response models for Chat Workflows."""
+
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 
 def _strip_required(value: str, *, field_name: str) -> str:
+    """Normalize a required string field and reject blank values."""
     stripped = value.strip()
     if not stripped:
         raise ValueError(f"{field_name} must not be empty")
@@ -13,6 +16,7 @@ def _strip_required(value: str, *, field_name: str) -> str:
 
 
 def _strip_optional(value: str | None) -> str | None:
+    """Normalize an optional string field and coerce blank values to None."""
     if value is None:
         return None
     stripped = value.strip()
@@ -20,6 +24,8 @@ def _strip_optional(value: str | None) -> str | None:
 
 
 class ChatWorkflowTemplateStep(BaseModel):
+    """A single authored step in a workflow template or run snapshot."""
+
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(..., min_length=1)
@@ -32,23 +38,28 @@ class ChatWorkflowTemplateStep(BaseModel):
 
     @field_validator("id", "base_question")
     @classmethod
-    def _strip_required_fields(cls, value: str, info) -> str:
+    def _strip_required_fields(cls, value: str, info: ValidationInfo) -> str:
+        """Trim required text fields while preserving the field name in errors."""
         return _strip_required(value, field_name=info.field_name)
 
     @field_validator("label", "phrasing_instructions", mode="before")
     @classmethod
     def _strip_optional_fields(cls, value: str | None) -> str | None:
+        """Trim optional text fields before validation."""
         return _strip_optional(value)
 
     @field_validator("question_mode", mode="before")
     @classmethod
     def _normalize_question_mode(cls, value: str) -> str:
+        """Accept hyphenated question modes and normalize them to schema form."""
         if isinstance(value, str):
             return value.strip().lower().replace("-", "_")
         return value
 
 
 class ChatWorkflowTemplateDraft(BaseModel):
+    """A reusable or generated linear workflow definition."""
+
     model_config = ConfigDict(extra="forbid")
 
     title: str = Field(..., min_length=1)
@@ -59,19 +70,23 @@ class ChatWorkflowTemplateDraft(BaseModel):
     @field_validator("title")
     @classmethod
     def _strip_title(cls, value: str) -> str:
+        """Trim the draft title and reject blanks."""
         return _strip_required(value, field_name="title")
 
     @field_validator("description", mode="before")
     @classmethod
     def _strip_description(cls, value: str | None) -> str | None:
+        """Trim the optional draft description."""
         return _strip_optional(value)
 
 
 class ChatWorkflowTemplateCreate(ChatWorkflowTemplateDraft):
-    pass
+    """Request body for creating a persisted workflow template."""
 
 
 class ChatWorkflowTemplateUpdate(BaseModel):
+    """Patch body for modifying an existing workflow template."""
+
     model_config = ConfigDict(extra="forbid")
 
     title: str | None = None
@@ -82,15 +97,18 @@ class ChatWorkflowTemplateUpdate(BaseModel):
     @field_validator("title", mode="before")
     @classmethod
     def _strip_optional_title(cls, value: str | None) -> str | None:
+        """Trim the optional title override."""
         return _strip_optional(value)
 
     @field_validator("description", mode="before")
     @classmethod
     def _strip_optional_description(cls, value: str | None) -> str | None:
+        """Trim the optional description override."""
         return _strip_optional(value)
 
     @model_validator(mode="after")
     def _require_at_least_one_field(self) -> "ChatWorkflowTemplateUpdate":
+        """Reject empty update payloads that would be a no-op."""
         if (
             self.title is None
             and self.description is None
@@ -102,6 +120,8 @@ class ChatWorkflowTemplateUpdate(BaseModel):
 
 
 class GenerateDraftRequest(BaseModel):
+    """Request body for draft generation from a goal statement."""
+
     model_config = ConfigDict(extra="forbid")
 
     goal: str = Field(..., min_length=1)
@@ -112,21 +132,27 @@ class GenerateDraftRequest(BaseModel):
     @field_validator("goal")
     @classmethod
     def _strip_goal(cls, value: str) -> str:
+        """Trim the generation goal and reject blanks."""
         return _strip_required(value, field_name="goal")
 
     @field_validator("base_question", mode="before")
     @classmethod
     def _strip_base_question(cls, value: str | None) -> str | None:
+        """Trim the optional seed question."""
         return _strip_optional(value)
 
 
 class GenerateDraftResponse(BaseModel):
+    """Response body containing the generated workflow draft."""
+
     model_config = ConfigDict(extra="forbid")
 
     template_draft: ChatWorkflowTemplateDraft
 
 
 class StartRunRequest(BaseModel):
+    """Request body for starting a workflow run from a template or draft."""
+
     model_config = ConfigDict(extra="forbid")
 
     template_id: int | None = Field(default=None, ge=1)
@@ -137,10 +163,12 @@ class StartRunRequest(BaseModel):
     @field_validator("question_renderer_model", mode="before")
     @classmethod
     def _strip_question_renderer_model(cls, value: str | None) -> str | None:
+        """Trim the optional renderer model override."""
         return _strip_optional(value)
 
     @model_validator(mode="after")
     def _validate_template_source(self) -> "StartRunRequest":
+        """Require exactly one workflow source when starting a run."""
         has_template_id = self.template_id is not None
         has_template_draft = self.template_draft is not None
         if has_template_id == has_template_draft:
@@ -149,6 +177,8 @@ class StartRunRequest(BaseModel):
 
 
 class SubmitAnswerRequest(BaseModel):
+    """Request body for answering the current workflow step."""
+
     model_config = ConfigDict(extra="forbid")
 
     step_index: int = Field(..., ge=0)
@@ -158,21 +188,27 @@ class SubmitAnswerRequest(BaseModel):
     @field_validator("answer_text")
     @classmethod
     def _strip_answer(cls, value: str) -> str:
+        """Trim the answer body and reject blanks."""
         return _strip_required(value, field_name="answer_text")
 
     @field_validator("idempotency_key", mode="before")
     @classmethod
     def _strip_idempotency_key(cls, value: str | None) -> str | None:
+        """Trim the optional idempotency key."""
         return _strip_optional(value)
 
 
 class ContinueChatResponse(BaseModel):
+    """Response body for continuing a completed run as free chat."""
+
     model_config = ConfigDict(extra="forbid")
 
     conversation_id: str
 
 
 class ChatWorkflowTemplateResponse(ChatWorkflowTemplateDraft):
+    """Persisted workflow template payload returned by the API."""
+
     id: int
     status: str = "active"
     created_at: str | None = None
@@ -180,6 +216,8 @@ class ChatWorkflowTemplateResponse(ChatWorkflowTemplateDraft):
 
 
 class ChatWorkflowAnswerResponse(BaseModel):
+    """Serialized answer entry for a workflow run."""
+
     model_config = ConfigDict(extra="forbid")
 
     step_id: str
@@ -190,7 +228,28 @@ class ChatWorkflowAnswerResponse(BaseModel):
     answered_at: str | None = None
 
 
+class ChatWorkflowTranscriptMessage(BaseModel):
+    """A transcript message synthesized from a workflow run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["assistant", "user"]
+    content: str
+    step_index: int
+
+
+class ChatWorkflowTranscriptResponse(BaseModel):
+    """Transcript response for replaying a workflow run as chat messages."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    messages: list[ChatWorkflowTranscriptMessage] = Field(default_factory=list)
+
+
 class ChatWorkflowRunResponse(BaseModel):
+    """Current run state, including answered history and current question."""
+
     model_config = ConfigDict(extra="forbid")
 
     run_id: str

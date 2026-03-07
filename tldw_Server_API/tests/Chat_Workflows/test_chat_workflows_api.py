@@ -117,6 +117,7 @@ async def test_chat_workflow_run_can_complete_and_continue_to_chat(tmp_path):
         )
         assert run_resp.status_code == 200, run_resp.text
         run_id = run_resp.json()["run_id"]
+        assert db.get_run(run_id)["source_mode"] == "saved_template"
 
         answer_resp = client.post(
             f"/api/v1/chat-workflows/runs/{run_id}/answer",
@@ -177,7 +178,9 @@ async def test_chat_workflow_transcript_returns_structured_messages(tmp_path):
 
         transcript_resp = client.get(f"/api/v1/chat-workflows/runs/{run_id}/transcript")
         assert transcript_resp.status_code == 200, transcript_resp.text
-        messages = transcript_resp.json()["messages"]
+        transcript_body = transcript_resp.json()
+        assert transcript_body["run_id"] == run_id
+        messages = transcript_body["messages"]
         assert messages[0]["role"] == "assistant"
         assert messages[1]["role"] == "user"
 
@@ -226,3 +229,132 @@ async def test_chat_workflow_cancel_marks_run_canceled(tmp_path):
         cancel_resp = client.post(f"/api/v1/chat-workflows/runs/{run_id}/cancel")
         assert cancel_resp.status_code == 200, cancel_resp.text
         assert cancel_resp.json()["status"] == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_chat_workflow_answer_is_idempotent_with_matching_key(tmp_path):
+    db = ChatWorkflowsDatabase(
+        db_path=tmp_path / "chat_workflows.db",
+        client_id="test-client",
+    )
+    app = _build_app(
+        db,
+        principal_permissions=[
+            CHAT_WORKFLOWS_READ,
+            CHAT_WORKFLOWS_WRITE,
+            CHAT_WORKFLOWS_RUN,
+        ],
+        user_permissions=[
+            CHAT_WORKFLOWS_READ,
+            CHAT_WORKFLOWS_WRITE,
+            CHAT_WORKFLOWS_RUN,
+        ],
+    )
+
+    with TestClient(app) as client:
+        template_id = client.post(
+            "/api/v1/chat-workflows/templates",
+            json={
+                "title": "Discovery",
+                "steps": [
+                    {
+                        "id": "goal",
+                        "step_index": 0,
+                        "base_question": "What is your goal?",
+                        "question_mode": "stock",
+                        "context_refs": [],
+                    }
+                ],
+            },
+        ).json()["id"]
+        run_id = client.post(
+            "/api/v1/chat-workflows/runs",
+            json={"template_id": template_id, "selected_context_refs": []},
+        ).json()["run_id"]
+
+        first_resp = client.post(
+            f"/api/v1/chat-workflows/runs/{run_id}/answer",
+            json={
+                "step_index": 0,
+                "answer_text": "Ship a feature",
+                "idempotency_key": "answer-1",
+            },
+        )
+        replay_resp = client.post(
+            f"/api/v1/chat-workflows/runs/{run_id}/answer",
+            json={
+                "step_index": 0,
+                "answer_text": "Ship a feature",
+                "idempotency_key": "answer-1",
+            },
+        )
+
+        assert first_resp.status_code == 200, first_resp.text
+        assert replay_resp.status_code == 200, replay_resp.text
+        assert len(db.list_answers(run_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_workflow_answer_rejects_conflicting_idempotent_retry(tmp_path):
+    db = ChatWorkflowsDatabase(
+        db_path=tmp_path / "chat_workflows.db",
+        client_id="test-client",
+    )
+    app = _build_app(
+        db,
+        principal_permissions=[
+            CHAT_WORKFLOWS_READ,
+            CHAT_WORKFLOWS_WRITE,
+            CHAT_WORKFLOWS_RUN,
+        ],
+        user_permissions=[
+            CHAT_WORKFLOWS_READ,
+            CHAT_WORKFLOWS_WRITE,
+            CHAT_WORKFLOWS_RUN,
+        ],
+    )
+
+    with TestClient(app) as client:
+        run_resp = client.post(
+            "/api/v1/chat-workflows/runs",
+            json={
+                "template_draft": {
+                    "title": "Generated",
+                    "description": "Draft",
+                    "version": 1,
+                    "steps": [
+                        {
+                            "id": "goal",
+                            "step_index": 0,
+                            "base_question": "What is your goal?",
+                            "question_mode": "stock",
+                            "context_refs": [],
+                        }
+                    ],
+                },
+                "selected_context_refs": [],
+            },
+        )
+        assert run_resp.status_code == 200, run_resp.text
+        run_id = run_resp.json()["run_id"]
+        assert db.get_run(run_id)["source_mode"] == "generated_draft"
+
+        first_resp = client.post(
+            f"/api/v1/chat-workflows/runs/{run_id}/answer",
+            json={
+                "step_index": 0,
+                "answer_text": "Ship a feature",
+                "idempotency_key": "answer-1",
+            },
+        )
+        conflict_resp = client.post(
+            f"/api/v1/chat-workflows/runs/{run_id}/answer",
+            json={
+                "step_index": 0,
+                "answer_text": "Ship something else",
+                "idempotency_key": "answer-1",
+            },
+        )
+
+        assert first_resp.status_code == 200, first_resp.text
+        assert conflict_resp.status_code == 409, conflict_resp.text

@@ -2,7 +2,10 @@ import json
 
 import pytest
 
-from tldw_Server_API.app.core.Chat_Workflows.service import ChatWorkflowService
+from tldw_Server_API.app.core.Chat_Workflows.service import (
+    ChatWorkflowConflictError,
+    ChatWorkflowService,
+)
 from tldw_Server_API.app.core.DB_Management.ChatWorkflows_DB import ChatWorkflowsDatabase
 
 
@@ -182,4 +185,86 @@ async def test_record_answer_rejects_stale_step_submission(fake_chat_workflows_d
             run_id=run["run_id"],
             step_index=0,
             answer_text="Try again",
+        )
+
+
+@pytest.mark.asyncio
+async def test_record_answer_replays_matching_idempotent_submission(fake_chat_workflows_db):
+    service = ChatWorkflowService(db=fake_chat_workflows_db, question_renderer=None)
+    run = service.start_run(
+        tenant_id="default",
+        user_id="user-1",
+        template={
+            "id": 10,
+            "title": "Discovery",
+            "version": 1,
+            "steps": [
+                {
+                    "id": "goal",
+                    "step_index": 0,
+                    "base_question": "What is your goal?",
+                    "question_mode": "stock",
+                    "context_refs": [],
+                }
+            ],
+        },
+        source_mode="saved_template",
+        selected_context_refs=[],
+    )
+
+    first = await service.record_answer(
+        run_id=run["run_id"],
+        step_index=0,
+        answer_text="Ship a feature",
+        idempotency_key="answer-1",
+    )
+    replay = await service.record_answer(
+        run_id=run["run_id"],
+        step_index=0,
+        answer_text="Ship a feature",
+        idempotency_key="answer-1",
+    )
+
+    assert first["status"] == "completed"
+    assert replay["status"] == "completed"
+    assert len(fake_chat_workflows_db.list_answers(run["run_id"])) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_answer_rejects_idempotency_key_reuse_for_different_answer(fake_chat_workflows_db):
+    service = ChatWorkflowService(db=fake_chat_workflows_db, question_renderer=None)
+    run = service.start_run(
+        tenant_id="default",
+        user_id="user-1",
+        template={
+            "id": 10,
+            "title": "Discovery",
+            "version": 1,
+            "steps": [
+                {
+                    "id": "goal",
+                    "step_index": 0,
+                    "base_question": "What is your goal?",
+                    "question_mode": "stock",
+                    "context_refs": [],
+                }
+            ],
+        },
+        source_mode="saved_template",
+        selected_context_refs=[],
+    )
+
+    await service.record_answer(
+        run_id=run["run_id"],
+        step_index=0,
+        answer_text="Ship a feature",
+        idempotency_key="answer-1",
+    )
+
+    with pytest.raises(ChatWorkflowConflictError, match="different answer"):
+        await service.record_answer(
+            run_id=run["run_id"],
+            step_index=0,
+            answer_text="Ship something else",
+            idempotency_key="answer-1",
         )
