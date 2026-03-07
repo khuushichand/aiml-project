@@ -47,6 +47,61 @@ export interface LoginResponse {
   token_type: string;
 }
 
+export interface AuthenticatedLoginResult {
+  status: 'authenticated';
+  accessToken: string;
+  tokenType: string;
+}
+
+export interface MfaRequiredLoginResult {
+  status: 'mfa_required';
+  sessionToken: string;
+  expiresIn: number;
+  message: string;
+}
+
+export type PasswordLoginResult = AuthenticatedLoginResult | MfaRequiredLoginResult;
+
+type LoginSuccessPayload = {
+  access_token?: string;
+  token_type?: string;
+  session_token?: string;
+  mfa_required?: boolean;
+  expires_in?: number;
+  message?: string;
+};
+
+const isMfaChallengePayload = (
+  value: LoginSuccessPayload
+): value is Required<Pick<LoginSuccessPayload, 'session_token' | 'expires_in' | 'message'>> & {
+  mfa_required: true;
+} =>
+  value.mfa_required === true
+  && typeof value.session_token === 'string'
+  && typeof value.expires_in === 'number'
+  && typeof value.message === 'string';
+
+const isTokenPayload = (
+  value: LoginSuccessPayload
+): value is Required<Pick<LoginSuccessPayload, 'access_token' | 'token_type'>> =>
+  typeof value.access_token === 'string'
+  && typeof value.token_type === 'string';
+
+const finalizePasswordLogin = async (
+  accessToken: string,
+  tokenType: string
+): Promise<AuthenticatedLoginResult> => {
+  clearApiKeyStorage();
+  localStorage.setItem('access_token', accessToken);
+  emitAuthChange();
+  await fetchAndStoreUser(accessToken);
+  return {
+    status: 'authenticated',
+    accessToken,
+    tokenType,
+  };
+};
+
 /**
  * Check if we're in single-user mode (X-API-KEY auth)
  */
@@ -94,7 +149,7 @@ export function hasStoredAuth(): boolean {
 export async function loginWithPassword(
   username: string,
   password: string
-): Promise<LoginResponse | null> {
+): Promise<PasswordLoginResult | null> {
   try {
     // tldw_server expects OAuth2 form-urlencoded body
     const formData = new URLSearchParams();
@@ -110,22 +165,55 @@ export async function loginWithPassword(
     });
 
     if (response.ok) {
-      const data: LoginResponse = await response.json();
-      // Auth mode exclusivity: password/JWT login clears single-user API key state.
-      clearApiKeyStorage();
-      // Store JWT token
-      localStorage.setItem('access_token', data.access_token);
-      emitAuthChange();
-
-      // Fetch user info
-      await fetchAndStoreUser(data.access_token);
-
-      return data;
+      const data = await response.json() as LoginSuccessPayload;
+      if (isMfaChallengePayload(data)) {
+        return {
+          status: 'mfa_required',
+          sessionToken: data.session_token,
+          expiresIn: data.expires_in,
+          message: data.message,
+        };
+      }
+      if (isTokenPayload(data)) {
+        return await finalizePasswordLogin(data.access_token, data.token_type);
+      }
     }
 
     return null;
   } catch (error) {
     console.error('Login failed:', error);
+    return null;
+  }
+}
+
+export async function completeMfaLogin(
+  sessionToken: string,
+  mfaToken: string
+): Promise<AuthenticatedLoginResult | null> {
+  try {
+    const response = await fetch(buildApiUrl('/auth/mfa/login'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        session_token: sessionToken,
+        mfa_token: mfaToken,
+      }),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json() as LoginSuccessPayload;
+    if (!isTokenPayload(data)) {
+      return null;
+    }
+
+    return await finalizePasswordLogin(data.access_token, data.token_type);
+  } catch (error) {
+    console.error('MFA login failed:', error);
     return null;
   }
 }
