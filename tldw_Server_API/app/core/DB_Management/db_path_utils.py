@@ -207,6 +207,7 @@ class DatabasePaths:
     GUARDIAN_DB_NAME = "Guardian.db"
     WORKFLOWS_DB_NAME = "workflows.db"
     WORKFLOWS_SCHEDULER_DB_NAME = "workflows_scheduler.db"
+    RESEARCH_SESSIONS_DB_NAME = "ResearchSessions.db"
     KANBAN_DB_NAME = "Kanban.db"
     SLIDES_DB_NAME = "Slides.db"
     VOICE_REGISTRY_DB_NAME = "voice_registry.db"
@@ -445,6 +446,12 @@ class DatabasePaths:
         return workflows_dir / DatabasePaths.WORKFLOWS_SCHEDULER_DB_NAME
 
     @staticmethod
+    def get_research_sessions_db_path(user_id: Optional[UserId]) -> Path:
+        """Get the path to the user's research sessions database."""
+        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        return user_dir / DatabasePaths.RESEARCH_SESSIONS_DB_NAME
+
+    @staticmethod
     def get_kanban_db_path(user_id: Optional[UserId]) -> Path:
         """Get the path to the user's Kanban database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
@@ -605,6 +612,7 @@ class DatabasePaths:
             "personalization": DatabasePaths.get_personalization_db_path(user_id),
             "workflows": DatabasePaths.get_workflows_db_path(user_id),
             "workflows_scheduler": DatabasePaths.get_workflows_scheduler_db_path(user_id),
+            "research_sessions": DatabasePaths.get_research_sessions_db_path(user_id),
             "kanban": DatabasePaths.get_kanban_db_path(user_id),
             "slides": DatabasePaths.get_slides_db_path(user_id),
         }

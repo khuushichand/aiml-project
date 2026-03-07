@@ -709,15 +709,16 @@ export function KnowledgeContextBar({
           type="button"
           onClick={onToggleWeb}
           className={cn(
-            "inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors",
+            "inline-flex h-7 items-center gap-1 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
             webEnabled
               ? "border-primary/40 bg-primary/10 text-primaryStrong"
               : "border-border text-text-muted hover:bg-surface2 hover:text-text"
           )}
           aria-pressed={webEnabled}
+          aria-label={`Web fallback is currently ${webEnabled ? "enabled" : "disabled"}. Click to toggle.`}
         >
-          <Globe className="h-3.5 w-3.5" />
-          Web: {webEnabled ? "On" : "Off"}
+          <Globe className={cn("h-3.5 w-3.5", webEnabled ? "fill-current" : "")} />
+          Web
         </button>
 
         <button

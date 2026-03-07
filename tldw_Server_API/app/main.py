@@ -1117,6 +1117,7 @@ elif _MINIMAL_TEST_APP:
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
+    from tldw_Server_API.app.api.v1.endpoints.research_runs import router as research_runs_router
 
     # Admin endpoints are used by several pytest modules; import for minimal app
     try:
@@ -1176,9 +1177,11 @@ else:
     # Paper Search Endpoint (provider-specific)
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
+    from tldw_Server_API.app.api.v1.endpoints.research_runs import router as research_runs_router
 
     # Sync Endpoint
     from tldw_Server_API.app.api.v1.endpoints.sync import router as sync_router
+    from tldw_Server_API.app.api.v1.endpoints.text2sql import router as text2sql_router
 
     # Tools Endpoint (optional; guard import to avoid startup failure on optional module issues)
     try:
@@ -5254,6 +5257,7 @@ if _ULTRA_MINIMAL_APP:
 elif _MINIMAL_TEST_APP:
     # Minimal set for paper_search tests
     include_router_idempotent(app, research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
+    include_router_idempotent(app, research_runs_router, prefix=f"{API_V1_PREFIX}", tags=["research-runs"])
     include_router_idempotent(app, paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
     # Include lightweight chat/character routes needed by tests
     include_router_idempotent(app, chat_router, prefix=f"{API_V1_PREFIX}/chat")
@@ -5376,6 +5380,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(rag_unified_router, tags=["rag-unified"])
     except _IMPORT_EXCEPTIONS as _rag_min_err:
         logger.debug(f"Skipping rag_unified router in minimal test app: {_rag_min_err}")
+    # Standalone text2sql endpoint
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.text2sql import router as text2sql_router
+
+        app.include_router(text2sql_router, prefix=f"{API_V1_PREFIX}", tags=["text2sql"])
+    except _IMPORT_EXCEPTIONS as _text2sql_min_err:
+        logger.debug(f"Skipping text2sql router in minimal test app: {_text2sql_min_err}")
     # Explicit feedback endpoints (shared chat/RAG)
     try:
         from tldw_Server_API.app.api.v1.endpoints.feedback import router as feedback_router
@@ -6162,6 +6173,8 @@ else:
         _include_if_enabled("prompt-studio", prompt_studio_websocket_router, tags=["prompt-studio"])
     _include_if_enabled("rag-health", rag_health_router, tags=["rag-health"])
     _include_if_enabled("rag-unified", rag_unified_router, tags=["rag-unified"])
+    if "text2sql_router" in locals():
+        _include_if_enabled("text2sql", text2sql_router, prefix=f"{API_V1_PREFIX}", tags=["text2sql"])
     _include_if_enabled("feedback", feedback_router, prefix=f"{API_V1_PREFIX}/feedback", tags=["feedback"])
     if _HAS_WORKFLOWS:
         # In test contexts, force-include workflows regardless of policy to avoid 404s.
@@ -6184,6 +6197,7 @@ else:
         else:
             _include_if_enabled("scheduler", scheduler_workflows_router, tags=["scheduler"], default_stable=False)
     _include_if_enabled("research", research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
+    _include_if_enabled("research", research_runs_router, prefix=f"{API_V1_PREFIX}", tags=["research-runs"])
     _include_if_enabled(
         "paper-search", paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"]
     )

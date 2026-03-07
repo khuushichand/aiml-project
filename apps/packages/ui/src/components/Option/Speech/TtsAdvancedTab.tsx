@@ -15,7 +15,8 @@ type Props = {
   removeReasoning: boolean
   onRemoveReasoningChange: (value: boolean) => void
   isTldw: boolean
-  onOpenVoiceCloning: () => void
+  onOpenVoiceCloning?: () => void
+  voiceCloningContent?: React.ReactNode
 }
 
 const TOGGLE_ITEMS = (props: Props) => [
@@ -66,9 +67,11 @@ export const TtsAdvancedTab: React.FC<Props> = (props) => {
       {props.isTldw && (
         <div className="border-t border-border pt-3">
           <div className="text-sm text-text mb-2">Voice Cloning</div>
-          <Button size="small" onClick={props.onOpenVoiceCloning}>
-            Manage custom voices
-          </Button>
+          {props.voiceCloningContent ?? (
+            <Button size="small" onClick={props.onOpenVoiceCloning}>
+              Manage custom voices
+            </Button>
+          )}
         </div>
       )}
 

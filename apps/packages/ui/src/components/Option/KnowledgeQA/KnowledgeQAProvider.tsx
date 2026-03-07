@@ -79,7 +79,7 @@ const initialState: KnowledgeQAState = {
   expertMode: false,
 
   searchHistory: [],
-  historySidebarOpen: true,
+  historySidebarOpen: false,
 
   settingsPanelOpen: false,
   focusedSourceIndex: null,

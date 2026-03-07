@@ -295,6 +295,7 @@ nav:
           - Chatbooks & Workflows:
               - Chatbook User Guide: User_Guides/WebUI_Extension/Chatbook_User_Guide.md
               - Chatbook Tools Getting Started: User_Guides/WebUI_Extension/Chatbook_Tools_Getting_Started.md
+              - Google Keep Notes Import and Export: User_Guides/WebUI_Extension/Google_Keep_Notes_Import_Export_Guide.md
               - Workflows Examples: User_Guides/WebUI_Extension/Workflows_Examples.md
       - Integrations & Experiments:
           - Getting Started with ACP: User_Guides/Integrations_Experiments/Getting_Started_with_ACP.md

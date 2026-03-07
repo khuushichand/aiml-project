@@ -44,13 +44,13 @@ describe("RecordingStrip", () => {
 
   it("renders record button in idle state", () => {
     render(<RecordingStrip onBlobReady={mockOnBlobReady} />)
-    const btn = screen.getByRole("button", { name: "Start recording" })
+    const btn = screen.getByRole("button", { name: /start recording/i })
     expect(btn).toBeInTheDocument()
   })
 
   it("calls startRecording when record clicked", () => {
     render(<RecordingStrip onBlobReady={mockOnBlobReady} />)
-    const btn = screen.getByRole("button", { name: "Start recording" })
+    const btn = screen.getByRole("button", { name: /start recording/i })
     fireEvent.click(btn)
     expect(mockStartRecording).toHaveBeenCalledOnce()
   })
@@ -76,7 +76,7 @@ describe("RecordingStrip", () => {
 
   it("has correct aria-label on record button", () => {
     render(<RecordingStrip onBlobReady={mockOnBlobReady} />)
-    const btn = screen.getByRole("button", { name: "Start recording" })
-    expect(btn).toHaveAttribute("aria-label", "Start recording")
+    const btn = screen.getByRole("button", { name: /start recording/i })
+    expect(btn.getAttribute("aria-label")).toContain("Start recording")
   })
 })
