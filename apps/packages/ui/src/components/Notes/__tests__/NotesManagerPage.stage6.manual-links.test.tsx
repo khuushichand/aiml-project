@@ -224,8 +224,15 @@ describe('NotesManagerPage stage 6 manual link management', () => {
     renderPage()
     await saveSeedNote()
 
-    const targetSelect = screen.getByTestId('notes-manual-link-target-select')
-    fireEvent.change(targetSelect, { target: { value: 'note-b' } })
+    const targetContainer = screen.getByTestId('notes-manual-link-target-select')
+    const targetContent = targetContainer.querySelector('.ant-select-content') || targetContainer
+    fireEvent.mouseDown(targetContent)
+    await waitFor(() => {
+      const options = document.querySelectorAll('.ant-select-item-option')
+      const match = Array.from(options).find(el => el.textContent === 'Target note')
+      if (!match) throw new Error('Option "Target note" not found')
+      fireEvent.click(match)
+    })
     fireEvent.click(screen.getByTestId('notes-manual-link-add'))
 
     await waitFor(() => {
@@ -301,8 +308,14 @@ describe('NotesManagerPage stage 6 manual link management', () => {
     renderPage()
     await saveSeedNote()
 
-    fireEvent.change(screen.getByTestId('notes-manual-link-target-select'), {
-      target: { value: 'note-b' }
+    const targetContainer2 = screen.getByTestId('notes-manual-link-target-select')
+    const targetContent2 = targetContainer2.querySelector('.ant-select-content') || targetContainer2
+    fireEvent.mouseDown(targetContent2)
+    await waitFor(() => {
+      const options = document.querySelectorAll('.ant-select-item-option')
+      const match = Array.from(options).find(el => el.textContent === 'Target note')
+      if (!match) throw new Error('Option "Target note" not found')
+      fireEvent.click(match)
     })
     fireEvent.click(screen.getByTestId('notes-manual-link-add'))
 

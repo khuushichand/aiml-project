@@ -375,8 +375,16 @@ describe("NotesManagerPage stage 42 moodboard view", () => {
       expect(screen.getByTestId("notes-moodboard-pagination")).toBeInTheDocument()
     })
 
-    const pageSizeSelect = screen.getByTestId("notes-moodboard-page-size")
-    fireEvent.change(pageSizeSelect, { target: { value: "10" } })
+    const pageSizeContainer = screen.getByTestId("notes-moodboard-page-size")
+    const pageSizeContent = pageSizeContainer.querySelector('.ant-select-content') || pageSizeContainer
+    fireEvent.mouseDown(pageSizeContent)
+    await waitFor(() => {
+      // Options are [10, 20, 50, 100]; labels are identical due to i18n mock
+      // Click first option (value=10) which is first in DOM order
+      const options = document.querySelectorAll('.ant-select-item-option')
+      if (options.length === 0) throw new Error('No dropdown options found')
+      fireEvent.click(options[0])
+    })
 
     const hasMoodboardPageRequest = (limit: number, offset: number) =>
       mockBgRequest.mock.calls.some(([arg]) => {

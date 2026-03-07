@@ -254,9 +254,21 @@ describe("NotesManagerPage stage 14 sorting and pagination", () => {
     expect(latestListPath()).toContain("sort_by=last_modified")
     expect(latestListPath()).toContain("sort_order=desc")
 
-    fireEvent.change(screen.getByTestId("notes-sort-select"), {
-      target: { value: "created_desc" }
-    })
+    // Helper to change an Ant Design Select value by option label
+    const selectOption = async (testId: string, optionLabel: string) => {
+      const container = screen.getByTestId(testId)
+      // Open the dropdown by clicking the content area
+      const content = container.querySelector('.ant-select-content') || container
+      fireEvent.mouseDown(content)
+      await waitFor(() => {
+        const options = document.querySelectorAll('.ant-select-item-option')
+        const match = Array.from(options).find(el => el.textContent === optionLabel)
+        if (!match) throw new Error(`Option "${optionLabel}" not found in dropdown`)
+        fireEvent.click(match)
+      })
+    }
+
+    await selectOption("notes-sort-select", "Date created (newest first)")
     await waitFor(() => {
       expect(screen.getByTestId("notes-order")).toHaveTextContent(
         "Gamma note|Zulu note|Alpha note"
@@ -265,9 +277,7 @@ describe("NotesManagerPage stage 14 sorting and pagination", () => {
     expect(latestListPath()).toContain("sort_by=created_at")
     expect(latestListPath()).toContain("sort_order=desc")
 
-    fireEvent.change(screen.getByTestId("notes-sort-select"), {
-      target: { value: "title_asc" }
-    })
+    await selectOption("notes-sort-select", "Title (A-Z)")
     await waitFor(() => {
       expect(screen.getByTestId("notes-order")).toHaveTextContent(
         "Alpha note|Gamma note|Zulu note"
@@ -276,9 +286,7 @@ describe("NotesManagerPage stage 14 sorting and pagination", () => {
     expect(latestListPath()).toContain("sort_by=title")
     expect(latestListPath()).toContain("sort_order=asc")
 
-    fireEvent.change(screen.getByTestId("notes-sort-select"), {
-      target: { value: "title_desc" }
-    })
+    await selectOption("notes-sort-select", "Title (Z-A)")
     await waitFor(() => {
       expect(screen.getByTestId("notes-order")).toHaveTextContent(
         "Zulu note|Gamma note|Alpha note"
