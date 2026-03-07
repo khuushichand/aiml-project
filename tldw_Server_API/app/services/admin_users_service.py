@@ -28,12 +28,19 @@ from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.core.AuthNZ.settings import get_profile
 from tldw_Server_API.app.core.AuthNZ.password_service import hash_password
 from tldw_Server_API.app.services import admin_scope_service
+from tldw_Server_API.app.services.admin_audit_service import (
+    emit_admin_account_audit_event as _emit_admin_account_audit_event,
+)
 from tldw_Server_API.app.services.admin_guardrails_service import verify_privileged_action
 from tldw_Server_API.app.services.admin_data_ops_service import (
     build_users_csv as svc_build_users_csv,
 )
 from tldw_Server_API.app.services.admin_data_ops_service import (
     build_users_json as svc_build_users_json,
+)
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditEventCategory,
+    AuditEventType,
 )
 
 
@@ -236,8 +243,9 @@ async def update_user(
             user_id,
             require_hierarchy=True,
         )
+        reason: str | None = None
         if request.role is not None or request.is_active is not None:
-            await verify_privileged_action(
+            reason = await verify_privileged_action(
                 principal,
                 db,
                 password_service,
@@ -319,6 +327,23 @@ async def update_user(
                     raise UserNotFoundError(f"User {user_id}")
             await db.commit()
 
+        if reason is not None:
+            metadata: dict[str, Any] = {"reason": reason}
+            if request.role is not None:
+                metadata["role"] = request.role
+            if request.is_active is not None:
+                metadata["is_active"] = request.is_active
+            await _emit_admin_account_audit_event(
+                actor_id=principal.user_id,
+                target_user_id=user_id,
+                event_type=AuditEventType.USER_UPDATED,
+                category=AuditEventCategory.AUTHORIZATION,
+                resource_type="user_account",
+                resource_id=str(user_id),
+                action="admin.user.update",
+                metadata=metadata,
+            )
+
         logger.info(f"Admin updated user {user_id}")
 
         return {"message": f"User {user_id} updated successfully"}
@@ -353,7 +378,7 @@ async def reset_user_password(
             user_id,
             require_hierarchy=True,
         )
-        await verify_privileged_action(
+        reason = await verify_privileged_action(
             principal,
             db,
             password_service,
@@ -414,6 +439,21 @@ async def reset_user_password(
             )
             await db.commit()
 
+        await _emit_admin_account_audit_event(
+            actor_id=principal.user_id,
+            target_user_id=user_id,
+            event_type=AuditEventType.USER_PASSWORD_RESET,
+            category=AuditEventCategory.AUTHENTICATION,
+            resource_type="user_account",
+            resource_id=str(user_id),
+            action="admin.user.password_reset",
+            metadata={
+                "reason": reason,
+                "force_password_change": force_password_change,
+                "temporary_password_provided": request.temporary_password is not None,
+            },
+        )
+
         logger.info("Admin reset password for user {}", user_id)
 
         return {
@@ -458,7 +498,7 @@ async def set_user_mfa_requirement(
             user_id,
             require_hierarchy=True,
         )
-        await verify_privileged_action(
+        reason = await verify_privileged_action(
             principal,
             db,
             password_service,
@@ -513,6 +553,20 @@ async def set_user_mfa_requirement(
             )
             await db.commit()
 
+        await _emit_admin_account_audit_event(
+            actor_id=principal.user_id,
+            target_user_id=user_id,
+            event_type=AuditEventType.CONFIG_CHANGED,
+            category=AuditEventCategory.SECURITY,
+            resource_type="user_mfa",
+            resource_id=str(user_id),
+            action="admin.user.mfa_requirement.update",
+            metadata={
+                "reason": reason,
+                "require_mfa": require_mfa,
+            },
+        )
+
         logger.info("Admin updated MFA requirement for user {} to {}", user_id, require_mfa)
 
         return {
@@ -556,7 +610,7 @@ async def delete_user(
             user_id,
             require_hierarchy=True,
         )
-        await verify_privileged_action(
+        reason = await verify_privileged_action(
             principal,
             db,
             password_service,
@@ -576,6 +630,17 @@ async def delete_user(
                 (user_id,),
             )
             await db.commit()
+
+        await _emit_admin_account_audit_event(
+            actor_id=principal.user_id,
+            target_user_id=user_id,
+            event_type=AuditEventType.USER_DEACTIVATED,
+            category=AuditEventCategory.AUTHORIZATION,
+            resource_type="user_account",
+            resource_id=str(user_id),
+            action="admin.user.deactivate",
+            metadata={"reason": reason},
+        )
 
         logger.info(f"Admin soft-deleted user {user_id}")
 
