@@ -267,27 +267,29 @@ class ChatWorkflowsDatabase:
         status: str | None = None,
         version: int | None = None,
     ) -> None:
-        assignments: list[str] = []
-        params: list[Any] = []
-        if title is not None:
-            assignments.append("title = ?")
-            params.append(title)
-        if description is not None:
-            assignments.append("description = ?")
-            params.append(description)
-        if status is not None:
-            assignments.append("status = ?")
-            params.append(status)
-        if version is not None:
-            assignments.append("version = ?")
-            params.append(version)
-        assignments.append("updated_at = ?")
-        params.append(_utcnow_iso())
-        params.append(template_id)
         with self.transaction() as conn:
             conn.execute(
-                f"UPDATE chat_workflow_templates SET {', '.join(assignments)} WHERE id = ?",
-                tuple(params),
+                """
+                UPDATE chat_workflow_templates
+                SET title = CASE WHEN ? THEN ? ELSE title END,
+                    description = CASE WHEN ? THEN ? ELSE description END,
+                    status = CASE WHEN ? THEN ? ELSE status END,
+                    version = CASE WHEN ? THEN ? ELSE version END,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    title is not None,
+                    title,
+                    description is not None,
+                    description,
+                    status is not None,
+                    status,
+                    version is not None,
+                    version,
+                    _utcnow_iso(),
+                    template_id,
+                ),
             )
 
     def delete_template(self, template_id: int) -> None:
@@ -363,30 +365,40 @@ class ChatWorkflowsDatabase:
         canceled_at: str | None = None,
         free_chat_conversation_id: str | None = None,
     ) -> None:
-        assignments: list[str] = []
-        params: list[Any] = []
-        if status is not None:
-            assignments.append("status = ?")
-            params.append(status)
-        if current_step_index is not None:
-            assignments.append("current_step_index = ?")
-            params.append(current_step_index)
-        if completed_at is not None:
-            assignments.append("completed_at = ?")
-            params.append(completed_at)
-        if canceled_at is not None:
-            assignments.append("canceled_at = ?")
-            params.append(canceled_at)
-        if free_chat_conversation_id is not None:
-            assignments.append("free_chat_conversation_id = ?")
-            params.append(free_chat_conversation_id)
-        if not assignments:
+        if (
+            status is None
+            and current_step_index is None
+            and completed_at is None
+            and canceled_at is None
+            and free_chat_conversation_id is None
+        ):
             return
-        params.append(run_id)
         with self.transaction() as conn:
             conn.execute(
-                f"UPDATE chat_workflow_runs SET {', '.join(assignments)} WHERE run_id = ?",
-                tuple(params),
+                """
+                UPDATE chat_workflow_runs
+                SET status = CASE WHEN ? THEN ? ELSE status END,
+                    current_step_index = CASE WHEN ? THEN ? ELSE current_step_index END,
+                    completed_at = CASE WHEN ? THEN ? ELSE completed_at END,
+                    canceled_at = CASE WHEN ? THEN ? ELSE canceled_at END,
+                    free_chat_conversation_id = CASE
+                        WHEN ? THEN ? ELSE free_chat_conversation_id
+                    END
+                WHERE run_id = ?
+                """,
+                (
+                    status is not None,
+                    status,
+                    current_step_index is not None,
+                    current_step_index,
+                    completed_at is not None,
+                    completed_at,
+                    canceled_at is not None,
+                    canceled_at,
+                    free_chat_conversation_id is not None,
+                    free_chat_conversation_id,
+                    run_id,
+                ),
             )
 
     def add_answer(
