@@ -165,6 +165,7 @@ Add tests that verify:
 - lane failures are recorded as gaps/collection metadata without killing the run when another lane succeeds
 - planning writes `provider_config.json` and collecting consumes it
 - the resolved lane config from `provider_config.json` is passed explicitly into provider calls rather than being re-derived ad hoc during collection
+- normalized source records preserve the adapter-reported provider identity (for example `duckduckgo`, `arxiv`, `pubmed`) instead of collapsing everything to generic lane names
 
 Example expectations:
 
@@ -195,6 +196,7 @@ Implement:
 - loading `provider_config.json` during collection and passing the resolved per-lane config explicitly to each provider call
 - replacing the temporary `_resolve_provider_config(...)` helper in `jobs.py` with `resolve_provider_config(...)` from `tldw_Server_API/app/core/Research/providers/config.py` so planning and execution use one canonical config resolver
 - `lane_errors` capture in collection summary when a provider raises, using structured entries that include at least `focus_area`, `lane`, and `message`
+- preserving adapter-reported provider identities in `ResearchSourceRecord.provider` while still keeping lane-level metrics separate
 - hard failure only when every enabled lane fails and zero sources are collected
 
 **Step 4: Run tests to verify they pass**
