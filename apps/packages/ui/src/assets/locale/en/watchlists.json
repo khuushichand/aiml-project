@@ -441,6 +441,8 @@
     "feedsSummary": "{{count}} feeds",
     "monitorsActive": "{{count}} monitors active",
     "lastRun": "Last run {{time}}",
+    "nextRun": "Next run {{time}}",
+    "lastChecked": "Checked {{time}}",
     "runningNow": "running now",
     "articlesPending": "{{count}} articles pending",
     "attentionTooltip": "{{count}} items need attention",

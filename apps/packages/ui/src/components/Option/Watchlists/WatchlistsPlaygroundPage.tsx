@@ -70,15 +70,6 @@ const SHOW_ALL_VIEWS_STORAGE_KEY = "watchlists:show-all-views:v1"
 const SECONDARY_EXPANDED_STORAGE_KEY = "watchlists:secondary-expanded:v1"
 const SUCCESSFUL_RUN_STATUSES = new Set(["completed", "succeeded", "success", "done", "finished"])
 
-/** Maps old tab param values to new primary tabs for backward compat deep links */
-const TAB_PARAM_COMPAT: Record<string, string> = {
-  feeds: "sources",
-  monitors: "jobs",
-  activity: "runs",
-  articles: "items",
-  reports: "outputs"
-}
-
 /** Primary tabs in the progressive disclosure layout */
 const PROGRESSIVE_PRIMARY_TABS = ["sources", "items", "outputs"] as const
 
@@ -404,6 +395,27 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       return next
     })
   }, [])
+
+  // Navigate to a tab, auto-expanding inline secondary sections in progressive mode
+  const navigateToTab = useCallback((key: string) => {
+    const isProgressive = !showAllViews && !iaExperimentEnabled
+    if (isProgressive && SECONDARY_IN_PRIMARY[key]) {
+      const primaryTab = SECONDARY_IN_PRIMARY[key]
+      setActiveTab(primaryTab as typeof activeTab)
+      const sectionKey = key === "jobs" ? "monitors" : key === "runs" ? "activity" : "templates"
+      setSecondaryExpanded((prev) => {
+        const next = { ...prev, [sectionKey]: true }
+        writeSecondaryExpanded(next)
+        return next
+      })
+      return
+    }
+    setActiveTab(key as typeof activeTab)
+  }, [setActiveTab, showAllViews, iaExperimentEnabled])
+
+  // Refresh key — incrementing forces tab components to remount and refetch
+  const [refreshKey, setRefreshKey] = React.useState(0)
+  const triggerRefresh = useCallback(() => setRefreshKey((k) => k + 1), [])
 
   const tabHelpLabels = {
     overview: t("watchlists:help.tabs.overview", "Overview guidance"),
@@ -826,15 +838,13 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
 
   // Command palette commands — stabilize actions object to avoid re-creating on every render
   const commandPaletteActions = useMemo(() => ({
-    setActiveTab: (tab: string) => setActiveTab(tab as typeof activeTab),
+    setActiveTab: navigateToTab,
     openSourceForm: () => openSourceForm(),
     openJobForm: () => openJobForm(),
     openSettings: () => setSettingsDrawerOpen(true),
-    refreshCurrentView: () => {
-      window.dispatchEvent(new CustomEvent("watchlists:refresh"))
-    },
+    refreshCurrentView: triggerRefresh,
     startGuidedTour
-  }), [setActiveTab, openSourceForm, openJobForm, startGuidedTour])
+  }), [navigateToTab, openSourceForm, openJobForm, triggerRefresh, startGuidedTour])
   const commandPaletteCommands = useWatchlistsCommands(commandPaletteActions)
 
   // Keyboard shortcuts
@@ -854,9 +864,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         else if (resolved === "jobs") openJobForm()
         else openSourceForm() // default to creating a feed
       },
-      onRefresh: () => {
-        window.dispatchEvent(new CustomEvent("watchlists:refresh"))
-      },
+      onRefresh: triggerRefresh,
       onFocusSearch: () => {
         // Focus the first search input on the page
         const searchInput = document.querySelector<HTMLInputElement>(
@@ -871,14 +879,14 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
 
   const openRunFromNotification = useCallback((runId: number, key: string) => {
     notification.destroy(key)
-    setActiveTab("runs")
+    navigateToTab("runs")
     openRunDetail(runId)
-  }, [notification, openRunDetail, setActiveTab])
+  }, [notification, openRunDetail, navigateToTab])
 
   const openRunsTabFromNotification = useCallback((key: string) => {
     notification.destroy(key)
-    setActiveTab("runs")
-  }, [notification, setActiveTab])
+    navigateToTab("runs")
+  }, [notification, navigateToTab])
 
   const runNotificationsPollPlan = React.useMemo(() => {
     const basePollMs = resolveRunNotificationsPollMs()
@@ -1364,22 +1372,10 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         })()
       : allTabItems
 
-  // When in progressive mode, redirect secondary tab keys to their parent primary tab
+  // Tab bar change handler — delegates to navigateToTab which handles progressive mode
   const handleTabChange = useCallback((key: string) => {
-    if (useProgressiveLayout && SECONDARY_IN_PRIMARY[key]) {
-      const primaryTab = SECONDARY_IN_PRIMARY[key]
-      setActiveTab(primaryTab as typeof activeTab)
-      // Also expand the secondary section
-      setSecondaryExpanded((prev) => {
-        const sectionKey = key === "jobs" ? "monitors" : key === "runs" ? "activity" : "templates"
-        const next = { ...prev, [sectionKey]: true }
-        writeSecondaryExpanded(next)
-        return next
-      })
-      return
-    }
-    setActiveTab(key as typeof activeTab)
-  }, [setActiveTab, useProgressiveLayout])
+    navigateToTab(key)
+  }, [navigateToTab])
 
   // Resolve active tab for the tab bar (in progressive mode, secondary tabs map to their parent)
   const resolvedActiveTab = useProgressiveLayout && SECONDARY_IN_PRIMARY[activeTab]
@@ -1634,10 +1630,10 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           )}
           action={(
             <div className="flex flex-wrap gap-2">
-              <Button size="small" onClick={() => setActiveTab("runs")}>
+              <Button size="small" onClick={() => navigateToTab("runs")}>
                 {t("watchlists:guide.openActivity", "Open Activity")}
               </Button>
-              <Button size="small" onClick={() => setActiveTab("items")}>
+              <Button size="small" onClick={() => navigateToTab("items")}>
                 {t("watchlists:guide.openArticles", "Open Articles")}
               </Button>
             </div>
@@ -1697,10 +1693,13 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
               label: item?.label
             })) || []}
           />
-          {renderedTabItems?.find((item) => String(item?.key) === resolvedActiveTab)?.children}
+          <div key={refreshKey}>
+            {renderedTabItems?.find((item) => String(item?.key) === resolvedActiveTab)?.children}
+          </div>
         </>
       ) : (
         <Tabs
+          key={refreshKey}
           activeKey={resolvedActiveTab}
           onChange={handleTabChange}
           items={renderedTabItems}

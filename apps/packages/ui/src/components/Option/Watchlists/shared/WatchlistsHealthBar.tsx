@@ -67,8 +67,8 @@ export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }
         if (typeof setOverviewHealth === "function") {
           setOverviewHealth(result.health, result.fetchedAt)
         }
-      } catch {
-        // Silently fail — health bar is non-critical
+      } catch (err) {
+        console.warn("[WatchlistsHealthBar] Failed to fetch overview data:", err)
       } finally {
         setLoading(false)
         setRefreshing(false)
@@ -101,11 +101,13 @@ export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }
 
   const feedsCount = data?.sources.total ?? 0
   const monitorsActive = data?.jobs.active ?? 0
-  const lastRunAt = data?.runs.running > 0
+  const lastCheckedAt = data?.runs.running > 0
     ? t("watchlists:healthBar.runningNow", "running now")
-    : data?.fetchedAt
-      ? formatRelativeTime(data.fetchedAt, t)
-      : null
+    : data?.jobs.nextRunAt
+      ? formatRelativeTime(data.jobs.nextRunAt, t)
+      : data?.fetchedAt
+        ? formatRelativeTime(data.fetchedAt, t)
+        : null
   const unreadArticles = data?.items.unread ?? 0
   const attentionTotal = overviewHealth?.attention?.total ?? 0
   const hasAttention = attentionTotal > 0
@@ -123,9 +125,11 @@ export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }
       })
     )
   }
-  if (lastRunAt) {
+  if (lastCheckedAt) {
     summaryParts.push(
-      t("watchlists:healthBar.lastRun", "Last run {{time}}", { time: lastRunAt })
+      data?.jobs.nextRunAt
+        ? t("watchlists:healthBar.nextRun", "Next run {{time}}", { time: lastCheckedAt })
+        : t("watchlists:healthBar.lastChecked", "Checked {{time}}", { time: lastCheckedAt })
     )
   }
   if (unreadArticles > 0) {
