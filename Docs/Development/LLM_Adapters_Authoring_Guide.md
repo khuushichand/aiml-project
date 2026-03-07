@@ -46,6 +46,8 @@ class MyProviderAdapter(ChatProvider):
 
 ## Request Shaping
 - Adapters receive an OpenAI-like request dict. Common keys: `model`, `messages`, `stream`, `tools`, `tool_choice`, `temperature`, `top_p`, `max_tokens`, `stop`, `response_format`.
+- `response_format.type` supports `text`, `json_object`, and `json_schema`.
+- For `json_schema`, requests include `response_format.json_schema = {name, schema, strict?}`. If a provider cannot do `json_schema` natively, the server may downgrade the outbound request to `json_object` and still validate response content against the requested schema server-side.
 - Use `apply_tool_choice(payload, tools, tool_choice)` to set `tool_choice` safely only when supported.
 - Validation enforces that `tool_choice` requires `tools`; do not rely on adapters to silently ignore missing tools.
 - `extra_headers`/`extra_body` are additive overrides; explicit headers/body keys in the request win on conflicts.
@@ -55,6 +57,7 @@ class MyProviderAdapter(ChatProvider):
 ## Streaming
 - Use `iter_sse_lines_requests()` for `requests` streams and `aiter_sse_lines_httpx()` for `httpx` streams to normalize per-line output.
 - Do NOT forward provider `[DONE]` frames; the endpoint appends a single final `sse_done()` via `finalize_stream()`.
+- Structured output mode may emit additive terminal events (`structured_result` or `structured_error`) before normal stream termination markers. Adapters should only emit provider delta/event data and let chat service own terminal event sequencing.
 
 ## Error Mapping
 - Wrap provider exceptions with `self.normalize_error(exc)` which maps to project `Chat*Error` types.
