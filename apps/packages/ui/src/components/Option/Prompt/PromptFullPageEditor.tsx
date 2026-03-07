@@ -1,7 +1,7 @@
 import React, { useEffect, useCallback, useState } from "react"
 import { Form, Input, Select, Collapse } from "antd"
 import { useTranslation } from "react-i18next"
-import { ArrowLeft, Save, X } from "lucide-react"
+import { ArrowLeft, Save } from "lucide-react"
 import { PromptEditorPreview } from "./PromptEditorPreview"
 import { useFormDraft, formatDraftAge } from "@/hooks/useFormDraft"
 import {
@@ -39,7 +39,12 @@ export const PromptFullPageEditor: React.FC<PromptFullPageEditorProps> = ({
   const [showMobilePreview, setShowMobilePreview] = useState(false)
 
   const draftKey = `${DRAFT_KEY_PREFIX}${mode === "edit" ? initialValues?.id || "new" : "new"}`
-  const { recovered, clearDraft, saveDraft, draftAge } = useFormDraft(draftKey)
+  const { hasDraft, draftData, clearDraft, saveDraft, applyDraft, lastSaved } = useFormDraft({
+    storageKey: draftKey,
+    formType: mode,
+    editId: mode === "edit" ? initialValues?.id : undefined,
+    autoSaveInterval: 5000,
+  })
 
   const systemPromptValue = Form.useWatch("system_prompt", form) || ""
   const userPromptValue = Form.useWatch("user_prompt", form) || ""
@@ -47,9 +52,14 @@ export const PromptFullPageEditor: React.FC<PromptFullPageEditorProps> = ({
   // Set initial values
   useEffect(() => {
     if (!open) return
-    if (recovered) {
-      form.setFieldsValue(recovered)
-    } else if (initialValues) {
+    if (hasDraft && draftData) {
+      const recovered = applyDraft()
+      if (recovered) {
+        form.setFieldsValue(recovered)
+        return
+      }
+    }
+    if (initialValues) {
       form.setFieldsValue({
         name: initialValues.name || "",
         author: initialValues.author || "",
@@ -63,15 +73,12 @@ export const PromptFullPageEditor: React.FC<PromptFullPageEditorProps> = ({
       form.resetFields()
     }
     setDirty(false)
-  }, [open, initialValues, recovered, form])
+  }, [open, initialValues, hasDraft, draftData, applyDraft, form])
 
-  // Auto-save draft
+  // Mark dirty changes for auto-save
   useEffect(() => {
     if (!open || !dirty) return
-    const timer = setInterval(() => {
-      saveDraft(form.getFieldsValue())
-    }, 5000)
-    return () => clearInterval(timer)
+    saveDraft(form.getFieldsValue())
   }, [open, dirty, form, saveDraft])
 
   // beforeunload guard
@@ -83,6 +90,19 @@ export const PromptFullPageEditor: React.FC<PromptFullPageEditorProps> = ({
     window.addEventListener("beforeunload", handler)
     return () => window.removeEventListener("beforeunload", handler)
   }, [open, dirty])
+
+  const handleRequestClose = useCallback(() => {
+    if (dirty) {
+      const ok = window.confirm(
+        t("managePrompts.drawer.unsavedChanges", {
+          defaultValue: "You have unsaved changes. Discard them?",
+        })
+      )
+      if (!ok) return
+    }
+    clearDraft()
+    onClose()
+  }, [dirty, clearDraft, onClose, t])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -99,20 +119,7 @@ export const PromptFullPageEditor: React.FC<PromptFullPageEditorProps> = ({
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [open, dirty, form])
-
-  const handleRequestClose = useCallback(() => {
-    if (dirty) {
-      const ok = window.confirm(
-        t("managePrompts.drawer.unsavedChanges", {
-          defaultValue: "You have unsaved changes. Discard them?",
-        })
-      )
-      if (!ok) return
-    }
-    clearDraft()
-    onClose()
-  }, [dirty, clearDraft, onClose, t])
+  }, [open, form, handleRequestClose])
 
   const handleFinish = (values: any) => {
     const keywords = Array.isArray(values.keywords)
@@ -138,8 +145,11 @@ export const PromptFullPageEditor: React.FC<PromptFullPageEditorProps> = ({
   const templateFieldValidator = (_: any, value: string) => {
     if (!value) return Promise.resolve()
     const result = validateTemplateVariableSyntax(value)
-    if (!result.valid && result.errors.length > 0) {
-      return Promise.reject(result.errors[0])
+    if (!result.isValid) {
+      const msg = result.code === "unmatched_braces"
+        ? "Unmatched {{ or }} braces"
+        : `Invalid template variable: ${result.invalidTokens?.[0] ?? ""}`
+      return Promise.reject(msg)
     }
     return Promise.resolve()
   }
@@ -190,9 +200,9 @@ export const PromptFullPageEditor: React.FC<PromptFullPageEditorProps> = ({
             Back to Prompts
           </button>
           <span className="text-sm font-medium text-text">{title}</span>
-          {draftAge && (
+          {lastSaved && (
             <span className="text-xs text-text-muted">
-              Draft saved {formatDraftAge(draftAge)}
+              Draft saved {formatDraftAge(lastSaved)}
             </span>
           )}
         </div>

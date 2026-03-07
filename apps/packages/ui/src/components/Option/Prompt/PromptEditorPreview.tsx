@@ -24,25 +24,12 @@ export const PromptEditorPreview: React.FC<Props> = ({
     return extractTemplateVariables(allText)
   }, [systemPrompt, userPrompt])
 
-  const substitute = (text: string) => {
-    if (!text) return text
-    let result = text
-    for (const v of variables) {
-      const regex = new RegExp(`\\{\\{\\s*${v}\\s*\\}\\}`, "g")
-      const value = varValues[v]
-      if (value) {
-        result = result.replace(regex, value)
-      }
-    }
-    return result
-  }
-
   const renderHighlighted = (text: string) => {
     if (!text) return <span className="text-text-muted italic">Empty</span>
     const tokens = tokenizeTemplateVariableHighlights(text)
     return tokens.map((token, i) => {
-      if (token.type === "variable") {
-        const val = varValues[token.name || ""]
+      if (token.isVariable) {
+        const val = varValues[token.variableName || ""]
         if (val) {
           return (
             <span key={i} className="rounded bg-green-500/20 px-0.5">

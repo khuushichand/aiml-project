@@ -2483,7 +2483,7 @@ export const PromptBody = () => {
     } else if (isNew === "1" && !fullEditorOpen) {
       openFullEditor()
     }
-  }, [status, data, searchParams])
+  }, [status, data, searchParams, fullEditorOpen, openFullEditor])
 
   const copyCopilotToCustom = React.useCallback(
     (record: { key?: string; prompt?: string }) => {
@@ -2876,7 +2876,7 @@ export const PromptBody = () => {
       }
       if (e.key === "n" && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault()
-        openCreateDrawer()
+        openFullEditor()
         return
       }
       if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -2886,7 +2886,7 @@ export const PromptBody = () => {
     }
     document.addEventListener("keydown", handler)
     return () => document.removeEventListener("keydown", handler)
-  }, [drawerOpen, shortcutsHelpOpen, openCreateDrawer])
+  }, [drawerOpen, shortcutsHelpOpen, openFullEditor])
 
   const openEditDrawer = (record: any) => {
     if (guardPrivateMode()) return
@@ -2996,6 +2996,15 @@ export const PromptBody = () => {
   const handleDrawerSubmit = (values: any) => {
     const payload = normalizePromptPayload(values)
     if (drawerMode === "create") {
+      savePromptMutation(payload)
+    } else {
+      updatePromptMutation(payload)
+    }
+  }
+
+  const handleFullEditorSubmit = (values: any) => {
+    const payload = normalizePromptPayload(values)
+    if (fullEditorMode === "create") {
       savePromptMutation(payload)
     } else {
       updatePromptMutation(payload)
@@ -3273,9 +3282,9 @@ export const PromptBody = () => {
     (promptId: string) => {
       const promptRecord = getPromptRecordById(promptId)
       if (!promptRecord) return
-      openEditDrawer(promptRecord)
+      openFullEditor(promptRecord)
     },
-    [getPromptRecordById]
+    [getPromptRecordById, openFullEditor]
   )
 
   const renderCustomPromptTitleMeta = React.useCallback(
@@ -3329,7 +3338,7 @@ export const PromptBody = () => {
           inlineUseInChat={false}
           onEdit={() => {
             if (!promptRecord) return
-            openEditDrawer(promptRecord)
+            openFullEditor(promptRecord)
           }}
           onDuplicate={() => {
             if (!promptRecord) return
@@ -3614,7 +3623,7 @@ export const PromptBody = () => {
             <div className="flex flex-wrap items-center gap-2">
               <Tooltip title={t("managePrompts.newPromptHint", { defaultValue: "New prompt (N)" })}>
               <button
-                onClick={() => openCreateDrawer()}
+                onClick={() => openFullEditor()}
                 data-testid="prompts-add"
                 className="inline-flex items-center rounded-md border border-transparent bg-primary px-2 py-2 text-md font-medium leading-4 text-white shadow-sm hover:bg-primaryStrong focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50">
                 {t("managePrompts.newPromptBtn", { defaultValue: "New prompt" })}
@@ -3970,7 +3979,7 @@ export const PromptBody = () => {
               primaryActionLabel={t("settings:managePrompts.emptyPrimaryCta", {
                 defaultValue: "Create prompt"
               })}
-              onPrimaryAction={openCreateDrawer}
+              onPrimaryAction={() => openFullEditor()}
             />
             <div className="mt-6">
               <h3 className="mb-3 text-sm font-medium text-text-muted">
@@ -4761,7 +4770,7 @@ export const PromptBody = () => {
         onClose={closeFullEditor}
         mode={fullEditorMode}
         initialValues={fullEditorInitialValues}
-        onSubmit={handleDrawerSubmit}
+        onSubmit={handleFullEditorSubmit}
         isLoading={fullEditorMode === "create" ? savePromptLoading : isUpdatingPrompt}
         allTags={allTags}
       />
@@ -4774,7 +4783,7 @@ export const PromptBody = () => {
           const promptRecord = getPromptRecordById(promptId)
           if (!promptRecord) return
           closeInspector()
-          openEditDrawer(promptRecord)
+          openFullEditor(promptRecord)
         }}
         onUseInChat={(promptId) => {
           const promptRecord = getPromptRecordById(promptId)
