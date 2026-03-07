@@ -8,9 +8,17 @@
 
 **Tech Stack:** FastAPI, `StreamingResponse`, `SSEStream`, SQLite-backed `ResearchSessionsDB`, `ResearchService`, research jobs/artifact helpers, pytest, Bandit.
 
+**Status:** Complete
+
+**Verification:** `59/59` focused research/e2e tests passed and Bandit reported `0` findings / `0` errors in `/tmp/bandit_deep_research_replayable_events.json`.
+
+**Residual Risk:** Replay remains single-run only, `snapshot` is live but not persisted, `after_id` is the only replay cursor in v1, and reconnecting after the stored terminal row may still rely on synthetic terminal emission.
+
 ---
 
 ### Task 1: Persist Research Run Events And Read Them By Cursor
+
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/DB_Management/ResearchSessionsDB.py`
@@ -74,6 +82,8 @@ git commit -m "feat(research): persist replayable run events"
 
 ### Task 2: Add A Deduping Research Event Writer And Transaction Helpers
 
+**Status:** Complete
+
 **Files:**
 - Modify: `tldw_Server_API/app/core/Research/service.py`
 - Modify: `tldw_Server_API/app/core/DB_Management/ResearchSessionsDB.py`
@@ -134,6 +144,8 @@ git commit -m "feat(research): add transactional event writer"
 
 ### Task 3: Instrument Real Research Write Points
 
+**Status:** Complete
+
 **Files:**
 - Modify: `tldw_Server_API/app/core/Research/jobs.py`
 - Modify: `tldw_Server_API/app/core/Research/service.py`
@@ -192,6 +204,8 @@ git commit -m "feat(research): record run events at write points"
 ```
 
 ### Task 4: Extend The SSE Endpoint For Replay With `after_id`
+
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/Research/streaming.py`
@@ -264,6 +278,8 @@ git commit -m "feat(research): replay persisted events in sse"
 
 ### Task 5: Add Reconnect End-To-End Coverage
 
+**Status:** Complete
+
 **Files:**
 - Modify: `tldw_Server_API/tests/e2e/test_deep_research_runs.py`
 
@@ -310,6 +326,8 @@ git commit -m "test(research): verify replayable sse reconnects"
 ```
 
 ### Task 6: Verify The Replayable Events Slice
+
+**Status:** Complete
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-07-deep-research-replayable-events-implementation-plan.md`
