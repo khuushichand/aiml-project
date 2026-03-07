@@ -10,6 +10,7 @@ from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.External_Sources.gmail import GmailConnector
 from tldw_Server_API.app.core.External_Sources.google_drive import GoogleDriveConnector
 from tldw_Server_API.app.core.External_Sources.notion import NotionConnector
+from tldw_Server_API.app.core.External_Sources.sync_adapter import FileSyncAdapter
 
 _CONNECTORS_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -29,6 +30,8 @@ _CONNECTORS_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     ValueError,
 )
+
+FILE_SYNC_PROVIDERS = frozenset({"drive"})
 
 
 def _is_db_pool_object(db: Any) -> bool:
@@ -63,6 +66,16 @@ def get_connector_by_name(name: str):
     if n == "gmail":
         return GmailConnector()
     raise ValueError(f"Unknown connector provider: {name}")
+
+
+def get_file_sync_connector_by_name(name: str) -> FileSyncAdapter:
+    normalized = name.lower()
+    if normalized not in FILE_SYNC_PROVIDERS:
+        raise ValueError(f"Connector provider does not support file sync: {name}")
+    connector = get_connector_by_name(normalized)
+    if not isinstance(connector, FileSyncAdapter):  # pragma: no cover - defensive guard
+        raise TypeError(f"Connector provider does not implement the file sync adapter contract: {name}")
+    return connector
 
 
 async def _ensure_tables(db) -> None:
