@@ -1,6 +1,5 @@
 import React from "react"
 import { Tag } from "antd"
-import { X } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 export interface ActiveFilterChipsProps {
