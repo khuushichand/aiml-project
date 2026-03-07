@@ -202,3 +202,203 @@ async def test_collecting_job_advances_autonomous_run_to_synthesizing(tmp_path):
     assert updated is not None
     assert updated.phase == "synthesizing"
     assert result["phase"] == "synthesizing"
+
+
+@pytest.mark.asyncio
+async def test_synthesizing_job_writes_artifacts_and_opens_outline_review(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Test synthesizing",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="synthesizing",
+        status="queued",
+    )
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="approved_plan.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["evidence alignment"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="source_registry.json",
+        payload={
+            "sources": [
+                {
+                    "source_id": "src_1",
+                    "focus_area": "evidence alignment",
+                    "source_type": "local_document",
+                    "provider": "local_corpus",
+                    "title": "Internal source",
+                    "url": None,
+                    "snippet": "Internal note summary",
+                    "published_at": None,
+                    "retrieved_at": "2026-03-07T00:00:00+00:00",
+                    "fingerprint": "fp_1",
+                    "trust_tier": "internal",
+                    "metadata": {},
+                }
+            ]
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_jsonl(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="evidence_notes.jsonl",
+        records=[
+            {
+                "note_id": "note_1",
+                "source_id": "src_1",
+                "focus_area": "evidence alignment",
+                "kind": "summary",
+                "text": "Internal evidence remains aligned.",
+                "citation_locator": None,
+                "confidence": 0.8,
+                "metadata": {},
+            }
+        ],
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="collection_summary.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["evidence alignment"],
+            "source_count": 1,
+            "evidence_note_count": 1,
+            "remaining_gaps": [],
+            "collection_metrics": {"lane_counts": {"local": 1, "academic": 0, "web": 0}, "deduped_sources": 0},
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+
+    result = await handle_research_phase_job(
+        {
+            "id": 8,
+            "payload": {
+                "session_id": session.id,
+                "phase": "synthesizing",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+    )
+
+    updated = db.get_session(session.id)
+    assert updated is not None
+    assert updated.phase == "awaiting_outline_review"
+    assert updated.latest_checkpoint_id is not None
+    assert result["phase"] == "awaiting_outline_review"
+    assert result["artifacts_written"] >= 4
+    assert (tmp_path / "outputs" / "research" / session.id / "outline_v1.json").exists()
+    assert (tmp_path / "outputs" / "research" / session.id / "claims.json").exists()
+    assert (tmp_path / "outputs" / "research" / session.id / "report_v1.md").exists()
+    assert (tmp_path / "outputs" / "research" / session.id / "synthesis_summary.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_synthesizing_job_advances_autonomous_run_to_packaging(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Test synthesizing",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="synthesizing",
+        status="queued",
+    )
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="plan.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["evidence alignment"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="source_registry.json",
+        payload={"sources": []},
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_jsonl(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="evidence_notes.jsonl",
+        records=[],
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="collection_summary.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["evidence alignment"],
+            "source_count": 0,
+            "evidence_note_count": 0,
+            "remaining_gaps": ["no_sources_collected"],
+            "collection_metrics": {"lane_counts": {"local": 0, "academic": 0, "web": 0}, "deduped_sources": 0},
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+
+    result = await handle_research_phase_job(
+        {
+            "id": 9,
+            "payload": {
+                "session_id": session.id,
+                "phase": "synthesizing",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+    )
+
+    updated = db.get_session(session.id)
+    assert updated is not None
+    assert updated.phase == "packaging"
+    assert result["phase"] == "packaging"

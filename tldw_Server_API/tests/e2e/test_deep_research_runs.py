@@ -15,6 +15,7 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
     from tldw_Server_API.app.api.v1.endpoints import research_runs
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
     from tldw_Server_API.app.core.File_Artifacts.adapter_registry import FileAdapterRegistry
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
     from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
     from tldw_Server_API.app.core.Research.models import (
         ResearchCollectionResult,
@@ -143,18 +144,57 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
         assert approve_source_resp.status_code == 200
         assert approve_source_resp.json()["phase"] == "synthesizing"
 
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 13,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "synthesizing",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+        )
+    )
+
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.phase == "awaiting_outline_review"
+    assert session.latest_checkpoint_id is not None
+    assert (outputs_dir / "research" / session_id / "outline_v1.json").exists()
+    assert (outputs_dir / "research" / session_id / "claims.json").exists()
+    assert (outputs_dir / "research" / session_id / "report_v1.md").exists()
+    assert (outputs_dir / "research" / session_id / "synthesis_summary.json").exists()
+
+    with TestClient(app) as client:
+        approve_outline_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={},
+        )
+        assert approve_outline_resp.status_code == 200
+        assert approve_outline_resp.json()["phase"] == "packaging"
+
+    store = ResearchArtifactStore(base_dir=outputs_dir, db=db)
+    outline = store.read_json(session_id=session_id, artifact_name="outline_v1.json")
+    claims = store.read_json(session_id=session_id, artifact_name="claims.json")
+    report_markdown = store.read_text(session_id=session_id, artifact_name="report_v1.md")
+    source_registry = store.read_json(session_id=session_id, artifact_name="source_registry.json")
+
     package = service.build_package(
         owner_user_id="1",
         session_id=session_id,
         brief={"query": "Test deep research run"},
-        outline={"sections": ["Overview"]},
-        report_markdown="# Report\nAnswer",
-        claims=[{"text": "Claim", "citations": [{"source_id": "src_1"}]}],
-        source_inventory=[{"source_id": "src_1", "title": "Source 1"}],
+        outline=outline or {"sections": []},
+        report_markdown=report_markdown or "",
+        claims=(claims or {}).get("claims", []),
+        source_inventory=(source_registry or {}).get("sources", []),
     )
     adapter = FileAdapterRegistry().get_adapter("research_package")
     assert adapter is not None
     export = adapter.export(package, format="md")
     assert export.status == "ready"
-    assert export.content == b"# Report\nAnswer"
+    assert export.content.startswith(b"# Research Report")
     assert (outputs_dir / "research" / session_id / "bundle.json").exists()

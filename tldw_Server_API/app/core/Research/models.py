@@ -64,3 +64,30 @@ class ResearchCollectionResult:
     evidence_notes: list[ResearchEvidenceNote]
     collection_metrics: dict[str, Any]
     remaining_gaps: list[str]
+
+
+@dataclass(frozen=True)
+class ResearchOutlineSection:
+    title: str
+    focus_area: str
+    source_ids: list[str]
+    note_ids: list[str]
+
+
+@dataclass(frozen=True)
+class ResearchSynthesizedClaim:
+    claim_id: str
+    text: str
+    focus_area: str
+    source_ids: list[str]
+    citations: list[dict[str, Any]]
+    confidence: float
+
+
+@dataclass(frozen=True)
+class ResearchSynthesisResult:
+    outline_sections: list[ResearchOutlineSection]
+    claims: list[ResearchSynthesizedClaim]
+    report_markdown: str
+    unresolved_questions: list[str]
+    synthesis_summary: dict[str, Any]

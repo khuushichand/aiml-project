@@ -105,6 +105,33 @@ class ResearchArtifactStore:
             job_id=job_id,
         )
 
+    def write_text(
+        self,
+        *,
+        owner_user_id: int | str,
+        session_id: str,
+        artifact_name: str,
+        content: str,
+        phase: str,
+        job_id: str | None,
+        content_type: str = "text/plain",
+    ) -> ResearchArtifactRow:
+        _ = owner_user_id
+        path = self._artifact_path(session_id, artifact_name)
+        encoded = content.encode("utf-8")
+        path.write_bytes(encoded)
+        return self.db.record_artifact(
+            session_id=session_id,
+            artifact_name=path.name,
+            artifact_version=self._next_version(session_id, path.name),
+            storage_path=str(path),
+            content_type=content_type,
+            byte_size=len(encoded),
+            checksum=hashlib.sha256(encoded).hexdigest(),
+            phase=phase,
+            job_id=job_id,
+        )
+
     def read_json(self, *, session_id: str, artifact_name: str) -> dict[str, Any] | None:
         artifact = self._latest_artifact(session_id, artifact_name)
         if artifact is None:
@@ -117,3 +144,33 @@ class ResearchArtifactStore:
         except json.JSONDecodeError:
             return None
         return payload if isinstance(payload, dict) else None
+
+    def read_jsonl(self, *, session_id: str, artifact_name: str) -> list[dict[str, Any]] | None:
+        artifact = self._latest_artifact(session_id, artifact_name)
+        if artifact is None:
+            return None
+        path = Path(artifact.storage_path)
+        if not path.exists():
+            return None
+        records: list[dict[str, Any]] = []
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                payload = json.loads(line)
+                if isinstance(payload, dict):
+                    records.append(payload)
+                else:
+                    return None
+        except json.JSONDecodeError:
+            return None
+        return records
+
+    def read_text(self, *, session_id: str, artifact_name: str) -> str | None:
+        artifact = self._latest_artifact(session_id, artifact_name)
+        if artifact is None:
+            return None
+        path = Path(artifact.storage_path)
+        if not path.exists():
+            return None
+        return path.read_text(encoding="utf-8")

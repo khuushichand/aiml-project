@@ -1,0 +1,104 @@
+import pytest
+
+
+pytestmark = pytest.mark.unit
+
+
+def _plan(focus_areas: list[str]):
+    from tldw_Server_API.app.core.Research.models import ResearchPlan
+
+    return ResearchPlan(
+        query="Map evidence gaps",
+        focus_areas=focus_areas,
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        stop_criteria={"min_cited_sections": 1},
+    )
+
+
+def _source(source_id: str, focus_area: str):
+    from tldw_Server_API.app.core.Research.models import ResearchSourceRecord
+
+    return ResearchSourceRecord(
+        source_id=source_id,
+        focus_area=focus_area,
+        source_type="local_document",
+        provider="local_corpus",
+        title=f"Source for {focus_area}",
+        url=None,
+        snippet=f"Snippet for {focus_area}",
+        published_at=None,
+        retrieved_at="2026-03-07T00:00:00+00:00",
+        fingerprint=f"fp_{source_id}",
+        trust_tier="internal",
+        metadata={},
+    )
+
+
+def _note(note_id: str, source_id: str, focus_area: str, text: str):
+    from tldw_Server_API.app.core.Research.models import ResearchEvidenceNote
+
+    return ResearchEvidenceNote(
+        note_id=note_id,
+        source_id=source_id,
+        focus_area=focus_area,
+        kind="summary",
+        text=text,
+        citation_locator=None,
+        confidence=0.8,
+        metadata={},
+    )
+
+
+def test_synthesizer_groups_notes_into_sections_and_claims():
+    from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
+
+    synthesizer = ResearchSynthesizer()
+    result = synthesizer.synthesize(
+        plan=_plan(["background", "counterevidence"]),
+        source_registry=[
+            _source("src_background", "background"),
+            _source("src_counter", "counterevidence"),
+        ],
+        evidence_notes=[
+            _note("note_background", "src_background", "background", "Internal notes confirm baseline context."),
+            _note("note_counter", "src_counter", "counterevidence", "Counterevidence remains limited but present."),
+        ],
+        collection_summary={
+            "remaining_gaps": [],
+        },
+    )
+
+    assert [section.focus_area for section in result.outline_sections] == ["background", "counterevidence"]
+    assert result.claims[0].citations == [{"source_id": "src_background"}]
+    assert result.claims[1].citations == [{"source_id": "src_counter"}]
+    assert "## Background" in result.report_markdown
+    assert "[Sources: src_background]" in result.report_markdown
+    assert result.synthesis_summary["section_count"] == 2
+    assert result.synthesis_summary["claim_count"] == 2
+    assert result.synthesis_summary["coverage"]["missing_focus_areas"] == []
+
+
+def test_synthesizer_omits_unsupported_claims_and_carries_unresolved_questions():
+    from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
+
+    synthesizer = ResearchSynthesizer()
+    result = synthesizer.synthesize(
+        plan=_plan(["background", "missing evidence"]),
+        source_registry=[
+            _source("src_background", "background"),
+        ],
+        evidence_notes=[
+            _note("note_background", "src_background", "background", "Background evidence is grounded."),
+            _note("note_unsupported", "src_unknown", "background", "Unsupported evidence should not become a claim."),
+        ],
+        collection_summary={
+            "remaining_gaps": ["weak_external_coverage"],
+        },
+    )
+
+    assert len(result.claims) == 1
+    assert result.claims[0].source_ids == ["src_background"]
+    assert "weak_external_coverage" in result.unresolved_questions
+    assert "missing evidence" in result.synthesis_summary["coverage"]["missing_focus_areas"]
+    assert any("missing evidence" in item for item in result.unresolved_questions)

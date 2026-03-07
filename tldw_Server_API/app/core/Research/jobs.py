@@ -9,8 +9,13 @@ from typing import Any
 from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
 from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
 from tldw_Server_API.app.core.Research.broker import ResearchBroker
-from tldw_Server_API.app.core.Research.models import ResearchPlan
+from tldw_Server_API.app.core.Research.models import (
+    ResearchEvidenceNote,
+    ResearchPlan,
+    ResearchSourceRecord,
+)
 from tldw_Server_API.app.core.Research.planner import build_initial_plan
+from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
 
 RESEARCH_DOMAIN = "research"
 RESEARCH_JOB_TYPE = "research_phase"
@@ -50,6 +55,7 @@ async def handle_research_phase_job(
     research_db_path: str | Path,
     outputs_dir: str | Path,
     broker: ResearchBroker | None = None,
+    synthesizer: ResearchSynthesizer | None = None,
 ) -> dict[str, Any]:
     """Advance a single research phase job."""
     payload = job.get("payload") or {}
@@ -85,6 +91,14 @@ async def handle_research_phase_job(
             artifact_store=artifact_store,
             job_id=job_id,
             broker=broker or ResearchBroker(),
+        )
+    if phase == "synthesizing":
+        return await _handle_synthesizing_phase(
+            session=session,
+            db=db,
+            artifact_store=artifact_store,
+            job_id=job_id,
+            synthesizer=synthesizer or ResearchSynthesizer(),
         )
     raise ValueError(f"unsupported research phase: {phase}")
 
@@ -142,31 +156,7 @@ async def _handle_collecting_phase(
     job_id: str | None,
     broker: ResearchBroker,
 ) -> dict[str, Any]:
-    plan_payload = artifact_store.read_json(session_id=session.id, artifact_name="approved_plan.json")
-    if plan_payload is None:
-        plan_payload = artifact_store.read_json(session_id=session.id, artifact_name="plan.json")
-    if plan_payload is None:
-        raise ValueError(f"missing research plan artifact for session {session.id}")
-
-    focus_areas = [
-        str(area).strip()
-        for area in plan_payload.get("focus_areas", [])
-        if str(area).strip()
-    ]
-    if not focus_areas:
-        focus_areas = [session.query]
-
-    plan = ResearchPlan(
-        query=str(plan_payload.get("query") or session.query),
-        focus_areas=focus_areas,
-        source_policy=str(plan_payload.get("source_policy") or session.source_policy),
-        autonomy_mode=str(plan_payload.get("autonomy_mode") or session.autonomy_mode),
-        stop_criteria=(
-            dict(plan_payload.get("stop_criteria"))
-            if isinstance(plan_payload.get("stop_criteria"), dict)
-            else {}
-        ),
-    )
+    plan = _load_effective_plan(session=session, artifact_store=artifact_store)
 
     sources_by_fingerprint: dict[str, dict[str, Any]] = {}
     evidence_notes: list[dict[str, Any]] = []
@@ -268,6 +258,141 @@ async def _handle_collecting_phase(
         "checkpoint_id": checkpoint_id,
         "artifacts_written": 3,
     }
+
+
+async def _handle_synthesizing_phase(
+    *,
+    session: Any,
+    db: ResearchSessionsDB,
+    artifact_store: ResearchArtifactStore,
+    job_id: str | None,
+    synthesizer: ResearchSynthesizer,
+) -> dict[str, Any]:
+    plan = _load_effective_plan(session=session, artifact_store=artifact_store)
+    source_registry_payload = artifact_store.read_json(session_id=session.id, artifact_name="source_registry.json")
+    if source_registry_payload is None:
+        raise ValueError(f"missing source registry artifact for session {session.id}")
+    evidence_notes_payload = artifact_store.read_jsonl(session_id=session.id, artifact_name="evidence_notes.jsonl")
+    if evidence_notes_payload is None:
+        raise ValueError(f"missing evidence notes artifact for session {session.id}")
+    collection_summary = artifact_store.read_json(session_id=session.id, artifact_name="collection_summary.json")
+    if collection_summary is None:
+        raise ValueError(f"missing collection summary artifact for session {session.id}")
+
+    source_registry = [
+        ResearchSourceRecord(**record)
+        for record in source_registry_payload.get("sources", [])
+        if isinstance(record, dict)
+    ]
+    evidence_notes = [
+        ResearchEvidenceNote(**record)
+        for record in evidence_notes_payload
+        if isinstance(record, dict)
+    ]
+
+    result = synthesizer.synthesize(
+        plan=plan,
+        source_registry=source_registry,
+        evidence_notes=evidence_notes,
+        collection_summary=collection_summary,
+    )
+
+    outline_payload = {
+        "query": plan.query,
+        "sections": [asdict(section) for section in result.outline_sections],
+        "unresolved_questions": list(result.unresolved_questions),
+    }
+    claims_payload = {
+        "claims": [asdict(claim) for claim in result.claims],
+    }
+
+    artifact_store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="outline_v1.json",
+        payload=outline_payload,
+        phase="synthesizing",
+        job_id=job_id,
+    )
+    artifact_store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="claims.json",
+        payload=claims_payload,
+        phase="synthesizing",
+        job_id=job_id,
+    )
+    artifact_store.write_text(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="report_v1.md",
+        content=result.report_markdown,
+        phase="synthesizing",
+        job_id=job_id,
+        content_type="text/markdown",
+    )
+    artifact_store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="synthesis_summary.json",
+        payload=result.synthesis_summary,
+        phase="synthesizing",
+        job_id=job_id,
+    )
+
+    next_phase = "packaging"
+    next_status = "queued"
+    checkpoint_id: str | None = None
+    if session.autonomy_mode == "checkpointed":
+        checkpoint = db.create_checkpoint(
+            session_id=session.id,
+            checkpoint_type="outline_review",
+            proposed_payload={
+                "outline": outline_payload,
+                "claim_count": len(result.claims),
+                "report_preview": "\n".join(result.report_markdown.splitlines()[:8]),
+            },
+        )
+        checkpoint_id = checkpoint.id
+        next_phase = "awaiting_outline_review"
+        next_status = "waiting_human"
+
+    db.update_phase(session.id, phase=next_phase, status=next_status)
+    db.attach_active_job(session.id, None)
+    return {
+        "session_id": session.id,
+        "phase": next_phase,
+        "checkpoint_id": checkpoint_id,
+        "artifacts_written": 4,
+    }
+
+
+def _load_effective_plan(*, session: Any, artifact_store: ResearchArtifactStore) -> ResearchPlan:
+    plan_payload = artifact_store.read_json(session_id=session.id, artifact_name="approved_plan.json")
+    if plan_payload is None:
+        plan_payload = artifact_store.read_json(session_id=session.id, artifact_name="plan.json")
+    if plan_payload is None:
+        raise ValueError(f"missing research plan artifact for session {session.id}")
+
+    focus_areas = [
+        str(area).strip()
+        for area in plan_payload.get("focus_areas", [])
+        if str(area).strip()
+    ]
+    if not focus_areas:
+        focus_areas = [session.query]
+
+    return ResearchPlan(
+        query=str(plan_payload.get("query") or session.query),
+        focus_areas=focus_areas,
+        source_policy=str(plan_payload.get("source_policy") or session.source_policy),
+        autonomy_mode=str(plan_payload.get("autonomy_mode") or session.autonomy_mode),
+        stop_criteria=(
+            dict(plan_payload.get("stop_criteria"))
+            if isinstance(plan_payload.get("stop_criteria"), dict)
+            else {}
+        ),
+    )
 
 
 __all__ = [

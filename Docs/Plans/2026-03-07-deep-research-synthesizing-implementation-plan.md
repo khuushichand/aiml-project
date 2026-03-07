@@ -17,6 +17,7 @@
 - Modify: `tldw_Server_API/app/core/Research/models.py`
 - Modify: `tldw_Server_API/app/core/Research/__init__.py`
 - Test: `tldw_Server_API/tests/Research/test_research_synthesizer.py`
+**Status:** Complete
 
 **Step 1: Write the failing test**
 
@@ -56,6 +57,7 @@ git commit -m "feat(research): add deterministic synthesizer"
 - Modify: `tldw_Server_API/app/core/Research/artifact_store.py`
 - Modify: `tldw_Server_API/app/core/Research/jobs.py`
 - Test: `tldw_Server_API/tests/Research/test_research_jobs_worker.py`
+**Status:** Complete
 
 **Step 1: Write the failing test**
 
@@ -98,6 +100,7 @@ git commit -m "feat(research): add synthesizing jobs slice"
 - Modify: `tldw_Server_API/app/core/Research/service.py`
 - Modify: `tldw_Server_API/tests/Research/test_research_jobs_service.py`
 - Modify: `tldw_Server_API/tests/e2e/test_deep_research_runs.py`
+**Status:** Complete
 
 **Step 1: Write the failing test**
 
@@ -135,6 +138,7 @@ git commit -m "test(research): verify synthesizing lifecycle"
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-07-deep-research-synthesizing-implementation-plan.md`
+**Status:** Complete
 
 **Step 1: Run targeted research suite**
 
