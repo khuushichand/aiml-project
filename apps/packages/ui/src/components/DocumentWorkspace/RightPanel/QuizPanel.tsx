@@ -183,7 +183,7 @@ export const QuizPanel: React.FC = () => {
   // Quiz config state - persisted in localStorage
   const QUIZ_PREFS_KEY = "document-workspace-quiz-prefs"
 
-  const loadPrefs = () => {
+  const loadPrefs = (): Record<string, unknown> | null => {
     try {
       const raw = localStorage.getItem(QUIZ_PREFS_KEY)
       if (raw) return JSON.parse(raw)
@@ -191,10 +191,10 @@ export const QuizPanel: React.FC = () => {
     return null
   }
 
-  const savedPrefs = loadPrefs()
-  const [numQuestions, setNumQuestions] = useState<number>(savedPrefs?.numQuestions ?? 5)
-  const [questionType, setQuestionType] = useState<QuestionType>(savedPrefs?.questionType ?? "multiple_choice")
-  const [difficulty, setDifficulty] = useState<DifficultyLevel>(savedPrefs?.difficulty ?? "medium")
+  const [savedPrefs] = useState(loadPrefs)
+  const [numQuestions, setNumQuestions] = useState<number>((savedPrefs?.numQuestions as number) ?? 5)
+  const [questionType, setQuestionType] = useState<QuestionType>((savedPrefs?.questionType as QuestionType) ?? "multiple_choice")
+  const [difficulty, setDifficulty] = useState<DifficultyLevel>((savedPrefs?.difficulty as DifficultyLevel) ?? "medium")
   const [showConfig, setShowConfig] = useState(true)
 
   // Persist preferences when they change

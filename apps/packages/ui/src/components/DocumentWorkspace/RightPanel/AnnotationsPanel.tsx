@@ -373,6 +373,9 @@ export const AnnotationsPanel: React.FC = () => {
   const handleDelete = useCallback((annotation: Annotation) => {
     if (!activeDocumentId) return
 
+    // Capture full annotation for undo (preserves original id)
+    const savedAnnotation = { ...annotation }
+
     // Remove from local store immediately
     const removeAnnotation = useDocumentWorkspaceStore.getState().removeAnnotation
     removeAnnotation(annotation.id)
@@ -394,18 +397,10 @@ export const AnnotationsPanel: React.FC = () => {
                 clearTimeout(timer)
                 pendingDeleteTimers.current.delete(annotation.id)
               }
-              // Restore the annotation
-              const addAnnotation = useDocumentWorkspaceStore.getState().addAnnotation
-              addAnnotation({
-                documentId: annotation.documentId,
-                location: annotation.location,
-                text: annotation.text,
-                color: annotation.color,
-                note: annotation.note,
-                annotationType: annotation.annotationType,
-                chapterTitle: annotation.chapterTitle,
-                percentage: annotation.percentage,
-              })
+              // Restore with original id to stay in sync with server
+              useDocumentWorkspaceStore.setState((state) => ({
+                annotations: [...state.annotations, savedAnnotation]
+              }))
               message.destroy(key)
             }}
           >

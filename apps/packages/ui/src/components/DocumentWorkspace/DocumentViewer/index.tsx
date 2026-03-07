@@ -86,7 +86,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
       if (mod && (e.key === "g" || e.key === "G")) {
         e.preventDefault()
         const pageInput = document.querySelector<HTMLInputElement>(
-          '.ant-input[type="number"]'
+          '[data-testid="document-page-input"] input, [data-testid="document-page-input"]'
         )
         if (pageInput) {
           pageInput.focus()
@@ -127,7 +127,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           if (document.fullscreenElement) {
             document.exitFullscreen()
           } else {
-            const viewer = document.querySelector('[class*="flex h-full min-h-0 flex-col"]')
+            const viewer = document.querySelector('[data-testid="document-viewer"]')
             viewer?.requestFullscreen?.()
           }
           return
@@ -352,7 +352,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   }
 
   return (
-    <div className={`flex h-full min-h-0 flex-col ${className || ""}`}>
+    <div data-testid="document-viewer" className={`flex h-full min-h-0 flex-col ${className || ""}`}>
       <ViewerToolbar
         currentPage={currentPage}
         totalPages={totalPages}

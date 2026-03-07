@@ -325,7 +325,6 @@ export const DocumentWorkspacePage: React.FC = () => {
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
   const openDocuments = useDocumentWorkspaceStore((s) => s.openDocuments)
   const openDocument = useDocumentWorkspaceStore((s) => s.openDocument)
-  const closeDocument = useDocumentWorkspaceStore((s) => s.closeDocument)
   const annotationsHealth = useDocumentWorkspaceStore((s) => s.annotationsHealth)
   const progressHealth = useDocumentWorkspaceStore((s) => s.progressHealth)
 
@@ -421,14 +420,6 @@ export const DocumentWorkspacePage: React.FC = () => {
             textarea?.focus()
           }, 100)
           return
-        }
-        // Cmd+W → close active document
-        if (e.key === "w" || e.key === "W") {
-          if (activeDocumentId !== null) {
-            e.preventDefault()
-            closeDocument(activeDocumentId)
-            return
-          }
         }
       }
 

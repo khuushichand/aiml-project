@@ -238,6 +238,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
               onBlur={handlePageInputBlur}
               className="w-14 text-center"
               size="small"
+              data-testid="document-page-input"
             />
             <span className="text-muted">
               / {totalPages || "-"}
