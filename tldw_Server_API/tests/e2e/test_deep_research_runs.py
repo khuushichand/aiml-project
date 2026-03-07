@@ -3,6 +3,7 @@ import json
 import threading
 import time
 from types import SimpleNamespace
+from typing import Callable
 
 import pytest
 from fastapi import FastAPI
@@ -14,36 +15,57 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 pytestmark = pytest.mark.critical
 
 
-def _collect_sse_events(app: FastAPI, url: str, sink: list[dict[str, object]], snapshot_seen: threading.Event) -> None:
+def _parse_sse_block(block: str) -> dict[str, object] | None:
+    event_name: str | None = None
+    event_id: int | None = None
+    data_lines: list[str] = []
+    for line in block.splitlines():
+        if line.startswith("id:"):
+            raw_event_id = line.partition(":")[2].strip()
+            if raw_event_id.isdigit():
+                event_id = int(raw_event_id)
+        elif line.startswith("event: "):
+            event_name = line.removeprefix("event: ").strip()
+        elif line.startswith("data: "):
+            data_lines.append(line.removeprefix("data: "))
+    if event_name is None:
+        return None
+    payload = "\n".join(data_lines)
+    return {
+        "event": event_name,
+        "id": event_id,
+        "data": json.loads(payload) if payload else None,
+    }
+
+
+def _collect_sse_events(
+    app: FastAPI,
+    url: str,
+    sink: list[dict[str, object]],
+    snapshot_seen: threading.Event,
+    *,
+    stop_when: Callable[[dict[str, object], list[dict[str, object]]], bool] | None = None,
+) -> None:
     with TestClient(app) as client:
         with client.stream("GET", url) as response:
             sink.append({"event": "__meta__", "data": {"status_code": response.status_code}})
-            chunks: list[str] = []
+            buffer = ""
             for chunk in response.iter_text():
-                chunks.append(chunk)
-                if not snapshot_seen.is_set() and "event: snapshot" in "".join(chunks):
+                buffer += chunk.replace("\r\n", "\n")
+                if not snapshot_seen.is_set() and "event: snapshot" in buffer:
                     snapshot_seen.set()
-
-    payload_text = "".join(chunks).replace("\r\n", "\n")
-    for block in payload_text.split("\n\n"):
-        if not block.strip():
-            continue
-        event_name: str | None = None
-        data_lines: list[str] = []
-        for line in block.splitlines():
-            if line.startswith("event: "):
-                event_name = line.removeprefix("event: ").strip()
-            elif line.startswith("data: "):
-                data_lines.append(line.removeprefix("data: "))
-        if event_name is None:
-            continue
-        payload = "\n".join(data_lines)
-        sink.append(
-            {
-                "event": event_name,
-                "data": json.loads(payload) if payload else None,
-            }
-        )
+                while "\n\n" in buffer:
+                    block, buffer = buffer.split("\n\n", 1)
+                    if not block.strip():
+                        continue
+                    parsed = _parse_sse_block(block)
+                    if parsed is None:
+                        continue
+                    sink.append(parsed)
+                    if parsed["event"] == "snapshot":
+                        snapshot_seen.set()
+                    if stop_when is not None and stop_when(parsed, sink):
+                        return
 
 
 def _build_stub_synthesizer(first_source: dict[str, object], first_note: dict[str, object]):
@@ -602,3 +624,207 @@ def test_deep_research_live_progress_stream_reports_checkpoint_and_terminal_even
 
     terminal_event = next(item for item in reversed(events) if item["event"] == "terminal")
     assert terminal_event["data"]["status"] == "completed"
+
+
+def test_deep_research_live_progress_stream_reconnect_replays_only_missed_events(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            return {"id": 21, "uuid": "job-21", "status": "queued", **kwargs}
+
+    monkeypatch.setenv("RESEARCH_RUNS_SSE_POLL_INTERVAL", "0.05")
+    monkeypatch.setenv("RESEARCH_RUNS_SSE_TEST_MAX_SECONDS", "5.0")
+
+    research_db_path = tmp_path / "research.db"
+    outputs_dir = tmp_path / "outputs"
+    service = ResearchService(
+        research_db_path=research_db_path,
+        outputs_dir=outputs_dir,
+        job_manager=DummyJobs(),
+    )
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+    app.dependency_overrides[research_runs.get_research_service] = lambda: service
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/api/v1/research/runs",
+            json={
+                "query": "Replay deep research events",
+                "provider_overrides": {
+                    "local": {"top_k": 4, "sources": ["media_db"]},
+                    "web": {"engine": "kagi", "result_count": 3},
+                    "academic": {"providers": ["arxiv", "pubmed"], "max_results": 2},
+                    "synthesis": {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2},
+                },
+            },
+        )
+        assert create_resp.status_code == 200
+        session_id = create_resp.json()["id"]
+
+    initial_events: list[dict[str, object]] = []
+    snapshot_seen = threading.Event()
+    first_stream = threading.Thread(
+        target=_collect_sse_events,
+        args=(app, f"/api/v1/research/runs/{session_id}/events/stream", initial_events, snapshot_seen),
+        kwargs={
+            "stop_when": lambda event, _sink: (
+                event["event"] == "checkpoint"
+                and isinstance(event["data"], dict)
+                and event["data"].get("checkpoint_type") == "plan_review"
+            )
+        },
+        daemon=True,
+    )
+    first_stream.start()
+    time.sleep(0.2)
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 21,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "drafting_plan",
+                    "checkpoint_id": None,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+        )
+    )
+
+    first_stream.join(timeout=5.0)
+    assert not first_stream.is_alive()
+
+    first_replayable_ids = [
+        event["id"] for event in initial_events if isinstance(event.get("id"), int)
+    ]
+    assert first_replayable_ids
+    last_seen = max(first_replayable_ids)
+
+    db = ResearchSessionsDB(research_db_path)
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.latest_checkpoint_id is not None
+
+    with TestClient(app) as client:
+        approve_plan_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={"patch_payload": {"focus_areas": ["background", "counterevidence"]}},
+        )
+        assert approve_plan_resp.status_code == 200
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 22,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "collecting",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+        )
+    )
+
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.latest_checkpoint_id is not None
+
+    with TestClient(app) as client:
+        approve_source_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={},
+        )
+        assert approve_source_resp.status_code == 200
+
+    store = ResearchArtifactStore(base_dir=outputs_dir, db=db)
+    source_registry = store.read_json(session_id=session_id, artifact_name="source_registry.json")
+    evidence_notes = store.read_jsonl(session_id=session_id, artifact_name="evidence_notes.jsonl")
+    assert source_registry is not None
+    assert evidence_notes is not None
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 23,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "synthesizing",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+            synthesizer=_build_stub_synthesizer(source_registry["sources"][0], evidence_notes[0]),
+        )
+    )
+
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.latest_checkpoint_id is not None
+
+    with TestClient(app) as client:
+        approve_outline_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={},
+        )
+        assert approve_outline_resp.status_code == 200
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 24,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "packaging",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+        )
+    )
+
+    reconnect_events: list[dict[str, object]] = []
+    reconnect_snapshot_seen = threading.Event()
+    replay_stream = threading.Thread(
+        target=_collect_sse_events,
+        args=(
+            app,
+            f"/api/v1/research/runs/{session_id}/events/stream?after_id={last_seen}",
+            reconnect_events,
+            reconnect_snapshot_seen,
+        ),
+        daemon=True,
+    )
+    replay_stream.start()
+    replay_stream.join(timeout=5.0)
+    assert not replay_stream.is_alive()
+
+    meta = next(item for item in reconnect_events if item["event"] == "__meta__")
+    assert meta["data"]["status_code"] == 200
+
+    replay_payload_events = [
+        event for event in reconnect_events if event["event"] not in {"__meta__", "snapshot"}
+    ]
+    assert replay_payload_events
+    assert all(isinstance(event["id"], int) and event["id"] > last_seen for event in replay_payload_events)
+    assert all(event["data"]["event_id"] > last_seen for event in replay_payload_events)
+    assert all(event["data"]["replayed"] is True for event in replay_payload_events)
+    assert reconnect_events[1]["event"] == "snapshot"
+    assert replay_payload_events[-1]["event"] == "terminal"
