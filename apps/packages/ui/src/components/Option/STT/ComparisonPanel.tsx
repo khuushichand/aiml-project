@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react"
+import React, { useCallback, useEffect, useRef, useState } from "react"
 import { Button, Card, Input, Select, Skeleton, Tag, Tooltip, Typography } from "antd"
 import { Copy, RotateCcw, Save } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -18,6 +18,7 @@ export interface ComparisonPanelProps {
   selectedModels?: string[]
   sttOptions: Record<string, any>
   onSaveToNotes: (text: string, model: string) => void
+  onComparisonComplete?: (results: ComparisonResult[]) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -130,13 +131,14 @@ export const ComparisonPanel: React.FC<ComparisonPanelProps> = ({
   selectedModels: selectedModelsProp,
   sttOptions,
   onSaveToNotes,
+  onComparisonComplete,
 }) => {
   const { t } = useTranslation("playground")
   const notification = useAntdNotification()
   const [models, setModels] = useState<string[]>(selectedModelsProp ?? [])
 
   const { results, isRunning, transcribeAll, retryModel } =
-    useComparisonTranscribe({ sttOptions })
+    useComparisonTranscribe()
 
   // Sync from prop when provided
   useEffect(() => {
@@ -145,10 +147,19 @@ export const ComparisonPanel: React.FC<ComparisonPanelProps> = ({
     }
   }, [selectedModelsProp])
 
-  const handleTranscribeAll = useCallback(() => {
+  const handleTranscribeAll = useCallback(async () => {
     if (!blob || models.length === 0) return
-    transcribeAll(blob, models)
-  }, [blob, models, transcribeAll])
+    await transcribeAll(blob, models, sttOptions)
+  }, [blob, models, sttOptions, transcribeAll])
+
+  // Notify parent when comparison run finishes
+  const prevIsRunning = useRef(false)
+  useEffect(() => {
+    if (prevIsRunning.current && !isRunning && results.length > 0) {
+      onComparisonComplete?.(results)
+    }
+    prevIsRunning.current = isRunning
+  }, [isRunning, results, onComparisonComplete])
 
   const handleCopy = useCallback(
     async (text: string) => {
@@ -169,9 +180,9 @@ export const ComparisonPanel: React.FC<ComparisonPanelProps> = ({
   const handleRetry = useCallback(
     (model: string) => {
       if (!blob) return
-      retryModel(blob, model)
+      retryModel(blob, model, sttOptions)
     },
-    [blob, retryModel]
+    [blob, sttOptions, retryModel]
   )
 
   const canTranscribe = !!blob && models.length > 0 && !isRunning
