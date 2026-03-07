@@ -689,7 +689,7 @@ describe("background proxy fallback safety", () => {
 
     const { bgStream } = await importProxy()
     const chunks: string[] = []
-    try {
+    const streamTask = (async () => {
       for await (const chunk of bgStream({
         path: "/api/v1/chat/completions",
         method: "POST",
@@ -698,6 +698,10 @@ describe("background proxy fallback safety", () => {
       })) {
         chunks.push(chunk)
       }
+    })()
+    try {
+      await vi.advanceTimersByTimeAsync(401)
+      await streamTask
     } finally {
       vi.unstubAllGlobals()
     }
