@@ -1,10 +1,10 @@
 'use client';
 
-import { buildApiUrl } from './api-config';
-
-// In-memory storage for single-user API key (not persisted to web storage).
-let inMemoryApiKey: string | null = null;
 const AUTH_CHANGE_EVENT = 'tldw-admin-auth-change';
+const SESSION_MARKER_COOKIE = 'admin_session';
+
+// In-memory storage for legacy single-user API key mode.
+let inMemoryApiKey: string | null = null;
 
 const clearApiKeyStorage = (): void => {
   inMemoryApiKey = null;
@@ -16,9 +16,36 @@ const clearJwtStorage = (): void => {
   }
 };
 
-const emitAuthChange = () => {
+const hasSessionMarker = (): boolean => {
+  if (typeof document === 'undefined') return false;
+  return document.cookie
+    .split(';')
+    .some((cookie) => cookie.trim().startsWith(`${SESSION_MARKER_COOKIE}=`));
+};
+
+const emitAuthChange = (): void => {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
+};
+
+const storeUser = (user: AdminUser): void => {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem('user', JSON.stringify(user));
+};
+
+const clearStoredUser = (): void => {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.removeItem('user');
+};
+
+const finalizeAuthenticatedLogin = async (): Promise<AuthenticatedLoginResult> => {
+  clearApiKeyStorage();
+  clearJwtStorage();
+  await fetchAndStoreUser();
+  emitAuthChange();
+  return {
+    status: 'authenticated',
+  };
 };
 
 export const subscribeAuthChange = (handler: () => void): (() => void) => {
@@ -42,15 +69,8 @@ export interface AdminUser {
   last_login?: string;
 }
 
-export interface LoginResponse {
-  access_token: string;
-  token_type: string;
-}
-
 export interface AuthenticatedLoginResult {
   status: 'authenticated';
-  accessToken: string;
-  tokenType: string;
 }
 
 export interface MfaRequiredLoginResult {
@@ -63,12 +83,15 @@ export interface MfaRequiredLoginResult {
 export type PasswordLoginResult = AuthenticatedLoginResult | MfaRequiredLoginResult;
 
 type LoginSuccessPayload = {
-  access_token?: string;
   token_type?: string;
   session_token?: string;
   mfa_required?: boolean;
   expires_in?: number;
   message?: string;
+};
+
+type ApiKeyLoginPayload = {
+  user?: AdminUser;
 };
 
 const isMfaChallengePayload = (
@@ -81,26 +104,8 @@ const isMfaChallengePayload = (
   && typeof value.expires_in === 'number'
   && typeof value.message === 'string';
 
-const isTokenPayload = (
-  value: LoginSuccessPayload
-): value is Required<Pick<LoginSuccessPayload, 'access_token' | 'token_type'>> =>
-  typeof value.access_token === 'string'
-  && typeof value.token_type === 'string';
-
-const finalizePasswordLogin = async (
-  accessToken: string,
-  tokenType: string
-): Promise<AuthenticatedLoginResult> => {
-  clearApiKeyStorage();
-  localStorage.setItem('access_token', accessToken);
-  emitAuthChange();
-  await fetchAndStoreUser(accessToken);
-  return {
-    status: 'authenticated',
-    accessToken,
-    tokenType,
-  };
-};
+const isAuthenticatedLoginPayload = (value: LoginSuccessPayload): boolean =>
+  value.mfa_required !== true && typeof value.token_type === 'string';
 
 /**
  * Check if we're in single-user mode (X-API-KEY auth)
@@ -115,68 +120,67 @@ export function isSingleUserMode(): boolean {
  */
 export function getApiKey(): string | null {
   if (typeof window === 'undefined') return null;
-  if (inMemoryApiKey) return inMemoryApiKey;
-  return null;
+  return inMemoryApiKey;
 }
 
 /**
  * Set X-API-KEY for single-user mode
  */
 export function setApiKey(key: string): void {
-  if (typeof window !== 'undefined') {
-    inMemoryApiKey = key;
-    emitAuthChange();
-  }
+  if (typeof window === 'undefined') return;
+  inMemoryApiKey = key;
+  emitAuthChange();
 }
 
 /**
- * Get JWT token from localStorage
+ * Admin bearer tokens are stored in httpOnly cookies and are never exposed to browser JS.
  */
 export function getJWTToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem('access_token');
+  return null;
 }
 
 export function hasStoredAuth(): boolean {
   if (typeof window === 'undefined') return false;
-  return !!getJWTToken() || !!getApiKey();
+  return hasSessionMarker() || !!getApiKey() || !!localStorage.getItem('user');
 }
 
 /**
  * Login with username/email and password (multi-user JWT mode)
- * tldw_server uses OAuth2 form-urlencoded login
  */
 export async function loginWithPassword(
   username: string,
   password: string
 ): Promise<PasswordLoginResult | null> {
   try {
-    // tldw_server expects OAuth2 form-urlencoded body
     const formData = new URLSearchParams();
     formData.append('username', username);
     formData.append('password', password);
 
-    const response = await fetch(buildApiUrl('/auth/login'), {
+    const response = await fetch('/api/auth/login', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: formData.toString(),
+      credentials: 'include',
     });
 
-    if (response.ok) {
-      const data = await response.json() as LoginSuccessPayload;
-      if (isMfaChallengePayload(data)) {
-        return {
-          status: 'mfa_required',
-          sessionToken: data.session_token,
-          expiresIn: data.expires_in,
-          message: data.message,
-        };
-      }
-      if (isTokenPayload(data)) {
-        return await finalizePasswordLogin(data.access_token, data.token_type);
-      }
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json() as LoginSuccessPayload;
+    if (isMfaChallengePayload(data)) {
+      return {
+        status: 'mfa_required',
+        sessionToken: data.session_token,
+        expiresIn: data.expires_in,
+        message: data.message,
+      };
+    }
+
+    if (isAuthenticatedLoginPayload(data)) {
+      return await finalizeAuthenticatedLogin();
     }
 
     return null;
@@ -191,7 +195,7 @@ export async function completeMfaLogin(
   mfaToken: string
 ): Promise<AuthenticatedLoginResult | null> {
   try {
-    const response = await fetch(buildApiUrl('/auth/mfa/login'), {
+    const response = await fetch('/api/auth/mfa/login', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -200,6 +204,7 @@ export async function completeMfaLogin(
         session_token: sessionToken,
         mfa_token: mfaToken,
       }),
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -207,11 +212,11 @@ export async function completeMfaLogin(
     }
 
     const data = await response.json() as LoginSuccessPayload;
-    if (!isTokenPayload(data)) {
+    if (!isAuthenticatedLoginPayload(data)) {
       return null;
     }
 
-    return await finalizePasswordLogin(data.access_token, data.token_type);
+    return await finalizeAuthenticatedLogin();
   } catch (error) {
     console.error('MFA login failed:', error);
     return null;
@@ -223,24 +228,29 @@ export async function completeMfaLogin(
  */
 export async function loginWithApiKey(apiKey: string): Promise<boolean> {
   try {
-    // Validate the API key by calling a protected endpoint
-    const response = await fetch(buildApiUrl('/users/me'), {
-      method: 'GET',
+    const response = await fetch('/api/auth/apikey', {
+      method: 'POST',
       headers: {
-        'X-API-KEY': apiKey,
+        'Content-Type': 'application/json',
       },
+      body: JSON.stringify({ apiKey }),
+      credentials: 'include',
     });
 
-    if (response.ok) {
-      const user = await response.json();
-      // Auth mode exclusivity: API key login clears JWT auth state.
-      clearJwtStorage();
-      setApiKey(apiKey);
-      localStorage.setItem('user', JSON.stringify(user));
-      return true;
+    if (!response.ok) {
+      return false;
     }
 
-    return false;
+    const payload = await response.json() as ApiKeyLoginPayload;
+    if (!payload.user) {
+      return false;
+    }
+
+    clearJwtStorage();
+    clearApiKeyStorage();
+    storeUser(payload.user);
+    emitAuthChange();
+    return true;
   } catch (error) {
     console.error('API key validation failed:', error);
     return false;
@@ -248,22 +258,21 @@ export async function loginWithApiKey(apiKey: string): Promise<boolean> {
 }
 
 /**
- * Fetch and store current user info
+ * Fetch and store current user info using the server-managed session.
  */
-async function fetchAndStoreUser(token: string): Promise<AdminUser | null> {
+async function fetchAndStoreUser(): Promise<AdminUser | null> {
   try {
-    const response = await fetch(buildApiUrl('/users/me'), {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+    const response = await fetch('/api/proxy/users/me', {
+      credentials: 'include',
     });
 
-    if (response.ok) {
-      const user: AdminUser = await response.json();
-      localStorage.setItem('user', JSON.stringify(user));
-      return user;
+    if (!response.ok) {
+      return null;
     }
-    return null;
+
+    const user: AdminUser = await response.json();
+    storeUser(user);
+    return user;
   } catch (error) {
     console.error('Failed to fetch user:', error);
     return null;
@@ -275,21 +284,14 @@ async function fetchAndStoreUser(token: string): Promise<AdminUser | null> {
  */
 export async function logout(): Promise<void> {
   try {
-    const token = getJWTToken();
-    if (token) {
-      // Try to invalidate token on server (optional - tldw_server may not have this endpoint)
-      await fetch(buildApiUrl('/auth/logout'), {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      }).catch(() => {
-        // Ignore errors - server might not have logout endpoint
-      });
-    }
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+    }).catch(() => {
+      // Ignore errors - local auth state must still be cleared.
+    });
   } finally {
-    // Always clear local storage
-    localStorage.removeItem('user');
+    clearStoredUser();
     clearJwtStorage();
     clearApiKeyStorage();
     emitAuthChange();

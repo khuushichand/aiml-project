@@ -55,8 +55,12 @@ Open `http://localhost:3001`.
 
 ## Authentication
 
-- **Single-user mode**: API key login (X-API-KEY); key stored in memory for the session.
-- **Multi-user mode**: username/password login via `/auth/login` and JWT stored in localStorage.
+- **Single-user mode**: API key login remains supported, but the validated key is moved into an
+  `httpOnly` session cookie after login instead of being persisted in web storage.
+- **Multi-user mode**: username/password login is exchanged through Next route handlers that set
+  `httpOnly` session cookies. Browser JavaScript never stores or reads admin bearer tokens.
+- **Authenticated API calls**: the UI sends privileged requests through `/api/proxy/*` on the same
+  origin, and the proxy attaches the server-managed credential to backend requests.
 
 ## System Ops Endpoints Used
 
