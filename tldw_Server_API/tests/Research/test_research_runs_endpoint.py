@@ -99,6 +99,61 @@ def test_create_research_run_passes_provider_overrides():
         assert create_resp.json()["id"] == "rs_2"
 
 
+def test_list_research_runs_endpoint_returns_recent_created_runs():
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    class StubService:
+        def list_sessions(self, **kwargs):
+            assert kwargs["owner_user_id"] == "1"
+            assert kwargs["limit"] == 25
+            return [
+                {
+                    "id": "rs_new",
+                    "query": "Newest created run",
+                    "status": "queued",
+                    "phase": "drafting_plan",
+                    "control_state": "running",
+                    "progress_percent": 5.0,
+                    "progress_message": "planning research",
+                    "active_job_id": "15",
+                    "latest_checkpoint_id": None,
+                    "completed_at": None,
+                    "created_at": "2026-03-07T08:00:00+00:00",
+                    "updated_at": "2026-03-07T08:00:00+00:00",
+                },
+                {
+                    "id": "rs_old",
+                    "query": "Older created run",
+                    "status": "waiting_human",
+                    "phase": "awaiting_plan_review",
+                    "control_state": "running",
+                    "progress_percent": 10.0,
+                    "progress_message": "planning research",
+                    "active_job_id": None,
+                    "latest_checkpoint_id": "cp_1",
+                    "completed_at": None,
+                    "created_at": "2026-03-07T07:00:00+00:00",
+                    "updated_at": "2026-03-07T07:30:00+00:00",
+                },
+            ]
+
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/research/runs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["id"] for item in body] == ["rs_new", "rs_old"]
+    assert body[0]["query"] == "Newest created run"
+    assert body[0]["created_at"] == "2026-03-07T08:00:00+00:00"
+    assert body[1]["updated_at"] == "2026-03-07T07:30:00+00:00"
+
+
 def test_read_research_run_bundle_and_artifact():
     from tldw_Server_API.app.api.v1.endpoints import research_runs
 

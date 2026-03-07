@@ -541,6 +541,46 @@ def test_get_stream_snapshot_includes_checkpoint_and_latest_artifact_manifest(tm
     ).artifact_version == 2
 
 
+def test_list_sessions_returns_newly_created_runs_for_owner(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    older = db.create_session(
+        owner_user_id="1",
+        query="Older service run",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+    )
+    newer = db.create_session(
+        owner_user_id="1",
+        query="Newer service run",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+    )
+    db.create_session(
+        owner_user_id="2",
+        query="Other owner service run",
+        source_policy="external_only",
+        autonomy_mode="autonomous",
+        limits_json={},
+    )
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=None,
+    )
+
+    sessions = service.list_sessions(owner_user_id="1", limit=10)
+
+    assert [session.id for session in sessions] == [newer.id, older.id]
+    assert [session.query for session in sessions] == ["Newer service run", "Older service run"]
+    assert all(session.owner_user_id == "1" for session in sessions)
+
+
 def test_pause_run_marks_active_executable_session_pause_requested(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
     from tldw_Server_API.app.core.Research.service import ResearchService

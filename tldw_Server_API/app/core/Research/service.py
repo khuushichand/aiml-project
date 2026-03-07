@@ -458,6 +458,15 @@ class ResearchService:
             artifacts=self._latest_artifact_manifest(db.list_artifacts(session_id)),
         )
 
+    def list_sessions(
+        self,
+        *,
+        owner_user_id: str,
+        limit: int = 25,
+    ) -> list[ResearchSessionRow]:
+        db = self._db_for_user(owner_user_id)
+        return db.list_sessions(owner_user_id, limit=limit)
+
     def get_session(self, *, owner_user_id: str, session_id: str) -> ResearchSessionRow:
         db = self._db_for_user(owner_user_id)
         session = db.get_session(session_id)

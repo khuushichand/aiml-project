@@ -111,3 +111,36 @@ def test_research_run_events_table_is_created_automatically(tmp_path):
         }
 
     assert "research_run_events" in table_names
+
+
+def test_list_sessions_is_owner_scoped_and_sorted_by_created_at_desc(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    older = db.create_session(
+        owner_user_id="1",
+        query="Older run",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+    )
+    newer = db.create_session(
+        owner_user_id="1",
+        query="Newer run",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+    )
+    db.create_session(
+        owner_user_id="2",
+        query="Other owner run",
+        source_policy="local_only",
+        autonomy_mode="autonomous",
+        limits_json={},
+    )
+
+    sessions = db.list_sessions(owner_user_id="1", limit=10)
+
+    assert [session.id for session in sessions] == [newer.id, older.id]
+    assert [session.query for session in sessions] == ["Newer run", "Older run"]
+    assert all(session.owner_user_id == "1" for session in sessions)

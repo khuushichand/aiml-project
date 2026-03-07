@@ -39,6 +39,14 @@ class ResearchRunResponse(BaseModel):
     completed_at: str | None = None
 
 
+class ResearchRunListItemResponse(ResearchRunResponse):
+    """List item returned for recent deep research run queries."""
+
+    query: str
+    created_at: str
+    updated_at: str
+
+
 class ResearchCheckpointSummary(BaseModel):
     """Current checkpoint summary included in research stream snapshots."""
 

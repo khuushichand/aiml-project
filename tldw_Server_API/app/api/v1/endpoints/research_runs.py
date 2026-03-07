@@ -13,6 +13,7 @@ from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import (
     ResearchArtifactResponse,
     ResearchCheckpointPatchApproveRequest,
     ResearchRunCreateRequest,
+    ResearchRunListItemResponse,
     ResearchRunResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -69,6 +70,19 @@ async def create_research_run(
         provider_overrides=payload.provider_overrides,
     )
     return ResearchRunResponse.model_validate(session)
+
+
+@router.get("/runs", response_model=list[ResearchRunListItemResponse], summary="List deep research runs")
+async def list_research_runs(
+    limit: int = Query(25, ge=1, le=100),
+    current_user: User = Depends(get_request_user),
+    service: ResearchService = Depends(get_research_service),
+) -> list[ResearchRunListItemResponse]:
+    sessions = service.list_sessions(
+        owner_user_id=str(current_user.id),
+        limit=limit,
+    )
+    return [ResearchRunListItemResponse.model_validate(session) for session in sessions]
 
 
 @router.get("/runs/{session_id}", response_model=ResearchRunResponse, summary="Get a deep research run")

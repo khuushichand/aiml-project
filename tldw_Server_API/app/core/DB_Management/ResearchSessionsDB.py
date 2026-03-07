@@ -337,6 +337,20 @@ class ResearchSessionsDB:
             ).fetchone()
         return self._session_from_row(row)
 
+    def list_sessions(self, owner_user_id: str, *, limit: int = 25) -> list[ResearchSessionRow]:
+        bounded_limit = max(1, int(limit))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM research_sessions
+                WHERE owner_user_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (str(owner_user_id), bounded_limit),
+            ).fetchall()
+        return [session for row in rows if (session := self._session_from_row(row)) is not None]
+
     def update_phase(
         self,
         session_id: str,
