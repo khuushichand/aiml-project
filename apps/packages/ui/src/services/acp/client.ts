@@ -16,6 +16,7 @@ import type {
   ACPWSClientMessage,
   ACPWSServerMessage,
 } from "./types"
+import { shouldRetryACPWebSocketClose } from "./constants"
 
 // -----------------------------------------------------------------------------
 // Configuration
@@ -233,7 +234,7 @@ export class ACPWebSocketClient {
       this.callbacks.onClose?.(event.code, event.reason)
 
       // Attempt reconnection if not manually closed
-      if (!this.isClosedManually && event.code !== 4401) {
+      if (!this.isClosedManually && shouldRetryACPWebSocketClose(event.code)) {
         this.scheduleReconnect(sessionId)
       }
     }

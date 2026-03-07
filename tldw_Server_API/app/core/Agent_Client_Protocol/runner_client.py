@@ -16,6 +16,7 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.config import (
     ACPRunnerConfig,
     load_acp_runner_config,
 )
+from tldw_Server_API.app.core.Agent_Client_Protocol.permission_tiers import determine_permission_tier
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import (
     ACPMessage,
     ACPResponseError,
@@ -597,38 +598,8 @@ class ACPRunnerClient:
         return True
 
     def _determine_permission_tier(self, tool_name: str) -> str:
-        """Determine the permission tier for a tool based on its name.
-
-        First consults admin-configured permission policies (if any).
-        Falls back to a heuristic based on common patterns:
-        - Read operations: auto
-        - Write operations: batch
-        - Execute/delete operations: individual
-        """
-        # Check admin-configured policies first (best-effort, sync)
-        try:
-            from tldw_Server_API.app.services.admin_acp_sessions_service import _store
-            if _store is not None:
-                policy_tier = _store.resolve_permission_tier(tool_name)
-                if policy_tier is not None:
-                    return policy_tier
-        except Exception as policy_error:
-            logger.debug("Runner client failed to resolve ACP policy tier from store", exc_info=policy_error)
-
-        tool_lower = tool_name.lower()
-
-        # Auto-approve tier (read-only)
-        auto_patterns = ["read", "get", "list", "search", "find", "view", "show", "glob", "grep", "status"]
-        if any(p in tool_lower for p in auto_patterns):
-            return "auto"
-
-        # Individual approval tier (destructive)
-        individual_patterns = ["delete", "remove", "exec", "run", "shell", "bash", "terminal", "push", "force"]
-        if any(p in tool_lower for p in individual_patterns):
-            return "individual"
-
-        # Default to batch tier (write operations)
-        return "batch"
+        """Determine the permission tier for a tool based on policies then heuristics."""
+        return determine_permission_tier(tool_name)
 
     # -------------------------------------------------------------------------
     # Notification and Request Handlers

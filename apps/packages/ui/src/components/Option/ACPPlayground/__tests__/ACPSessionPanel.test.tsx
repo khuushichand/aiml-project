@@ -304,4 +304,67 @@ describe("ACPSessionPanel filters and sorting", () => {
     expect(screen.getAllByText("Perm 0").length).toBeGreaterThan(0)
     expect(screen.getByText(`Fork ${alphaId.slice(0, 8)}`)).toBeInTheDocument()
   })
+
+  it("does not silently local-fork server-backed sessions when the backend fork fails", async () => {
+    const store = useACPSessionsStore.getState()
+    const alphaId = store.createSession({ cwd: "/workspace/alpha", name: "Alpha Session" })
+
+    useACPSessionsStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [alphaId]: {
+          ...state.sessions[alphaId],
+          backendStatus: "active",
+        },
+      },
+    }))
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: RequestInfo | URL) => {
+        const urlString = String(url)
+        if (urlString.includes(`/api/v1/acp/sessions/${alphaId}/detail`)) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              session_id: alphaId,
+              user_id: 1,
+              agent_type: "custom",
+              name: "Alpha Session",
+              status: "active",
+              created_at: "2024-01-01T00:00:00.000Z",
+              last_activity_at: "2024-01-01T00:00:05.000Z",
+              message_count: 2,
+              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+              tags: [],
+              has_websocket: false,
+              forked_from: null,
+              messages: [{ id: 1 }, { id: 2 }],
+              cwd: "/workspace/alpha",
+            }),
+          })
+        }
+        if (urlString.includes(`/api/v1/acp/sessions/${alphaId}/fork`)) {
+          return Promise.resolve({
+            ok: false,
+            status: 409,
+            json: async () => ({ detail: "fork_not_resumable" }),
+          })
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({}) })
+      })
+    )
+
+    render(<ACPSessionPanel />)
+
+    fireEvent.click(screen.getByTestId(`acp-session-fork-${alphaId}`))
+
+    await waitFor(() => {
+      expect(useACPSessionsStore.getState().globalError).toBe("fork_not_resumable")
+    })
+
+    expect(useACPSessionsStore.getState().getSessions()).toHaveLength(1)
+    expect(screen.queryByText("Alpha Session (fork)")).toBeNull()
+  })
 })

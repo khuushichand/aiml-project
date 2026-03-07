@@ -243,6 +243,95 @@ def test_acp_control_surface_rate_limit(client_user_only, stub_acp_hardening, mo
     assert detail["code"] == "rate_limited"
 
 
+def test_acp_read_only_endpoint_allows_read_scoped_api_key(client_user_only, stub_acp_hardening, monkeypatch):
+    import tldw_Server_API.app.api.v1.API_Deps.auth_deps as auth_deps
+    import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+    seen_api_keys: list[str] = []
+
+    class _Settings:
+        AUTH_MODE = "multi_user"
+
+    class _APIKeyManager:
+        async def validate_api_key(
+            self,
+            api_key: str,
+            ip_address: str | None = None,
+            record_usage: bool | None = None,
+            usage_details: dict | None = None,
+        ):
+            seen_api_keys.append(api_key)
+            return {"id": 1, "user_id": 1, "scope": "read"}
+
+    async def _get_api_key_manager():
+        return _APIKeyManager()
+
+    monkeypatch.setattr(auth_deps, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(auth_deps, "resolve_client_ip", lambda request, settings=None: "127.0.0.1")
+    monkeypatch.setattr(auth_deps, "get_api_key_manager", _get_api_key_manager)
+
+    overrides = client_user_only.app.dependency_overrides
+    overrides[acp_endpoints.get_request_user] = lambda: types.SimpleNamespace(id=1)
+    overrides[auth_deps.get_jwt_service_dep] = lambda: object()
+    overrides[auth_deps.get_db_pool] = lambda: object()
+    try:
+        response = client_user_only.get(
+            "/api/v1/acp/sessions/session-123/usage",
+            headers={"X-API-KEY": "read-key"},
+        )
+    finally:
+        overrides.pop(acp_endpoints.get_request_user, None)
+        overrides.pop(auth_deps.get_jwt_service_dep, None)
+        overrides.pop(auth_deps.get_db_pool, None)
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == "session-123"
+    assert seen_api_keys == ["read-key"]
+
+
+def test_acp_write_endpoint_rejects_read_scoped_api_key(client_user_only, stub_acp_hardening, monkeypatch):
+    import tldw_Server_API.app.api.v1.API_Deps.auth_deps as auth_deps
+    import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+    class _Settings:
+        AUTH_MODE = "multi_user"
+
+    class _APIKeyManager:
+        async def validate_api_key(
+            self,
+            api_key: str,
+            ip_address: str | None = None,
+            record_usage: bool | None = None,
+            usage_details: dict | None = None,
+        ):
+            return {"id": 1, "user_id": 1, "scope": "read"}
+
+    async def _get_api_key_manager():
+        return _APIKeyManager()
+
+    monkeypatch.setattr(auth_deps, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(auth_deps, "resolve_client_ip", lambda request, settings=None: "127.0.0.1")
+    monkeypatch.setattr(auth_deps, "get_api_key_manager", _get_api_key_manager)
+
+    overrides = client_user_only.app.dependency_overrides
+    overrides[acp_endpoints.get_request_user] = lambda: types.SimpleNamespace(id=1)
+    overrides[auth_deps.get_jwt_service_dep] = lambda: object()
+    overrides[auth_deps.get_db_pool] = lambda: object()
+    try:
+        response = client_user_only.post(
+            "/api/v1/acp/sessions/cancel",
+            json={"session_id": "session-123"},
+            headers={"X-API-KEY": "read-key"},
+        )
+    finally:
+        overrides.pop(acp_endpoints.get_request_user, None)
+        overrides.pop(auth_deps.get_jwt_service_dep, None)
+        overrides.pop(auth_deps.get_db_pool, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Forbidden: API key lacks required scope"
+
+
 def test_acp_reconciliation_store_is_bounded(client_user_only, stub_acp_hardening, monkeypatch):
     _store, _runner, acp_endpoints = stub_acp_hardening
     monkeypatch.setenv("ACP_RECONCILIATION_MAX_ENTRIES", "2")

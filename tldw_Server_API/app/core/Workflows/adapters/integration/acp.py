@@ -20,6 +20,7 @@ from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.Workflows.adapters._common import extract_openai_content, resolve_context_user_id
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.integration._config import ACPStageConfig
+from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
 
 _ACP_STAGE_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -259,6 +260,43 @@ async def _verify_session_access(
         return False
 
 
+async def _register_workflow_session(
+    *,
+    session_id: str,
+    user_id: int,
+    stage: str,
+    cwd: str,
+    agent_type: str | None,
+    persona_id: str | None,
+    workspace_id: str | None,
+    workspace_group_id: str | None,
+    scope_snapshot_id: str | None,
+) -> None:
+    store = await get_acp_session_store()
+    await store.register_session(
+        session_id=session_id,
+        user_id=int(user_id),
+        agent_type=agent_type or "custom",
+        name=f"Workflow {stage}",
+        cwd=cwd,
+        tags=["workflow", "acp_stage", stage],
+        persona_id=persona_id,
+        workspace_id=workspace_id,
+        workspace_group_id=workspace_group_id,
+        scope_snapshot_id=scope_snapshot_id,
+    )
+
+
+async def _record_workflow_prompt(
+    *,
+    session_id: str,
+    prompt: list[dict[str, Any]],
+    result: dict[str, Any],
+) -> None:
+    store = await get_acp_session_store()
+    await store.record_prompt(session_id, prompt, result)
+
+
 @registry.register(
     "acp_stage",
     category="integration",
@@ -393,6 +431,26 @@ async def run_acp_stage_adapter(config: dict[str, Any], context: dict[str, Any])
             return _maybe_raise_if_configured(result, bool(config.get("fail_on_error")))
         session_created = True
         context[session_context_key] = session_id
+        try:
+            await _register_workflow_session(
+                session_id=str(session_id),
+                user_id=workflow_user_id,
+                stage=stage,
+                cwd=cwd,
+                agent_type=agent_type,
+                persona_id=persona_id,
+                workspace_id=workspace_id,
+                workspace_group_id=workspace_group_id,
+                scope_snapshot_id=scope_snapshot_id,
+            )
+        except _ACP_STAGE_NONCRITICAL_EXCEPTIONS:
+            logger.warning(
+                "ACP stage adapter: failed to register workflow-created ACP session in store. "
+                "stage={} session_id={} user_id={}",
+                stage,
+                session_id,
+                workflow_user_id,
+            )
 
     access_allowed = await _verify_session_access(
         runner,
@@ -487,6 +545,20 @@ async def run_acp_stage_adapter(config: dict[str, Any], context: dict[str, Any])
         return _maybe_raise_if_configured(failed, bool(config.get("fail_on_error")))
 
     response = raw_response if isinstance(raw_response, dict) else {"raw_result": raw_response}
+    try:
+        await _record_workflow_prompt(
+            session_id=str(session_id),
+            prompt=prompt_payload,
+            result=response,
+        )
+    except _ACP_STAGE_NONCRITICAL_EXCEPTIONS:
+        logger.warning(
+            "ACP stage adapter: failed to record prompt in ACP session store. "
+            "stage={} session_id={} user_id={}",
+            stage,
+            session_id,
+            workflow_user_id,
+        )
     usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
     governance = response.get("governance") if isinstance(response.get("governance"), dict) else {}
 

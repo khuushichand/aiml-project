@@ -10,6 +10,7 @@ can persist to SQLite/PostgreSQL without changing the public API.
 from __future__ import annotations
 
 import asyncio
+import copy
 import fnmatch
 import time
 from dataclasses import dataclass, field
@@ -58,10 +59,13 @@ class SessionRecord:
     usage: SessionTokenUsage = field(default_factory=SessionTokenUsage)
     tags: list[str] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
+    mcp_servers: list[dict[str, Any]] = field(default_factory=list)
     persona_id: str | None = None
     workspace_id: str | None = None
     workspace_group_id: str | None = None
     scope_snapshot_id: str | None = None
+    bootstrap_ready: bool = True
+    needs_bootstrap: bool = False
     # Forking lineage
     forked_from: str | None = None
 
@@ -82,6 +86,7 @@ class SessionRecord:
             "workspace_id": self.workspace_id,
             "workspace_group_id": self.workspace_group_id,
             "scope_snapshot_id": self.scope_snapshot_id,
+            "forked_from": self.forked_from,
         }
 
     def to_detail_dict(self, *, has_websocket: bool = False) -> dict[str, Any]:
@@ -89,6 +94,77 @@ class SessionRecord:
         d["messages"] = list(self.messages)
         d["cwd"] = self.cwd
         return d
+
+
+def _normalize_text_content(value: Any) -> str | None:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            normalized = _normalize_text_content(item)
+            if normalized:
+                parts.append(normalized)
+        if parts:
+            return "\n".join(parts)
+        return None
+
+    if isinstance(value, dict):
+        content_type = str(value.get("type") or "").strip().lower()
+        if content_type in {"text", "input_text", "output_text"}:
+            direct_text = value.get("text")
+            if isinstance(direct_text, str) and direct_text.strip():
+                return direct_text.strip()
+        for key in ("content", "text", "message", "output", "detail", "value"):
+            normalized = _normalize_text_content(value.get(key))
+            if normalized:
+                return normalized
+        return None
+
+    return None
+
+
+def _normalize_prompt_messages(prompt: list[dict[str, Any]], timestamp: str) -> tuple[list[dict[str, Any]], bool]:
+    entries: list[dict[str, Any]] = []
+    bootstrap_ready = True
+    for item in prompt:
+        role = "user"
+        if isinstance(item, dict):
+            role = str(item.get("role") or "user")
+            content = _normalize_text_content(item.get("content"))
+            entry: dict[str, Any] = {"role": role, "content": content, "timestamp": timestamp}
+            entry["raw_prompt"] = copy.deepcopy(item)
+        else:
+            content = None
+            entry = {"role": role, "content": None, "timestamp": timestamp, "raw_prompt": copy.deepcopy(item)}
+        if content is None:
+            bootstrap_ready = False
+        entries.append(entry)
+    return entries, bootstrap_ready
+
+
+def _normalize_result_message(result: dict[str, Any], timestamp: str) -> tuple[dict[str, Any], bool]:
+    content = _normalize_text_content(result)
+    entry: dict[str, Any] = {
+        "role": "assistant",
+        "content": content,
+        "timestamp": timestamp,
+        "raw_result": copy.deepcopy(result),
+    }
+    return entry, content is not None
+
+
+def _messages_bootstrap_ready(messages: list[dict[str, Any]]) -> bool:
+    for message in messages:
+        if not isinstance(message, dict):
+            return False
+        role = str(message.get("role") or "").strip()
+        content = message.get("content")
+        if not role or not isinstance(content, str) or not content.strip():
+            return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +262,7 @@ class ACPSessionStore:
         name: str = "",
         cwd: str = "",
         tags: list[str] | None = None,
+        mcp_servers: list[dict[str, Any]] | None = None,
         persona_id: str | None = None,
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
@@ -201,6 +278,7 @@ class ACPSessionStore:
             created_at=now,
             last_activity_at=now,
             tags=tags or [],
+            mcp_servers=copy.deepcopy(mcp_servers or []),
             persona_id=persona_id,
             workspace_id=workspace_id,
             workspace_group_id=workspace_group_id,
@@ -231,18 +309,12 @@ class ACPSessionStore:
                 return None
             now = datetime.now(timezone.utc).isoformat()
             rec.last_activity_at = now
-            rec.message_count += 1
-            # Store message for fork support
-            rec.messages.append({
-                "role": "user",
-                "content": prompt,
-                "timestamp": now,
-            })
-            rec.messages.append({
-                "role": "assistant",
-                "content": result,
-                "timestamp": now,
-            })
+            prompt_entries, prompt_bootstrap_ready = _normalize_prompt_messages(prompt, now)
+            result_entry, result_bootstrap_ready = _normalize_result_message(result, now)
+            rec.messages.extend(prompt_entries)
+            rec.messages.append(result_entry)
+            rec.message_count = len(rec.messages)
+            rec.bootstrap_ready = rec.bootstrap_ready and prompt_bootstrap_ready and result_bootstrap_ready
             # Extract token usage from result
             usage_data = result.get("usage") or {}
             prompt_tokens = int(usage_data.get("prompt_tokens") or usage_data.get("input_tokens") or 0)
@@ -256,6 +328,33 @@ class ACPSessionStore:
 
     async def get_session(self, session_id: str) -> SessionRecord | None:
         return self._sessions.get(session_id)
+
+    async def build_bootstrap_prompt(
+        self,
+        session_id: str,
+        prompt: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], bool]:
+        async with self._lock:
+            rec = self._sessions.get(session_id)
+            if not rec or not rec.needs_bootstrap:
+                return copy.deepcopy(prompt), False
+
+            if not _messages_bootstrap_ready(rec.messages):
+                rec.bootstrap_ready = False
+                raise ValueError("fork_not_resumable")
+
+            bootstrap_prompt = [
+                {"role": str(message["role"]), "content": str(message["content"])}
+                for message in rec.messages
+            ]
+            return bootstrap_prompt + copy.deepcopy(prompt), True
+
+    async def clear_bootstrap(self, session_id: str) -> None:
+        async with self._lock:
+            rec = self._sessions.get(session_id)
+            if rec:
+                rec.needs_bootstrap = False
+                rec.last_activity_at = datetime.now(timezone.utc).isoformat()
 
     async def list_sessions(
         self,
@@ -297,7 +396,7 @@ class ACPSessionStore:
             if source.user_id != user_id:
                 return None
             # message_index is inclusive (0-based) — copy messages 0..message_index
-            forked_messages = list(source.messages[:message_index + 1])
+            forked_messages = copy.deepcopy(source.messages[:message_index + 1])
             now = datetime.now(timezone.utc).isoformat()
             fork_name = name or f"Fork of {source.name}"
             forked = SessionRecord(
@@ -310,11 +409,14 @@ class ACPSessionStore:
                 last_activity_at=now,
                 message_count=len(forked_messages),
                 tags=list(source.tags),
+                mcp_servers=copy.deepcopy(source.mcp_servers),
                 messages=forked_messages,
                 persona_id=source.persona_id,
                 workspace_id=source.workspace_id,
                 workspace_group_id=source.workspace_group_id,
                 scope_snapshot_id=source.scope_snapshot_id,
+                bootstrap_ready=_messages_bootstrap_ready(forked_messages),
+                needs_bootstrap=bool(forked_messages),
                 forked_from=source_session_id,
             )
             self._sessions[new_session_id] = forked

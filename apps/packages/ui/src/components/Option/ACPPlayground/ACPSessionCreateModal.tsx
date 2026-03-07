@@ -33,6 +33,7 @@ import type {
   ACPStructuredError,
 } from "@/services/acp/types"
 import { useACPSessionsStore, type CreateSessionOptions } from "@/store/acp-sessions"
+import { useWorkspaceStore } from "@/store/workspace"
 import { MCPServerConfigList } from "./MCPServerConfigList"
 
 // -----------------------------------------------------------------------------
@@ -188,6 +189,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
   const [authMode] = useStorage("authMode", "single-user")
   const [apiKey] = useStorage("apiKey", "")
   const [accessToken] = useStorage("accessToken", "")
+  const workspaceId = useWorkspaceStore((state) => state.workspaceId)
 
   // Local state
   const [mcpServers, setMcpServers] = useState<ACPMCPServerConfig[]>([])
@@ -266,6 +268,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
           ? values.tags.split(",").map((t) => t.trim()).filter(Boolean)
           : undefined,
         mcpServers: mcpServers.length > 0 ? mcpServers : undefined,
+        workspaceId: workspaceId || undefined,
       }
 
       const localSessionId = createSession(options)
@@ -280,6 +283,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
           agent_type: options.agentType,
           tags: options.tags,
           mcp_servers: options.mcpServers,
+          workspace_id: options.workspaceId,
         })
 
         setCreationStep("connecting")
@@ -298,6 +302,10 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
             sandboxRunId: response.sandbox_run_id ?? null,
             sshWsUrl: response.ssh_ws_url ?? null,
             sshUser: response.ssh_user ?? null,
+            personaId: response.persona_id ?? null,
+            workspaceId: response.workspace_id ?? options.workspaceId ?? null,
+            workspaceGroupId: response.workspace_group_id ?? null,
+            scopeSnapshotId: response.scope_snapshot_id ?? null,
           },
         }
       } catch (error) {
