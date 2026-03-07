@@ -5,24 +5,32 @@ export type LayoutMode = "simple" | "research" | "expert"
 const STORAGE_KEY = "knowledge_qa_layout_mode"
 const DISMISSED_KEY = "knowledge_qa_promotion_dismissed"
 
-function readPersistedMode(): LayoutMode | null {
+/** Suggest workspace view after this many messages (3 Q+A pairs) */
+export const PROMOTION_MESSAGE_THRESHOLD = 6
+
+function safeGetItem(key: string): string | null {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored === "simple" || stored === "research" || stored === "expert") {
-      return stored
-    }
+    return localStorage.getItem(key)
   } catch {
-    // localStorage unavailable (private mode, extension sandbox, etc.)
+    // localStorage unavailable in private mode, extension sandbox, etc.
+    return null
   }
-  return null
 }
 
-function persistMode(mode: LayoutMode) {
+function safeSetItem(key: string, value: string): void {
   try {
-    localStorage.setItem(STORAGE_KEY, mode)
+    localStorage.setItem(key, value)
   } catch {
-    // ignore
+    // localStorage unavailable — preference won't persist this session
   }
+}
+
+function readPersistedMode(): LayoutMode | null {
+  const stored = safeGetItem(STORAGE_KEY)
+  if (stored === "simple" || stored === "research" || stored === "expert") {
+    return stored
+  }
+  return null
 }
 
 type UseLayoutModeOptions = {
@@ -34,26 +42,22 @@ export function useLayoutMode({ messageCount }: UseLayoutModeOptions) {
     () => readPersistedMode() ?? "simple"
   )
   const [showPromotionToast, setShowPromotionToast] = useState(false)
-  const [promotionDismissed, setPromotionDismissed] = useState(() => {
-    try {
-      return localStorage.getItem(DISMISSED_KEY) === "true"
-    } catch {
-      return false
-    }
-  })
+  const [promotionDismissed, setPromotionDismissed] = useState(
+    () => safeGetItem(DISMISSED_KEY) === "true"
+  )
 
   const setLayoutMode = useCallback((next: LayoutMode) => {
     setModeRaw(next)
-    persistMode(next)
+    safeSetItem(STORAGE_KEY, next)
     setShowPromotionToast(false)
   }, [])
 
-  // Auto-suggest promotion to research mode after 3+ Q+A pairs (6 messages)
+  // Auto-suggest promotion to research mode after 3+ Q+A pairs
   useEffect(() => {
     if (
       mode === "simple" &&
       !promotionDismissed &&
-      messageCount >= 6
+      messageCount >= PROMOTION_MESSAGE_THRESHOLD
     ) {
       setShowPromotionToast(true)
     }
@@ -62,13 +66,13 @@ export function useLayoutMode({ messageCount }: UseLayoutModeOptions) {
   const dismissPromotion = useCallback(() => {
     setShowPromotionToast(false)
     setPromotionDismissed(true)
-    try { localStorage.setItem(DISMISSED_KEY, "true") } catch { /* ignore */ }
+    safeSetItem(DISMISSED_KEY, "true")
   }, [])
 
   const acceptPromotion = useCallback(() => {
     setLayoutMode("research")
     setPromotionDismissed(true)
-    try { localStorage.setItem(DISMISSED_KEY, "true") } catch { /* ignore */ }
+    safeSetItem(DISMISSED_KEY, "true")
   }, [setLayoutMode])
 
   const isSimple = mode === "simple"

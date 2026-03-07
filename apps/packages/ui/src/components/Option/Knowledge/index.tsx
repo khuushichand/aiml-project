@@ -218,26 +218,30 @@ export const KnowledgeSettings = () => {
     )
   }
 
+  const STATUS_COPY: Record<string, { title: string; description: string }> = {
+    indexing: {
+      title: t("knowledge:status.indexingTitle", { defaultValue: "Knowledge base is indexing" }),
+      description: t("knowledge:status.indexingDescription", { defaultValue: "Your documents are being indexed. Search results may be incomplete until indexing finishes." }),
+    },
+    offline: {
+      title: t("knowledge:status.offlineTitle", { defaultValue: "Knowledge service unavailable" }),
+      description: t("knowledge:status.offlineDescription", { defaultValue: "The RAG service is not responding. Check your server logs or Diagnostics." }),
+    },
+    unknown: {
+      title: t("knowledge:status.unknownTitle", { defaultValue: "Checking knowledge base status..." }),
+      description: t("knowledge:status.unknownDescription", { defaultValue: "We're checking whether your knowledge base is available. This usually takes a few seconds." }),
+    },
+  }
+
   if (knowledgeStatus === "unknown" || knowledgeStatus === "indexing" || knowledgeStatus === "offline") {
+    const { title, description } = STATUS_COPY[knowledgeStatus] ?? STATUS_COPY.unknown
     return (
       <div className="space-y-4 rounded-lg border border-border bg-surface p-6">
         <div className="flex items-center gap-3">
           <HelpCircle className="h-8 w-8 text-text-muted" />
           <div>
-            <h2 className="text-sm font-semibold text-text">
-              {knowledgeStatus === "indexing"
-                ? t("knowledge:status.indexingTitle", { defaultValue: "Knowledge base is indexing" })
-                : knowledgeStatus === "offline"
-                  ? t("knowledge:status.offlineTitle", { defaultValue: "Knowledge service unavailable" })
-                  : t("knowledge:status.unknownTitle", { defaultValue: "Checking knowledge base status..." })}
-            </h2>
-            <p className="mt-1 text-xs text-text-muted">
-              {knowledgeStatus === "indexing"
-                ? t("knowledge:status.indexingDescription", { defaultValue: "Your documents are being indexed. Search results may be incomplete until indexing finishes." })
-                : knowledgeStatus === "offline"
-                  ? t("knowledge:status.offlineDescription", { defaultValue: "The RAG service is not responding. Check your server logs or Diagnostics." })
-                  : t("knowledge:status.unknownDescription", { defaultValue: "We're checking whether your knowledge base is available. This usually takes a few seconds." })}
-            </p>
+            <h2 className="text-sm font-semibold text-text">{title}</h2>
+            <p className="mt-1 text-xs text-text-muted">{description}</p>
           </div>
         </div>
         <div className="flex gap-2">

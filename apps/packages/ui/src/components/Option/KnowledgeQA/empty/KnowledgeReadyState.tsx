@@ -1,4 +1,4 @@
-import React, { useState } from "react"
+import React, { useState, useEffect } from "react"
 import { BookOpen, ChevronDown, ChevronUp, Clock3, SlidersHorizontal } from "lucide-react"
 import { cn } from "@/libs/utils"
 
@@ -23,6 +23,13 @@ export function KnowledgeReadyState({
 }: KnowledgeReadyStateProps) {
   const isReturningUser = hasRecentSession
   const [guideExpanded, setGuideExpanded] = useState(!isReturningUser)
+
+  // Collapse guide when history finishes loading and reveals a returning user
+  useEffect(() => {
+    if (isReturningUser) {
+      setGuideExpanded(false)
+    }
+  }, [isReturningUser])
 
   return (
     <div className={cn("space-y-5 text-center", className)}>

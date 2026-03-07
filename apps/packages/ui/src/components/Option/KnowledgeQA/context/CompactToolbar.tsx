@@ -13,6 +13,8 @@ type CompactToolbarProps = {
   contextChangedSinceLastRun: boolean
 }
 
+const ALL_SOURCES_THRESHOLD = 5
+
 const SOURCE_LABELS: Record<string, string> = {
   media_db: "Docs & Media",
   notes: "Notes",
@@ -24,7 +26,7 @@ const SOURCE_LABELS: Record<string, string> = {
 function summarizeSources(sources: string[]): string {
   if (!Array.isArray(sources) || sources.length === 0) return "None"
   if (sources.length === 1) return SOURCE_LABELS[sources[0]] || sources[0]
-  if (sources.length >= 5) return "All sources"
+  if (sources.length >= ALL_SOURCES_THRESHOLD) return "All sources"
   return `${sources.length} selected`
 }
 

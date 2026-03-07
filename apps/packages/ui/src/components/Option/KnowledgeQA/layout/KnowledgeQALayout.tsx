@@ -372,7 +372,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
 
       {/* Mode toggle + promotion toast */}
       <div className="fixed bottom-4 right-4 z-20 flex flex-col items-end gap-2">
-        {showPromotionToast && (
+        {showPromotionToast && !isMobile && (
           <div className="rounded-lg border border-border bg-surface px-4 py-3 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-300">
             <p className="text-sm font-medium text-text">Switch to workspace view?</p>
             <p className="mt-0.5 text-xs text-text-muted">

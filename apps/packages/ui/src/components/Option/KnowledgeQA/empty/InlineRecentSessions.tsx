@@ -9,8 +9,12 @@ type InlineRecentSessionsProps = {
   className?: string
 }
 
+const MAX_VISIBLE_SESSIONS = 5
+
 function formatRelativeTime(timestamp: string): string {
-  const diff = Date.now() - new Date(timestamp).getTime()
+  const parsed = new Date(timestamp).getTime()
+  if (Number.isNaN(parsed)) return "Unknown"
+  const diff = Date.now() - parsed
   const minutes = Math.floor(diff / 60000)
   if (minutes < 1) return "Just now"
   if (minutes < 60) return `${minutes}m ago`
@@ -29,7 +33,7 @@ export function InlineRecentSessions({
 }: InlineRecentSessionsProps) {
   if (items.length === 0) return null
 
-  const visible = items.slice(0, 5)
+  const visible = items.slice(0, MAX_VISIBLE_SESSIONS)
 
   return (
     <div className={cn("mx-auto max-w-2xl", className)}>
