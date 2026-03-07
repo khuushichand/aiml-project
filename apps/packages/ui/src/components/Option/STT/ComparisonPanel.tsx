@@ -232,7 +232,7 @@ export const ComparisonPanel: React.FC<ComparisonPanelProps> = ({
             onClick={handleTranscribeAll}
           >
             {t("stt.comparison.transcribeAll", "Transcribe All")}{" "}
-            <kbd className="ml-1 text-xs opacity-60">&#8984;&#9166;</kbd>
+            <kbd className="ml-1 text-xs opacity-60">{navigator.platform?.includes("Mac") ? "⌘" : "Ctrl+"}⏎</kbd>
           </Button>
         </Tooltip>
       </div>

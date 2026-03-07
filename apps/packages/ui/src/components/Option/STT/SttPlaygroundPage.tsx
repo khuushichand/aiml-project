@@ -269,6 +269,7 @@ export const SttPlaygroundPage: React.FC = () => {
         tag === "input" ||
         tag === "textarea" ||
         tag === "select" ||
+        tag === "button" ||
         isEditable
       ) {
         return
