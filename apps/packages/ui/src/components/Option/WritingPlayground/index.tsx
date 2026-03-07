@@ -134,6 +134,7 @@ import {
   estimateTokenCountFromText
 } from "./writing-generation-stats-utils"
 import { buildDiagnosticsSummary } from "./writing-diagnostics-utils"
+import { WritingPlaygroundActiveSessionGuard } from "./WritingPlaygroundActiveSessionGuard"
 import { WritingPlaygroundShell } from "./WritingPlaygroundShell"
 import { WritingPlaygroundLibraryPanel } from "./WritingPlaygroundLibraryPanel"
 import { WritingPlaygroundEditorPanel } from "./WritingPlaygroundEditorPanel"
@@ -6384,20 +6385,12 @@ export const WritingPlayground = () => {
                 sampling={(
                   <Card
                     title={t("option:writingPlayground.samplingTitle", "Sampling")}>
-              {activeSession ? (
-                activeSessionLoading ? (
-                  <Skeleton active />
-                ) : activeSessionError ? (
-                  <Alert
-                    type="error"
-                    showIcon
-                    title={t(
-                      "option:writingPlayground.settingsError",
-                      "Unable to load session settings."
-                    )}
-                  />
-                ) : (
-                  <div className="flex flex-col gap-4">
+                    <WritingPlaygroundActiveSessionGuard
+                      hasActiveSession={Boolean(activeSession)}
+                      isLoading={activeSessionLoading}
+                      hasError={Boolean(activeSessionError)}
+                      t={t}>
+                      <div className="flex flex-col gap-4">
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div className="flex flex-col gap-1">
                         <span className="text-xs text-text-muted">
@@ -6982,16 +6975,8 @@ export const WritingPlayground = () => {
                         ]}
                       />
                     )}
-                  </div>
-                )
-              ) : (
-                <Empty
-                  description={t(
-                    "option:writingPlayground.settingsEmpty",
-                    "Select a session to edit settings."
-                  )}
-                />
-              )}
+                      </div>
+                    </WritingPlaygroundActiveSessionGuard>
                   </Card>
                 )}
                 context={(
@@ -7008,20 +6993,12 @@ export const WritingPlayground = () => {
                         )}
                       </Button>
                     }>
-                    {activeSession ? (
-                      activeSessionLoading ? (
-                        <Skeleton active />
-                      ) : activeSessionError ? (
-                        <Alert
-                          type="error"
-                          showIcon
-                          title={t(
-                            "option:writingPlayground.settingsError",
-                            "Unable to load session settings."
-                          )}
-                        />
-                      ) : (
-                        <div className="flex flex-col gap-4">
+                    <WritingPlaygroundActiveSessionGuard
+                      hasActiveSession={Boolean(activeSession)}
+                      isLoading={activeSessionLoading}
+                      hasError={Boolean(activeSessionError)}
+                      t={t}>
+                      <div className="flex flex-col gap-4">
                                     <div className="rounded-md border border-border bg-surface p-3">
                                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                                         <div className="flex flex-col gap-1">
@@ -7560,16 +7537,8 @@ export const WritingPlayground = () => {
                                         )}
                                       </div>
                                     </div>
-                        </div>
-                      )
-                    ) : (
-                      <Empty
-                        description={t(
-                          "option:writingPlayground.settingsEmpty",
-                          "Select a session to edit settings."
-                        )}
-                      />
-                    )}
+                      </div>
+                    </WritingPlaygroundActiveSessionGuard>
                   </Card>
                 )}
                 setup={(
@@ -7597,20 +7566,12 @@ export const WritingPlayground = () => {
                         </Button>
                       </div>
                     }>
-                    {activeSession ? (
-                      activeSessionLoading ? (
-                        <Skeleton active />
-                      ) : activeSessionError ? (
-                        <Alert
-                          type="error"
-                          showIcon
-                          title={t(
-                            "option:writingPlayground.settingsError",
-                            "Unable to load session settings."
-                          )}
-                        />
-                      ) : (
-                        <div className="flex flex-col gap-3">
+                    <WritingPlaygroundActiveSessionGuard
+                      hasActiveSession={Boolean(activeSession)}
+                      isLoading={activeSessionLoading}
+                      hasError={Boolean(activeSessionError)}
+                      t={t}>
+                      <div className="flex flex-col gap-3">
                           <div className="flex flex-col gap-1">
                             <span className="text-xs text-text-muted">
                               {t(
@@ -7705,20 +7666,13 @@ export const WritingPlayground = () => {
                               )}
                             </span>
                           </div>
-                        </div>
-                      )
-                    ) : (
-                      <Empty
-                        description={t(
-                          "option:writingPlayground.settingsEmpty",
-                          "Select a session to edit settings."
-                        )}
-                      />
-                    )}
+                      </div>
+                    </WritingPlaygroundActiveSessionGuard>
                   </Card>
                 )}
                 inspect={(
                   <WritingPlaygroundDiagnosticsPanel
+                    title={t("option:writingPlayground.sidebarInspect", "Inspect")}
                     t={t}
                     status={diagnosticsSummary.status}
                     showOffline={showOffline}

@@ -1,5 +1,5 @@
 import React from "react"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 vi.mock("@tanstack/react-query", () => {
@@ -228,6 +228,18 @@ describe("WritingPlayground inspector tabs", () => {
     ).toBeInTheDocument()
   })
 
+  it("disables essentials settings controls when no session is selected", () => {
+    render(<WritingPlayground />)
+
+    const spinbuttons = screen.getAllByRole("spinbutton")
+    expect(spinbuttons.length).toBeGreaterThan(0)
+    for (const input of spinbuttons) {
+      expect(input).toBeDisabled()
+    }
+
+    expect(screen.getByTestId("writing-essentials-generate")).toBeDisabled()
+  })
+
   it("has four tabs: Sampling, Context, Setup, Inspect", () => {
     render(<WritingPlayground />)
 
@@ -235,5 +247,18 @@ describe("WritingPlayground inspector tabs", () => {
     expect(screen.getByRole("tab", { name: "Context" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Setup" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Inspect" })).toBeInTheDocument()
+  })
+
+  it("renders an Inspect panel title that matches the tab label", () => {
+    render(<WritingPlayground />)
+
+    fireEvent.click(screen.getByRole("tab", { name: "Inspect" }))
+
+    expect(
+      within(screen.getByTestId("writing-playground-diagnostics-card")).getByText(
+        "Inspect"
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Diagnostics")).not.toBeInTheDocument()
   })
 })
