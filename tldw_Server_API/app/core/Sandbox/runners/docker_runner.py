@@ -52,10 +52,12 @@ def docker_available() -> bool:
 
 
 class DockerRunner:
-    """Stub Docker runner. Real container lifecycle management is out of scope for this scaffold.
+    """Docker-based sandbox runner with full container lifecycle management.
 
-    For now, this runner returns a NotImplementedError when invoked. Availability detection
-    is provided for feature discovery endpoints.
+    Provides session creation, run execution with security hardening (cap-drop,
+    no-new-privileges, seccomp, read-only rootfs, non-root user, ulimits, PID
+    limits), log streaming, artifact collection, stdin pumping, and egress
+    network policy enforcement via iptables.
     """
 
     def __init__(self) -> None:
