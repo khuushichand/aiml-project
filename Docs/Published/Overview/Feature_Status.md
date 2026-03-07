@@ -78,6 +78,7 @@ Legend
 | Strict OpenAI compat filter | Working | Filter non-standard keys | [docs](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/LLM_Calls/README.md) |
 | Providers listing | Working | `GET /api/v1/llm/providers` | [docs](../API-related/Providers_API_Documentation.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/llm_providers.py) |
 | Moderation endpoint | Working | Basic wrappers | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/moderation.py) |
+| Chat Workflows (structured QA) | WIP | Saved templates, generated drafts, linear runs, transcript view, and explicit continue-to-chat handoff are available; UI remains beta and broader context resolution/resumable runs are still evolving. | [docs](../API-related/Chat_Workflows_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/chat_workflows.py) |
 
 ## Knowledge, Notes, Prompt Studio
 

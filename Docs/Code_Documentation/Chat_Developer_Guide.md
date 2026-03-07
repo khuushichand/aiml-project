@@ -21,6 +21,27 @@ This guide explains the Chat module’s architecture, key components, and how to
 - Config toggles for default persistence are read from `[Chat-Module]` and environment (e.g., `CHAT_SAVE_DEFAULT`).
 - Non-stream responses include `tldw_conversation_id` in the JSON payload for client state.
 
+## Chat Workflows (Adjacent Module)
+
+- Chat Workflows lives beside the core chat completions module at `tldw_Server_API/app/api/v1/endpoints/chat_workflows.py`.
+- It is intentionally not implemented as generic Workflows engine logic. The primary record is a structured run with saved answers, not an open-ended message transcript.
+- A workflow run starts from either a saved template or a generated draft, then freezes that structure into an immutable run snapshot before the first question is shown.
+- Each step uses either:
+  - `stock` question mode: render the authored `base_question` directly.
+  - `llm_phrased` question mode: route through `core/Chat_Workflows/question_renderer.py`, with service-level fallback to the stock question if phrasing fails.
+- Completion is stop-by-default. Free chat requires an explicit `POST /api/v1/chat-workflows/runs/{run_id}/continue-chat` handoff.
+- Access is split across dedicated permissions:
+  - `chat_workflows.read`
+  - `chat_workflows.write`
+  - `chat_workflows.run`
+- Current v1 behavior keeps context explicit:
+  - run-level `selected_context_refs` are persisted with the run
+  - step-level `context_refs` are persisted with the template snapshot
+  - prior answers are fed back into question rendering
+  - broader context resolution remains intentionally narrow in the current implementation
+
+Published API reference: `Docs/Published/API-related/Chat_Workflows_API.md`
+
 ## Directory Map
 
 - `tldw_Server_API/app/core/Chat/`
