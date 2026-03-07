@@ -1117,6 +1117,7 @@ elif _MINIMAL_TEST_APP:
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
+    from tldw_Server_API.app.api.v1.endpoints.research_runs import router as research_runs_router
 
     # Admin endpoints are used by several pytest modules; import for minimal app
     try:
@@ -1176,6 +1177,7 @@ else:
     # Paper Search Endpoint (provider-specific)
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
+    from tldw_Server_API.app.api.v1.endpoints.research_runs import router as research_runs_router
 
     # Sync Endpoint
     from tldw_Server_API.app.api.v1.endpoints.sync import router as sync_router
@@ -5225,6 +5227,7 @@ if _ULTRA_MINIMAL_APP:
 elif _MINIMAL_TEST_APP:
     # Minimal set for paper_search tests
     include_router_idempotent(app, research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
+    include_router_idempotent(app, research_runs_router, prefix=f"{API_V1_PREFIX}", tags=["research-runs"])
     include_router_idempotent(app, paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
     # Include lightweight chat/character routes needed by tests
     include_router_idempotent(app, chat_router, prefix=f"{API_V1_PREFIX}/chat")
@@ -6155,6 +6158,7 @@ else:
         else:
             _include_if_enabled("scheduler", scheduler_workflows_router, tags=["scheduler"], default_stable=False)
     _include_if_enabled("research", research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
+    _include_if_enabled("research", research_runs_router, prefix=f"{API_V1_PREFIX}", tags=["research-runs"])
     _include_if_enabled(
         "paper-search", paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"]
     )
