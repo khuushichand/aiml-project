@@ -101,6 +101,7 @@ def test_onedrive_webhook_enqueues_incremental_sync_and_dedupes(connectors_clien
             "provider": "onedrive",
             "user_id": 42,
             "enabled": True,
+            "webhook_metadata": {"clientState": "state-123"},
         }
 
     async def _fake_record_webhook_receipt(db, *, provider, receipt_key, source_id=None, payload_hash=None):
@@ -132,7 +133,7 @@ def test_onedrive_webhook_enqueues_incremental_sync_and_dedupes(connectors_clien
     monkeypatch.setattr(ep, "record_webhook_receipt", _fake_record_webhook_receipt)
     monkeypatch.setattr(ep, "create_import_job", _fake_create_import_job)
 
-    payload = {"value": [{"subscriptionId": "sub-1", "changeType": "updated"}]}
+    payload = {"value": [{"subscriptionId": "sub-1", "changeType": "updated", "clientState": "state-123"}]}
 
     first = client.post(
         "/api/v1/connectors/providers/onedrive/webhook",
@@ -162,6 +163,43 @@ def test_onedrive_webhook_enqueues_incremental_sync_and_dedupes(connectors_clien
 
 
 @pytest.mark.integration
+def test_onedrive_webhook_ignores_invalid_client_state(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    async def _fake_get_source_by_webhook_subscription(db, *, provider, subscription_id):
+        return {
+            "id": 77,
+            "provider": "onedrive",
+            "user_id": 42,
+            "enabled": True,
+            "webhook_metadata": {"clientState": "expected-state"},
+        }
+
+    async def _unexpected_record_webhook_receipt(*args, **kwargs):
+        raise AssertionError("invalid webhook notifications must be rejected before dedupe is recorded")
+
+    async def _unexpected_create_import_job(*args, **kwargs):
+        raise AssertionError("invalid webhook notifications must not enqueue sync jobs")
+
+    monkeypatch.setattr(ep, "get_source_by_webhook_subscription", _fake_get_source_by_webhook_subscription)
+    monkeypatch.setattr(ep, "record_webhook_receipt", _unexpected_record_webhook_receipt)
+    monkeypatch.setattr(ep, "create_import_job", _unexpected_create_import_job)
+
+    response = client.post(
+        "/api/v1/connectors/providers/onedrive/webhook",
+        json={"value": [{"subscriptionId": "sub-1", "changeType": "updated", "clientState": "wrong-state"}]},
+        headers=headers,
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "ignored"
+    assert response.json()["queued_jobs"] == 0
+    assert response.json()["ignored_notifications"] == 1
+
+
+@pytest.mark.integration
 def test_drive_webhook_enqueues_incremental_sync_and_dedupes(connectors_client, monkeypatch):
     client, headers = connectors_client
 
@@ -178,6 +216,7 @@ def test_drive_webhook_enqueues_incremental_sync_and_dedupes(connectors_client, 
             "provider": "drive",
             "user_id": 24,
             "enabled": True,
+            "webhook_metadata": {"clientState": "drive-state-123"},
         }
 
     async def _fake_record_webhook_receipt(db, *, provider, receipt_key, source_id=None, payload_hash=None):
@@ -213,6 +252,7 @@ def test_drive_webhook_enqueues_incremental_sync_and_dedupes(connectors_client, 
     request_headers.update(
         {
             "X-Goog-Channel-Id": "drive-chan-1",
+            "X-Goog-Channel-Token": "drive-state-123",
             "X-Goog-Message-Number": "1",
             "X-Goog-Resource-State": "change",
             "X-Goog-Resource-Id": "drive-resource-1",
@@ -236,6 +276,50 @@ def test_drive_webhook_enqueues_incremental_sync_and_dedupes(connectors_client, 
     assert queued_jobs[0]["user_id"] == 24
     assert queued_jobs[0]["source_id"] == 88
     assert queued_jobs[0]["job_type"] == "incremental_sync"
+
+
+@pytest.mark.integration
+def test_drive_webhook_ignores_invalid_channel_token(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    async def _fake_get_source_by_webhook_subscription(db, *, provider, subscription_id):
+        return {
+            "id": 88,
+            "provider": "drive",
+            "user_id": 24,
+            "enabled": True,
+            "webhook_metadata": {"clientState": "expected-drive-state"},
+        }
+
+    async def _unexpected_record_webhook_receipt(*args, **kwargs):
+        raise AssertionError("invalid drive notifications must be rejected before dedupe is recorded")
+
+    async def _unexpected_create_import_job(*args, **kwargs):
+        raise AssertionError("invalid drive notifications must not enqueue sync jobs")
+
+    monkeypatch.setattr(ep, "get_source_by_webhook_subscription", _fake_get_source_by_webhook_subscription)
+    monkeypatch.setattr(ep, "record_webhook_receipt", _unexpected_record_webhook_receipt)
+    monkeypatch.setattr(ep, "create_import_job", _unexpected_create_import_job)
+
+    request_headers = dict(headers)
+    request_headers.update(
+        {
+            "X-Goog-Channel-Id": "drive-chan-1",
+            "X-Goog-Channel-Token": "wrong-drive-state",
+            "X-Goog-Message-Number": "1",
+            "X-Goog-Resource-State": "change",
+            "X-Goog-Resource-Id": "drive-resource-1",
+        }
+    )
+
+    response = client.post("/api/v1/connectors/providers/drive/webhook", headers=request_headers)
+
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "ignored"
+    assert response.json()["queued_jobs"] == 0
+    assert response.json()["ignored_notifications"] == 1
 
 
 @pytest.mark.asyncio

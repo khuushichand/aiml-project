@@ -150,6 +150,20 @@ async def test_external_items_upgrade_preserves_legacy_row_and_adds_binding_fiel
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_ensure_tables_does_not_commit_sqlite_transaction(sqlite_db: aiosqlite.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _unexpected_commit() -> None:
+        raise AssertionError("_ensure_tables must not commit an outer sqlite transaction")
+
+    monkeypatch.setattr(sqlite_db, "commit", _unexpected_commit)
+
+    await svc._ensure_tables(sqlite_db)
+
+    state = await svc.get_source_sync_state(sqlite_db, source_id=999)
+    assert state is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_sync_storage_helpers_track_bindings_events_and_archive_state(
     sqlite_db: aiosqlite.Connection,
 ) -> None:
@@ -161,8 +175,10 @@ async def test_sync_storage_helpers_track_bindings_events_and_archive_state(
         sync_mode="hybrid",
         cursor="delta-token",
         cursor_kind="drive_start_page_token",
+        webhook_subscription_id="drive-chan-1",
         webhook_metadata={
             "resourceId": "drive-resource-1",
+            "clientState": "drive-state-123",
             "pageToken": "delta-token",
         },
     )
@@ -191,6 +207,11 @@ async def test_sync_storage_helpers_track_bindings_events_and_archive_state(
         external_id="file-1",
         sync_status="archived_upstream_removed",
     )
+    webhook_source = await svc.get_source_by_webhook_subscription(
+        sqlite_db,
+        provider="drive",
+        subscription_id="drive-chan-1",
+    )
     fetched = await svc.get_external_item_binding(
         sqlite_db,
         source_id=source["id"],
@@ -206,6 +227,9 @@ async def test_sync_storage_helpers_track_bindings_events_and_archive_state(
     assert event["event_type"] == "content_updated"
     assert archived["sync_status"] == "archived_upstream_removed"
     assert archived["remote_deleted_at"] is not None
+    assert webhook_source is not None
+    assert webhook_source["id"] == source["id"]
+    assert webhook_source["webhook_metadata"]["clientState"] == "drive-state-123"
     assert fetched is not None
     assert fetched["sync_status"] == "archived_upstream_removed"
     assert len(items) == 1

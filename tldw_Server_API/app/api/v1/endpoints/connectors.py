@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -29,6 +30,8 @@ from tldw_Server_API.app.api.v1.schemas.connectors import (
     ConnectorSourceCreateRequest,
     ConnectorSourcePatchRequest,
     ConnectorSourceSyncStatus,
+    ConnectorSourceSyncTriggerResponse,
+    ConnectorWebhookCallbackResponse,
     ImportJob,
     SyncOptions,
 )
@@ -91,6 +94,31 @@ def _resolve_redirect_base(request: Request | None, conn) -> str:
             "Redirect base could not be resolved; OAuth redirect_uri may be invalid (expected only in tests)"
         )
     return resolved
+
+
+def _is_local_callback_base(base_url: str) -> bool:
+    try:
+        host = str(urlparse(base_url).hostname or "").strip().lower()
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return host in {"localhost", "127.0.0.1", "testserver"} or host.endswith(".localhost")
+
+
+def _resolve_webhook_callback_base(request: Request | None, conn) -> str:
+    configured_base = (os.getenv("CONNECTOR_REDIRECT_BASE_URL") or getattr(conn, "redirect_base", "") or "").rstrip("/")
+    if configured_base:
+        return configured_base
+    request_base = _resolve_redirect_base(request, conn)
+    if request_base and (
+        os.getenv("TEST_MODE", "").strip().lower() == "true"
+        or os.getenv("TESTING", "").strip().lower() == "true"
+        or _is_local_callback_base(request_base)
+    ):
+        return request_base
+    raise HTTPException(
+        status_code=500,
+        detail="CONNECTOR_REDIRECT_BASE_URL must be configured before enabling webhook subscriptions",
+    )
 
 
 def _get_user_id(principal: AuthPrincipal) -> int:
@@ -174,7 +202,8 @@ def _load_active_job(sync_state: dict[str, Any] | None) -> dict[str, Any] | None
         from tldw_Server_API.app.core.Jobs.manager import JobManager
 
         return JobManager().get_job(int(active_job_id))
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to load active connectors job {}: {}", active_job_id, exc)
         return None
 
 
@@ -223,6 +252,38 @@ def _drive_webhook_receipt_key(request: Request) -> tuple[str | None, str | None
     receipt_key = f"{channel_id}:{message_number}:{resource_state}:{resource_id or ''}"
     payload_hash = hashlib.sha256(receipt_key.encode("utf-8")).hexdigest()
     return channel_id, receipt_key, payload_hash
+
+
+def _webhook_response(
+    *,
+    provider: str,
+    status: str,
+    queued_jobs: int = 0,
+    duplicate_notifications: int = 0,
+    ignored_notifications: int = 0,
+    source_ids: list[int] | None = None,
+) -> JSONResponse:
+    payload = ConnectorWebhookCallbackResponse(
+        provider=provider,
+        status=status,
+        queued_jobs=queued_jobs,
+        duplicate_notifications=duplicate_notifications,
+        ignored_notifications=ignored_notifications,
+        source_ids=source_ids or [],
+    )
+    return JSONResponse(status_code=202, content=payload.model_dump())
+
+
+def _provider_webhook_secret(source: dict[str, Any] | None) -> str | None:
+    metadata = dict((source or {}).get("webhook_metadata") or {})
+    secret = str(metadata.get("clientState") or metadata.get("token") or "").strip()
+    return secret or None
+
+
+def _matches_webhook_secret(expected: str | None, received: str | None) -> bool:
+    if not expected or not received:
+        return False
+    return secrets.compare_digest(expected, received)
 
 
 async def _queue_source_job(
@@ -558,7 +619,7 @@ async def add_source(
             tokens = await get_account_tokens(db, user_id, account_id)
             if tokens:
                 conn = get_connector_by_name(provider)
-                callback_base = _resolve_redirect_base(request, conn)
+                callback_base = _resolve_webhook_callback_base(request, conn)
                 callback_url = f"{callback_base}/api/v1/connectors/providers/{provider}/webhook"
                 resource_id = str(remote_id or "root").strip("/") or "root"
                 if provider == "onedrive":
@@ -731,7 +792,7 @@ async def get_source_sync_status(
     )
 
 
-@router.post("/sources/{source_id}/sync")
+@router.post("/sources/{source_id}/sync", response_model=ConnectorSourceSyncTriggerResponse)
 async def trigger_source_sync(
     source_id: int,
     request: Request,
@@ -739,7 +800,7 @@ async def trigger_source_sync(
     principal: AuthPrincipal = Depends(get_auth_principal),
     org_policy: dict[str, Any] = Depends(get_org_policy_from_principal),
     count_jobs_fn: Callable[[int], int] = Depends(get_connectors_job_counter),
-) -> dict[str, Any]:
+) -> ConnectorSourceSyncTriggerResponse:
     user_id = _get_user_id(principal)
     source = await get_source_by_id(db, user_id, source_id)
     if not source:
@@ -753,21 +814,21 @@ async def trigger_source_sync(
         count_jobs_fn=count_jobs_fn,
         job_type="incremental_sync",
     )
-    return {
-        "source_id": int(source_id),
-        "provider": str(source.get("provider")),
-        "status": "queued",
-        "job": job.model_dump(),
-    }
+    return ConnectorSourceSyncTriggerResponse(
+        source_id=int(source_id),
+        provider=str(source.get("provider")),
+        status="queued",
+        job=job,
+    )
 
 
-@router.api_route("/providers/{provider}/webhook", methods=["GET", "POST"])
+@router.api_route("/providers/{provider}/webhook", methods=["GET", "POST"], response_model=ConnectorWebhookCallbackResponse)
 async def provider_webhook_callback(
     provider: str,
     request: Request,
     validation_token: str | None = Query(None, alias="validationToken"),
     db=Depends(get_db_transaction),
-) -> Any:
+) -> ConnectorWebhookCallbackResponse | PlainTextResponse:
     provider = _ensure_connector_provider_enabled(provider)
     if validation_token is not None:
         return PlainTextResponse(validation_token)
@@ -776,17 +837,7 @@ async def provider_webhook_callback(
         request_id = ensure_request_id(request)
         channel_id, receipt_key, payload_hash = _drive_webhook_receipt_key(request)
         if not channel_id or not receipt_key:
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "provider": provider,
-                    "status": "ignored",
-                    "queued_jobs": 0,
-                    "duplicate_notifications": 0,
-                    "ignored_notifications": 1,
-                    "source_ids": [],
-                },
-            )
+            return _webhook_response(provider=provider, status="ignored", ignored_notifications=1)
 
         source = await get_source_by_webhook_subscription(
             db,
@@ -794,17 +845,16 @@ async def provider_webhook_callback(
             subscription_id=channel_id,
         )
         if not source:
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "provider": provider,
-                    "status": "ignored",
-                    "queued_jobs": 0,
-                    "duplicate_notifications": 0,
-                    "ignored_notifications": 1,
-                    "source_ids": [],
-                },
+            return _webhook_response(provider=provider, status="ignored", ignored_notifications=1)
+        expected_secret = _provider_webhook_secret(source)
+        received_secret = str(request.headers.get("X-Goog-Channel-Token") or "").strip() or None
+        if not _matches_webhook_secret(expected_secret, received_secret):
+            logger.warning(
+                "Rejected drive webhook with invalid secret for source_id={} channel_id={}",
+                source.get("id"),
+                channel_id,
             )
+            return _webhook_response(provider=provider, status="ignored", ignored_notifications=1)
 
         source_id = int(source.get("id"))
         is_new = await record_webhook_receipt(
@@ -815,16 +865,10 @@ async def provider_webhook_callback(
             payload_hash=payload_hash,
         )
         if not is_new:
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "provider": provider,
-                    "status": "duplicate",
-                    "queued_jobs": 0,
-                    "duplicate_notifications": 1,
-                    "ignored_notifications": 0,
-                    "source_ids": [],
-                },
+            return _webhook_response(
+                provider=provider,
+                status="duplicate",
+                duplicate_notifications=1,
             )
 
         await create_import_job(
@@ -833,16 +877,11 @@ async def provider_webhook_callback(
             request_id=request_id,
             job_type="incremental_sync",
         )
-        return JSONResponse(
-            status_code=202,
-            content={
-                "provider": provider,
-                "status": "queued",
-                "queued_jobs": 1,
-                "duplicate_notifications": 0,
-                "ignored_notifications": 0,
-                "source_ids": [source_id],
-            },
+        return _webhook_response(
+            provider=provider,
+            status="queued",
+            queued_jobs=1,
+            source_ids=[source_id],
         )
 
     if provider != "onedrive":
@@ -880,6 +919,16 @@ async def provider_webhook_callback(
         if not source:
             ignored_notifications += 1
             continue
+        expected_secret = _provider_webhook_secret(source)
+        received_secret = str(notification.get("clientState") or "").strip() or None
+        if not _matches_webhook_secret(expected_secret, received_secret):
+            logger.warning(
+                "Rejected onedrive webhook with invalid secret for source_id={} subscription_id={}",
+                source.get("id"),
+                subscription_id,
+            )
+            ignored_notifications += 1
+            continue
         source_id = int(source.get("id"))
         is_new = await record_webhook_receipt(
             db,
@@ -904,16 +953,13 @@ async def provider_webhook_callback(
         queued_jobs += 1
 
     status = "queued" if queued_jobs else ("duplicate" if duplicate_notifications else "ignored")
-    return JSONResponse(
-        status_code=202,
-        content={
-            "provider": provider,
-            "status": status,
-            "queued_jobs": queued_jobs,
-            "duplicate_notifications": duplicate_notifications,
-            "ignored_notifications": ignored_notifications,
-            "source_ids": queued_source_ids,
-        },
+    return _webhook_response(
+        provider=provider,
+        status=status,
+        queued_jobs=queued_jobs,
+        duplicate_notifications=duplicate_notifications,
+        ignored_notifications=ignored_notifications,
+        source_ids=queued_source_ids,
     )
 
 

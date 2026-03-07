@@ -97,6 +97,22 @@ class ConnectorSourceSyncStatus(BaseModel):
     degraded_item_count: int = 0
 
 
+class ConnectorSourceSyncTriggerResponse(BaseModel):
+    source_id: int
+    provider: Literal["drive", "notion", "gmail", "onedrive"]
+    status: Literal["queued"] = "queued"
+    job: ImportJob
+
+
+class ConnectorWebhookCallbackResponse(BaseModel):
+    provider: Literal["drive", "onedrive"]
+    status: Literal["queued", "duplicate", "ignored"] = "ignored"
+    queued_jobs: int = 0
+    duplicate_notifications: int = 0
+    ignored_notifications: int = 0
+    source_ids: list[int] = Field(default_factory=list)
+
+
 class AuthorizeURLResponse(BaseModel):
     auth_url: str
     state: str | None = None

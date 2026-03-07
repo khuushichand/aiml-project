@@ -5,7 +5,7 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from tldw_Server_API.app.core.http_client import afetch
 
@@ -225,9 +225,10 @@ class GoogleDriveConnector(BaseConnector):
         if not token:
             return None
         headers = {"Authorization": f"Bearer {token}"}
+        quoted_remote_id = quote(remote_id, safe="")
         resp = await afetch(
             method="GET",
-            url=f"https://www.googleapis.com/drive/v3/files/{remote_id}",
+            url=f"https://www.googleapis.com/drive/v3/files/{quoted_remote_id}",
             headers=headers,
             params={
                 "fields": "id,name,mimeType,modifiedTime,md5Checksum,size,parents,version,webViewLink,trashed",
@@ -421,6 +422,7 @@ class GoogleDriveConnector(BaseConnector):
         if not token:
             return b""
         headers = {"Authorization": f"Bearer {token}"}
+        quoted_file_id = quote(file_id, safe="")
         # If mime_type is a Google Docs type, use export
         mt = (mime_type or "").lower()
         if mt.startswith("application/vnd.google-apps."):
@@ -432,7 +434,7 @@ class GoogleDriveConnector(BaseConnector):
                 "application/vnd.google-apps.presentation": "application/pdf",
             }
             exp = export_mime or default_export_map.get(mt, "text/plain")
-            url = f"https://www.googleapis.com/drive/v3/files/{file_id}/export"
+            url = f"https://www.googleapis.com/drive/v3/files/{quoted_file_id}/export"
             resp = await afetch(
                 method="GET",
                 url=url,
@@ -448,7 +450,7 @@ class GoogleDriveConnector(BaseConnector):
                 if callable(close):
                     await close()
         # Binary download for normal files
-        url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+        url = f"https://www.googleapis.com/drive/v3/files/{quoted_file_id}"
         resp = await afetch(
             method="GET",
             url=url,

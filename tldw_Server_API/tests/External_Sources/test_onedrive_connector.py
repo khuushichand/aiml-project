@@ -82,6 +82,39 @@ def test_connector_source_request_accepts_onedrive_file_sources() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_onedrive_get_item_metadata_url_encodes_remote_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, str] = {}
+
+    async def _fake_afetch(*, method, url, headers=None, params=None, timeout=None):
+        seen["method"] = method
+        seen["url"] = url
+        return _Resp(
+            {
+                "id": "item/../unsafe",
+                "name": "unsafe.txt",
+                "eTag": "etag-1",
+                "file": {"mimeType": "text/plain"},
+            }
+        )
+
+    import tldw_Server_API.app.core.External_Sources.onedrive as onedrive_mod
+
+    monkeypatch.setattr(onedrive_mod, "afetch", _fake_afetch)
+
+    connector = OneDriveConnector(client_id="x", client_secret="y", redirect_base="http://localhost")
+    metadata = await connector.get_item_metadata(
+        {"tokens": {"access_token": "token"}},
+        "item/../unsafe",
+    )
+
+    assert seen["method"] == "GET"
+    assert seen["url"].endswith("/v1.0/me/drive/items/item%2F..%2Funsafe")
+    assert metadata is not None
+    assert metadata["remote_id"] == "item/../unsafe"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_list_providers_includes_onedrive() -> None:
     from tldw_Server_API.app.api.v1.endpoints import connectors as ep
 

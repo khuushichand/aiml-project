@@ -9,6 +9,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from fnmatch import fnmatch
 from typing import Any
 
 from loguru import logger
@@ -455,18 +456,50 @@ def _determine_drive_export_mime(
     return export_mime
 
 
-def _convert_document_bytes_to_text(*, raw: bytes, name: str, effective_mime: str) -> str:
+def _file_sync_skip_reason(
+    *,
+    name: str,
+    mime: str | None,
+    size: Any,
+    is_folder: bool,
+    include_types: list[str],
+    exclude_patterns: list[str],
+    allowed_file_types: list[str],
+    max_bytes: int | None,
+) -> str | None:
+    from tldw_Server_API.app.core.External_Sources.policy import is_file_type_allowed
+
+    if is_folder:
+        return "folder"
+    if exclude_patterns and any(fnmatch(name, pattern) for pattern in exclude_patterns):
+        return "excluded_by_pattern"
+    if include_types:
+        ext = name.lower().rsplit(".", 1)[-1] if "." in name else ""
+        if ext not in include_types:
+            return "extension_not_included"
+    if not is_file_type_allowed(name=name, mime=mime, allowed=allowed_file_types):
+        return "disallowed_file_type"
+    if max_bytes is not None and size is not None:
+        try:
+            if int(size) > max_bytes:
+                return "file_too_large"
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+async def _convert_document_bytes_to_text(*, raw: bytes, name: str, effective_mime: str) -> str:
     content_text = ""
     try:
         if effective_mime == "application/pdf" or (not effective_mime and name.lower().endswith(".pdf")):
             try:
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf
 
-                res = process_pdf(file_input=raw, filename=name, parser="docling")
+                res = await asyncio.to_thread(process_pdf, file_input=raw, filename=name, parser="docling")
             except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf
 
-                res = process_pdf(file_input=raw, filename=name, parser="pymupdf4llm")
+                res = await asyncio.to_thread(process_pdf, file_input=raw, filename=name, parser="pymupdf4llm")
             if isinstance(res, dict):
                 content_text = (res.get("content") or "").strip()
         else:
@@ -957,9 +990,6 @@ async def _process_import_job(
     degraded = 0
     bootstrap_sync_storage_enabled = False
     # Policy helpers
-    from fnmatch import fnmatch
-
-    from tldw_Server_API.app.core.External_Sources.policy import is_file_type_allowed
     allowed_export_formats = [str(f).lower() for f in (policy.get("allowed_export_formats") or [])]
     allowed_export_set = set(allowed_export_formats)
     allowed_file_types = [str(t).lower() for t in (policy.get("allowed_file_types") or [])]
@@ -1120,6 +1150,28 @@ async def _process_import_job(
                         metadata = dict(change.metadata or {})
                         export_mime = None
                         mime = str(metadata.get("mime_type") or metadata.get("mimeType") or "").strip() or None
+                        name = str(change.remote_name or change.remote_id)
+                        skip_reason = _file_sync_skip_reason(
+                            name=name,
+                            mime=mime,
+                            size=metadata.get("size"),
+                            is_folder=bool(metadata.get("is_folder")),
+                            include_types=include_types,
+                            exclude_patterns=exclude_patterns,
+                            allowed_file_types=allowed_file_types,
+                            max_bytes=max_bytes,
+                        )
+                        if skip_reason:
+                            if binding:
+                                raise ValueError(f"File sync change blocked by policy: {skip_reason}")  # noqa: TRY003
+                            logger.info(
+                                "Skipping file sync change for provider={} source_id={} remote_id={} reason={}",
+                                provider,
+                                source_id,
+                                change.remote_id,
+                                skip_reason,
+                            )
+                            continue
                         if provider == "drive":
                             export_mime = _determine_drive_export_mime(
                                 mime=mime,
@@ -1135,13 +1187,13 @@ async def _process_import_job(
                             change.remote_id,
                             metadata=metadata,
                         )
-                        content_text = _convert_document_bytes_to_text(
+                        content_text = await _convert_document_bytes_to_text(
                             raw=raw,
-                            name=change.remote_name or change.remote_id,
+                            name=name,
                             effective_mime=(export_mime or mime or "").lower(),
                         )
                         content_payload = sync_coordinator.FileSyncContentPayload(
-                            text=content_text or f"[empty content for {provider}:{change.remote_id}]",
+                            text=content_text,
                             safe_metadata={"export_mime": export_mime} if export_mime else None,
                         )
 
@@ -1538,9 +1590,6 @@ async def _process_import_job(
                         )
                     processed += 1
                     continue
-                # Skip folders
-                if (it.get("is_folder") is True) or (str(it.get("mimeType") or "").startswith("application/vnd.google-apps.folder")):
-                    continue
                 fid = str(it.get("id"))
                 name = str(it.get("name") or fid)
                 modified_at = it.get("modifiedTime") or it.get("last_edited_time")
@@ -1548,26 +1597,19 @@ async def _process_import_job(
                 mime = it.get("mimeType") or ("text/markdown" if provider == "notion" else None)
                 version = it.get("md5Checksum") or None
 
-                # Enforce include/exclude on name
-                try:
-                    if exclude_patterns and any(fnmatch(name, pat) for pat in exclude_patterns):
-                        continue
-                    if include_types:
-                        ext = name.lower().rsplit(".", 1)[-1] if "." in name else ""
-                        if ext not in include_types:
-                            continue
-                except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
-                    pass
-
-                # Enforce policy: file type and size
-                if not is_file_type_allowed(name=name, mime=mime, allowed=allowed_file_types):
+                skip_reason = _file_sync_skip_reason(
+                    name=name,
+                    mime=mime,
+                    size=size,
+                    is_folder=bool(it.get("is_folder"))
+                    or str(it.get("mimeType") or "").startswith("application/vnd.google-apps.folder"),
+                    include_types=include_types,
+                    exclude_patterns=exclude_patterns,
+                    allowed_file_types=allowed_file_types,
+                    max_bytes=max_bytes,
+                )
+                if skip_reason:
                     continue
-                if max_bytes is not None and size is not None:
-                    try:
-                        if int(size) > max_bytes:
-                            continue
-                    except (TypeError, ValueError):
-                        pass
 
                 # Determine desired export for Drive Google types according to policy/overrides
                 export_mime = None
@@ -1587,10 +1629,13 @@ async def _process_import_job(
                         raw = await _attempt_with_refresh(conn.download_file, acct, fid) if provider == "notion" else await _attempt_with_refresh(conn.download_file, acct, fid, mime_type=mime)
                 except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"download failed for {provider}:{fid}: {e}")
+                    if provider in FILE_SYNC_PROVIDERS and bootstrap_sync_storage_enabled:
+                        failed += 1
+                        continue
                     raw = b""
 
                 effective_mime = (export_mime or mime or "").lower()
-                content_text = _convert_document_bytes_to_text(
+                content_text = await _convert_document_bytes_to_text(
                     raw=raw,
                     name=name,
                     effective_mime=effective_mime,
@@ -1649,7 +1694,7 @@ async def _process_import_job(
                             )
 
                         reconcile_content = sync_coordinator.FileSyncContentPayload(
-                            text=content_text or f"[empty content for {provider}:{fid}]",
+                            text=content_text,
                             safe_metadata={"export_mime": export_mime} if export_mime else None,
                         )
                         async with pool.transaction() as db:

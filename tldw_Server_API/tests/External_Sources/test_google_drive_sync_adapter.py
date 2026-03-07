@@ -104,6 +104,39 @@ async def test_drive_resolve_shared_link_returns_canonical_metadata(monkeypatch:
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_drive_get_item_metadata_url_encodes_remote_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, str] = {}
+
+    async def _fake_afetch(*, method, url, headers=None, params=None, timeout=None):
+        seen["method"] = method
+        seen["url"] = url
+        return _Resp(
+            {
+                "id": "file/../unsafe",
+                "name": "unsafe.txt",
+                "mimeType": "text/plain",
+                "version": "1",
+            }
+        )
+
+    import tldw_Server_API.app.core.External_Sources.google_drive as drive_mod
+
+    monkeypatch.setattr(drive_mod, "afetch", _fake_afetch)
+
+    connector = GoogleDriveConnector(client_id="x", client_secret="y", redirect_base="http://localhost")
+    metadata = await connector.get_item_metadata(
+        {"tokens": {"access_token": "token"}},
+        "file/../unsafe",
+    )
+
+    assert seen["method"] == "GET"
+    assert seen["url"].endswith("/drive/v3/files/file%2F..%2Funsafe")
+    assert metadata is not None
+    assert metadata["remote_id"] == "file/../unsafe"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_drive_subscribe_webhook_watches_changes_feed_and_returns_channel_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

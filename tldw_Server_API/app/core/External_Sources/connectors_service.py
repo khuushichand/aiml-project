@@ -560,10 +560,7 @@ async def _ensure_tables(db) -> None:
                 )
                 """,
             )
-            await getattr(db, "commit", lambda: None)()
         await _mark_sources_needing_rescan(db, is_pg=is_pg)
-        if not is_pg:
-            await getattr(db, "commit", lambda: None)()
     except _CONNECTORS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to ensure connector tables: {e}")
         raise
@@ -1178,6 +1175,7 @@ async def get_source_by_webhook_subscription(
                 s.options,
                 s.enabled,
                 s.last_synced_at,
+                st.webhook_metadata,
                 a.user_id,
                 a.email
             FROM external_source_sync_state st
@@ -1194,6 +1192,7 @@ async def get_source_by_webhook_subscription(
             return None
         data = dict(row)
         data["options"] = _json_loads(data.get("options"), {})
+        data["webhook_metadata"] = _json_loads(data.get("webhook_metadata"), {})
         return data
 
     cur = await db.execute(
@@ -1208,6 +1207,7 @@ async def get_source_by_webhook_subscription(
             s.options,
             s.enabled,
             s.last_synced_at,
+            st.webhook_metadata,
             a.user_id,
             a.email
         FROM external_source_sync_state st
@@ -1224,6 +1224,7 @@ async def get_source_by_webhook_subscription(
         return None
     data = dict(row)
     data["options"] = _json_loads(data.get("options"), {})
+    data["webhook_metadata"] = _json_loads(data.get("webhook_metadata"), {})
     return data
 
 

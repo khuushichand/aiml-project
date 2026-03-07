@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from tldw_Server_API.app.core.http_client import afetch
 
@@ -238,9 +238,10 @@ class OneDriveConnector(BaseConnector):
         if not token:
             return None
         headers = {"Authorization": f"Bearer {token}"}
+        quoted_remote_id = quote(remote_id, safe="")
         resp = await afetch(
             method="GET",
-            url=f"https://graph.microsoft.com/v1.0/me/drive/items/{remote_id}",
+            url=f"https://graph.microsoft.com/v1.0/me/drive/items/{quoted_remote_id}",
             headers=headers,
             params={"$select": "id,name,size,eTag,cTag,lastModifiedDateTime,webUrl,parentReference,file,folder,deleted"},
             timeout=30,
@@ -280,9 +281,10 @@ class OneDriveConnector(BaseConnector):
         if not token:
             return b""
         headers = {"Authorization": f"Bearer {token}"}
+        quoted_file_id = quote(file_id, safe="")
         resp = await afetch(
             method="GET",
-            url=f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}/content",
+            url=f"https://graph.microsoft.com/v1.0/me/drive/items/{quoted_file_id}/content",
             headers=headers,
             timeout=60,
         )
