@@ -341,6 +341,74 @@ def test_research_session_defaults_include_control_and_progress_fields(tmp_path)
     assert payload.progress_message is None
 
 
+def test_get_stream_snapshot_includes_checkpoint_and_latest_artifact_manifest(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=None,
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Track live research state",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="awaiting_plan_review",
+        status="waiting_human",
+    )
+    checkpoint = db.create_checkpoint(
+        session_id=session.id,
+        checkpoint_type="plan_review",
+        proposed_payload={
+            "focus_areas": ["background", "counterevidence"],
+            "stop_criteria": {"min_cited_sections": 2},
+        },
+    )
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="plan.json",
+        payload={"focus_areas": ["background"]},
+        phase="drafting_plan",
+        job_id="11",
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="plan.json",
+        payload={"focus_areas": ["background", "counterevidence"]},
+        phase="drafting_plan",
+        job_id="12",
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="provider_config.json",
+        payload={"web": {"engine": "kagi"}},
+        phase="drafting_plan",
+        job_id="12",
+    )
+
+    snapshot = service.get_stream_snapshot(owner_user_id="1", session_id=session.id)
+
+    assert snapshot.run.id == session.id
+    assert snapshot.run.phase == "awaiting_plan_review"
+    assert snapshot.checkpoint is not None
+    assert snapshot.checkpoint.checkpoint_id == checkpoint.id
+    assert snapshot.checkpoint.checkpoint_type == "plan_review"
+    assert snapshot.checkpoint.proposed_payload["focus_areas"] == ["background", "counterevidence"]
+    assert {item.artifact_name for item in snapshot.artifacts} == {"plan.json", "provider_config.json"}
+    assert next(
+        item for item in snapshot.artifacts if item.artifact_name == "plan.json"
+    ).artifact_version == 2
+
+
 def test_pause_run_marks_active_executable_session_pause_requested(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
     from tldw_Server_API.app.core.Research.service import ResearchService

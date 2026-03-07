@@ -39,6 +39,34 @@ class ResearchRunResponse(BaseModel):
     completed_at: str | None = None
 
 
+class ResearchCheckpointSummary(BaseModel):
+    """Current checkpoint summary included in research stream snapshots."""
+
+    checkpoint_id: str
+    checkpoint_type: str
+    status: str
+    proposed_payload: dict[str, Any]
+    resolution: str | None = None
+
+
+class ResearchArtifactManifestEntry(BaseModel):
+    """Latest-version artifact metadata for research stream snapshots."""
+
+    artifact_name: str
+    artifact_version: int
+    content_type: str
+    phase: str
+    job_id: str | None = None
+
+
+class ResearchRunSnapshotResponse(BaseModel):
+    """Reconnect-safe snapshot for live research progress streams."""
+
+    run: ResearchRunResponse
+    checkpoint: ResearchCheckpointSummary | None = None
+    artifacts: list[ResearchArtifactManifestEntry] = Field(default_factory=list)
+
+
 class ResearchArtifactResponse(BaseModel):
     """Typed artifact response for deep research polling APIs."""
 

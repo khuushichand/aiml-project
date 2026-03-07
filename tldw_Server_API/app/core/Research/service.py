@@ -7,6 +7,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import (
+    ResearchArtifactManifestEntry,
+    ResearchCheckpointSummary,
+    ResearchRunResponse,
+    ResearchRunSnapshotResponse,
+)
 from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import (
     ResearchArtifactRow,
     ResearchSessionRow,
@@ -253,6 +259,50 @@ class ResearchService:
             job_id=None,
         )
         return package
+
+    @staticmethod
+    def _latest_artifact_manifest(artifacts: list[ResearchArtifactRow]) -> list[ResearchArtifactManifestEntry]:
+        latest_by_name: dict[str, ResearchArtifactManifestEntry] = {}
+        for artifact in artifacts:
+            if artifact.artifact_name in latest_by_name:
+                continue
+            latest_by_name[artifact.artifact_name] = ResearchArtifactManifestEntry(
+                artifact_name=artifact.artifact_name,
+                artifact_version=artifact.artifact_version,
+                content_type=artifact.content_type,
+                phase=artifact.phase,
+                job_id=artifact.job_id,
+            )
+        return list(latest_by_name.values())
+
+    def get_stream_snapshot(
+        self,
+        *,
+        owner_user_id: str,
+        session_id: str,
+    ) -> ResearchRunSnapshotResponse:
+        db = self._db_for_user(owner_user_id)
+        session = db.get_session(session_id)
+        if session is None:
+            raise KeyError(session_id)
+
+        checkpoint_summary: ResearchCheckpointSummary | None = None
+        if session.latest_checkpoint_id:
+            checkpoint = db.get_checkpoint(session.latest_checkpoint_id)
+            if checkpoint is not None:
+                checkpoint_summary = ResearchCheckpointSummary(
+                    checkpoint_id=checkpoint.id,
+                    checkpoint_type=checkpoint.checkpoint_type,
+                    status=checkpoint.status,
+                    proposed_payload=checkpoint.proposed_payload,
+                    resolution=checkpoint.resolution,
+                )
+
+        return ResearchRunSnapshotResponse(
+            run=ResearchRunResponse.model_validate(session),
+            checkpoint=checkpoint_summary,
+            artifacts=self._latest_artifact_manifest(db.list_artifacts(session_id)),
+        )
 
     def get_session(self, *, owner_user_id: str, session_id: str) -> ResearchSessionRow:
         db = self._db_for_user(owner_user_id)
