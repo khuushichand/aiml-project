@@ -100,6 +100,9 @@ export interface NotesSidebarProps {
   capsLoading: boolean
   capabilities: ServerCapabilities | null
 
+  // Offline drafts
+  queuedOfflineDraftCount: number
+
   // Pagination hint
   showLargeListPaginationHint: boolean
 
@@ -224,6 +227,9 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
   demoEnabled,
   capsLoading,
   capabilities,
+
+  // Offline drafts
+  queuedOfflineDraftCount,
 
   // Pagination hint
   showLargeListPaginationHint,
@@ -1160,6 +1166,21 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
               />
             )}
           </div>
+
+          {/* Offline draft sync indicator */}
+          {queuedOfflineDraftCount > 0 && (
+            <div
+              className="flex-shrink-0 border-t border-border px-4 py-1.5"
+              data-testid="notes-sidebar-offline-status"
+            >
+              <Typography.Text className="text-[11px] text-text-muted">
+                {t('option:notesSearch.sidebarOfflineDrafts', {
+                  defaultValue: '{{count}} draft(s) pending sync',
+                  count: queuedOfflineDraftCount
+                })}
+              </Typography.Text>
+            </div>
+          )}
 
           {/* Sticky bulk actions bar at bottom */}
           {listMode === 'active' && bulkSelectedIds.length > 0 && (

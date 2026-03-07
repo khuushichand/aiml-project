@@ -1,8 +1,10 @@
 import React, { useMemo } from 'react'
-import { Button, Dropdown, Tag, Tooltip, Typography } from 'antd'
+import { Button, Dropdown, Tooltip, Typography } from 'antd'
 import type { MenuProps } from 'antd'
 import { useTranslation } from 'react-i18next'
 import { useMobile } from '@/hooks/useMediaQuery'
+import type { SaveIndicatorState } from './notes-manager-types'
+import NotesSaveStatus from './NotesSaveStatus'
 import {
   Link2 as LinkIcon,
   Plus as PlusIcon,
@@ -41,6 +43,8 @@ interface NotesEditorHeaderProps {
   isSaving: boolean
   canDelete: boolean
   isDirty?: boolean
+  saveIndicator?: SaveIndicatorState
+  lastSavedAt?: string | null
   onOpenLinkedConversation: () => void
   onOpenSourceLink: (sourceId: string, sourceLabel: string) => void
   onNewNote: () => void
@@ -76,6 +80,8 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
   isSaving,
   canDelete,
   isDirty,
+  saveIndicator = 'idle',
+  lastSavedAt,
   onOpenLinkedConversation,
   onOpenSourceLink,
   onNewNote,
@@ -336,11 +342,11 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
           <Typography.Title level={5} className="!mb-0 truncate !text-text">
             {displayTitle}
           </Typography.Title>
-          {isDirty && (
-            <Tag color="orange" className="!text-[10px] !px-1.5 !py-0 !leading-4 !m-0">
-              {t('option:notesSearch.unsaved', { defaultValue: 'Unsaved' })}
-            </Tag>
-          )}
+          <NotesSaveStatus
+            state={isDirty ? 'dirty' : saveIndicator}
+            lastSavedAt={lastSavedAt}
+            onRetry={onSave}
+          />
         </div>
         {backlinkConversationId && (
           <div className="text-xs text-primary">

@@ -220,6 +220,7 @@ const NotesManagerPage: React.FC = () => {
   const searchQueryTimeoutRef = React.useRef<number | null>(null)
   /* keywordSearchTimeoutRef moved to useNotesKeywords */
   const autosaveTimeoutRef = React.useRef<number | null>(null)
+  const saveNoteRef = React.useRef<((opts?: { showSuccessMessage?: boolean }) => Promise<void>) | null>(null)
   const pageSizeSettingHydratedRef = React.useRef(false)
   const notebookSettingsHydratedRef = React.useRef(false)
   const bulkSelectionAnchorRef = React.useRef<string | null>(null)
@@ -1870,14 +1871,25 @@ const NotesManagerPage: React.FC = () => {
 
   const confirmDiscardIfDirty = React.useCallback(async () => {
     if (!isDirty) return true
+    // Auto-save instead of discarding
+    if (!saving && (content.trim() || title.trim()) && saveNoteRef.current) {
+      try {
+        await saveNoteRef.current({ showSuccessMessage: false })
+        return true
+      } catch {
+        // Save failed — fall through to confirmation dialog
+      }
+    }
     const ok = await confirmDanger({
-      title: 'Discard changes?',
-      content: 'You have unsaved changes. Discard them?',
-      okText: 'Discard',
-      cancelText: 'Cancel'
+      title: t('option:notesSearch.unsavedChangesTitle', { defaultValue: 'Save changes?' }),
+      content: t('option:notesSearch.unsavedChangesContent', {
+        defaultValue: 'Your changes could not be saved automatically. What would you like to do?'
+      }),
+      okText: t('option:notesSearch.discardChanges', { defaultValue: 'Discard' }),
+      cancelText: t('common:cancel', { defaultValue: 'Cancel' })
     })
     return ok
-  }, [isDirty])
+  }, [confirmDanger, content, isDirty, saving, t, title])
 
   const switchListMode = React.useCallback(
     async (nextMode: 'active' | 'trash') => {
@@ -2772,6 +2784,9 @@ const NotesManagerPage: React.FC = () => {
     ]
   )
 
+  // Keep ref in sync so confirmDiscardIfDirty can call saveNote without TDZ
+  saveNoteRef.current = saveNote
+
   const syncOfflineDraftEntry = React.useCallback(
     async (draft: OfflineDraftEntry): Promise<OfflineDraftSyncResult> => {
       const metadata: Record<string, any> = {
@@ -3113,7 +3128,7 @@ const NotesManagerPage: React.FC = () => {
       if (typeof (message as any).open === 'function') {
         ;(message as any).open({
           key: toastKey,
-          duration: 8,
+          duration: 10,
           content: (
             <span className="inline-flex items-center gap-2">
               <span>Note deleted</span>
@@ -4927,6 +4942,7 @@ const NotesManagerPage: React.FC = () => {
         demoEnabled={demoEnabled}
         capsLoading={capsLoading}
         capabilities={capabilities || null}
+        queuedOfflineDraftCount={queuedOfflineDraftCount}
         showLargeListPaginationHint={showLargeListPaginationHint}
         conversationLabelById={conversationLabelById}
         importSubmitting={importSubmitting}
@@ -5024,6 +5040,7 @@ const NotesManagerPage: React.FC = () => {
         keywordOptions={keywordOptions}
         saveIndicator={saveIndicator}
         saveIndicatorText={saveIndicatorText}
+        selectedLastSavedAt={selectedLastSavedAt}
         offlineStatusText={offlineStatusText}
         currentOfflineDraft={currentOfflineDraft}
         remoteVersionInfo={remoteVersionInfo}

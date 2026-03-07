@@ -90,6 +90,7 @@ export interface NotesEditorPaneProps {
   keywordOptions: string[]
   saveIndicator: SaveIndicatorState
   saveIndicatorText: string | null
+  selectedLastSavedAt: string | null
   offlineStatusText: string | null
   currentOfflineDraft: OfflineDraftEntry | null
   remoteVersionInfo: RemoteVersionInfo | null
@@ -223,6 +224,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
   keywordOptions,
   saveIndicator,
   saveIndicatorText,
+  selectedLastSavedAt,
   offlineStatusText,
   currentOfflineDraft,
   remoteVersionInfo,
@@ -356,6 +358,8 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
         isSaving={saving}
         canDelete={!editorDisabled && isOnline && selectedId != null}
         isDirty={isDirty}
+        saveIndicator={saveIndicator}
+        lastSavedAt={selectedLastSavedAt}
         onOpenLinkedConversation={() => {
           void openLinkedConversation()
         }}
