@@ -21,7 +21,8 @@ def client_with_auth():
     app.dependency_overrides[get_request_user] = override_user
     settings = get_settings()
     headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
-    yield TestClient(app, headers=headers)
+    with TestClient(app, headers=headers) as client:
+        yield client
     app.dependency_overrides.clear()
 
 
