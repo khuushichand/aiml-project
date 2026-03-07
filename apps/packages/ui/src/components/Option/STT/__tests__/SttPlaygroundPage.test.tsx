@@ -1,10 +1,33 @@
+// @vitest-environment jsdom
+
 import React from "react"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
+
+const storageValues: Record<string, unknown> = {
+  speechToTextLanguage: "fr",
+  sttTask: "translate",
+  sttResponseFormat: "verbose_json",
+  sttTemperature: 0.4,
+  sttPrompt: "Global prompt",
+  sttUseSegmentation: true,
+  sttSegK: 8,
+  sttSegMinSegmentSize: 7,
+  sttSegLambdaBalance: 0.2,
+  sttSegUtteranceExpansionWidth: 3,
+  sttSegEmbeddingsProvider: "openai",
+  sttSegEmbeddingsModel: "text-embedding-3-small",
+  sttComparisonHistory: []
+}
+
+let comparisonPanelProps: Record<string, unknown> | null = null
 
 // Mock all dependencies before importing the component
 vi.mock("@plasmohq/storage/hook", () => ({
-  useStorage: (_key: string, defaultVal: unknown) => [defaultVal, vi.fn()]
+  useStorage: (key: string, defaultVal: unknown) => [
+    key in storageValues ? storageValues[key] : defaultVal,
+    vi.fn()
+  ]
 }))
 
 vi.mock("react-i18next", () => ({
@@ -19,6 +42,12 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     transcribeAudio: vi.fn().mockResolvedValue({ text: "test" }),
     createNote: vi.fn().mockResolvedValue({})
   }
+}))
+
+vi.mock("@/components/Common/PageShell", () => ({
+  PageShell: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="page-shell">{children}</div>
+  )
 }))
 
 vi.mock("@/hooks/useAntdNotification", () => ({
@@ -47,9 +76,10 @@ vi.mock("../InlineSettingsPanel", () => ({
 }))
 
 vi.mock("../ComparisonPanel", () => ({
-  ComparisonPanel: (_props: Record<string, unknown>) => (
-    <div data-testid="comparison-panel" />
-  )
+  ComparisonPanel: (props: Record<string, unknown>) => {
+    comparisonPanelProps = props
+    return <div data-testid="comparison-panel" />
+  }
 }))
 
 vi.mock("../HistoryPanel", () => ({
@@ -67,6 +97,10 @@ vi.mock("@/db/dexie/stt-recordings", () => ({
 import { SttPlaygroundPage } from "../SttPlaygroundPage"
 
 describe("SttPlaygroundPage", () => {
+  beforeEach(() => {
+    comparisonPanelProps = null
+  })
+
   it("renders page title 'STT Playground'", () => {
     render(<SttPlaygroundPage />)
     expect(screen.getByText("STT Playground")).toBeTruthy()
@@ -82,5 +116,24 @@ describe("SttPlaygroundPage", () => {
   it("settings panel is hidden by default", () => {
     render(<SttPlaygroundPage />)
     expect(screen.queryByTestId("settings-panel")).toBeNull()
+  })
+
+  it("applies global STT defaults even before opening settings", () => {
+    render(<SttPlaygroundPage />)
+
+    expect(comparisonPanelProps?.sttOptions).toEqual({
+      language: "fr",
+      task: "translate",
+      response_format: "verbose_json",
+      temperature: 0.4,
+      prompt: "Global prompt",
+      segment: true,
+      seg_K: 8,
+      seg_min_segment_size: 7,
+      seg_lambda_balance: 0.2,
+      seg_utterance_expansion_width: 3,
+      seg_embeddings_provider: "openai",
+      seg_embeddings_model: "text-embedding-3-small"
+    })
   })
 })

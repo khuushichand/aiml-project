@@ -141,7 +141,9 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
 )
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 from tldw_Server_API.app.core.Chat.chat_service import (
+    apply_structured_response_request,
     apply_prompt_templating,
+    build_structured_http_exception,
     build_call_params_from_request,
     build_context_and_messages,
     estimate_tokens_from_json,
@@ -149,10 +151,16 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     execute_streaming_call,
     moderate_input_messages,
     perform_chat_api_call,
+    prepare_structured_response_request,
     queue_is_active,
     resolve_provider_and_model,
     resolve_provider_api_key,
     is_model_known_for_provider,
+)
+from tldw_Server_API.app.core.LLM_Calls.structured_generation import (
+    StructuredGenerationCapabilityError,
+    StructuredGenerationParseError,
+    StructuredGenerationSchemaError,
 )
 
 # Backward-compatible re-exports for legacy tests patching these symbols on the endpoint module.
@@ -2800,6 +2808,21 @@ async def create_chat_completion(
                 app_config=app_config_override,
             )
             cleaned_args["request"] = request
+            try:
+                structured_request_context = prepare_structured_response_request(
+                    provider=target_api_provider,
+                    response_format=cleaned_args.get("response_format"),
+                )
+                apply_structured_response_request(
+                    cleaned_args=cleaned_args,
+                    structured_request_context=structured_request_context,
+                )
+            except (
+                StructuredGenerationCapabilityError,
+                StructuredGenerationParseError,
+                StructuredGenerationSchemaError,
+            ) as structured_exc:
+                raise build_structured_http_exception(structured_exc) from structured_exc
 
             def _get_default_model_for_provider_name(target_provider: str) -> str | None:
                 override_default = get_override_default_model(target_provider)
@@ -3207,6 +3230,23 @@ async def create_chat_completion(
                             raise initial_exc
 
                         try:
+                            refreshed_structured_request_context = structured_request_context
+                            if refreshed_structured_request_context is not None:
+                                try:
+                                    refreshed_structured_request_context = prepare_structured_response_request(
+                                        provider=target_api_provider,
+                                        response_format=structured_request_context.requested_response_format,
+                                    )
+                                except (
+                                    StructuredGenerationCapabilityError,
+                                    StructuredGenerationParseError,
+                                    StructuredGenerationSchemaError,
+                                ) as structured_exc:
+                                    raise build_structured_http_exception(structured_exc) from structured_exc
+                                apply_structured_response_request(
+                                    cleaned_args=refreshed_args,
+                                    structured_request_context=refreshed_structured_request_context,
+                                )
                             refreshed_response = perform_chat_api_call(**refreshed_args)
                             _record_openai_oauth_retry("success")
                             return refreshed_response
@@ -3283,6 +3323,7 @@ async def create_chat_completion(
                     enable_provider_fallback=allow_provider_fallback_for_request,
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
+                    structured_request_context=structured_request_context,
                     moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
                     on_stream_full_reply=_on_stream_full_reply_for_persona_telemetry,
@@ -3333,6 +3374,7 @@ async def create_chat_completion(
                     enable_provider_fallback=allow_provider_fallback_for_request,
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
+                    structured_request_context=structured_request_context,
                     moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
                     self_monitoring_service=_self_mon_service,

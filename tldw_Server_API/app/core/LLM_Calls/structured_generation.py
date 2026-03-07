@@ -16,9 +16,9 @@ from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 
 from tldw_Server_API.app.core.LLM_Calls.structured_output import (
     StructuredOutputOptions,
+    StructuredOutputParseError,
     parse_structured_output,
 )
-from tldw_Server_API.app.core.exceptions import StructuredOutputParseError
 
 
 class StructuredGenerationError(ValueError):
@@ -26,11 +26,19 @@ class StructuredGenerationError(ValueError):
 
     code: str = "structured_output_error"
 
-    def __init__(self, message: str, *, code: str | None = None, attempts: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        attempts: int | None = None,
+        internal_detail: str | None = None,
+    ) -> None:
         super().__init__(message)
         if code is not None:
             self.code = code
         self.attempts = attempts
+        self.internal_detail = internal_detail
 
 
 class StructuredGenerationCapabilityError(StructuredGenerationError):
@@ -61,6 +69,8 @@ class StructuredModeDecision:
 
 
 def _load_provider_capabilities(provider: str) -> dict[str, Any]:
+    """Return adapter capabilities for `provider` when the registry is available."""
+
     try:
         from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
         from tldw_Server_API.app.core.LLM_Calls.adapter_utils import normalize_provider
@@ -71,12 +81,14 @@ def _load_provider_capabilities(provider: str) -> dict[str, Any]:
         capabilities = adapter.capabilities() or {}
         if isinstance(capabilities, dict):
             return capabilities
-    except Exception:
+    except ImportError:
         return {}
     return {}
 
 
 def _extract_supported_response_format_types(provider_capabilities: Mapping[str, Any]) -> set[str]:
+    """Collect normalized structured-output modes from provider capabilities."""
+
     supported_types: set[str] = set()
     for key in ("response_format_types", "supported_response_format_types"):
         raw_value = provider_capabilities.get(key)
@@ -92,6 +104,8 @@ def _extract_supported_response_format_types(provider_capabilities: Mapping[str,
 
 
 def _normalize_requested_response_format(requested: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and normalize a structured `response_format` request payload."""
+
     requested_type = str(requested.get("type") or "").strip().lower()
     if requested_type not in {"json_schema", "json_object"}:
         raise StructuredGenerationCapabilityError(
@@ -131,7 +145,7 @@ def negotiate_structured_response_mode(
             from tldw_Server_API.app.core.LLM_Calls.capability_registry import get_allowed_fields
 
             allowed_fields = get_allowed_fields(provider)
-        except Exception:
+        except ImportError:
             allowed_fields = {"response_format"}
     if "response_format" not in set(allowed_fields):
         raise StructuredGenerationCapabilityError(
@@ -209,7 +223,10 @@ def validate_structured_payload(*, payload: Any, schema: Mapping[str, Any]) -> N
     try:
         Draft202012Validator(dict(schema)).validate(payload)
     except (JsonSchemaValidationError, JsonSchemaSchemaError) as exc:
-        raise StructuredGenerationSchemaError(str(exc)) from exc
+        raise StructuredGenerationSchemaError(
+            "Model output did not match the requested JSON schema.",
+            internal_detail=str(exc),
+        ) from exc
 
 
 def parse_and_validate_structured_output(
@@ -230,7 +247,10 @@ def parse_and_validate_structured_output(
             ),
         )
     except StructuredOutputParseError as exc:
-        raise StructuredGenerationParseError(str(exc)) from exc
+        raise StructuredGenerationParseError(
+            "Model output could not be parsed as JSON.",
+            internal_detail=str(exc),
+        ) from exc
 
     validate_structured_payload(payload=parsed, schema=schema)
     return parsed

@@ -234,3 +234,8 @@ async def test_stream_emits_structured_error_and_done_on_validation_failure(
 
     assert any("event: structured_error" in chunk for chunk in events)
     assert any("data: [DONE]" in chunk for chunk in events)
+    error_chunk = next(chunk for chunk in events if "event: structured_error" in chunk)
+    data_line = next(line for line in error_chunk.splitlines() if line.startswith("data: "))
+    payload = json.loads(data_line[6:])
+    assert payload["code"] == "structured_output_schema_error"
+    assert payload["message"] == "Model output did not match the requested JSON schema."

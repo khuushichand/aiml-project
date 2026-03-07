@@ -70,15 +70,72 @@ export const SttPlaygroundPage: React.FC = () => {
   }, [])
 
   // ── Settings ──────────────────────────────────────────────────────
-  const [sttSettings, setSttSettings] = useState<SttLocalSettings | null>(null)
+  const [globalLanguage] = useStorage("speechToTextLanguage", "en-US")
+  const [globalTask] = useStorage("sttTask", "transcribe")
+  const [globalFormat] = useStorage("sttResponseFormat", "json")
+  const [globalTemperature] = useStorage("sttTemperature", 0)
+  const [globalPrompt] = useStorage("sttPrompt", "")
+  const [globalUseSegmentation] = useStorage("sttUseSegmentation", false)
+  const [globalSegK] = useStorage("sttSegK", 6)
+  const [globalSegMinSegmentSize] = useStorage("sttSegMinSegmentSize", 5)
+  const [globalSegLambdaBalance] = useStorage("sttSegLambdaBalance", 0.01)
+  const [globalSegUtteranceExpansionWidth] = useStorage(
+    "sttSegUtteranceExpansionWidth",
+    2
+  )
+  const [globalSegEmbeddingsProvider] = useStorage(
+    "sttSegEmbeddingsProvider",
+    ""
+  )
+  const [globalSegEmbeddingsModel] = useStorage("sttSegEmbeddingsModel", "")
+
+  const defaultSttSettings = useMemo<SttLocalSettings>(
+    () => ({
+      language: globalLanguage,
+      task: globalTask,
+      responseFormat: globalFormat,
+      temperature: globalTemperature,
+      prompt: globalPrompt,
+      useSegmentation: globalUseSegmentation,
+      segK: globalSegK,
+      segMinSegmentSize: globalSegMinSegmentSize,
+      segLambdaBalance: globalSegLambdaBalance,
+      segUtteranceExpansionWidth: globalSegUtteranceExpansionWidth,
+      segEmbeddingsProvider: globalSegEmbeddingsProvider,
+      segEmbeddingsModel: globalSegEmbeddingsModel
+    }),
+    [
+      globalFormat,
+      globalLanguage,
+      globalPrompt,
+      globalSegEmbeddingsModel,
+      globalSegEmbeddingsProvider,
+      globalSegK,
+      globalSegLambdaBalance,
+      globalSegMinSegmentSize,
+      globalSegUtteranceExpansionWidth,
+      globalTask,
+      globalTemperature,
+      globalUseSegmentation
+    ]
+  )
+
+  const [sttSettings, setSttSettings] = useState<SttLocalSettings>(
+    defaultSttSettings
+  )
   const [showSettings, setShowSettings] = useState(false)
+
+  useEffect(() => {
+    if (!showSettings) {
+      setSttSettings(defaultSttSettings)
+    }
+  }, [defaultSttSettings, showSettings])
 
   const toggleSettings = useCallback(() => {
     setShowSettings((prev) => !prev)
   }, [])
 
   const sttOptions = useMemo(() => {
-    if (!sttSettings) return {}
     const opts: Record<string, unknown> = {}
     if (sttSettings.language) opts.language = sttSettings.language
     if (sttSettings.task) opts.task = sttSettings.task
