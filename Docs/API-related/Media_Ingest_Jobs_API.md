@@ -4,6 +4,22 @@ Submit background media ingestion jobs with cancellation support.
 
 Base path: `/api/v1/media`
 
+## Related Connector Sync Jobs
+
+External file-hosting sync does not use the `/api/v1/media/ingest/jobs` endpoints directly.
+Google Drive and Microsoft OneDrive source sync runs are queued through the connectors API and the core Jobs domain `connectors`.
+
+- Connector endpoints:
+  - `GET /api/v1/connectors/sources/{source_id}/sync` - source-level sync status, cursor state, webhook status, and active job summary
+  - `POST /api/v1/connectors/sources/{source_id}/sync` - queue a manual `incremental_sync` job
+  - `POST /api/v1/connectors/providers/{provider}/webhook` - webhook callback that validates, dedupes, and queues `incremental_sync`
+- Connector job types currently used for file-hosting sync:
+  - `import` - source creation / legacy bootstrap path
+  - `incremental_sync` - cursor-backed delta sync
+  - `subscription_renewal` - webhook renewal before expiry
+  - `repair_rescan` - scheduled replay/full-rescan recovery when a source is marked `needs_full_rescan`
+- Sync job result payloads include `processed`, `skipped`, `failed`, and, for file-hosting sync, `degraded` counts.
+
 ## Endpoints
 
 - POST `/ingest/jobs` - Submit jobs (one job per item)

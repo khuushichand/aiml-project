@@ -3056,6 +3056,9 @@
   "header_audiobookStudio": {
     "message": "Audiobook Studio"
   },
+  "header_chatWorkflows": {
+    "message": "Chat Workflows"
+  },
   "header_workflowEditor": {
     "message": "Workflow Editor"
   },

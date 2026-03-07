@@ -10,6 +10,41 @@ The Jobs module provides a reusable, DB-backed job queue with leasing, retries, 
 
 Use these names across domains to keep operations consistent.
 
+## Connectors Domain
+
+The external connectors stack now uses the Jobs module for user-visible and recurring file sync work.
+
+- Domain: `connectors`
+- Queue: `default`
+- Current job types:
+  - `import`
+  - `incremental_sync`
+  - `subscription_renewal`
+  - `repair_rescan`
+- Trigger paths:
+  - connector source creation can enqueue `import`
+  - `POST /api/v1/connectors/sources/{source_id}/sync` enqueues `incremental_sync`
+  - provider webhooks enqueue `incremental_sync` after validation and dedupe
+  - the recurring connectors sync scheduler enqueues `incremental_sync`, `subscription_renewal`, or `repair_rescan`
+
+### Source-Scoped Fencing
+
+Connector sync jobs are not only deduped at Jobs level. They also reserve a source-scoped fence in `external_source_sync_state`.
+
+- `active_job_id` and `active_job_started_at` track the current source owner
+- duplicate submissions for the same source return the already-active job when it is still live
+- stale fences are cleared before reserving a new job
+- workers renew their Jobs lease and update source sync state while running
+- file-hosting sync jobs report `processed`, `skipped`, `failed`, and `degraded` counts in the job result
+
+### Recurring Connector Scheduler
+
+`tldw_Server_API/app/services/connectors_sync_scheduler.py` is an APScheduler bridge that scans sources and enqueues Jobs. It does not perform sync work itself.
+
+- `CONNECTORS_SYNC_SCHEDULER_ENABLED=true` starts the service at app startup
+- `CONNECTORS_SYNC_SCHEDULER_SCAN_SEC` controls scan cadence (default `300`)
+- `CONNECTORS_SYNC_RENEWAL_LOOKAHEAD_SEC` controls how early expiring webhook subscriptions are renewed (default `3600`)
+
 ## Admin Quick Reference
 
 - Safe reads

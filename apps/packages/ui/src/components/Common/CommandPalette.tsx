@@ -62,7 +62,7 @@ export interface CommandItem {
   icon: React.ReactNode
   shortcut?: CommandShortcut
   action: () => void
-  category: "navigation" | "action" | "setting" | "recent"
+  category: "navigation" | "action" | "setting" | "recent" | "prompt"
   keywords?: string[]
 }
 
@@ -447,6 +447,7 @@ export function CommandPalette({
     // by additionalCommands when that feature is implemented.
     const groups: Record<string, CommandItem[]> = {
       action: [],
+      prompt: [],
       navigation: [],
       setting: [],
       recent: [],
@@ -551,13 +552,14 @@ export function CommandPalette({
   if (!open) return null
   if (typeof document === "undefined") return null
 
-  const categories = ["recent", "action", "navigation", "setting"] as const
+  const categories = ["recent", "action", "prompt", "navigation", "setting"] as const
   const focusRingClasses =
     "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
   const categoryLabels: Record<string, string> = {
     action: t("common:commandPalette.categoryActions", "Actions"),
     navigation: t("common:commandPalette.categoryNavigation", "Navigation"),
+    prompt: t("common:commandPalette.categoryPrompts", "Prompts"),
     setting: t("common:commandPalette.categorySettings", "Settings"),
     recent: t("common:commandPalette.categoryRecent", "Recent"),
   }

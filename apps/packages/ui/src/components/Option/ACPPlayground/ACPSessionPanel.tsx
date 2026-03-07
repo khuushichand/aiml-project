@@ -100,6 +100,7 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
   const replaceSessionId = useACPSessionsStore((s) => s.replaceSessionId)
   const applySessionDetail = useACPSessionsStore((s) => s.applySessionDetail)
   const applySessionUsage = useACPSessionsStore((s) => s.applySessionUsage)
+  const setGlobalError = useACPSessionsStore((s) => s.setGlobalError)
   const hasActiveFilters = searchQuery.trim().length > 0 || stateFilter !== "all" || sortKey !== "recent"
   const refreshLoading = isRefreshing || isRefreshingLocal
 
@@ -151,6 +152,10 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
         args: server.args ? [...server.args] : undefined,
         env: server.env ? { ...server.env } : undefined,
       })),
+      personaId: sourceSession.personaId ?? undefined,
+      workspaceId: sourceSession.workspaceId ?? undefined,
+      workspaceGroupId: sourceSession.workspaceGroupId ?? undefined,
+      scopeSnapshotId: sourceSession.scopeSnapshotId ?? undefined,
     })
 
     useACPSessionsStore.setState((state) => {
@@ -188,6 +193,8 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
     if (!sourceSession) {
       return
     }
+    const isServerBacked = sourceSession.backendStatus !== null
+    setGlobalError(null)
 
     const fallbackName = `${sourceSession.name || sourceSession.cwd.split("/").filter(Boolean).pop() || "Session"} (fork)`
 
@@ -205,7 +212,11 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
       }
 
       if (messageIndex < 0) {
-        createLocalFork(sourceSession)
+        if (!isServerBacked) {
+          createLocalFork(sourceSession)
+        } else {
+          setGlobalError("fork_not_resumable")
+        }
         return
       }
 
@@ -226,6 +237,10 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
           args: server.args ? [...server.args] : undefined,
           env: server.env ? { ...server.env } : undefined,
         })),
+        personaId: sourceSession.personaId ?? undefined,
+        workspaceId: sourceSession.workspaceId ?? undefined,
+        workspaceGroupId: sourceSession.workspaceGroupId ?? undefined,
+        scopeSnapshotId: sourceSession.scopeSnapshotId ?? undefined,
       })
 
       replaceSessionId(localForkSessionId, serverSessionId, {
@@ -238,8 +253,13 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
         .catch(() => undefined)
 
       setActiveSession(serverSessionId)
-    } catch (_error) {
-      createLocalFork(sourceSession)
+    } catch (error) {
+      if (!isServerBacked) {
+        createLocalFork(sourceSession)
+        return
+      }
+      const message = error instanceof Error && error.message ? error.message : "Failed to fork ACP session"
+      setGlobalError(message)
     }
   }
 

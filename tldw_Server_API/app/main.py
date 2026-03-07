@@ -820,6 +820,7 @@ _HAS_OUTPUT_TEMPLATES = False
 _HAS_OUTPUTS = False
 _HAS_PROMPT_STUDIO = False
 _HAS_WORKFLOWS = False
+_HAS_CHAT_WORKFLOWS = False
 _HAS_UNIFIED_EVALUATIONS = False
 _HAS_SCHEDULER_WF = False
 _HAS_JOBS_ADMIN = False
@@ -1102,6 +1103,17 @@ else:
     except _IMPORT_EXCEPTIONS as _wf_import_err:
         logger.warning(f"Workflows endpoints unavailable; skipping import: {_wf_import_err}")
         _HAS_WORKFLOWS = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.chat_workflows import (
+            router as chat_workflows_router,
+        )
+
+        _HAS_CHAT_WORKFLOWS = True
+    except _IMPORT_EXCEPTIONS as _chat_wf_import_err:
+        logger.warning(
+            f"Chat workflows endpoints unavailable; skipping import: {_chat_wf_import_err}"
+        )
+        _HAS_CHAT_WORKFLOWS = False
 # Legacy RAG Endpoint (Deprecated)
 # from tldw_Server_API.app.api.v1.endpoints.rag import router as retrieval_agent_router
 #
@@ -1117,6 +1129,7 @@ elif _MINIMAL_TEST_APP:
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
+    from tldw_Server_API.app.api.v1.endpoints.research_runs import router as research_runs_router
 
     # Admin endpoints are used by several pytest modules; import for minimal app
     try:
@@ -1176,9 +1189,11 @@ else:
     # Paper Search Endpoint (provider-specific)
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
+    from tldw_Server_API.app.api.v1.endpoints.research_runs import router as research_runs_router
 
     # Sync Endpoint
     from tldw_Server_API.app.api.v1.endpoints.sync import router as sync_router
+    from tldw_Server_API.app.api.v1.endpoints.text2sql import router as text2sql_router
 
     # Tools Endpoint (optional; guard import to avoid startup failure on optional module issues)
     try:
@@ -3190,6 +3205,21 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Reminders scheduler: {e}")
 
+    # Start Connectors sync scheduler (periodic submission into Jobs)
+    connectors_sync_sched_task = None
+    try:
+        from tldw_Server_API.app.services.connectors_sync_scheduler import (
+            start_connectors_sync_scheduler,
+        )
+
+        connectors_sync_sched_task = await start_connectors_sync_scheduler()
+        if connectors_sync_sched_task:
+            logger.info("Connectors sync scheduler started")
+        else:
+            logger.info("Connectors sync scheduler disabled (CONNECTORS_SYNC_SCHEDULER_ENABLED != true)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Connectors sync scheduler: {e}")
+
     # Display authentication mode (API key masked by default unless explicitly requested)
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
@@ -3626,6 +3656,20 @@ async def lifespan(app: FastAPI):
                     reminders_sched_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
                 pass
+        # Stop Connectors sync scheduler
+        try:
+            if "connectors_sync_sched_task" in locals():
+                from tldw_Server_API.app.services.connectors_sync_scheduler import (
+                    stop_connectors_sync_scheduler as _stop_connectors_sync_scheduler,
+                )
+
+                await _stop_connectors_sync_scheduler(connectors_sync_sched_task)
+        except _STARTUP_GUARD_EXCEPTIONS:
+            try:
+                if "connectors_sync_sched_task" in locals() and connectors_sync_sched_task:
+                    connectors_sync_sched_task.cancel()
+            except _STARTUP_GUARD_EXCEPTIONS:
+                pass
         # Jobs metrics gauges worker shutdown
         if "jobs_metrics_task" in locals() and jobs_metrics_task:
             try:
@@ -3878,6 +3922,17 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: Prompts DB resources cleaned up")
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error shutting down Prompts DB resources: {e}")
+
+    # Shutdown Chat Workflows DB cache
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.chat_workflows_deps import (
+            shutdown_chat_workflows_deps,
+        )
+
+        shutdown_chat_workflows_deps(app)
+        logger.info("App Shutdown: Chat workflows resources cleaned up")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.exception(f"App Shutdown: Error shutting down chat workflows resources: {e}")
 
     # Shutdown Chat Module Components
     logger.info("App Shutdown: Cleaning up Chat module components...")
@@ -5225,6 +5280,7 @@ if _ULTRA_MINIMAL_APP:
 elif _MINIMAL_TEST_APP:
     # Minimal set for paper_search tests
     include_router_idempotent(app, research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
+    include_router_idempotent(app, research_runs_router, prefix=f"{API_V1_PREFIX}", tags=["research-runs"])
     include_router_idempotent(app, paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
     # Include lightweight chat/character routes needed by tests
     include_router_idempotent(app, chat_router, prefix=f"{API_V1_PREFIX}/chat")
@@ -5347,6 +5403,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(rag_unified_router, tags=["rag-unified"])
     except _IMPORT_EXCEPTIONS as _rag_min_err:
         logger.debug(f"Skipping rag_unified router in minimal test app: {_rag_min_err}")
+    # Standalone text2sql endpoint
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.text2sql import router as text2sql_router
+
+        app.include_router(text2sql_router, prefix=f"{API_V1_PREFIX}", tags=["text2sql"])
+    except _IMPORT_EXCEPTIONS as _text2sql_min_err:
+        logger.debug(f"Skipping text2sql router in minimal test app: {_text2sql_min_err}")
     # Explicit feedback endpoints (shared chat/RAG)
     try:
         from tldw_Server_API.app.api.v1.endpoints.feedback import router as feedback_router
@@ -5776,6 +5839,16 @@ elif _MINIMAL_TEST_APP:
     except _IMPORT_EXCEPTIONS as _wf_min_err:
         logger.debug(f"Skipping workflows router in minimal test app: {_wf_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.chat_workflows import (
+            router as _chat_wf_router,
+        )
+
+        app.include_router(_chat_wf_router, prefix="", tags=["chat-workflows"])
+    except _IMPORT_EXCEPTIONS as _chat_wf_min_err:
+        logger.debug(
+            f"Skipping chat workflows router in minimal test app: {_chat_wf_min_err}"
+        )
+    try:
         from tldw_Server_API.app.api.v1.endpoints.scheduler_workflows import router as _sch_wf_router
 
         app.include_router(_sch_wf_router, prefix="", tags=["scheduler"])
@@ -6133,6 +6206,8 @@ else:
         _include_if_enabled("prompt-studio", prompt_studio_websocket_router, tags=["prompt-studio"])
     _include_if_enabled("rag-health", rag_health_router, tags=["rag-health"])
     _include_if_enabled("rag-unified", rag_unified_router, tags=["rag-unified"])
+    if "text2sql_router" in locals():
+        _include_if_enabled("text2sql", text2sql_router, prefix=f"{API_V1_PREFIX}", tags=["text2sql"])
     _include_if_enabled("feedback", feedback_router, prefix=f"{API_V1_PREFIX}/feedback", tags=["feedback"])
     if _HAS_WORKFLOWS:
         # In test contexts, force-include workflows regardless of policy to avoid 404s.
@@ -6141,6 +6216,12 @@ else:
             app.include_router(workflows_router, prefix="", tags=["workflows"])
         else:
             _include_if_enabled("workflows", workflows_router, tags=["workflows"], default_stable=False)
+    if _HAS_CHAT_WORKFLOWS:
+        _test_ctx = bool(_TEST_MODE)
+        if _test_ctx:
+            app.include_router(chat_workflows_router, prefix="", tags=["chat-workflows"])
+        else:
+            _include_if_enabled("chat-workflows", chat_workflows_router, tags=["chat-workflows"])
     try:
         from tldw_Server_API.app.api.v1.endpoints.scheduler_workflows import router as scheduler_workflows_router
 
@@ -6155,6 +6236,7 @@ else:
         else:
             _include_if_enabled("scheduler", scheduler_workflows_router, tags=["scheduler"], default_stable=False)
     _include_if_enabled("research", research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
+    _include_if_enabled("research", research_runs_router, prefix=f"{API_V1_PREFIX}", tags=["research-runs"])
     _include_if_enabled(
         "paper-search", paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"]
     )

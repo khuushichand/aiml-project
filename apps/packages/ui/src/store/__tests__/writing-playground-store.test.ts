@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest"
 import { useWritingPlaygroundStore } from "../writing-playground"
 
 describe("writing playground store", () => {
-  it("defaults workspace mode to draft", () => {
+  it("defaults activeSessionId to null", () => {
     const state = useWritingPlaygroundStore.getState()
-    expect(state.workspaceMode).toBe("draft")
+    expect(state.activeSessionId).toBeNull()
   })
 
-  it("updates workspace mode", () => {
-    useWritingPlaygroundStore.getState().setWorkspaceMode("manage")
-    expect(useWritingPlaygroundStore.getState().workspaceMode).toBe("manage")
-    useWritingPlaygroundStore.getState().setWorkspaceMode("draft")
+  it("updates activeSessionId", () => {
+    useWritingPlaygroundStore.getState().setActiveSessionId("test-id")
+    expect(useWritingPlaygroundStore.getState().activeSessionId).toBe("test-id")
+    useWritingPlaygroundStore.getState().setActiveSessionId(null)
   })
 })

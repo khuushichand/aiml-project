@@ -1,5 +1,5 @@
 import React from "react"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 vi.mock("@tanstack/react-query", () => {
@@ -148,53 +148,53 @@ describe("WritingPlayground inspector tabs", () => {
     })
     expect(tablist).toBeInTheDocument()
 
-    const generationTab = screen.getByRole("tab", { name: "Generation" })
-    const planningTab = screen.getByRole("tab", { name: "Planning" })
+    const samplingTab = screen.getByRole("tab", { name: "Sampling" })
+    const contextTab = screen.getByRole("tab", { name: "Context" })
 
-    expect(generationTab).toHaveAttribute("aria-selected", "true")
-    expect(planningTab).toHaveAttribute("aria-selected", "false")
+    expect(samplingTab).toHaveAttribute("aria-selected", "true")
+    expect(contextTab).toHaveAttribute("aria-selected", "false")
 
-    fireEvent.click(planningTab)
+    fireEvent.click(contextTab)
 
-    expect(planningTab).toHaveAttribute("aria-selected", "true")
-    expect(generationTab).toHaveAttribute("aria-selected", "false")
+    expect(contextTab).toHaveAttribute("aria-selected", "true")
+    expect(samplingTab).toHaveAttribute("aria-selected", "false")
   })
 
   it("supports keyboard arrow navigation between tabs", () => {
     render(<WritingPlayground />)
 
-    const generationTab = screen.getByRole("tab", { name: "Generation" })
-    const planningTab = screen.getByRole("tab", { name: "Planning" })
+    const samplingTab = screen.getByRole("tab", { name: "Sampling" })
+    const contextTab = screen.getByRole("tab", { name: "Context" })
 
-    generationTab.focus()
-    fireEvent.keyDown(generationTab, { key: "ArrowRight" })
+    samplingTab.focus()
+    fireEvent.keyDown(samplingTab, { key: "ArrowRight" })
 
-    expect(planningTab).toHaveAttribute("aria-selected", "true")
-    expect(generationTab).toHaveAttribute("aria-selected", "false")
-    expect(planningTab).toHaveFocus()
+    expect(contextTab).toHaveAttribute("aria-selected", "true")
+    expect(samplingTab).toHaveAttribute("aria-selected", "false")
+    expect(contextTab).toHaveFocus()
   })
 
   it("supports Home/End and wraparound focus traversal", () => {
     render(<WritingPlayground />)
 
-    const generationTab = screen.getByRole("tab", { name: "Generation" })
-    const diagnosticsTab = screen.getByRole("tab", { name: "Diagnostics" })
+    const samplingTab = screen.getByRole("tab", { name: "Sampling" })
+    const inspectTab = screen.getByRole("tab", { name: "Inspect" })
 
-    generationTab.focus()
-    fireEvent.keyDown(generationTab, { key: "ArrowLeft" })
-    expect(diagnosticsTab).toHaveAttribute("aria-selected", "true")
-    expect(diagnosticsTab).toHaveFocus()
+    samplingTab.focus()
+    fireEvent.keyDown(samplingTab, { key: "ArrowLeft" })
+    expect(inspectTab).toHaveAttribute("aria-selected", "true")
+    expect(inspectTab).toHaveFocus()
 
-    fireEvent.keyDown(diagnosticsTab, { key: "Home" })
-    expect(generationTab).toHaveAttribute("aria-selected", "true")
-    expect(generationTab).toHaveFocus()
+    fireEvent.keyDown(inspectTab, { key: "Home" })
+    expect(samplingTab).toHaveAttribute("aria-selected", "true")
+    expect(samplingTab).toHaveFocus()
 
-    fireEvent.keyDown(generationTab, { key: "End" })
-    expect(diagnosticsTab).toHaveAttribute("aria-selected", "true")
-    expect(diagnosticsTab).toHaveFocus()
+    fireEvent.keyDown(samplingTab, { key: "End" })
+    expect(inspectTab).toHaveAttribute("aria-selected", "true")
+    expect(inspectTab).toHaveFocus()
   })
 
-  it("shows template/theme management actions in Planning, not Generation", () => {
+  it("shows template/theme management actions in Setup tab", () => {
     render(<WritingPlayground />)
 
     expect(
@@ -204,7 +204,7 @@ describe("WritingPlayground inspector tabs", () => {
       screen.queryByRole("button", { name: "Manage themes" })
     ).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole("tab", { name: "Planning" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Setup" }))
 
     expect(
       screen.getByRole("button", { name: "Manage templates" })
@@ -214,13 +214,51 @@ describe("WritingPlayground inspector tabs", () => {
     ).toBeInTheDocument()
   })
 
-  it("renders non-placeholder diagnostics content", () => {
+  it("renders essentials strip with model input and generate button", () => {
     render(<WritingPlayground />)
 
-    fireEvent.click(screen.getByRole("tab", { name: "Diagnostics" }))
+    expect(
+      screen.getByTestId("writing-essentials-strip")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId("writing-essentials-model")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId("writing-essentials-generate")
+    ).toBeInTheDocument()
+  })
+
+  it("disables essentials settings controls when no session is selected", () => {
+    render(<WritingPlayground />)
+
+    const spinbuttons = screen.getAllByRole("spinbutton")
+    expect(spinbuttons.length).toBeGreaterThan(0)
+    for (const input of spinbuttons) {
+      expect(input).toBeDisabled()
+    }
+
+    expect(screen.getByTestId("writing-essentials-generate")).toBeDisabled()
+  })
+
+  it("has four tabs: Sampling, Context, Setup, Inspect", () => {
+    render(<WritingPlayground />)
+
+    expect(screen.getByRole("tab", { name: "Sampling" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Context" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Setup" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Inspect" })).toBeInTheDocument()
+  })
+
+  it("renders an Inspect panel title that matches the tab label", () => {
+    render(<WritingPlayground />)
+
+    fireEvent.click(screen.getByRole("tab", { name: "Inspect" }))
 
     expect(
-      screen.queryByText("Diagnostics tools will be moved here.")
-    ).not.toBeInTheDocument()
+      within(screen.getByTestId("writing-playground-diagnostics-card")).getByText(
+        "Inspect"
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Diagnostics")).not.toBeInTheDocument()
   })
 })
