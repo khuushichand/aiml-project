@@ -366,9 +366,6 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
         onOpenSourceLink={(sourceId, sourceLabel) => {
           openLinkedSource(sourceId, sourceLabel)
         }}
-        onNewNote={() => {
-          void handleNewNote()
-        }}
         onApplyTemplate={(templateId) => {
           void handleNewNote(templateId)
         }}
@@ -520,15 +517,6 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
             }))}
             disabled={editorDisabled}
           />
-          <Typography.Text
-            type="secondary"
-            className="block text-[11px] mt-1 text-text-muted"
-          >
-            {t('option:notesSearch.tagsHelp', {
-              defaultValue:
-                'Keywords help you find this note using the keyword filter on the left.'
-            })}
-          </Typography.Text>
           {saveIndicatorText && (
             <Typography.Text
               type={saveIndicator === 'error' ? 'danger' : 'secondary'}

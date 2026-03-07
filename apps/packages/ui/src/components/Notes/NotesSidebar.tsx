@@ -63,7 +63,6 @@ export interface NotesSidebarProps {
   queryInput: string
   hasActiveFilters: boolean
   activeFilterSummary: ActiveFilterSummary | null
-  searchRequestCount: number
   keywordTokens: string[]
   keywordOptions: string[]
   availableKeywords: string[]
@@ -191,7 +190,6 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
   queryInput,
   hasActiveFilters,
   activeFilterSummary,
-  searchRequestCount,
   keywordTokens,
   keywordOptions,
   availableKeywords,
@@ -689,28 +687,6 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                     storageKey="filters"
                     testId="notes-section-filters"
                   >
-                    <Typography.Text
-                      type="secondary"
-                      className="block text-[11px] text-text-muted"
-                      data-testid="notes-search-helper-text"
-                    >
-                      {t('option:notesSearch.searchHelper', {
-                        defaultValue:
-                          'Full-text search across titles and content. Text + keyword filters use AND.'
-                      })}
-                    </Typography.Text>
-                    {hasActiveFilters && searchRequestCount > 0 && (
-                      <Typography.Text
-                        type="secondary"
-                        className="block text-[11px] text-text-subtle"
-                        data-testid="notes-search-request-metrics"
-                      >
-                        {t('option:notesSearch.searchRequestMetricsLabel', {
-                          defaultValue: 'Requests in this filter session'
-                        })}
-                        {`: ${searchRequestCount}`}
-                      </Typography.Text>
-                    )}
                     <div className="flex items-center justify-end">
                       <Popover
                         trigger="click"

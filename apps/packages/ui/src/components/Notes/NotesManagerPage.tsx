@@ -158,7 +158,6 @@ const NotesManagerPage: React.FC = () => {
   const { t } = useTranslation(['option', 'common'])
   const [query, setQuery] = React.useState('')
   const [queryInput, setQueryInput] = React.useState('')
-  const [searchRequestCount, setSearchRequestCount] = React.useState(0)
   const [searchTipsQuery, setSearchTipsQuery] = React.useState('')
   const [exportProgress, setExportProgress] = React.useState<ExportProgressState | null>(null)
   const [importModalOpen, setImportModalOpen] = React.useState(false)
@@ -1076,16 +1075,11 @@ const NotesManagerPage: React.FC = () => {
     q: string,
     toks: string[],
     page: number,
-    pageSize: number,
-    options?: { trackSearchRequest?: boolean }
+    pageSize: number
   ): Promise<{ items: any[]; total: number }> => {
     const qstr = q.trim()
     if (!qstr && toks.length === 0) {
       return { items: [], total: 0 }
-    }
-
-    if (options?.trackSearchRequest !== false) {
-      setSearchRequestCount((current) => current + 1)
     }
 
     const params = new URLSearchParams()
@@ -3803,9 +3797,7 @@ const NotesManagerPage: React.FC = () => {
       while (p <= MAX_EXPORT_PAGES) {
         let items: any[] = []
         try {
-          const result = await fetchFilteredNotesRaw(q, toks, p, ps, {
-            trackSearchRequest: false
-          })
+          const result = await fetchFilteredNotesRaw(q, toks, p, ps)
           items = result.items
         } catch {
           failedBatches += 1
@@ -4243,7 +4235,6 @@ const NotesManagerPage: React.FC = () => {
     ) {
       return
     }
-    setSearchRequestCount(0)
   }, [effectiveKeywordTokens.length, listMode, queryInput, selectedNotebookId])
 
   React.useEffect(() => {
@@ -4918,7 +4909,6 @@ const NotesManagerPage: React.FC = () => {
         queryInput={queryInput}
         hasActiveFilters={hasActiveFilters}
         activeFilterSummary={activeFilterSummary}
-        searchRequestCount={searchRequestCount}
         keywordTokens={keywordTokens}
         keywordOptions={keywordOptions}
         availableKeywords={availableKeywords}

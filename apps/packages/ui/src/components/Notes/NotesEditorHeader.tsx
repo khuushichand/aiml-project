@@ -7,7 +7,6 @@ import type { SaveIndicatorState } from './notes-manager-types'
 import NotesSaveStatus from './NotesSaveStatus'
 import {
   Link2 as LinkIcon,
-  Plus as PlusIcon,
   Sparkles as SparklesIcon,
   Copy as CopyIcon,
   FileDown as FileDownIcon,
@@ -47,7 +46,6 @@ interface NotesEditorHeaderProps {
   lastSavedAt?: string | null
   onOpenLinkedConversation: () => void
   onOpenSourceLink: (sourceId: string, sourceLabel: string) => void
-  onNewNote: () => void
   onApplyTemplate?: (templateId: string) => void
   onDuplicate?: () => void
   onTogglePin?: () => void
@@ -84,7 +82,6 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
   lastSavedAt,
   onOpenLinkedConversation,
   onOpenSourceLink,
-  onNewNote,
   onApplyTemplate,
   onDuplicate,
   onTogglePin,
@@ -121,13 +118,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
 
     // --- Create group ---
     if (!editorDisabled) {
-      const createChildren: MenuProps['items'] = [
-        {
-          key: 'new-note',
-          label: t('option:notesSearch.new', { defaultValue: 'New note' }),
-          icon: (<PlusIcon className="w-4 h-4" />) as any
-        }
-      ]
+      const createChildren: MenuProps['items'] = []
 
       if (onDuplicate) {
         createChildren.push({
@@ -150,11 +141,13 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
         })
       }
 
-      items.push({
-        type: 'group' as const,
-        label: t('option:notesSearch.overflowGroupCreate', { defaultValue: 'Create' }),
-        children: createChildren
-      })
+      if (createChildren.length > 0) {
+        items.push({
+          type: 'group' as const,
+          label: t('option:notesSearch.overflowGroupCreate', { defaultValue: 'Create' }),
+          children: createChildren
+        })
+      }
 
       // --- Organize group ---
       const organizeChildren: MenuProps['items'] = []
@@ -294,9 +287,6 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
 
   const handleOverflowMenuClick: MenuProps['onClick'] = ({ key }) => {
     switch (key) {
-      case 'new-note':
-        onNewNote()
-        break
       case 'duplicate':
         onDuplicate?.()
         break
