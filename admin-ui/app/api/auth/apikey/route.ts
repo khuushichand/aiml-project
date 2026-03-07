@@ -2,7 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { buildApiUrl } from '@/lib/api-config';
 import { setApiKeySessionCookies } from '@/lib/server-auth';
 
+const isAdminApiKeyLoginEnabled = (): boolean =>
+  process.env.ADMIN_UI_ALLOW_API_KEY_LOGIN === 'true'
+  || process.env.NEXT_PUBLIC_ALLOW_ADMIN_API_KEY_LOGIN === 'true';
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  if (!isAdminApiKeyLoginEnabled()) {
+    return NextResponse.json(
+      { detail: 'Admin UI API key login is disabled. Use multi-user credentials.' },
+      { status: 403 }
+    );
+  }
+
   const body = await request.json().catch(() => null) as { apiKey?: string } | null;
   const apiKey = body?.apiKey?.trim();
 

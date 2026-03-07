@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import LoginPage from '../page';
 
@@ -37,12 +37,23 @@ vi.mock('@/components/ui/button', () => ({
 }));
 
 describe('LoginPage', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     routerPushMock.mockReset();
     loginWithPasswordMock.mockReset();
     loginWithApiKeyMock.mockReset();
     completeMfaLoginMock.mockReset();
     window.history.replaceState({}, '', '/login');
+  });
+
+  it('hides API key login by default for enterprise admin deployments', () => {
+    render(<LoginPage />);
+
+    expect(screen.queryByRole('tab', { name: /api key/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /username & password/i })).toBeInTheDocument();
   });
 
   it('shows MFA challenge form instead of redirecting when password login requires MFA', async () => {
