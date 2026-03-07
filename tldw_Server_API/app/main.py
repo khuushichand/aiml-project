@@ -1181,6 +1181,7 @@ else:
 
     # Sync Endpoint
     from tldw_Server_API.app.api.v1.endpoints.sync import router as sync_router
+    from tldw_Server_API.app.api.v1.endpoints.text2sql import router as text2sql_router
 
     # Tools Endpoint (optional; guard import to avoid startup failure on optional module issues)
     try:
@@ -5350,6 +5351,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(rag_unified_router, tags=["rag-unified"])
     except _IMPORT_EXCEPTIONS as _rag_min_err:
         logger.debug(f"Skipping rag_unified router in minimal test app: {_rag_min_err}")
+    # Standalone text2sql endpoint
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.text2sql import router as text2sql_router
+
+        app.include_router(text2sql_router, prefix=f"{API_V1_PREFIX}", tags=["text2sql"])
+    except _IMPORT_EXCEPTIONS as _text2sql_min_err:
+        logger.debug(f"Skipping text2sql router in minimal test app: {_text2sql_min_err}")
     # Explicit feedback endpoints (shared chat/RAG)
     try:
         from tldw_Server_API.app.api.v1.endpoints.feedback import router as feedback_router
@@ -6136,6 +6144,8 @@ else:
         _include_if_enabled("prompt-studio", prompt_studio_websocket_router, tags=["prompt-studio"])
     _include_if_enabled("rag-health", rag_health_router, tags=["rag-health"])
     _include_if_enabled("rag-unified", rag_unified_router, tags=["rag-unified"])
+    if "text2sql_router" in locals():
+        _include_if_enabled("text2sql", text2sql_router, prefix=f"{API_V1_PREFIX}", tags=["text2sql"])
     _include_if_enabled("feedback", feedback_router, prefix=f"{API_V1_PREFIX}/feedback", tags=["feedback"])
     if _HAS_WORKFLOWS:
         # In test contexts, force-include workflows regardless of policy to avoid 404s.
