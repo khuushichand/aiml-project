@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from "react"
+import React, { useCallback, useEffect, useMemo, useRef } from "react"
 import { Alert, Button, Drawer, Empty, Modal, Select, Switch, Tabs, Tooltip } from "antd"
 import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
@@ -309,6 +309,43 @@ const resolveRunNotificationsPollMs = (): number => {
  * Main container for the Watchlists module playground.
  * Provides a tabbed interface for managing sources, jobs, runs, outputs, templates, and settings.
  */
+/** Expandable inline secondary section for progressive disclosure layout */
+const InlineSecondarySection: React.FC<{
+  sectionKey: string
+  title: string
+  count?: number
+  expanded: boolean
+  onToggle: (key: string) => void
+  children: React.ReactNode
+}> = ({ sectionKey, title, count, expanded, onToggle, children }) => (
+  <div className="mt-6 border-t border-border pt-4" data-testid={`watchlists-secondary-${sectionKey}`}>
+    <div
+      className="flex cursor-pointer items-center gap-2 text-sm font-medium text-text-muted hover:text-text"
+      onClick={() => onToggle(sectionKey)}
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          onToggle(sectionKey)
+        }
+      }}
+    >
+      {expanded ? (
+        <ChevronUp className="h-4 w-4" />
+      ) : (
+        <ChevronDown className="h-4 w-4" />
+      )}
+      <span>{title}</span>
+      {count !== undefined && count > 0 && (
+        <span className="text-xs text-text-muted">({count})</span>
+      )}
+    </div>
+    {expanded && <div className="mt-3">{children}</div>}
+  </div>
+)
+
 export const WatchlistsPlaygroundPage: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
   const isOnline = useServerOnline()
@@ -367,10 +404,6 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       return next
     })
   }, [])
-
-  useEffect(() => {
-    writeSecondaryExpanded(secondaryExpanded)
-  }, [secondaryExpanded])
 
   const tabHelpLabels = {
     overview: t("watchlists:help.tabs.overview", "Overview guidance"),
@@ -791,19 +824,18 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     }
   }, []) // Run once on mount
 
-  // Command palette commands
-  const commandPaletteCommands = useWatchlistsCommands({
+  // Command palette commands — stabilize actions object to avoid re-creating on every render
+  const commandPaletteActions = useMemo(() => ({
     setActiveTab: (tab: string) => setActiveTab(tab as typeof activeTab),
     openSourceForm: () => openSourceForm(),
     openJobForm: () => openJobForm(),
     openSettings: () => setSettingsDrawerOpen(true),
     refreshCurrentView: () => {
-      // Trigger a page-level refresh by toggling a dummy state
-      // The individual tabs handle their own refresh via store
       window.dispatchEvent(new CustomEvent("watchlists:refresh"))
     },
     startGuidedTour
-  })
+  }), [setActiveTab, openSourceForm, openJobForm, startGuidedTour])
+  const commandPaletteCommands = useWatchlistsCommands(commandPaletteActions)
 
   // Keyboard shortcuts
   const primaryTabKeys = PROGRESSIVE_PRIMARY_TABS
@@ -1156,44 +1188,6 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       </span>
     ) : null
 
-  // Inline secondary section component for progressive disclosure layout
-  const InlineSecondarySection: React.FC<{
-    sectionKey: string
-    title: string
-    count?: number
-    children: React.ReactNode
-  }> = ({ sectionKey, title, count, children }) => {
-    const isExpanded = Boolean(secondaryExpanded[sectionKey])
-    return (
-      <div className="mt-6 border-t border-border pt-4" data-testid={`watchlists-secondary-${sectionKey}`}>
-        <div
-          className="flex cursor-pointer items-center gap-2 text-sm font-medium text-text-muted hover:text-text"
-          onClick={() => toggleSecondaryExpanded(sectionKey)}
-          role="button"
-          tabIndex={0}
-          aria-expanded={isExpanded}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault()
-              toggleSecondaryExpanded(sectionKey)
-            }
-          }}
-        >
-          {isExpanded ? (
-            <ChevronUp className="h-4 w-4" />
-          ) : (
-            <ChevronDown className="h-4 w-4" />
-          )}
-          <span>{title}</span>
-          {count !== undefined && count > 0 && (
-            <span className="text-xs text-text-muted">({count})</span>
-          )}
-        </div>
-        {isExpanded && <div className="mt-3">{children}</div>}
-      </div>
-    )
-  }
-
   // Full 8-tab items (used in "show all views" mode)
   const allTabItems: TabsProps["items"] = [
     {
@@ -1298,6 +1292,8 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           <InlineSecondarySection
             sectionKey="monitors"
             title={t("watchlists:tabs.jobs", "Monitors")}
+            expanded={Boolean(secondaryExpanded.monitors)}
+            onToggle={toggleSecondaryExpanded}
           >
             <JobsTab />
           </InlineSecondarySection>
@@ -1318,6 +1314,8 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
             sectionKey="activity"
             title={t("watchlists:tabs.runs", "Recent Activity")}
             count={overviewBadges.runs}
+            expanded={Boolean(secondaryExpanded.activity)}
+            onToggle={toggleSecondaryExpanded}
           >
             <RunsTab />
           </InlineSecondarySection>
@@ -1340,6 +1338,8 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           <InlineSecondarySection
             sectionKey="templates"
             title={t("watchlists:tabs.templates", "Templates")}
+            expanded={Boolean(secondaryExpanded.templates)}
+            onToggle={toggleSecondaryExpanded}
           >
             <TemplatesTab />
           </InlineSecondarySection>
