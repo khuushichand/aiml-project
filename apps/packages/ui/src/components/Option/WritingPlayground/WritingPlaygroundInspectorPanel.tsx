@@ -129,7 +129,7 @@ export const WritingPlaygroundInspectorPanel: FC<
               }}>
               {tabLabels?.[tab.key] || tab.label}
               {tabBadges?.[tab.key] ? (
-                <span className="ml-1">{tabBadges[tab.key]}</span>
+                <span className="ml-1" aria-hidden="true">{tabBadges[tab.key]}</span>
               ) : null}
             </button>
           )

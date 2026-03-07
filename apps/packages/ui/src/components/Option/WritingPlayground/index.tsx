@@ -5110,7 +5110,7 @@ export const WritingPlayground = () => {
     Boolean(selectedModel) &&
     hasChat &&
     !isGenerating
-  const settingsDisabled = isGenerating
+  const settingsDisabled = isGenerating || !activeSessionDetail
   const serverSupportsTokenize = writingCaps?.server?.tokenize === true
   const serverSupportsTokenCount = writingCaps?.server?.token_count === true
   const serverSupportsWordclouds = writingCaps?.server?.wordclouds === true
@@ -5695,42 +5695,6 @@ export const WritingPlayground = () => {
                               }
                             )}
                           </Tag>
-                        ) : null}
-                        <Tooltip
-                          title={t(
-                            "option:writingPlayground.generateShortcutTooltip",
-                            "Ctrl/Cmd+Enter to generate"
-                          )}>
-                          <Button
-                            type="primary"
-                            size="small"
-                            onClick={() => {
-                              void handleGenerate()
-                            }}
-                            loading={isGenerating}
-                            disabled={!canGenerate}>
-                            {t(
-                              "option:writingPlayground.generateAction",
-                              "Generate"
-                            )}
-                          </Button>
-                        </Tooltip>
-                        {isGenerating && settings.token_streaming ? (
-                          <Tooltip
-                            title={t(
-                              "option:writingPlayground.stopShortcutTooltip",
-                              "Esc to stop"
-                            )}>
-                            <Button
-                              size="small"
-                              onClick={handleCancelGeneration}
-                              danger>
-                              {t(
-                                "option:writingPlayground.stopAction",
-                                "Stop"
-                              )}
-                            </Button>
-                          </Tooltip>
                         ) : null}
                         <Button
                           size="small"
