@@ -85,11 +85,11 @@ const RouteNotFoundState = ({
           </Link>
           {kind === "options" && (
             <Link
-              to="/knowledge"
+              to="/research"
               className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
-              data-testid="not-found-open-knowledge"
+              data-testid="not-found-open-research"
             >
-              Open Knowledge
+              Open Research
             </Link>
           )}
           {kind === "options" && (
