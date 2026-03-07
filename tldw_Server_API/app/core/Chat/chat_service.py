@@ -77,6 +77,14 @@ from tldw_Server_API.app.core.LLM_Calls.openrouter_model_inventory import (
     discover_openrouter_models as _discover_openrouter_models_shared,
 )
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
+from tldw_Server_API.app.core.LLM_Calls.structured_generation import (
+    StructuredGenerationCapabilityError,
+    StructuredGenerationError,
+    StructuredGenerationParseError,
+    StructuredGenerationSchemaError,
+    negotiate_structured_response_mode,
+    parse_and_validate_structured_output,
+)
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.testing import (
@@ -1594,6 +1602,31 @@ def _wrap_raw_string_response(content: str, model: str | None) -> dict[str, Any]
             }
         ],
     }
+
+
+def _extract_structured_schema_from_response_format(response_format: Any) -> dict[str, Any] | None:
+    if not isinstance(response_format, dict):
+        return None
+    if str(response_format.get("type") or "").strip().lower() != "json_schema":
+        return None
+    json_schema = response_format.get("json_schema")
+    if not isinstance(json_schema, dict):
+        return None
+    schema = json_schema.get("schema")
+    if not isinstance(schema, dict):
+        return None
+    return schema
+
+
+def _structured_error_detail(exc: StructuredGenerationError) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        "code": getattr(exc, "code", "structured_output_error"),
+        "message": str(exc),
+    }
+    attempts = getattr(exc, "attempts", None)
+    if isinstance(attempts, int):
+        detail["attempts"] = attempts
+    return detail
 
 
 async def moderate_input_messages(
@@ -3581,6 +3614,7 @@ async def execute_non_stream_call(
     Returns the encoded payload (dict) ready to be wrapped by JSONResponse.
     """
     llm_start_time = time.time()
+    structured_metadata: dict[str, Any] | None = None
     normalized_continuation_metadata = (
         dict(continuation_metadata)
         if isinstance(continuation_metadata, dict) and continuation_metadata
@@ -4160,6 +4194,34 @@ async def execute_non_stream_call(
         except _CHAT_NONCRITICAL_EXCEPTIONS as autoexec_err:
             logger.warning("Chat tool auto-execution skipped due to error: {}", autoexec_err)
 
+    structured_request = cleaned_args.get("response_format")
+    structured_schema = _extract_structured_schema_from_response_format(structured_request)
+    if structured_schema is not None:
+        try:
+            decision = negotiate_structured_response_mode(
+                provider=selected_provider,
+                requested=structured_request,
+            )
+            validated_payload = parse_and_validate_structured_output(
+                raw_text=content_to_save,
+                schema=structured_schema,
+            )
+            structured_metadata = {
+                "validated": True,
+                "mode_used": decision.mode_used,
+                "fallback_used": decision.fallback_used,
+                "validated_payload": validated_payload,
+            }
+        except (
+            StructuredGenerationCapabilityError,
+            StructuredGenerationParseError,
+            StructuredGenerationSchemaError,
+        ) as structured_exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_structured_error_detail(structured_exc),
+            ) from structured_exc
+
     if INJECT_ASSISTANT_NAME and isinstance(llm_response, dict):
         try:
             choices = llm_response.get("choices")
@@ -4206,6 +4268,8 @@ async def execute_non_stream_call(
             encoded_payload["tldw_tool_auto_continue"] = tool_auto_continue_meta
         if normalized_continuation_metadata is not None:
             encoded_payload["tldw_continuation"] = normalized_continuation_metadata
+        if structured_metadata is not None:
+            encoded_payload["tldw_structured"] = structured_metadata
 
     # Audit success
     if audit_service and audit_context:
