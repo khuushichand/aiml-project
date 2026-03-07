@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import (
+    ResearchArtifactRow,
     ResearchSessionRow,
     ResearchSessionsDB,
 )
@@ -20,6 +22,19 @@ from .jobs import enqueue_research_phase_job
 
 class ResearchService:
     """Create research sessions and enqueue the next executable slice."""
+
+    _ALLOWED_ARTIFACT_NAMES = {
+        "plan.json",
+        "approved_plan.json",
+        "source_registry.json",
+        "evidence_notes.jsonl",
+        "collection_summary.json",
+        "outline_v1.json",
+        "claims.json",
+        "report_v1.md",
+        "synthesis_summary.json",
+        "bundle.json",
+    }
 
     def __init__(
         self,
@@ -190,6 +205,76 @@ class ResearchService:
             job_id=None,
         )
         return package
+
+    def get_session(self, *, owner_user_id: str, session_id: str) -> ResearchSessionRow:
+        db = self._db_for_user(owner_user_id)
+        session = db.get_session(session_id)
+        if session is None:
+            raise KeyError(session_id)
+        return session
+
+    def get_bundle(self, *, owner_user_id: str, session_id: str) -> dict[str, Any]:
+        artifact = self.get_artifact(
+            owner_user_id=owner_user_id,
+            session_id=session_id,
+            artifact_name="bundle.json",
+        )
+        content = artifact["content"]
+        if not isinstance(content, dict):
+            raise KeyError("bundle.json")
+        return content
+
+    def get_artifact(
+        self,
+        *,
+        owner_user_id: str,
+        session_id: str,
+        artifact_name: str,
+    ) -> dict[str, Any]:
+        if artifact_name not in self._ALLOWED_ARTIFACT_NAMES:
+            raise ValueError("artifact_not_allowed")
+
+        db = self._db_for_user(owner_user_id)
+        artifact_row = self._get_latest_artifact_row(db=db, session_id=session_id, artifact_name=artifact_name)
+        if artifact_row is None:
+            raise KeyError(artifact_name)
+        path = Path(artifact_row.storage_path)
+        if not path.exists():
+            raise KeyError(artifact_name)
+
+        content: Any
+        if artifact_row.content_type == "application/json":
+            content = json.loads(path.read_text(encoding="utf-8"))
+        elif artifact_row.content_type == "application/x-ndjson":
+            content = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        else:
+            content = path.read_text(encoding="utf-8")
+
+        return {
+            "artifact_name": artifact_row.artifact_name,
+            "content_type": artifact_row.content_type,
+            "content": content,
+        }
+
+    @staticmethod
+    def _get_latest_artifact_row(
+        *,
+        db: ResearchSessionsDB,
+        session_id: str,
+        artifact_name: str,
+    ) -> ResearchArtifactRow | None:
+        matches = [
+            artifact
+            for artifact in db.list_artifacts(session_id)
+            if artifact.artifact_name == artifact_name
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda artifact: artifact.artifact_version)
 
 
 __all__ = ["ResearchService"]

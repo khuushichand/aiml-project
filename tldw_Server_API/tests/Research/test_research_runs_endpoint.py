@@ -52,3 +52,87 @@ def test_create_and_approve_research_run():
         )
         assert approve_resp.status_code == 200
         assert approve_resp.json()["phase"] == "collecting"
+
+
+def test_read_research_run_bundle_and_artifact():
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    class StubService:
+        def get_session(self, **kwargs):
+            assert kwargs["session_id"] == "rs_1"
+            return {
+                "id": "rs_1",
+                "status": "completed",
+                "phase": "completed",
+                "active_job_id": None,
+                "latest_checkpoint_id": "cp_1",
+                "completed_at": "2026-03-07T00:00:00+00:00",
+            }
+
+        def get_bundle(self, **kwargs):
+            assert kwargs["session_id"] == "rs_1"
+            return {
+                "question": "What changed?",
+                "report_markdown": "# Report",
+                "claims": [],
+            }
+
+        def get_artifact(self, **kwargs):
+            assert kwargs["session_id"] == "rs_1"
+            assert kwargs["artifact_name"] == "report_v1.md"
+            return {
+                "artifact_name": "report_v1.md",
+                "content_type": "text/markdown",
+                "content": "# Report",
+            }
+
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        run_resp = client.get("/api/v1/research/runs/rs_1")
+        bundle_resp = client.get("/api/v1/research/runs/rs_1/bundle")
+        artifact_resp = client.get("/api/v1/research/runs/rs_1/artifacts/report_v1.md")
+
+        assert run_resp.status_code == 200
+        assert run_resp.json()["completed_at"] == "2026-03-07T00:00:00+00:00"
+        assert bundle_resp.status_code == 200
+        assert bundle_resp.json()["question"] == "What changed?"
+        assert artifact_resp.status_code == 200
+        assert artifact_resp.json()["content_type"] == "text/markdown"
+
+
+def test_read_research_artifact_maps_not_found_and_disallowed_errors():
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    class StubService:
+        def get_session(self, **kwargs):
+            raise KeyError(kwargs["session_id"])
+
+        def get_bundle(self, **kwargs):
+            raise KeyError("bundle.json")
+
+        def get_artifact(self, **kwargs):
+            if kwargs["artifact_name"] == "bad.bin":
+                raise ValueError("artifact_not_allowed")
+            raise KeyError(kwargs["artifact_name"])
+
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        run_resp = client.get("/api/v1/research/runs/rs_missing")
+        bundle_resp = client.get("/api/v1/research/runs/rs_1/bundle")
+        bad_artifact_resp = client.get("/api/v1/research/runs/rs_1/artifacts/bad.bin")
+        missing_artifact_resp = client.get("/api/v1/research/runs/rs_1/artifacts/report_v1.md")
+
+        assert run_resp.status_code == 404
+        assert bundle_resp.status_code == 404
+        assert bad_artifact_resp.status_code == 400
+        assert missing_artifact_resp.status_code == 404

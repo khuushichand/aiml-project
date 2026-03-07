@@ -12,6 +12,8 @@
 
 ### Task 1: Add Service Read Tests
 
+**Status:** Complete
+
 **Files:**
 - Modify: `tldw_Server_API/tests/Research/test_research_jobs_service.py` or create a dedicated service-read test file
 
@@ -43,6 +45,8 @@ Do not commit yet.
 
 ### Task 2: Implement Service Read Helpers And API Schemas
 
+**Status:** Complete
+
 **Files:**
 - Modify: `tldw_Server_API/app/core/Research/service.py`
 - Modify: `tldw_Server_API/app/core/Research/artifact_store.py` if helper reuse is needed
@@ -68,6 +72,8 @@ git commit -m "feat(research): add read service helpers"
 ```
 
 ### Task 3: Add Read Endpoints And API Tests
+
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/endpoints/research_runs.py`
@@ -104,6 +110,8 @@ git commit -m "feat(research): add read endpoints"
 ```
 
 ### Task 4: Verify End-To-End Polling Flow
+
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/tests/e2e/test_deep_research_runs.py`

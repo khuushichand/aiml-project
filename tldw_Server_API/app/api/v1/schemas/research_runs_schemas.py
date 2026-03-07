@@ -32,3 +32,12 @@ class ResearchRunResponse(BaseModel):
     phase: str
     active_job_id: str | None = None
     latest_checkpoint_id: str | None = None
+    completed_at: str | None = None
+
+
+class ResearchArtifactResponse(BaseModel):
+    """Typed artifact response for deep research polling APIs."""
+
+    artifact_name: str
+    content_type: str
+    content: Any

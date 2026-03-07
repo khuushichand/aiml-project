@@ -203,6 +203,21 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
     package = store.read_json(session_id=session_id, artifact_name="bundle.json")
     assert package is not None
 
+    with TestClient(app) as client:
+        run_resp = client.get(f"/api/v1/research/runs/{session_id}")
+        bundle_resp = client.get(f"/api/v1/research/runs/{session_id}/bundle")
+        artifact_resp = client.get(f"/api/v1/research/runs/{session_id}/artifacts/report_v1.md")
+
+        assert run_resp.status_code == 200
+        assert run_resp.json()["phase"] == "completed"
+        assert run_resp.json()["completed_at"] is not None
+        assert bundle_resp.status_code == 200
+        assert bundle_resp.json()["question"] == "Test deep research run"
+        assert artifact_resp.status_code == 200
+        assert artifact_resp.json()["artifact_name"] == "report_v1.md"
+        assert artifact_resp.json()["content_type"] == "text/markdown"
+        assert artifact_resp.json()["content"].startswith("# Research Report")
+
     adapter = FileAdapterRegistry().get_adapter("research_package")
     assert adapter is not None
     export = adapter.export(package, format="md")
