@@ -78,6 +78,18 @@ class ResearchArtifactRow:
     created_at: str
 
 
+@dataclass(frozen=True)
+class ResearchRunEventRow:
+    id: int
+    session_id: str
+    owner_user_id: str
+    event_type: str
+    event_payload: dict[str, Any]
+    phase: str | None
+    job_id: str | None
+    created_at: str
+
+
 class ResearchSessionsDB:
     """SQLite-backed storage for research sessions and related metadata."""
 
@@ -146,12 +158,26 @@ class ResearchSessionsDB:
                     FOREIGN KEY(session_id) REFERENCES research_sessions(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS research_run_events (
+                    id INTEGER PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    owner_user_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    event_payload_json TEXT NOT NULL,
+                    phase TEXT,
+                    job_id TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES research_sessions(id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_research_sessions_owner
                     ON research_sessions(owner_user_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_research_checkpoints_session
                     ON research_checkpoints(session_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_research_artifacts_session
                     ON research_artifacts(session_id, artifact_name, artifact_version DESC);
+                CREATE INDEX IF NOT EXISTS idx_research_run_events_owner_session
+                    ON research_run_events(owner_user_id, session_id, id ASC);
                 """
             )
             columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info('research_sessions')").fetchall()}
@@ -239,6 +265,21 @@ class ResearchSessionsDB:
             byte_size=int(row["byte_size"]),
             checksum=str(row["checksum"]),
             phase=str(row["phase"]),
+            job_id=str(row["job_id"]) if row["job_id"] else None,
+            created_at=str(row["created_at"]),
+        )
+
+    @staticmethod
+    def _run_event_from_row(row: sqlite3.Row | None) -> ResearchRunEventRow | None:
+        if row is None:
+            return None
+        return ResearchRunEventRow(
+            id=int(row["id"]),
+            session_id=str(row["session_id"]),
+            owner_user_id=str(row["owner_user_id"]),
+            event_type=str(row["event_type"]),
+            event_payload=_parse_json_dict(row["event_payload_json"]),
+            phase=str(row["phase"]) if row["phase"] else None,
             job_id=str(row["job_id"]) if row["job_id"] else None,
             created_at=str(row["created_at"]),
         )
@@ -581,6 +622,110 @@ class ResearchSessionsDB:
             raise RuntimeError("failed_to_record_research_artifact")
         return artifact
 
+    def record_run_event(
+        self,
+        *,
+        owner_user_id: str,
+        session_id: str,
+        event_type: str,
+        event_payload: dict[str, Any],
+        phase: str | None = None,
+        job_id: str | None = None,
+    ) -> ResearchRunEventRow:
+        now = _utc_now()
+        payload_json = json.dumps(event_payload or {}, sort_keys=True)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO research_run_events (
+                    session_id, owner_user_id, event_type, event_payload_json,
+                    phase, job_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    str(owner_user_id),
+                    event_type,
+                    payload_json,
+                    phase,
+                    job_id,
+                    now,
+                ),
+            )
+            event_id = int(cursor.lastrowid)
+        event = self.get_run_event(event_id)
+        if event is None:
+            raise RuntimeError("failed_to_record_research_run_event")
+        return event
+
+    def get_run_event(self, event_id: int) -> ResearchRunEventRow | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM research_run_events WHERE id = ?",
+                (int(event_id),),
+            ).fetchone()
+        return self._run_event_from_row(row)
+
+    def list_run_events_after(
+        self,
+        *,
+        owner_user_id: str,
+        session_id: str,
+        after_id: int,
+        limit: int | None = None,
+    ) -> list[ResearchRunEventRow]:
+        sql = """
+            SELECT * FROM research_run_events
+            WHERE owner_user_id = ? AND session_id = ? AND id > ?
+            ORDER BY id ASC
+        """
+        params: tuple[Any, ...] = (str(owner_user_id), session_id, int(after_id))
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = params + (int(limit),)
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [event for row in rows if (event := self._run_event_from_row(row)) is not None]
+
+    def get_latest_run_event(
+        self,
+        *,
+        owner_user_id: str,
+        session_id: str,
+        event_type: str,
+    ) -> ResearchRunEventRow | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM research_run_events
+                WHERE owner_user_id = ? AND session_id = ? AND event_type = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (str(owner_user_id), session_id, event_type),
+            ).fetchone()
+        return self._run_event_from_row(row)
+
+    def get_latest_run_event_id(
+        self,
+        *,
+        owner_user_id: str,
+        session_id: str,
+    ) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id FROM research_run_events
+                WHERE owner_user_id = ? AND session_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (str(owner_user_id), session_id),
+            ).fetchone()
+        if row is None:
+            return 0
+        return int(row["id"])
+
     def get_artifact(self, artifact_id: str) -> ResearchArtifactRow | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -605,6 +750,7 @@ class ResearchSessionsDB:
 __all__ = [
     "ResearchArtifactRow",
     "ResearchCheckpointRow",
+    "ResearchRunEventRow",
     "ResearchSessionRow",
     "ResearchSessionsDB",
 ]
