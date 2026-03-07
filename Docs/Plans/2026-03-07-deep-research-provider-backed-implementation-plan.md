@@ -12,6 +12,8 @@
 
 ### Task 1: Persist Provider Overrides And Resolved Config
 
+**Status:** Complete
+
 **Files:**
 - Modify: `tldw_Server_API/app/core/DB_Management/ResearchSessionsDB.py`
 - Modify: `tldw_Server_API/app/core/Research/service.py`
@@ -75,6 +77,8 @@ git commit -m "feat(research): persist provider-backed run config"
 ```
 
 ### Task 2: Add Provider Config Resolver And Collection Adapters
+
+**Status:** Complete
 
 **Files:**
 - Create: `tldw_Server_API/app/core/Research/providers/__init__.py`
@@ -150,6 +154,8 @@ git commit -m "feat(research): add collection provider adapters"
 
 ### Task 3: Wire Provider-Backed Collection Into The Broker And Worker
 
+**Status:** Complete
+
 **Files:**
 - Modify: `tldw_Server_API/app/core/Research/broker.py`
 - Modify: `tldw_Server_API/app/core/Research/jobs.py`
@@ -213,6 +219,8 @@ git commit -m "feat(research): use provider-backed collecting"
 ```
 
 ### Task 4: Add Provider-Backed Synthesis With Deterministic Fallback
+
+**Status:** Complete
 
 **Files:**
 - Create: `tldw_Server_API/app/core/Research/providers/synthesis.py`
@@ -284,6 +292,8 @@ git commit -m "feat(research): use provider-backed synthesis"
 ```
 
 ### Task 5: Verify Hybrid End-To-End Flow And Run Full Research Regression
+
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/tests/e2e/test_deep_research_runs.py`

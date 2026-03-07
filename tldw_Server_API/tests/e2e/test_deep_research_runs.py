@@ -17,12 +17,8 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
     from tldw_Server_API.app.core.File_Artifacts.adapter_registry import FileAdapterRegistry
     from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
     from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
-    from tldw_Server_API.app.core.Research.models import (
-        ResearchCollectionResult,
-        ResearchEvidenceNote,
-        ResearchSourceRecord,
-    )
     from tldw_Server_API.app.core.Research.service import ResearchService
+    from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
 
     class DummyJobs:
         def create_job(self, **kwargs):
@@ -42,7 +38,18 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
     app.dependency_overrides[research_runs.get_research_service] = lambda: service
 
     with TestClient(app) as client:
-        create_resp = client.post("/api/v1/research/runs", json={"query": "Test deep research run"})
+        create_resp = client.post(
+            "/api/v1/research/runs",
+            json={
+                "query": "Test deep research run",
+                "provider_overrides": {
+                    "local": {"top_k": 4, "sources": ["media_db"]},
+                    "web": {"engine": "kagi", "result_count": 3},
+                    "academic": {"providers": ["arxiv", "pubmed"], "max_results": 2},
+                    "synthesis": {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2},
+                },
+            },
+        )
         assert create_resp.status_code == 200
         session_id = create_resp.json()["id"]
 
@@ -68,48 +75,16 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
     assert session.latest_checkpoint_id is not None
 
     with TestClient(app) as client:
+        provider_config_resp = client.get(f"/api/v1/research/runs/{session_id}/artifacts/provider_config.json")
         approve_resp = client.post(
             f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
             json={"patch_payload": {"focus_areas": ["background", "counterevidence"]}},
         )
+        assert provider_config_resp.status_code == 200
+        assert provider_config_resp.json()["content"]["web"]["engine"] == "kagi"
+        assert provider_config_resp.json()["content"]["academic"]["providers"] == ["arxiv", "pubmed"]
         assert approve_resp.status_code == 200
         assert approve_resp.json()["phase"] == "collecting"
-
-    class StubBroker:
-        async def collect_focus_area(self, **kwargs):
-            focus_area = kwargs["focus_area"]
-            return ResearchCollectionResult(
-                sources=[
-                    ResearchSourceRecord(
-                        source_id=f"src_{focus_area}",
-                        focus_area=focus_area,
-                        source_type="local_document",
-                        provider="local_corpus",
-                        title=f"Internal note for {focus_area}",
-                        url=None,
-                        snippet=f"Evidence for {focus_area}",
-                        published_at=None,
-                        retrieved_at="2026-03-07T00:00:00+00:00",
-                        fingerprint=f"fp_{focus_area}",
-                        trust_tier="internal",
-                        metadata={},
-                    )
-                ],
-                evidence_notes=[
-                    ResearchEvidenceNote(
-                        note_id=f"note_{focus_area}",
-                        source_id=f"src_{focus_area}",
-                        focus_area=focus_area,
-                        kind="summary",
-                        text=f"Evidence for {focus_area}",
-                        citation_locator=None,
-                        confidence=0.8,
-                        metadata={},
-                    )
-                ],
-                collection_metrics={"lane_counts": {"local": 1, "academic": 0, "web": 0}, "deduped_sources": 0},
-                remaining_gaps=[],
-            )
 
     asyncio.run(
         handle_research_phase_job(
@@ -124,7 +99,6 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
             },
             research_db_path=research_db_path,
             outputs_dir=outputs_dir,
-            broker=StubBroker(),
         )
     )
 
@@ -135,6 +109,14 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
     assert (outputs_dir / "research" / session_id / "source_registry.json").exists()
     assert (outputs_dir / "research" / session_id / "evidence_notes.jsonl").exists()
     assert (outputs_dir / "research" / session_id / "collection_summary.json").exists()
+    source_registry = ResearchArtifactStore(base_dir=outputs_dir, db=db).read_json(
+        session_id=session_id,
+        artifact_name="source_registry.json",
+    )
+    assert source_registry is not None
+    assert {"local_corpus", "arxiv", "pubmed", "kagi"} <= {
+        item["provider"] for item in source_registry["sources"]
+    }
 
     with TestClient(app) as client:
         approve_source_resp = client.post(
@@ -143,6 +125,46 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
         )
         assert approve_source_resp.status_code == 200
         assert approve_source_resp.json()["phase"] == "synthesizing"
+
+    store = ResearchArtifactStore(base_dir=outputs_dir, db=db)
+    source_registry = store.read_json(session_id=session_id, artifact_name="source_registry.json")
+    evidence_notes = store.read_jsonl(session_id=session_id, artifact_name="evidence_notes.jsonl")
+    assert source_registry is not None
+    assert evidence_notes is not None
+    first_source = source_registry["sources"][0]
+    first_note = evidence_notes[0]
+
+    class StubSynthesisProvider:
+        async def summarize(self, **kwargs):
+            assert kwargs["config"]["provider"] == "openai"
+            assert kwargs["config"]["model"] == "gpt-4.1-mini"
+            return {
+                "outline_sections": [
+                    {
+                        "title": "Background",
+                        "focus_area": first_source["focus_area"],
+                        "source_ids": [first_source["source_id"]],
+                        "note_ids": [first_note["note_id"]],
+                    }
+                ],
+                "claims": [
+                    {
+                        "text": "Supported claim",
+                        "focus_area": first_source["focus_area"],
+                        "source_ids": [first_source["source_id"]],
+                        "citations": [{"source_id": first_source["source_id"]}],
+                        "confidence": 0.81,
+                    }
+                ],
+                "report_sections": [
+                    {
+                        "title": "Background",
+                        "markdown": "Evidence-backed section text.",
+                    }
+                ],
+                "unresolved_questions": [],
+                "summary": {"mode": "llm_backed"},
+            }
 
     asyncio.run(
         handle_research_phase_job(
@@ -157,6 +179,7 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
             },
             research_db_path=research_db_path,
             outputs_dir=outputs_dir,
+            synthesizer=ResearchSynthesizer(synthesis_provider=StubSynthesisProvider()),
         )
     )
 
@@ -168,6 +191,9 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
     assert (outputs_dir / "research" / session_id / "claims.json").exists()
     assert (outputs_dir / "research" / session_id / "report_v1.md").exists()
     assert (outputs_dir / "research" / session_id / "synthesis_summary.json").exists()
+    synthesis_summary = store.read_json(session_id=session_id, artifact_name="synthesis_summary.json")
+    assert synthesis_summary is not None
+    assert synthesis_summary["mode"] == "llm_backed"
 
     with TestClient(app) as client:
         approve_outline_resp = client.post(
@@ -177,7 +203,6 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
         assert approve_outline_resp.status_code == 200
         assert approve_outline_resp.json()["phase"] == "packaging"
 
-    store = ResearchArtifactStore(base_dir=outputs_dir, db=db)
     asyncio.run(
         handle_research_phase_job(
             {
