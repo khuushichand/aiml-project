@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI
@@ -55,3 +56,74 @@ def test_chat_workflows_user_requires_auth_headers(monkeypatch):
     response = client.get("/cw/me")
 
     assert response.status_code == 401
+
+
+def test_chat_workflows_db_cache_is_scoped_per_app(monkeypatch):
+    created: list[tuple[str, str]] = []
+
+    class FakeDB:
+        def __init__(self, label: str):
+            self.label = label
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    def fake_create_chat_workflows_database(*, client_id, db_path, backend):
+        created.append((client_id, str(db_path)))
+        return FakeDB(f"{client_id}:{db_path}")
+
+    monkeypatch.setattr(deps, "create_chat_workflows_database", fake_create_chat_workflows_database, raising=True)
+    monkeypatch.setattr(deps, "get_content_backend_instance", lambda: None, raising=True)
+    monkeypatch.setattr(
+        deps.DatabasePaths,
+        "get_chat_workflows_db_path",
+        staticmethod(lambda user_id: Path(f"/tmp/{user_id}.db")),
+    )
+
+    app_one = FastAPI()
+    app_two = FastAPI()
+
+    first = deps._get_or_create_chat_workflows_db(app_one, "user-1", "web")
+    second = deps._get_or_create_chat_workflows_db(app_one, "user-1", "web")
+    third = deps._get_or_create_chat_workflows_db(app_two, "user-1", "web")
+
+    assert first is second
+    assert third is not first
+    assert len(created) == 2
+
+
+def test_shutdown_chat_workflows_deps_closes_only_target_app_instances(monkeypatch):
+    class FakeDB:
+        def __init__(self, label: str):
+            self.label = label
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    def fake_create_chat_workflows_database(*, client_id, db_path, backend):
+        return FakeDB(f"{client_id}:{db_path}")
+
+    monkeypatch.setattr(deps, "create_chat_workflows_database", fake_create_chat_workflows_database, raising=True)
+    monkeypatch.setattr(deps, "get_content_backend_instance", lambda: None, raising=True)
+    monkeypatch.setattr(
+        deps.DatabasePaths,
+        "get_chat_workflows_db_path",
+        staticmethod(lambda user_id: Path(f"/tmp/{user_id}.db")),
+    )
+
+    app_one = FastAPI()
+    app_two = FastAPI()
+
+    first = deps._get_or_create_chat_workflows_db(app_one, "user-1", "web")
+    second = deps._get_or_create_chat_workflows_db(app_two, "user-1", "web")
+
+    deps.shutdown_chat_workflows_deps(app_one)
+
+    assert first.closed is True
+    assert second.closed is False
+
+    refreshed = deps._get_or_create_chat_workflows_db(app_one, "user-1", "web")
+
+    assert refreshed is not first

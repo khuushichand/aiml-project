@@ -1,10 +1,11 @@
 import asyncio
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 from cachetools import LRUCache
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -18,9 +19,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 MAX_CACHED_INSTANCES = settings.get("MAX_CACHED_CHAT_WORKFLOWS_DB_INSTANCES", 20)
-
-_db_instances_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_INSTANCES)
-_db_lock = threading.Lock()
+_APP_STATE_KEY = "_chat_workflows_deps_state"
 
 _CHAT_WORKFLOWS_DB_EXCEPTIONS = (
     OSError,
@@ -31,13 +30,38 @@ _CHAT_WORKFLOWS_DB_EXCEPTIONS = (
 )
 
 
+@dataclass
+class _ChatWorkflowsDepsState:
+    """App-scoped chat workflows dependency state."""
+
+    cache: LRUCache
+    lock: Any
+
+
 def _get_chat_workflows_db_path_for_user(user_id: str) -> Path:
     return DatabasePaths.get_chat_workflows_db_path(user_id)
 
 
-def _get_or_create_chat_workflows_db(user_id: str, client_id: str) -> ChatWorkflowsDatabase:
+def _get_state(app: FastAPI) -> _ChatWorkflowsDepsState:
+    """Return the app-scoped chat-workflows dependency state, creating it lazily."""
+    state = getattr(app.state, _APP_STATE_KEY, None)
+    if state is None:
+        state = _ChatWorkflowsDepsState(
+            cache=LRUCache(maxsize=MAX_CACHED_INSTANCES),
+            lock=threading.Lock(),
+        )
+        setattr(app.state, _APP_STATE_KEY, state)
+    return state
+
+
+def _get_or_create_chat_workflows_db(
+    app: FastAPI,
+    user_id: str,
+    client_id: str,
+) -> ChatWorkflowsDatabase:
     db_path = _get_chat_workflows_db_path_for_user(user_id)
     backend = get_content_backend_instance()
+    state = _get_state(app)
 
     backend_signature = "sqlite"
     if backend is not None:
@@ -58,10 +82,10 @@ def _get_or_create_chat_workflows_db(user_id: str, client_id: str) -> ChatWorkfl
 
     cache_key = (str(db_path), backend_signature)
 
-    with _db_lock:
-        if cache_key in _db_instances_cache:
+    with state.lock:
+        if cache_key in state.cache:
             logger.debug("Using cached ChatWorkflowsDatabase for user {}", user_id)
-            return _db_instances_cache[cache_key]
+            return state.cache[cache_key]
 
         try:
             db_instance = create_chat_workflows_database(
@@ -69,7 +93,7 @@ def _get_or_create_chat_workflows_db(user_id: str, client_id: str) -> ChatWorkfl
                 db_path=db_path,
                 backend=backend,
             )
-            _db_instances_cache[cache_key] = db_instance
+            state.cache[cache_key] = db_instance
             logger.info("Created new ChatWorkflowsDatabase instance for user {}", user_id)
             return db_instance
         except _CHAT_WORKFLOWS_DB_EXCEPTIONS as exc:
@@ -136,20 +160,35 @@ async def get_chat_workflows_user(
 
 
 async def get_chat_workflows_db(
+    request: Request,
     user_context: dict[str, Any] = Depends(get_chat_workflows_user),
 ) -> ChatWorkflowsDatabase:
     """Resolve or create the caller's chat workflows DB adapter off the event loop."""
     user_id = user_context["user_id"]
     client_id = user_context["client_id"]
-    return await asyncio.to_thread(_get_or_create_chat_workflows_db, user_id, client_id)
+    return await asyncio.to_thread(
+        _get_or_create_chat_workflows_db,
+        request.app,
+        user_id,
+        client_id,
+    )
 
 
-def shutdown_chat_workflows_deps() -> None:
-    """Close cached chat workflows DB instances and clear the dependency cache."""
-    with _db_lock:
-        for db_instance in list(_db_instances_cache.values()):
+def shutdown_chat_workflows_deps(app: FastAPI | None = None) -> None:
+    """Close app-scoped chat workflows DB instances and clear their cache."""
+    if app is None:
+        return
+
+    state = getattr(app.state, _APP_STATE_KEY, None)
+    if state is None:
+        return
+
+    with state.lock:
+        for db_instance in list(state.cache.values()):
             try:
                 db_instance.close()
             except _CHAT_WORKFLOWS_DB_EXCEPTIONS as exc:
                 logger.error("Failed to close ChatWorkflowsDatabase during shutdown: {}", exc)
-        _db_instances_cache.clear()
+        state.cache.clear()
+
+    delattr(app.state, _APP_STATE_KEY)

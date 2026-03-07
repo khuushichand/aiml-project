@@ -3891,6 +3891,17 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error shutting down Prompts DB resources: {e}")
 
+    # Shutdown Chat Workflows DB cache
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.chat_workflows_deps import (
+            shutdown_chat_workflows_deps,
+        )
+
+        shutdown_chat_workflows_deps(app)
+        logger.info("App Shutdown: Chat workflows resources cleaned up")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.exception(f"App Shutdown: Error shutting down chat workflows resources: {e}")
+
     # Shutdown Chat Module Components
     logger.info("App Shutdown: Cleaning up Chat module components...")
 
