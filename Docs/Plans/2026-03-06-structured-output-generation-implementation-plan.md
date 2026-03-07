@@ -34,7 +34,7 @@ Expected:
 **Step 3: Verify clean baseline for touched areas**
 
 Run:
-`source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Chat/unit/test_chat_request_schemas.py -k response_format`
+`source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Chat/unit/test_chat_request_schemas.py tldw_Server_API/tests/Chat_NEW/unit/test_chat_schemas.py -k response_format`
 
 Expected: Baseline passes before modifications.
 
