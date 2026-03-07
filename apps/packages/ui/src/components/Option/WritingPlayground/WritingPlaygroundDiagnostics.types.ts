@@ -69,6 +69,7 @@ export type WordcloudPanelState = {
 } & Omit<WordcloudCardProps, "t">
 
 export type WritingPlaygroundDiagnosticsPanelProps = {
+  title?: string
   t: TranslateFn
   status: "warning" | "busy" | "ready"
   showOffline: boolean

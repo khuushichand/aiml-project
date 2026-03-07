@@ -8,6 +8,7 @@ import type { WritingPlaygroundDiagnosticsPanelProps } from "./WritingPlayground
 export const WritingPlaygroundDiagnosticsPanel: FC<
   WritingPlaygroundDiagnosticsPanelProps
 > = ({
+  title,
   t,
   status,
   showOffline,
@@ -24,7 +25,7 @@ export const WritingPlaygroundDiagnosticsPanel: FC<
   return (
     <Card
       data-testid="writing-playground-diagnostics-card"
-      title={t("option:writingPlayground.sidebarDiagnostics", "Diagnostics")}>
+      title={title ?? t("option:writingPlayground.sidebarDiagnostics", "Diagnostics")}>
       <div className="flex flex-col gap-2">
         <Tag color={status === "warning" ? "gold" : status === "busy" ? "blue" : "green"}>
           {status === "warning"
