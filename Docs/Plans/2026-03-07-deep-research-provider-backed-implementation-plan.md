@@ -28,6 +28,7 @@ Add tests that verify:
 - `ResearchService.create_session(...)` persists the raw overrides with the session
 - the planning phase writes `provider_config.json` with resolved defaults plus overrides
 - `GET /api/v1/research/runs/{id}/artifacts/provider_config.json` is allowlisted
+- an existing `research_sessions` table created before this slice is migrated safely when the DB opens
 
 Example request payload to cover:
 
@@ -55,6 +56,7 @@ Implement:
 - a new `provider_overrides` field on `ResearchRunCreateRequest`
 - persistence in `ResearchSessionsDB` using a dedicated `provider_overrides_json` column
 - session row hydration for `provider_overrides_json`
+- additive SQLite migration logic in `ResearchSessionsDB._ensure_schema()` using `PRAGMA table_info(...)` and `ALTER TABLE ... ADD COLUMN` so existing session DBs continue to work
 - `ResearchService.create_session(...)` support for the new argument
 - planning-phase write of `provider_config.json`
 - allowlist update in `ResearchService._ALLOWED_ARTIFACT_NAMES`
@@ -92,6 +94,7 @@ Add tests that verify:
 - web provider wraps the core web search stack and normalizes top results
 - academic provider wraps arXiv/PubMed/Crossref helpers and normalizes papers
 - `TEST_MODE` paths return deterministic records without live network calls
+- local provider resolves per-user database paths via `DatabasePaths` before constructing `MultiDatabaseRetriever`
 
 Example assertions:
 
@@ -126,7 +129,11 @@ Implement:
 - `WebResearchProvider.search(...)`
 - `AcademicResearchProvider.search(...)`
 
-Each provider should return normalized `list[dict[str, Any]]` records ready for `ResearchBroker`.
+Implementation notes:
+- `LocalResearchProvider` should construct `MultiDatabaseRetriever` with explicit `db_paths` resolved from `DatabasePaths.get_media_db_path(...)`, `DatabasePaths.get_chacha_db_path(...)`, `DatabasePaths.get_prompts_db_path(...)`, and `DatabasePaths.get_kanban_db_path(...)` as needed by the selected sources
+- keep v1 conservative by defaulting local retrieval to `["media_db"]` unless the override explicitly opts into more sources
+- `WebResearchProvider` should call `perform_websearch(...)` directly rather than `generate_and_search(...)` so collection stays single-query and does not reintroduce broad subquery expansion
+- each provider should return normalized `list[dict[str, Any]]` records ready for `ResearchBroker`
 
 **Step 4: Run tests to verify they pass**
 
@@ -209,6 +216,7 @@ Add tests that verify:
 - unknown `source_id` references are rejected
 - parse failures or provider exceptions fall back to deterministic synthesis
 - fallback reason is recorded in `synthesis_summary.json`
+- the async synthesis path is awaited correctly by the worker and does not preserve the old synchronous call contract by accident
 
 Example structured output fixture:
 
@@ -238,7 +246,9 @@ Expected: FAIL because there is no synthesis adapter or fallback-aware validatio
 
 Implement:
 - `SynthesisProvider.summarize(...)` using `perform_chat_api_call_async`
-- structured-output parsing and source-id validation in `ResearchSynthesizer`
+- change `ResearchSynthesizer.synthesize(...)` to an async method and update `jobs.py` to await it
+- structured-output parsing via `parse_structured_output(...)` and `StructuredOutputOptions` from `tldw_Server_API/app/core/LLM_Calls/structured_output.py`
+- source-id validation in `ResearchSynthesizer`
 - deterministic fallback when parsing or validation fails
 - `jobs.py` integration so the synthesizing phase uses the resolved provider config
 
