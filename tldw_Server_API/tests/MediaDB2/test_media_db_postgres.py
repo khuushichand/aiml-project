@@ -60,6 +60,7 @@ def test_media_rls_enforces_scope_postgres():
     bootstrap_db = MediaDatabase(db_path=":memory:", client_id="bootstrap", backend=admin_backend)
     test_role = TEST_RLS_ROLE
     test_password = "ContentRlsR3g!"
+    escaped_password = test_password.replace("'", "''")
     ident = admin_backend.escape_identifier  # type: ignore[attr-defined]
 
     with admin_backend.transaction() as conn:
@@ -70,14 +71,12 @@ def test_media_rls_enforces_scope_postgres():
         ).scalar is not None
         if not role_exists:
             admin_backend.execute(
-                f"CREATE ROLE {ident(test_role)} LOGIN PASSWORD %s",
-                (test_password,),
+                f"CREATE ROLE {ident(test_role)} LOGIN PASSWORD '{escaped_password}'",
                 connection=conn,
             )
         else:
             admin_backend.execute(
-                f"ALTER ROLE {ident(test_role)} WITH LOGIN PASSWORD %s",
-                (test_password,),
+                f"ALTER ROLE {ident(test_role)} WITH LOGIN PASSWORD '{escaped_password}'",
                 connection=conn,
             )
         admin_backend.execute(

@@ -1,4 +1,4 @@
-import { MessageCircle, Star, StarOff } from "lucide-react"
+import { MessageCircle, Star } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useMemo, useState, useEffect } from "react"
 import { Tooltip } from "antd"
@@ -145,7 +145,7 @@ export function CharacterGalleryCard({
               {isFavorite ? (
                 <Star className="h-3.5 w-3.5 fill-current" />
               ) : (
-                <StarOff className="h-3.5 w-3.5" />
+                <Star className="h-3.5 w-3.5" />
               )}
             </button>
           </Tooltip>

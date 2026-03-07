@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback, Suspense, useEffect } from "react"
 import { useTranslation } from "react-i18next"
-import { Empty, Spin, Switch, Tooltip } from "antd"
+import { Empty, Spin, Switch, Tooltip, Popconfirm } from "antd"
 import {
   SendHorizontal,
   Trash2,
@@ -198,12 +198,18 @@ export const DocumentChat: React.FC = () => {
   // Server not available state
   if (!isServerAvailable) {
     return (
-      <div className="flex h-full flex-col items-center justify-center p-4 text-center">
-        <AlertCircle className="mb-3 h-10 w-10 text-warning" />
-        <p className="text-sm text-text-muted">
+      <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
+        <AlertCircle className="mb-2 h-10 w-10 text-warning" />
+        <p className="text-sm font-medium text-text-muted">
           {t(
             "option:documentWorkspace.serverRequired",
             "Connect to server to use document chat"
+          )}
+        </p>
+        <p className="text-xs text-text-muted max-w-xs">
+          {t(
+            "option:documentWorkspace.serverRequiredHint",
+            "Start the tldw server and configure the connection in Settings. The server provides AI chat, RAG search, and document analysis."
           )}
         </p>
       </div>
@@ -221,19 +227,27 @@ export const DocumentChat: React.FC = () => {
           <span className="text-xs text-text-muted">
             {t("option:documentWorkspace.chatWithDocument", "Chat with document")}
           </span>
-          <Tooltip
-            title={t("common:clearChat", "Clear chat")}
-            placement="left"
+          <Popconfirm
+            title={t("option:documentWorkspace.clearChatConfirm", "Clear chat history?")}
+            onConfirm={handleClearChat}
+            okText={t("common:clear", "Clear")}
+            cancelText={t("common:cancel", "Cancel")}
+            okButtonProps={{ danger: true }}
+            placement="bottomRight"
           >
-            <button
-              type="button"
-              onClick={handleClearChat}
-              disabled={isProcessing || streaming}
-              className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text disabled:opacity-50"
+            <Tooltip
+              title={t("common:clearChat", "Clear chat")}
+              placement="left"
             >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </Tooltip>
+              <button
+                type="button"
+                disabled={isProcessing || streaming}
+                className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          </Popconfirm>
         </div>
       )}
 
@@ -357,6 +371,7 @@ export const DocumentChat: React.FC = () => {
               "option:documentWorkspace.chatPlaceholder",
               "Ask about this document..."
             )}
+            aria-label={t("option:documentWorkspace.chatPlaceholder", "Ask about this document...")}
             disabled={!hasSelectedModel || (isProcessing && !streaming)}
             rows={1}
             className="

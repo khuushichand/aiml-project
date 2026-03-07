@@ -34,7 +34,7 @@ const DocumentTab: React.FC<DocumentTabProps> = ({
         }
       }}
       className={`
-        group flex items-center gap-2 px-3 py-2 min-w-0 max-w-[200px]
+        group relative flex items-center gap-2 px-3 py-2 min-w-0 max-w-[200px]
         border-r border-border cursor-pointer select-none
         transition-colors duration-150
         ${isActive
@@ -61,6 +61,21 @@ const DocumentTab: React.FC<DocumentTabProps> = ({
           <X className="h-3.5 w-3.5" />
         </button>
       </Tooltip>
+      {/* Reading progress bar */}
+      {document.viewerState && (
+        <div
+          className="absolute bottom-0 left-0 h-0.5 bg-primary/40 transition-all duration-300"
+          style={{
+            width: `${
+              document.type === "epub"
+                ? document.viewerState.currentPercentage
+                : document.viewerState.totalPages > 0
+                  ? (document.viewerState.currentPage / document.viewerState.totalPages) * 100
+                  : 0
+            }%`
+          }}
+        />
+      )}
     </div>
   )
 }

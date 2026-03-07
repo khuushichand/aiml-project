@@ -180,11 +180,29 @@ export const QuizPanel: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
 
-  // Quiz config state
-  const [numQuestions, setNumQuestions] = useState(5)
-  const [questionType, setQuestionType] = useState<QuestionType>("multiple_choice")
-  const [difficulty, setDifficulty] = useState<DifficultyLevel>("medium")
+  // Quiz config state - persisted in localStorage
+  const QUIZ_PREFS_KEY = "document-workspace-quiz-prefs"
+
+  const loadPrefs = () => {
+    try {
+      const raw = localStorage.getItem(QUIZ_PREFS_KEY)
+      if (raw) return JSON.parse(raw)
+    } catch { /* noop */ }
+    return null
+  }
+
+  const savedPrefs = loadPrefs()
+  const [numQuestions, setNumQuestions] = useState<number>(savedPrefs?.numQuestions ?? 5)
+  const [questionType, setQuestionType] = useState<QuestionType>(savedPrefs?.questionType ?? "multiple_choice")
+  const [difficulty, setDifficulty] = useState<DifficultyLevel>(savedPrefs?.difficulty ?? "medium")
   const [showConfig, setShowConfig] = useState(true)
+
+  // Persist preferences when they change
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(QUIZ_PREFS_KEY, JSON.stringify({ numQuestions, questionType, difficulty }))
+    } catch { /* noop */ }
+  }, [numQuestions, questionType, difficulty])
 
   const { quiz, isGenerating, error, generateQuiz, clearQuiz } = useDocumentQuiz(activeDocumentId)
 

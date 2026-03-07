@@ -329,13 +329,18 @@ class TestParakeetONNX:
 class TestParakeetONNXIntegration:
     """Integration tests for Parakeet ONNX."""
 
+    @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX.load_parakeet_onnx_model')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX.transcribe_with_parakeet_onnx')
-    def test_integration_with_nemo_module(self, mock_transcribe):
+    def test_integration_with_nemo_module(self, mock_transcribe, mock_load_onnx_model):
         """Test integration with Nemo module."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-            transcribe_with_parakeet
+            transcribe_with_parakeet,
+            _model_cache,
         )
 
+        _model_cache.clear()
+
+        mock_load_onnx_model.return_value = (MagicMock(), MagicMock())
         mock_transcribe.return_value = "ONNX transcription result"
 
         audio_data = np.array([0.1, 0.2, 0.3])

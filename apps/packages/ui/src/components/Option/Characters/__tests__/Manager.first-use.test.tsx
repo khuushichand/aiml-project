@@ -676,47 +676,33 @@ describe("CharactersManager first-use onboarding", () => {
   })
 
   it("renders enriched empty state with guidance and import CTA", async () => {
-    const user = userEvent.setup()
     render(<CharactersManager />)
 
-    expect(screen.getByRole("heading", { name: "No characters yet" })).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Get started with your first character" })).toBeInTheDocument()
     expect(
       screen.getByText(
         "Create reusable personas you can chat with. Each character keeps its own conversation history."
       )
     ).toBeInTheDocument()
-    expect(screen.getByText("Create a writing coach")).toBeInTheDocument()
-    expect(screen.getByText("Import a SillyTavern card")).toBeInTheDocument()
-    expect(screen.getByText("Build an interview practice persona")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Import character" })).toBeInTheDocument()
-
-    const uploadButton = screen.getByRole("button", { name: "Upload character" })
-    const uploadClickSpy = vi.fn()
-    uploadButton.addEventListener("click", uploadClickSpy)
-
-    await user.click(screen.getByRole("button", { name: "Import character" }))
-
-    expect(uploadClickSpy).toHaveBeenCalled()
+    expect(screen.getByRole("button", { name: "Create from scratch" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Start from a template" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Import existing" })).toBeInTheDocument()
   })
 
-  it("shows template strip in empty state and applies selected template", async () => {
+  it("shows template option in empty state and opens create modal with templates", async () => {
     const user = userEvent.setup()
     render(<CharactersManager />)
 
-    expect(screen.getByText("Start from a template")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /Writer Coach/i })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /Interview Trainer/i })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /Study Buddy/i })).toBeInTheDocument()
+    const templateButton = screen.getByRole("button", { name: "Start from a template" })
+    expect(templateButton).toBeInTheDocument()
 
-    await user.click(screen.getByRole("button", { name: /Writer Coach/i }))
+    await user.click(templateButton)
 
+    // Should open the create modal with template chooser expanded
     await waitFor(() => {
-      expect(notificationMock.info).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "Template applied" })
-      )
+      expect(screen.getByText("Choose a template")).toBeInTheDocument()
     })
     expect(window.localStorage.getItem(TEMPLATE_CHOOSER_SEEN_KEY)).toBe("true")
-    expect(await screen.findByDisplayValue("Writer Coach")).toBeInTheDocument()
   })
 
   it("expands template chooser on first create-modal open and keeps it collapsed once seen", async () => {
@@ -1192,7 +1178,9 @@ describe("CharactersManager first-use onboarding", () => {
       screen.queryByText("This description should be hidden in compact mode.")
     ).not.toBeInTheDocument()
 
-    await user.click(screen.getByText("Rich"))
+    // Open the Display dropdown and click Rich
+    await user.click(screen.getByRole("button", { name: "Display options" }))
+    await user.click(await screen.findByText("Rich"))
 
     expect(
       await screen.findByText("This description should be hidden in compact mode.")
@@ -1698,7 +1686,7 @@ describe("CharactersManager first-use onboarding", () => {
 
     render(<CharactersManager />)
 
-    await user.click(screen.getByText("Recently deleted"))
+    await user.click(screen.getByText("Trash"))
 
     await waitFor(() => {
       const deletedQuery = getDeletedScopeListCharactersQueryOptions()
@@ -1764,7 +1752,7 @@ describe("CharactersManager first-use onboarding", () => {
     render(<CharactersManager />)
 
     await user.click(
-      screen.getByText("Recently deleted", {
+      screen.getByText("Trash", {
         selector: ".ant-segmented-item-label"
       })
     )
@@ -1844,7 +1832,7 @@ describe("CharactersManager first-use onboarding", () => {
     render(<CharactersManager />)
 
     await user.click(
-      screen.getByText("Recently deleted", {
+      screen.getByText("Trash", {
         selector: ".ant-segmented-item-label"
       })
     )
@@ -3398,7 +3386,7 @@ describe("CharactersManager first-use onboarding", () => {
     render(<CharactersManager />)
 
     await user.click(await screen.findByRole("button", { name: /More actions/i }))
-    await user.click(await screen.findByRole("menuitem", { name: "Quick chat" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Test in popup" }))
 
     const input = await screen.findByPlaceholderText(
       "Ask this character a quick question..."
@@ -3467,9 +3455,14 @@ describe("CharactersManager first-use onboarding", () => {
     render(<CharactersManager />)
 
     await user.click(await screen.findByText("Gallery Quick Chat Character"))
+    // "Test in popup" is now in the overflow menu
+    const moreButton = await screen.findByRole("button", {
+      name: /More actions/i
+    })
+    await user.click(moreButton)
     await user.click(
-      await screen.findByRole("button", {
-        name: "Quick chat with Gallery Quick Chat Character"
+      await screen.findByRole("menuitem", {
+        name: "Test in popup"
       })
     )
 
@@ -3723,7 +3716,7 @@ describe("CharactersManager first-use onboarding", () => {
     render(<CharactersManager />)
 
     await user.click(await screen.findByRole("button", { name: /More actions/i }))
-    await user.click(await screen.findByRole("menuitem", { name: "Quick chat" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Test in popup" }))
 
     const quickChatInput = await screen.findByPlaceholderText(
       "Ask this character a quick question..."
@@ -3970,21 +3963,18 @@ describe("CharactersManager first-use onboarding", () => {
     expect(shortcutSummary).toHaveTextContent("Keyboard shortcuts")
 
     expect(
-      screen.getByRole("button", { name: "Keyboard shortcuts" })
+      screen.getByRole("button", { name: "Display options" })
     ).toBeInTheDocument()
   })
 
-  it("allows keyboard focus to reveal shortcut help tooltip", async () => {
+  it("allows keyboard focus on display options button", async () => {
     render(<CharactersManager />)
 
-    const shortcutButton = screen.getByRole("button", {
-      name: "Keyboard shortcuts"
+    const displayButton = screen.getByRole("button", {
+      name: "Display options"
     })
-    fireEvent.focus(shortcutButton)
-
-    await waitFor(() => {
-      expect(screen.getByRole("tooltip")).toBeInTheDocument()
-    })
+    fireEvent.focus(displayButton)
+    expect(displayButton).toHaveFocus()
   })
 
   it("renders reduced-motion utility classes on row action controls", async () => {

@@ -109,7 +109,8 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
       // Prefer explicit UI base origin if provided; else use API host; else window origin
       const preferredBase = (process.env.NEXT_PUBLIC_API_BASE_URL || '').toString().trim() || config.apiBaseHost || (typeof window !== 'undefined' ? window.location.origin : '');
       const base = (preferredBase || '').replace(/\/$/, '');
-      const resp = await fetch(`${base}/api/v1/config/docs-info`, { credentials: 'include' });
+      // docs-info is intentionally non-sensitive; avoid credentialed CORS requirements.
+      const resp = await fetch(`${base}/api/v1/config/docs-info`, { credentials: 'omit' });
       if (!resp.ok) return;
       const json = await resp.json();
       const host = json?.base_url || json?.api_base_url || config.apiBaseHost;

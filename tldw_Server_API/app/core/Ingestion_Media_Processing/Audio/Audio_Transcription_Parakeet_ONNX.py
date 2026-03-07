@@ -44,6 +44,44 @@ _onnx_model_cache: dict[str, Any] = {}
 logger = logger
 
 
+def _resolve_snapshot_download() -> Any:
+    """Resolve snapshot_download with patch-friendly precedence.
+
+    Why:
+    - Some tests patch ``huggingface_hub.snapshot_download``.
+    - Others patch this module's ``snapshot_download`` symbol directly.
+    - Import order can otherwise leave a stale function bound here.
+    """
+    global snapshot_download
+
+    local_fn = snapshot_download
+    runtime_fn = None
+    try:
+        import importlib as _importlib
+        hub_mod = _importlib.import_module("huggingface_hub")
+        runtime_fn = getattr(hub_mod, "snapshot_download", None)
+    except (ImportError, ModuleNotFoundError, RuntimeError):
+        runtime_fn = None
+
+    if runtime_fn is None:
+        return local_fn
+    if local_fn is None:
+        snapshot_download = runtime_fn
+        return runtime_fn
+    if local_fn is runtime_fn:
+        return local_fn
+
+    # Respect explicit direct patches against this module-level symbol.
+    local_mod = str(getattr(local_fn, "__module__", ""))
+    local_cls_mod = str(getattr(getattr(local_fn, "__class__", object), "__module__", ""))
+    if local_mod.startswith("unittest.mock") or local_cls_mod.startswith("unittest.mock"):
+        return local_fn
+
+    # Otherwise prefer runtime symbol so patched huggingface_hub lookups are honored.
+    snapshot_download = runtime_fn
+    return runtime_fn
+
+
 class ParakeetONNXTokenizer:
     """Simple tokenizer for Parakeet ONNX models."""
 
@@ -324,7 +362,9 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
         # Check if it's a local path or HuggingFace repo
         model_dir = Path(model_path)
 
-        if not model_dir.exists() and snapshot_download:
+        download_fn = _resolve_snapshot_download()
+
+        if not model_dir.exists() and download_fn:
             # Download from HuggingFace
             logger.info(f"Downloading ONNX model from HuggingFace: {model_path}")
             cache_dir = Path.home() / '.cache' / 'parakeet_onnx'
@@ -337,7 +377,7 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
 
             if not model_dir.exists():
                 # Limit download to ONNX files only to avoid fetching entire repositories
-                snapshot_download(
+                download_fn(
                     repo_id=model_path,
                     local_dir=str(model_dir),
                     revision=revision,
