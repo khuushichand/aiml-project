@@ -91,6 +91,51 @@ async def test_planning_job_writes_plan_and_opens_checkpoint(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_planning_job_records_progress_artifact_checkpoint_and_status_events(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Planning event log coverage",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+    )
+
+    await handle_research_phase_job(
+        {
+            "id": 55,
+            "payload": {
+                "session_id": session.id,
+                "phase": "drafting_plan",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+    )
+
+    events = db.list_run_events_after(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        after_id=0,
+    )
+
+    assert [event.event_type for event in events] == [
+        "progress",
+        "artifact",
+        "artifact",
+        "checkpoint",
+        "status",
+    ]
+    assert events[-1].event_payload["phase"] == "awaiting_plan_review"
+    assert events[-1].event_payload["status"] == "waiting_human"
+
+
+@pytest.mark.asyncio
 async def test_collecting_job_writes_artifacts_and_opens_source_review(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
     from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
@@ -1078,6 +1123,113 @@ async def test_packaging_job_writes_bundle_and_completes_session(tmp_path):
     assert bundle is not None
     assert bundle["question"] == session.query
     assert bundle["claims"][0]["citations"][0]["source_id"] == "src_1"
+
+
+@pytest.mark.asyncio
+async def test_packaging_job_records_terminal_and_artifact_events(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Packaging event log coverage",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="packaging",
+        status="queued",
+    )
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="plan.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["background"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="outline_v1.json",
+        payload={"query": session.query, "sections": [], "unresolved_questions": []},
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="claims.json",
+        payload={"claims": []},
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_text(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="report_v1.md",
+        content="# Report",
+        phase="packaging",
+        job_id=None,
+        content_type="text/markdown",
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="source_registry.json",
+        payload={"sources": []},
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="synthesis_summary.json",
+        payload={"unresolved_questions": []},
+        phase="packaging",
+        job_id=None,
+    )
+    before_id = db.get_latest_run_event_id(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+    )
+
+    await handle_research_phase_job(
+        {
+            "id": 510,
+            "payload": {
+                "session_id": session.id,
+                "phase": "packaging",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+    )
+
+    events = db.list_run_events_after(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        after_id=before_id,
+    )
+
+    assert [event.event_type for event in events] == [
+        "progress",
+        "artifact",
+        "progress",
+        "status",
+        "terminal",
+    ]
+    assert events[-1].event_payload["status"] == "completed"
 
 
 @pytest.mark.asyncio

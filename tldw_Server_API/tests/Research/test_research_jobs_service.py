@@ -695,6 +695,172 @@ def test_cancel_run_requests_active_work_and_terminalizes_idle_sessions(tmp_path
     with pytest.raises(ValueError, match="resume_not_allowed"):
         service.resume_run(owner_user_id="1", session_id=checkpoint.id)
 
+    cancel_requested_events = service.list_run_events_after(
+        owner_user_id="1",
+        session_id=active.id,
+        after_id=0,
+    )
+    cancelled_events = service.list_run_events_after(
+        owner_user_id="1",
+        session_id=checkpoint.id,
+        after_id=0,
+    )
+
+    assert [event.event_type for event in cancel_requested_events] == ["status"]
+    assert cancel_requested_events[0].event_payload["control_state"] == "cancel_requested"
+    assert [event.event_type for event in cancelled_events] == ["status"]
+    assert cancelled_events[0].event_payload["status"] == "cancelled"
+
+
+def test_pause_and_resume_record_status_events(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    jobs = _RecordingJobs()
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=jobs,
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    paused = db.create_session(
+        owner_user_id="1",
+        query="Pause event logging",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="collecting",
+        status="queued",
+    )
+    db.attach_active_job(paused.id, "41")
+    resumed = db.create_session(
+        owner_user_id="1",
+        query="Resume event logging",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="collecting",
+        status="queued",
+    )
+    db.update_control_state(resumed.id, control_state="paused")
+
+    service.pause_run(owner_user_id="1", session_id=paused.id)
+    service.resume_run(owner_user_id="1", session_id=resumed.id)
+
+    pause_events = service.list_run_events_after(
+        owner_user_id="1",
+        session_id=paused.id,
+        after_id=0,
+    )
+    resume_events = service.list_run_events_after(
+        owner_user_id="1",
+        session_id=resumed.id,
+        after_id=0,
+    )
+
+    assert [event.event_type for event in pause_events] == ["status"]
+    assert pause_events[0].event_payload["control_state"] == "pause_requested"
+    assert [event.event_type for event in resume_events] == ["status"]
+    assert resume_events[0].event_payload["control_state"] == "running"
+
+
+def test_approve_plan_review_records_checkpoint_artifact_and_status_events(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            return {"id": 111, "uuid": "job-111", "status": "queued", **kwargs}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=DummyJobs(),
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Approval event logging",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="awaiting_plan_review",
+        status="waiting_human",
+    )
+    checkpoint = db.create_checkpoint(
+        session_id=session.id,
+        checkpoint_type="plan_review",
+        proposed_payload={
+            "query": session.query,
+            "focus_areas": ["background"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+    )
+    before_id = db.get_latest_run_event_id(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+    )
+
+    service.approve_checkpoint(
+        owner_user_id="1",
+        session_id=session.id,
+        checkpoint_id=checkpoint.id,
+        patch_payload={"focus_areas": ["background", "contradictions"]},
+    )
+
+    events = service.list_run_events_after(
+        owner_user_id="1",
+        session_id=session.id,
+        after_id=before_id,
+    )
+
+    assert [event.event_type for event in events] == ["checkpoint", "artifact", "status"]
+    assert events[0].event_payload["status"] == "resolved"
+    assert events[1].event_payload["artifact_name"] == "approved_plan.json"
+    assert events[2].event_payload["phase"] == "collecting"
+
+
+def test_artifact_store_write_json_records_artifact_event(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Artifact write event",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+    )
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+
+    artifact = store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="plan.json",
+        payload={"query": session.query},
+        phase="drafting_plan",
+        job_id="77",
+    )
+
+    events = db.list_run_events_after(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        after_id=0,
+    )
+
+    assert artifact.artifact_version == 1
+    assert [event.event_type for event in events] == ["artifact"]
+    assert events[0].event_payload == {
+        "artifact_name": "plan.json",
+        "artifact_version": 1,
+        "content_type": "application/json",
+        "phase": "drafting_plan",
+        "job_id": "77",
+    }
+
 
 def test_approve_checkpoint_rejects_paused_or_cancellation_pending_sessions(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB

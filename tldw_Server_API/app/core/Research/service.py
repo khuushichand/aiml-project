@@ -85,6 +85,27 @@ class ResearchService:
     def _normalized_event_payload_json(payload: dict[str, Any]) -> str:
         return json.dumps(payload or {}, sort_keys=True)
 
+    @staticmethod
+    def _status_event_payload(
+        *,
+        session_id: str,
+        status: str,
+        phase: str,
+        control_state: str,
+        active_job_id: str | None,
+        latest_checkpoint_id: str | None,
+        completed_at: str | None,
+    ) -> dict[str, Any]:
+        return {
+            "id": session_id,
+            "status": status,
+            "phase": phase,
+            "control_state": control_state,
+            "active_job_id": active_job_id,
+            "latest_checkpoint_id": latest_checkpoint_id,
+            "completed_at": completed_at,
+        }
+
     def get_job_manager(self) -> Any:
         """Return the Jobs manager used for research phase execution and progress reads."""
         return self._job_manager_for_session()
@@ -270,6 +291,17 @@ class ResearchService:
             resolution="patched" if patch_payload else "approved",
             user_patch_payload=patch_payload or {},
         )
+        self.record_run_event(
+            owner_user_id=owner_user_id,
+            session_id=session_id,
+            event_type="checkpoint",
+            event_payload=self._checkpoint_event_payload(
+                checkpoint=db.get_checkpoint(checkpoint_id) or checkpoint,
+                phase=session.phase,
+            ),
+            phase=session.phase,
+            job_id=None,
+        )
 
         if checkpoint.checkpoint_type == "plan_review":
             artifact_store = ResearchArtifactStore(
@@ -286,9 +318,28 @@ class ResearchService:
             )
 
         next_phase, should_enqueue = self._next_phase_for_checkpoint(checkpoint.checkpoint_type)
-        db.update_phase(session_id, phase=next_phase, status="queued")
         if not should_enqueue:
-            return db.attach_active_job(session_id, None)
+            updated, _ = db.update_phase_with_event(
+                session_id,
+                phase=next_phase,
+                status="queued",
+                control_state=session.control_state,
+                active_job_id=None,
+                owner_user_id=owner_user_id,
+                event_type="status",
+                event_payload=self._status_event_payload(
+                    session_id=session.id,
+                    status="queued",
+                    phase=next_phase,
+                    control_state=session.control_state,
+                    active_job_id=None,
+                    latest_checkpoint_id=session.latest_checkpoint_id,
+                    completed_at=session.completed_at,
+                ),
+                event_phase=next_phase,
+                event_job_id=None,
+            )
+            return updated
 
         job = enqueue_research_phase_job(
             jm=self._job_manager_for_session(),
@@ -297,7 +348,27 @@ class ResearchService:
             owner_user_id=session.owner_user_id,
             checkpoint_id=checkpoint.id,
         )
-        return db.attach_active_job(session_id, self._job_identifier(job))
+        updated, _ = db.update_phase_with_event(
+            session_id,
+            phase=next_phase,
+            status="queued",
+            control_state=session.control_state,
+            active_job_id=self._job_identifier(job),
+            owner_user_id=owner_user_id,
+            event_type="status",
+            event_payload=self._status_event_payload(
+                session_id=session.id,
+                status="queued",
+                phase=next_phase,
+                control_state=session.control_state,
+                active_job_id=self._job_identifier(job),
+                latest_checkpoint_id=session.latest_checkpoint_id,
+                completed_at=session.completed_at,
+            ),
+            event_phase=next_phase,
+            event_job_id=self._job_identifier(job),
+        )
+        return updated
 
     def build_package(
         self,
@@ -425,8 +496,42 @@ class ResearchService:
         if session.control_state in {"paused", "pause_requested"}:
             return session
         if self._is_executable_phase(session.phase) and session.active_job_id:
-            return db.update_control_state(session.id, control_state="pause_requested")
-        return db.update_control_state(session.id, control_state="paused")
+            updated, _ = db.update_control_state_with_event(
+                session.id,
+                control_state="pause_requested",
+                owner_user_id=owner_user_id,
+                event_type="status",
+                event_payload=self._status_event_payload(
+                    session_id=session.id,
+                    status=session.status,
+                    phase=session.phase,
+                    control_state="pause_requested",
+                    active_job_id=session.active_job_id,
+                    latest_checkpoint_id=session.latest_checkpoint_id,
+                    completed_at=session.completed_at,
+                ),
+                event_phase=session.phase,
+                event_job_id=session.active_job_id,
+            )
+            return updated
+        updated, _ = db.update_control_state_with_event(
+            session.id,
+            control_state="paused",
+            owner_user_id=owner_user_id,
+            event_type="status",
+            event_payload=self._status_event_payload(
+                session_id=session.id,
+                status=session.status,
+                phase=session.phase,
+                control_state="paused",
+                active_job_id=session.active_job_id,
+                latest_checkpoint_id=session.latest_checkpoint_id,
+                completed_at=session.completed_at,
+            ),
+            event_phase=session.phase,
+            event_job_id=session.active_job_id,
+        )
+        return updated
 
     def resume_run(self, *, owner_user_id: str, session_id: str) -> ResearchSessionRow:
         db = self._db_for_user(owner_user_id)
@@ -438,17 +543,48 @@ class ResearchService:
         if self._is_terminal(session):
             raise ValueError("resume_not_allowed")
         if self._is_checkpoint_phase(session.phase):
-            return db.update_phase(
+            updated, _ = db.update_phase_with_event(
                 session.id,
                 phase=session.phase,
                 status="waiting_human",
                 control_state="running",
                 active_job_id=None,
+                owner_user_id=owner_user_id,
+                event_type="status",
+                event_payload=self._status_event_payload(
+                    session_id=session.id,
+                    status="waiting_human",
+                    phase=session.phase,
+                    control_state="running",
+                    active_job_id=None,
+                    latest_checkpoint_id=session.latest_checkpoint_id,
+                    completed_at=session.completed_at,
+                ),
+                event_phase=session.phase,
+                event_job_id=None,
             )
+            return updated
         if not self._is_executable_phase(session.phase):
             raise ValueError("resume_not_allowed")
         if session.active_job_id:
-            return db.update_control_state(session.id, control_state="running")
+            updated, _ = db.update_control_state_with_event(
+                session.id,
+                control_state="running",
+                owner_user_id=owner_user_id,
+                event_type="status",
+                event_payload=self._status_event_payload(
+                    session_id=session.id,
+                    status=session.status,
+                    phase=session.phase,
+                    control_state="running",
+                    active_job_id=session.active_job_id,
+                    latest_checkpoint_id=session.latest_checkpoint_id,
+                    completed_at=session.completed_at,
+                ),
+                event_phase=session.phase,
+                event_job_id=session.active_job_id,
+            )
+            return updated
 
         job = enqueue_research_phase_job(
             jm=self._job_manager_for_session(),
@@ -456,13 +592,28 @@ class ResearchService:
             phase=session.phase,
             owner_user_id=session.owner_user_id,
         )
-        return db.update_phase(
+        job_id = self._job_identifier(job)
+        updated, _ = db.update_phase_with_event(
             session.id,
             phase=session.phase,
             status="queued",
             control_state="running",
-            active_job_id=self._job_identifier(job),
+            active_job_id=job_id,
+            owner_user_id=owner_user_id,
+            event_type="status",
+            event_payload=self._status_event_payload(
+                session_id=session.id,
+                status="queued",
+                phase=session.phase,
+                control_state="running",
+                active_job_id=job_id,
+                latest_checkpoint_id=session.latest_checkpoint_id,
+                completed_at=session.completed_at,
+            ),
+            event_phase=session.phase,
+            event_job_id=job_id,
         )
+        return updated
 
     def cancel_run(self, *, owner_user_id: str, session_id: str) -> ResearchSessionRow:
         db = self._db_for_user(owner_user_id)
@@ -475,13 +626,44 @@ class ResearchService:
             return session
         if self._is_executable_phase(session.phase) and session.active_job_id:
             self._cancel_active_job_best_effort(session, reason="research_cancel_requested")
-            return db.update_control_state(session.id, control_state="cancel_requested")
-        return db.update_status(
+            updated, _ = db.update_control_state_with_event(
+                session.id,
+                control_state="cancel_requested",
+                owner_user_id=owner_user_id,
+                event_type="status",
+                event_payload=self._status_event_payload(
+                    session_id=session.id,
+                    status=session.status,
+                    phase=session.phase,
+                    control_state="cancel_requested",
+                    active_job_id=session.active_job_id,
+                    latest_checkpoint_id=session.latest_checkpoint_id,
+                    completed_at=session.completed_at,
+                ),
+                event_phase=session.phase,
+                event_job_id=session.active_job_id,
+            )
+            return updated
+        updated, _ = db.update_status_with_event(
             session.id,
             status="cancelled",
+            owner_user_id=owner_user_id,
+            event_type="status",
+            event_payload=self._status_event_payload(
+                session_id=session.id,
+                status="cancelled",
+                phase=session.phase,
+                control_state="cancelled",
+                active_job_id=None,
+                latest_checkpoint_id=session.latest_checkpoint_id,
+                completed_at=session.completed_at,
+            ),
+            phase=session.phase,
+            job_id=None,
             control_state="cancelled",
             active_job_id=None,
         )
+        return updated
 
     def get_bundle(self, *, owner_user_id: str, session_id: str) -> dict[str, Any]:
         artifact = self.get_artifact(

@@ -50,6 +50,23 @@ class ResearchArtifactStore:
             return None
         return max(matches, key=lambda artifact: artifact.artifact_version)
 
+    @staticmethod
+    def _artifact_event_payload(
+        *,
+        artifact_name: str,
+        artifact_version: int,
+        content_type: str,
+        phase: str,
+        job_id: str | None,
+    ) -> dict[str, Any]:
+        return {
+            "artifact_name": artifact_name,
+            "artifact_version": artifact_version,
+            "content_type": content_type,
+            "phase": phase,
+            "job_id": job_id,
+        }
+
     def write_json(
         self,
         *,
@@ -60,21 +77,32 @@ class ResearchArtifactStore:
         phase: str,
         job_id: str | None,
     ) -> ResearchArtifactRow:
-        _ = owner_user_id
+        owner_user_id = str(owner_user_id)
         path = self._artifact_path(session_id, artifact_name)
         encoded = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
         path.write_bytes(encoded)
-        return self.db.record_artifact(
+        next_version = self._next_version(session_id, path.name)
+        artifact, _ = self.db.record_artifact_with_event(
+            owner_user_id=owner_user_id,
             session_id=session_id,
             artifact_name=path.name,
-            artifact_version=self._next_version(session_id, path.name),
+            artifact_version=next_version,
             storage_path=str(path),
             content_type="application/json",
             byte_size=len(encoded),
             checksum=hashlib.sha256(encoded).hexdigest(),
             phase=phase,
             job_id=job_id,
+            event_type="artifact",
+            event_payload=self._artifact_event_payload(
+                artifact_name=path.name,
+                artifact_version=next_version,
+                content_type="application/json",
+                phase=phase,
+                job_id=job_id,
+            ),
         )
+        return artifact
 
     def write_jsonl(
         self,
@@ -86,24 +114,35 @@ class ResearchArtifactStore:
         phase: str,
         job_id: str | None,
     ) -> ResearchArtifactRow:
-        _ = owner_user_id
+        owner_user_id = str(owner_user_id)
         path = self._artifact_path(session_id, artifact_name)
         encoded = "".join(
             f"{json.dumps(record, sort_keys=True)}\n"
             for record in records
         ).encode("utf-8")
         path.write_bytes(encoded)
-        return self.db.record_artifact(
+        next_version = self._next_version(session_id, path.name)
+        artifact, _ = self.db.record_artifact_with_event(
+            owner_user_id=owner_user_id,
             session_id=session_id,
             artifact_name=path.name,
-            artifact_version=self._next_version(session_id, path.name),
+            artifact_version=next_version,
             storage_path=str(path),
             content_type="application/x-ndjson",
             byte_size=len(encoded),
             checksum=hashlib.sha256(encoded).hexdigest(),
             phase=phase,
             job_id=job_id,
+            event_type="artifact",
+            event_payload=self._artifact_event_payload(
+                artifact_name=path.name,
+                artifact_version=next_version,
+                content_type="application/x-ndjson",
+                phase=phase,
+                job_id=job_id,
+            ),
         )
+        return artifact
 
     def write_text(
         self,
@@ -116,21 +155,32 @@ class ResearchArtifactStore:
         job_id: str | None,
         content_type: str = "text/plain",
     ) -> ResearchArtifactRow:
-        _ = owner_user_id
+        owner_user_id = str(owner_user_id)
         path = self._artifact_path(session_id, artifact_name)
         encoded = content.encode("utf-8")
         path.write_bytes(encoded)
-        return self.db.record_artifact(
+        next_version = self._next_version(session_id, path.name)
+        artifact, _ = self.db.record_artifact_with_event(
+            owner_user_id=owner_user_id,
             session_id=session_id,
             artifact_name=path.name,
-            artifact_version=self._next_version(session_id, path.name),
+            artifact_version=next_version,
             storage_path=str(path),
             content_type=content_type,
             byte_size=len(encoded),
             checksum=hashlib.sha256(encoded).hexdigest(),
             phase=phase,
             job_id=job_id,
+            event_type="artifact",
+            event_payload=self._artifact_event_payload(
+                artifact_name=path.name,
+                artifact_version=next_version,
+                content_type=content_type,
+                phase=phase,
+                job_id=job_id,
+            ),
         )
+        return artifact
 
     def read_json(self, *, session_id: str, artifact_name: str) -> dict[str, Any] | None:
         artifact = self._latest_artifact(session_id, artifact_name)

@@ -38,6 +38,51 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _status_event_payload(
+    *,
+    session_id: str,
+    status: str,
+    phase: str,
+    control_state: str,
+    active_job_id: str | None,
+    latest_checkpoint_id: str | None,
+    completed_at: str | None,
+) -> dict[str, Any]:
+    return {
+        "id": session_id,
+        "status": status,
+        "phase": phase,
+        "control_state": control_state,
+        "active_job_id": active_job_id,
+        "latest_checkpoint_id": latest_checkpoint_id,
+        "completed_at": completed_at,
+    }
+
+
+def _progress_event_payload(
+    *,
+    session_id: str,
+    progress_percent: float | None,
+    progress_message: str | None,
+) -> dict[str, Any]:
+    return {
+        "id": session_id,
+        "progress_percent": progress_percent,
+        "progress_message": progress_message,
+    }
+
+
+def _checkpoint_event_payload(*, checkpoint: Any, phase: str | None) -> dict[str, Any]:
+    return {
+        "checkpoint_id": checkpoint.id,
+        "checkpoint_type": checkpoint.checkpoint_type,
+        "status": checkpoint.status,
+        "resolution": checkpoint.resolution,
+        "phase": phase,
+        "has_proposed_payload": bool(checkpoint.proposed_payload),
+    }
+
+
 def enqueue_research_phase_job(
     *,
     jm: Any,
@@ -140,7 +185,7 @@ async def _handle_planning_phase(
     halted = _halt_for_control_before_phase(db=db, session_id=session.id)
     if halted is not None:
         return halted
-    _set_phase_progress(db=db, session_id=session.id, phase="drafting_plan")
+    _set_phase_progress(db=db, session=session, phase="drafting_plan", job_id=job_id)
 
     plan = build_initial_plan(
         query=session.query,
@@ -174,6 +219,17 @@ async def _handle_planning_phase(
             checkpoint_type="plan_review",
             proposed_payload=asdict(plan),
         )
+        db.record_run_event(
+            owner_user_id=session.owner_user_id,
+            session_id=session.id,
+            event_type="checkpoint",
+            event_payload=_checkpoint_event_payload(
+                checkpoint=checkpoint,
+                phase="awaiting_plan_review",
+            ),
+            phase="awaiting_plan_review",
+            job_id=job_id,
+        )
         checkpoint_id = checkpoint.id
         next_phase = "awaiting_plan_review"
         next_status = "waiting_human"
@@ -199,7 +255,7 @@ async def _handle_collecting_phase(
     halted = _halt_for_control_before_phase(db=db, session_id=session.id)
     if halted is not None:
         return halted
-    _set_phase_progress(db=db, session_id=session.id, phase="collecting")
+    _set_phase_progress(db=db, session=session, phase="collecting", job_id=job_id)
 
     plan = _load_effective_plan(session=session, artifact_store=artifact_store)
     provider_config = _load_provider_config(session=session, artifact_store=artifact_store)
@@ -313,6 +369,17 @@ async def _handle_collecting_phase(
                 "collection_summary": collection_summary,
             },
         )
+        db.record_run_event(
+            owner_user_id=session.owner_user_id,
+            session_id=session.id,
+            event_type="checkpoint",
+            event_payload=_checkpoint_event_payload(
+                checkpoint=checkpoint,
+                phase="awaiting_source_review",
+            ),
+            phase="awaiting_source_review",
+            job_id=job_id,
+        )
         checkpoint_id = checkpoint.id
         next_phase = "awaiting_source_review"
         next_status = "waiting_human"
@@ -349,7 +416,7 @@ async def _handle_synthesizing_phase(
     halted = _halt_for_control_before_phase(db=db, session_id=session.id)
     if halted is not None:
         return halted
-    _set_phase_progress(db=db, session_id=session.id, phase="synthesizing")
+    _set_phase_progress(db=db, session=session, phase="synthesizing", job_id=job_id)
 
     plan = _load_effective_plan(session=session, artifact_store=artifact_store)
     provider_config = _load_provider_config(session=session, artifact_store=artifact_store)
@@ -438,6 +505,17 @@ async def _handle_synthesizing_phase(
                 "report_preview": "\n".join(result.report_markdown.splitlines()[:8]),
             },
         )
+        db.record_run_event(
+            owner_user_id=session.owner_user_id,
+            session_id=session.id,
+            event_type="checkpoint",
+            event_payload=_checkpoint_event_payload(
+                checkpoint=checkpoint,
+                phase="awaiting_outline_review",
+            ),
+            phase="awaiting_outline_review",
+            job_id=job_id,
+        )
         checkpoint_id = checkpoint.id
         next_phase = "awaiting_outline_review"
         next_status = "waiting_human"
@@ -462,7 +540,7 @@ async def _handle_packaging_phase(
     halted = _halt_for_control_before_phase(db=db, session_id=session.id)
     if halted is not None:
         return halted
-    _set_phase_progress(db=db, session_id=session.id, phase="packaging")
+    _set_phase_progress(db=db, session=session, phase="packaging", job_id=job_id)
 
     plan = _load_effective_plan(session=session, artifact_store=artifact_store)
     outline = artifact_store.read_json(session_id=session.id, artifact_name="outline_v1.json")
@@ -499,10 +577,19 @@ async def _handle_packaging_phase(
         job_id=job_id,
     )
 
-    db.update_progress(
+    db.update_progress_with_event(
         session.id,
         progress_percent=100.0,
         progress_message="packaging results",
+        owner_user_id=session.owner_user_id,
+        event_type="progress",
+        event_payload=_progress_event_payload(
+            session_id=session.id,
+            progress_percent=100.0,
+            progress_message="packaging results",
+        ),
+        event_phase="packaging",
+        event_job_id=job_id,
     )
     return _finalize_phase_transition(
         db=db,
@@ -515,14 +602,23 @@ async def _handle_packaging_phase(
     )
 
 
-def _set_phase_progress(*, db: ResearchSessionsDB, session_id: str, phase: str) -> None:
+def _set_phase_progress(*, db: ResearchSessionsDB, session: Any, phase: str, job_id: str | None) -> None:
     progress = _PHASE_PROGRESS.get(phase)
     if progress is None:
         return
-    db.update_progress(
-        session_id,
+    db.update_progress_with_event(
+        session.id,
         progress_percent=progress[0],
         progress_message=progress[1],
+        owner_user_id=session.owner_user_id,
+        event_type="progress",
+        event_payload=_progress_event_payload(
+            session_id=session.id,
+            progress_percent=progress[0],
+            progress_message=progress[1],
+        ),
+        event_phase=phase,
+        event_job_id=job_id,
     )
 
 
@@ -533,7 +629,24 @@ def _halt_for_control_before_phase(*, db: ResearchSessionsDB, session_id: str) -
     if session.control_state == "cancel_requested":
         return _cancel_session(db=db, session_id=session_id)
     if session.control_state in {"pause_requested", "paused"}:
-        updated = db.update_control_state(session_id, control_state="paused", active_job_id=None)
+        updated, _ = db.update_control_state_with_event(
+            session_id,
+            control_state="paused",
+            active_job_id=None,
+            owner_user_id=session.owner_user_id,
+            event_type="status",
+            event_payload=_status_event_payload(
+                session_id=session.id,
+                status=session.status,
+                phase=session.phase,
+                control_state="paused",
+                active_job_id=None,
+                latest_checkpoint_id=session.latest_checkpoint_id,
+                completed_at=session.completed_at,
+            ),
+            event_phase=session.phase,
+            event_job_id=None,
+        )
         return {
             "session_id": updated.id,
             "phase": updated.phase,
@@ -544,11 +657,43 @@ def _halt_for_control_before_phase(*, db: ResearchSessionsDB, session_id: str) -
 
 
 def _cancel_session(*, db: ResearchSessionsDB, session_id: str) -> dict[str, Any]:
-    updated = db.update_status(
+    session = db.get_session(session_id)
+    if session is None:
+        raise KeyError(session_id)
+    updated, _ = db.update_status_with_event(
         session_id,
         status="cancelled",
+        owner_user_id=session.owner_user_id,
+        event_type="status",
+        event_payload=_status_event_payload(
+            session_id=session.id,
+            status="cancelled",
+            phase=session.phase,
+            control_state="cancelled",
+            active_job_id=None,
+            latest_checkpoint_id=session.latest_checkpoint_id,
+            completed_at=session.completed_at,
+        ),
+        phase=session.phase,
+        job_id=None,
         control_state="cancelled",
         active_job_id=None,
+    )
+    db.record_run_event(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        event_type="terminal",
+        event_payload=_status_event_payload(
+            session_id=updated.id,
+            status=updated.status,
+            phase=updated.phase,
+            control_state=updated.control_state,
+            active_job_id=updated.active_job_id,
+            latest_checkpoint_id=updated.latest_checkpoint_id,
+            completed_at=updated.completed_at,
+        ),
+        phase=updated.phase,
+        job_id=None,
     )
     return {
         "session_id": updated.id,
@@ -574,13 +719,26 @@ def _finalize_phase_transition(
     if current.control_state == "cancel_requested":
         return _cancel_session(db=db, session_id=session_id)
     if current.control_state in {"pause_requested", "paused"} and next_phase != "completed":
-        updated = db.update_phase(
+        updated, _ = db.update_phase_with_event(
             session_id,
             phase=next_phase,
             status=next_status,
             control_state="paused",
             active_job_id=None,
             completed_at=completed_at,
+            owner_user_id=current.owner_user_id,
+            event_type="status",
+            event_payload=_status_event_payload(
+                session_id=current.id,
+                status=next_status,
+                phase=next_phase,
+                control_state="paused",
+                active_job_id=None,
+                latest_checkpoint_id=current.latest_checkpoint_id,
+                completed_at=completed_at,
+            ),
+            event_phase=next_phase,
+            event_job_id=None,
         )
         return {
             "session_id": updated.id,
@@ -588,16 +746,47 @@ def _finalize_phase_transition(
             "checkpoint_id": checkpoint_id,
             "artifacts_written": artifacts_written,
         }
-    updated = db.update_phase(
+    next_control_state = (
+        "running" if next_phase == "completed" and current.control_state in {"pause_requested", "paused"} else current.control_state
+    )
+    updated, _ = db.update_phase_with_event(
         session_id,
         phase=next_phase,
         status=next_status,
-        control_state=(
-            "running" if next_phase == "completed" and current.control_state in {"pause_requested", "paused"} else current.control_state
-        ),
+        control_state=next_control_state,
         active_job_id=None,
         completed_at=completed_at,
+        owner_user_id=current.owner_user_id,
+        event_type="status",
+        event_payload=_status_event_payload(
+            session_id=current.id,
+            status=next_status,
+            phase=next_phase,
+            control_state=next_control_state,
+            active_job_id=None,
+            latest_checkpoint_id=current.latest_checkpoint_id,
+            completed_at=completed_at,
+        ),
+        event_phase=next_phase,
+        event_job_id=None,
     )
+    if next_status in {"completed", "failed", "cancelled"}:
+        db.record_run_event(
+            owner_user_id=updated.owner_user_id,
+            session_id=updated.id,
+            event_type="terminal",
+            event_payload=_status_event_payload(
+                session_id=updated.id,
+                status=updated.status,
+                phase=updated.phase,
+                control_state=updated.control_state,
+                active_job_id=updated.active_job_id,
+                latest_checkpoint_id=updated.latest_checkpoint_id,
+                completed_at=updated.completed_at,
+            ),
+            phase=updated.phase,
+            job_id=None,
+        )
     return {
         "session_id": updated.id,
         "phase": updated.phase,
