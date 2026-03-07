@@ -51,6 +51,19 @@ class ChatWorkflowsDatabase:
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._create_schema()
 
+    def _table_columns(self, table_name: str) -> set[str]:
+        """Return the current column names for a table."""
+        rows = self._conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return {str(row["name"]) for row in rows}
+
+    def _ensure_column(self, table_name: str, column_name: str, definition: str) -> None:
+        """Add a missing column to an existing table."""
+        if column_name in self._table_columns(table_name):
+            return
+        self._conn.execute(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
+        )
+
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
         """Open a serialized write transaction on the shared SQLite connection."""
@@ -84,10 +97,12 @@ class ChatWorkflowsDatabase:
                 template_id INTEGER NOT NULL,
                 step_id TEXT NOT NULL,
                 step_index INTEGER NOT NULL,
+                step_type TEXT NOT NULL DEFAULT 'question_step',
                 label TEXT,
                 base_question TEXT NOT NULL,
                 question_mode TEXT NOT NULL DEFAULT 'stock',
                 phrasing_instructions TEXT,
+                dialogue_config_json TEXT,
                 context_refs_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -104,6 +119,8 @@ class ChatWorkflowsDatabase:
                 source_mode TEXT NOT NULL,
                 status TEXT NOT NULL,
                 current_step_index INTEGER NOT NULL DEFAULT 0,
+                active_round_index INTEGER NOT NULL DEFAULT 0,
+                step_runtime_state_json TEXT NOT NULL DEFAULT '{}',
                 template_snapshot_json TEXT NOT NULL,
                 selected_context_refs_json TEXT NOT NULL DEFAULT '[]',
                 resolved_context_snapshot_json TEXT NOT NULL DEFAULT '[]',
@@ -140,6 +157,24 @@ class ChatWorkflowsDatabase:
                 UNIQUE (run_id, seq)
             );
 
+            CREATE TABLE IF NOT EXISTS chat_workflow_rounds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                step_index INTEGER NOT NULL,
+                round_index INTEGER NOT NULL,
+                user_message TEXT NOT NULL,
+                debate_llm_message TEXT,
+                moderator_decision TEXT,
+                moderator_summary TEXT,
+                next_user_prompt TEXT,
+                status TEXT NOT NULL,
+                idempotency_key TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES chat_workflow_runs(run_id) ON DELETE CASCADE,
+                UNIQUE (run_id, step_index, round_index)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_chat_workflow_templates_owner
             ON chat_workflow_templates(tenant_id, user_id, status);
 
@@ -152,7 +187,31 @@ class ChatWorkflowsDatabase:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_workflow_answers_idempotency
             ON chat_workflow_answers(run_id, idempotency_key)
             WHERE idempotency_key IS NOT NULL;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_workflow_rounds_idempotency
+            ON chat_workflow_rounds(run_id, step_index, idempotency_key)
+            WHERE idempotency_key IS NOT NULL;
             """
+            )
+            self._ensure_column(
+                "chat_workflow_template_steps",
+                "step_type",
+                "TEXT NOT NULL DEFAULT 'question_step'",
+            )
+            self._ensure_column(
+                "chat_workflow_template_steps",
+                "dialogue_config_json",
+                "TEXT",
+            )
+            self._ensure_column(
+                "chat_workflow_runs",
+                "active_round_index",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                "chat_workflow_runs",
+                "step_runtime_state_json",
+                "TEXT NOT NULL DEFAULT '{}'",
             )
             self._conn.commit()
 
@@ -192,26 +251,35 @@ class ChatWorkflowsDatabase:
             for index, step in enumerate(steps):
                 step_index = int(step.get("step_index", index))
                 step_id = str(step.get("step_id") or step.get("id") or f"step-{step_index + 1}")
+                step_type = str(step.get("step_type", "question_step"))
                 context_refs = step.get("context_refs_json")
                 if context_refs is None:
                     context_refs = step.get("context_refs", [])
                 if not isinstance(context_refs, str):
                     context_refs = _json_dumps(context_refs)
+                dialogue_config = step.get("dialogue_config_json")
+                if dialogue_config is None:
+                    dialogue_config = step.get("dialogue_config")
+                if dialogue_config is not None and not isinstance(dialogue_config, str):
+                    dialogue_config = _json_dumps(dialogue_config)
                 conn.execute(
                     """
                     INSERT INTO chat_workflow_template_steps (
-                        template_id, step_id, step_index, label, base_question, question_mode,
-                        phrasing_instructions, context_refs_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        template_id, step_id, step_index, step_type, label, base_question,
+                        question_mode, phrasing_instructions, dialogue_config_json,
+                        context_refs_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         template_id,
                         step_id,
                         step_index,
+                        step_type,
                         step.get("label"),
                         step["base_question"],
                         step.get("question_mode", "stock"),
                         step.get("phrasing_instructions"),
+                        dialogue_config,
                         context_refs,
                         now,
                         now,
@@ -222,8 +290,8 @@ class ChatWorkflowsDatabase:
         with self._lock:
             rows = self._conn.execute(
                 """
-            SELECT id, template_id, step_id, step_index, label, base_question,
-                   question_mode, phrasing_instructions, context_refs_json,
+            SELECT id, template_id, step_id, step_index, step_type, label, base_question,
+                   question_mode, phrasing_instructions, dialogue_config_json, context_refs_json,
                    created_at, updated_at
             FROM chat_workflow_template_steps
             WHERE template_id = ?
@@ -324,17 +392,25 @@ class ChatWorkflowsDatabase:
         resolved_context_snapshot: list[dict[str, Any]] | list[Any],
         run_id: str | None = None,
         current_step_index: int = 0,
+        active_round_index: int = 0,
+        step_runtime_state: dict[str, Any] | list[Any] | str | None = None,
         question_renderer_model: str | None = None,
     ) -> str:
         run_identifier = run_id or str(uuid4())
+        runtime_state_json = (
+            step_runtime_state
+            if isinstance(step_runtime_state, str)
+            else _json_dumps(step_runtime_state or {})
+        )
         with self.transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO chat_workflow_runs (
                     run_id, tenant_id, user_id, template_id, template_version, source_mode, status,
-                    current_step_index, template_snapshot_json, selected_context_refs_json,
+                    current_step_index, active_round_index, step_runtime_state_json,
+                    template_snapshot_json, selected_context_refs_json,
                     resolved_context_snapshot_json, question_renderer_model, started_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_identifier,
@@ -345,6 +421,8 @@ class ChatWorkflowsDatabase:
                     source_mode,
                     status,
                     current_step_index,
+                    active_round_index,
+                    runtime_state_json,
                     _json_dumps(template_snapshot),
                     _json_dumps(selected_context_refs),
                     _json_dumps(resolved_context_snapshot),
@@ -359,7 +437,8 @@ class ChatWorkflowsDatabase:
             row = self._conn.execute(
                 """
             SELECT run_id, tenant_id, user_id, template_id, template_version, source_mode, status,
-                   current_step_index, template_snapshot_json, selected_context_refs_json,
+                   current_step_index, active_round_index, step_runtime_state_json,
+                   template_snapshot_json, selected_context_refs_json,
                    resolved_context_snapshot_json, question_renderer_model, started_at,
                    completed_at, canceled_at, free_chat_conversation_id
             FROM chat_workflow_runs
@@ -375,6 +454,8 @@ class ChatWorkflowsDatabase:
         *,
         status: str | None = None,
         current_step_index: int | None = None,
+        active_round_index: int | None = None,
+        step_runtime_state_json: dict[str, Any] | list[Any] | str | None = None,
         completed_at: str | None = None,
         canceled_at: str | None = None,
         free_chat_conversation_id: str | None = None,
@@ -382,17 +463,28 @@ class ChatWorkflowsDatabase:
         if (
             status is None
             and current_step_index is None
+            and active_round_index is None
+            and step_runtime_state_json is None
             and completed_at is None
             and canceled_at is None
             and free_chat_conversation_id is None
         ):
             return
+        runtime_state_value = (
+            step_runtime_state_json
+            if isinstance(step_runtime_state_json, str) or step_runtime_state_json is None
+            else _json_dumps(step_runtime_state_json)
+        )
         with self.transaction() as conn:
             conn.execute(
                 """
                 UPDATE chat_workflow_runs
                 SET status = CASE WHEN ? THEN ? ELSE status END,
                     current_step_index = CASE WHEN ? THEN ? ELSE current_step_index END,
+                    active_round_index = CASE WHEN ? THEN ? ELSE active_round_index END,
+                    step_runtime_state_json = CASE
+                        WHEN ? THEN ? ELSE step_runtime_state_json
+                    END,
                     completed_at = CASE WHEN ? THEN ? ELSE completed_at END,
                     canceled_at = CASE WHEN ? THEN ? ELSE canceled_at END,
                     free_chat_conversation_id = CASE
@@ -405,6 +497,10 @@ class ChatWorkflowsDatabase:
                     status,
                     current_step_index is not None,
                     current_step_index,
+                    active_round_index is not None,
+                    active_round_index,
+                    runtime_state_value is not None,
+                    runtime_state_value,
                     completed_at is not None,
                     completed_at,
                     canceled_at is not None,
@@ -474,7 +570,248 @@ class ChatWorkflowsDatabase:
                 (run_id, step_index),
             )
             row = cursor.fetchone()
+            return dict(row) if row is not None else None
+
+    def list_rounds(self, run_id: str, step_index: int) -> list[dict[str, Any]]:
+        """List dialogue rounds for a run step in round order."""
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, run_id, step_index, round_index, user_message, debate_llm_message,
+                       moderator_decision, moderator_summary, next_user_prompt, status,
+                       idempotency_key, created_at, updated_at
+                FROM chat_workflow_rounds
+                WHERE run_id = ? AND step_index = ?
+                ORDER BY round_index ASC
+                """,
+                (run_id, step_index),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_round(self, run_id: str, step_index: int, round_index: int) -> dict[str, Any] | None:
+        """Return a specific dialogue round, if it exists."""
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT id, run_id, step_index, round_index, user_message, debate_llm_message,
+                       moderator_decision, moderator_summary, next_user_prompt, status,
+                       idempotency_key, created_at, updated_at
+                FROM chat_workflow_rounds
+                WHERE run_id = ? AND step_index = ? AND round_index = ?
+                """,
+                (run_id, step_index, round_index),
+            ).fetchone()
         return dict(row) if row is not None else None
+
+    def begin_dialogue_round(
+        self,
+        *,
+        run_id: str,
+        step_index: int,
+        round_index: int,
+        user_message: str,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Claim a dialogue round before executing LLM calls."""
+        now = _utcnow_iso()
+        with self.transaction() as conn:
+            run_row = conn.execute(
+                """
+                SELECT run_id, current_step_index, active_round_index, status
+                FROM chat_workflow_runs
+                WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if run_row is None:
+                raise ValueError(f"run not found: {run_id}")
+
+            if run_row["status"] != "active":
+                return {"outcome": "stale", "run": dict(run_row)}
+            if int(run_row["current_step_index"]) != step_index:
+                return {"outcome": "stale", "run": dict(run_row)}
+            if int(run_row["active_round_index"]) != round_index:
+                return {"outcome": "stale", "run": dict(run_row)}
+
+            existing = conn.execute(
+                """
+                SELECT id, run_id, step_index, round_index, user_message, debate_llm_message,
+                       moderator_decision, moderator_summary, next_user_prompt, status,
+                       idempotency_key, created_at, updated_at
+                FROM chat_workflow_rounds
+                WHERE run_id = ? AND step_index = ? AND round_index = ?
+                """,
+                (run_id, step_index, round_index),
+            ).fetchone()
+            if existing is not None:
+                existing_round = dict(existing)
+                if idempotency_key is not None and existing_round.get("idempotency_key") == idempotency_key:
+                    return {"outcome": "replayed", "round": existing_round, "run": dict(run_row)}
+                return {"outcome": "conflict", "round": existing_round, "run": dict(run_row)}
+
+            conn.execute(
+                """
+                INSERT INTO chat_workflow_rounds (
+                    run_id, step_index, round_index, user_message, debate_llm_message,
+                    moderator_decision, moderator_summary, next_user_prompt, status,
+                    idempotency_key, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, 'pending', ?, ?, ?)
+                """,
+                (run_id, step_index, round_index, user_message, idempotency_key, now, now),
+            )
+            round_row = conn.execute(
+                """
+                SELECT id, run_id, step_index, round_index, user_message, debate_llm_message,
+                       moderator_decision, moderator_summary, next_user_prompt, status,
+                       idempotency_key, created_at, updated_at
+                FROM chat_workflow_rounds
+                WHERE run_id = ? AND step_index = ? AND round_index = ?
+                """,
+                (run_id, step_index, round_index),
+            ).fetchone()
+        return {
+            "outcome": "claimed",
+            "round": dict(round_row) if round_row is not None else None,
+            "run": dict(run_row),
+        }
+
+    def complete_dialogue_round(
+        self,
+        *,
+        run_id: str,
+        step_index: int,
+        round_index: int,
+        debate_llm_message: str,
+        moderator_decision: str,
+        moderator_summary: str | None,
+        next_user_prompt: str | None,
+        next_step_index: int,
+        next_round_index: int,
+        next_status: str,
+        step_runtime_state_json: dict[str, Any] | list[Any] | str | None = None,
+        completed_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Finalize a claimed dialogue round and update run state."""
+        runtime_state_value = (
+            step_runtime_state_json
+            if isinstance(step_runtime_state_json, str) or step_runtime_state_json is None
+            else _json_dumps(step_runtime_state_json)
+        )
+        now = _utcnow_iso()
+        with self.transaction() as conn:
+            run_row = conn.execute(
+                """
+                SELECT run_id, tenant_id, user_id, template_id, template_version, source_mode, status,
+                       current_step_index, active_round_index, step_runtime_state_json,
+                       template_snapshot_json, selected_context_refs_json,
+                       resolved_context_snapshot_json, question_renderer_model, started_at,
+                       completed_at, canceled_at, free_chat_conversation_id
+                FROM chat_workflow_runs
+                WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if run_row is None:
+                raise ValueError(f"run not found: {run_id}")
+            if (
+                run_row["status"] != "active"
+                or int(run_row["current_step_index"]) != step_index
+                or int(run_row["active_round_index"]) != round_index
+            ):
+                return {"outcome": "stale", "run": dict(run_row)}
+
+            round_row = conn.execute(
+                """
+                SELECT id, status
+                FROM chat_workflow_rounds
+                WHERE run_id = ? AND step_index = ? AND round_index = ?
+                """,
+                (run_id, step_index, round_index),
+            ).fetchone()
+            if round_row is None:
+                raise ValueError(
+                    f"dialogue round not found: run_id={run_id} step_index={step_index} round_index={round_index}"
+                )
+            if round_row["status"] == "completed":
+                return {"outcome": "replayed", "run": dict(run_row)}
+
+            conn.execute(
+                """
+                UPDATE chat_workflow_rounds
+                SET debate_llm_message = ?,
+                    moderator_decision = ?,
+                    moderator_summary = ?,
+                    next_user_prompt = ?,
+                    status = 'completed',
+                    updated_at = ?
+                WHERE run_id = ? AND step_index = ? AND round_index = ?
+                """,
+                (
+                    debate_llm_message,
+                    moderator_decision,
+                    moderator_summary,
+                    next_user_prompt,
+                    now,
+                    run_id,
+                    step_index,
+                    round_index,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE chat_workflow_runs
+                SET status = ?,
+                    current_step_index = ?,
+                    active_round_index = ?,
+                    step_runtime_state_json = CASE
+                        WHEN ? THEN ? ELSE step_runtime_state_json
+                    END,
+                    completed_at = CASE WHEN ? THEN ? ELSE completed_at END
+                WHERE run_id = ?
+                """,
+                (
+                    next_status,
+                    next_step_index,
+                    next_round_index,
+                    runtime_state_value is not None,
+                    runtime_state_value,
+                    completed_at is not None,
+                    completed_at,
+                    run_id,
+                ),
+            )
+            updated_run = conn.execute(
+                """
+                SELECT run_id, tenant_id, user_id, template_id, template_version, source_mode, status,
+                       current_step_index, active_round_index, step_runtime_state_json,
+                       template_snapshot_json, selected_context_refs_json,
+                       resolved_context_snapshot_json, question_renderer_model, started_at,
+                       completed_at, canceled_at, free_chat_conversation_id
+                FROM chat_workflow_runs
+                WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        return {"outcome": "completed", "run": dict(updated_run) if updated_run is not None else None}
+
+    def fail_dialogue_round(
+        self,
+        *,
+        run_id: str,
+        step_index: int,
+        round_index: int,
+    ) -> None:
+        """Mark a pending round as failed without advancing the workflow."""
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE chat_workflow_rounds
+                SET status = 'failed',
+                    updated_at = ?
+                WHERE run_id = ? AND step_index = ? AND round_index = ?
+                """,
+                (_utcnow_iso(), run_id, step_index, round_index),
+            )
 
     def get_answer_by_idempotency_key(
         self,
@@ -519,7 +856,8 @@ class ChatWorkflowsDatabase:
             return conn.execute(
                 """
                 SELECT run_id, tenant_id, user_id, template_id, template_version, source_mode, status,
-                       current_step_index, template_snapshot_json, selected_context_refs_json,
+                       current_step_index, active_round_index, step_runtime_state_json,
+                       template_snapshot_json, selected_context_refs_json,
                        resolved_context_snapshot_json, question_renderer_model, started_at,
                        completed_at, canceled_at, free_chat_conversation_id
                 FROM chat_workflow_runs

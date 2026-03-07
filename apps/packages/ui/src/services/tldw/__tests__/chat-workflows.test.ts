@@ -13,6 +13,7 @@ import {
   createChatWorkflowTemplate,
   deleteChatWorkflowTemplate,
   listChatWorkflowTemplates,
+  respondChatWorkflowRound,
   startChatWorkflowRun
 } from "../chat-workflows"
 
@@ -102,6 +103,26 @@ describe("chat workflows service client", () => {
       expect.objectContaining({
         path: "/api/v1/chat-workflows/templates/22",
         method: "DELETE"
+      })
+    )
+  })
+
+  it("submits dialogue rounds through the round response endpoint", async () => {
+    mocks.bgRequestClient.mockResolvedValueOnce({ run_id: "run-42", status: "active" })
+
+    await respondChatWorkflowRound("run-42", 1, {
+      user_message: "Here is my defense.",
+      idempotency_key: "round-2"
+    })
+
+    expect(mocks.bgRequestClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/chat-workflows/runs/run-42/rounds/1/respond",
+        method: "POST",
+        body: {
+          user_message: "Here is my defense.",
+          idempotency_key: "round-2"
+        }
       })
     )
   })

@@ -14,6 +14,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
     CHAT_WORKFLOWS_WRITE,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.core.Chat_Workflows.service import ChatWorkflowService
 from tldw_Server_API.app.core.DB_Management.ChatWorkflows_DB import ChatWorkflowsDatabase
 
 
@@ -358,3 +359,189 @@ async def test_chat_workflow_answer_rejects_conflicting_idempotent_retry(tmp_pat
 
         assert first_resp.status_code == 200, first_resp.text
         assert conflict_resp.status_code == 409, conflict_resp.text
+
+
+@pytest.mark.asyncio
+async def test_chat_workflow_round_endpoint_serializes_dialogue_progress(tmp_path):
+    class FakeDialogueOrchestrator:
+        async def run_round(self, **kwargs):
+            return {
+                "debate_llm_message": "Counterargument",
+                "moderator_decision": "continue",
+                "moderator_summary": "Push harder on the weakest premise.",
+                "next_user_prompt": "Defend your evidence.",
+            }
+
+    db = ChatWorkflowsDatabase(
+        db_path=tmp_path / "chat_workflows.db",
+        client_id="test-client",
+    )
+    app = _build_app(
+        db,
+        principal_permissions=[
+            CHAT_WORKFLOWS_READ,
+            CHAT_WORKFLOWS_WRITE,
+            CHAT_WORKFLOWS_RUN,
+        ],
+        user_permissions=[
+            CHAT_WORKFLOWS_READ,
+            CHAT_WORKFLOWS_WRITE,
+            CHAT_WORKFLOWS_RUN,
+        ],
+    )
+
+    async def _fake_get_service() -> ChatWorkflowService:
+        return ChatWorkflowService(
+            db=db,
+            question_renderer=None,
+            dialogue_orchestrator=FakeDialogueOrchestrator(),
+        )
+
+    app.dependency_overrides[chat_workflows_mod._get_service] = _fake_get_service
+
+    with TestClient(app) as client:
+        template_resp = client.post(
+            "/api/v1/chat-workflows/templates",
+            json={
+                "title": "Socratic",
+                "steps": [
+                    {
+                        "id": "debate",
+                        "step_index": 0,
+                        "step_type": "dialogue_round_step",
+                        "base_question": "State your thesis.",
+                        "question_mode": "stock",
+                        "context_refs": [],
+                        "dialogue_config": {
+                            "goal_prompt": "Stress-test the thesis.",
+                            "opening_prompt_mode": "base_question",
+                            "user_role_label": "Author",
+                            "debate_llm_config": {"provider": "openai", "model": "gpt-4o-mini"},
+                            "moderator_llm_config": {"provider": "openai", "model": "gpt-4o-mini"},
+                            "max_rounds": 4,
+                            "finish_conditions": ["clear compromise"],
+                            "context_refs": [],
+                            "debate_instruction_prompt": "Challenge weak assumptions.",
+                            "moderator_instruction_prompt": "Return structured control output only.",
+                        },
+                    }
+                ],
+            },
+        )
+        assert template_resp.status_code == 201, template_resp.text
+
+        run_resp = client.post(
+            "/api/v1/chat-workflows/runs",
+            json={"template_id": template_resp.json()["id"], "selected_context_refs": []},
+        )
+        assert run_resp.status_code == 200, run_resp.text
+        assert run_resp.json()["current_step_kind"] == "dialogue_round_step"
+        assert run_resp.json()["current_prompt"] == "State your thesis."
+
+        run_id = run_resp.json()["run_id"]
+        round_resp = client.post(
+            f"/api/v1/chat-workflows/runs/{run_id}/rounds/0/respond",
+            json={
+                "user_message": "My thesis is sound.",
+                "idempotency_key": "round-1",
+            },
+        )
+        assert round_resp.status_code == 200, round_resp.text
+        body = round_resp.json()
+        assert body["current_step_kind"] == "dialogue_round_step"
+        assert body["current_round_index"] == 1
+        assert body["current_prompt"] == "Defend your evidence."
+        assert len(body["rounds"]) == 1
+        assert body["rounds"][0]["moderator_decision"] == "continue"
+
+
+@pytest.mark.asyncio
+async def test_chat_workflow_transcript_includes_dialogue_roles(tmp_path):
+    class FakeDialogueOrchestrator:
+        async def run_round(self, **kwargs):
+            return {
+                "debate_llm_message": "Counterargument",
+                "moderator_decision": "continue",
+                "moderator_summary": "Push harder on the weakest premise.",
+                "next_user_prompt": "Defend your evidence.",
+            }
+
+    db = ChatWorkflowsDatabase(
+        db_path=tmp_path / "chat_workflows.db",
+        client_id="test-client",
+    )
+    app = _build_app(
+        db,
+        principal_permissions=[
+            CHAT_WORKFLOWS_READ,
+            CHAT_WORKFLOWS_WRITE,
+            CHAT_WORKFLOWS_RUN,
+        ],
+        user_permissions=[
+            CHAT_WORKFLOWS_READ,
+            CHAT_WORKFLOWS_WRITE,
+            CHAT_WORKFLOWS_RUN,
+        ],
+    )
+
+    async def _fake_get_service() -> ChatWorkflowService:
+        return ChatWorkflowService(
+            db=db,
+            question_renderer=None,
+            dialogue_orchestrator=FakeDialogueOrchestrator(),
+        )
+
+    app.dependency_overrides[chat_workflows_mod._get_service] = _fake_get_service
+
+    with TestClient(app) as client:
+        run_resp = client.post(
+            "/api/v1/chat-workflows/runs",
+            json={
+                "template_draft": {
+                    "title": "Socratic",
+                    "version": 1,
+                    "steps": [
+                        {
+                            "id": "debate",
+                            "step_index": 0,
+                            "step_type": "dialogue_round_step",
+                            "base_question": "State your thesis.",
+                            "question_mode": "stock",
+                            "context_refs": [],
+                            "dialogue_config": {
+                                "goal_prompt": "Stress-test the thesis.",
+                                "opening_prompt_mode": "base_question",
+                                "user_role_label": "Author",
+                                "debate_llm_config": {"provider": "openai", "model": "gpt-4o-mini"},
+                                "moderator_llm_config": {"provider": "openai", "model": "gpt-4o-mini"},
+                                "max_rounds": 4,
+                                "finish_conditions": ["clear compromise"],
+                                "context_refs": [],
+                                "debate_instruction_prompt": "Challenge weak assumptions.",
+                                "moderator_instruction_prompt": "Return structured control output only.",
+                            },
+                        }
+                    ],
+                },
+                "selected_context_refs": [],
+            },
+        )
+        assert run_resp.status_code == 200, run_resp.text
+        run_id = run_resp.json()["run_id"]
+
+        round_resp = client.post(
+            f"/api/v1/chat-workflows/runs/{run_id}/rounds/0/respond",
+            json={
+                "user_message": "My thesis is sound.",
+                "idempotency_key": "round-1",
+            },
+        )
+        assert round_resp.status_code == 200, round_resp.text
+
+        transcript_resp = client.get(f"/api/v1/chat-workflows/runs/{run_id}/transcript")
+        assert transcript_resp.status_code == 200, transcript_resp.text
+
+        roles = [message["role"] for message in transcript_resp.json()["messages"]]
+        assert "user" in roles
+        assert "debate_llm" in roles
+        assert "moderator" in roles

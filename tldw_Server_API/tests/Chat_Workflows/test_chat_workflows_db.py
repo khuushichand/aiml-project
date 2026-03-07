@@ -123,3 +123,115 @@ def test_append_event_assigns_unique_sequences_under_concurrency(tmp_path):
 
     assert sorted(seqs) == list(range(1, 21))
     assert [event["seq"] for event in db.list_events(run_id)] == list(range(1, 21))
+
+
+def test_replace_template_steps_persists_dialogue_metadata(tmp_path):
+    db = ChatWorkflowsDatabase(db_path=tmp_path / "chat_workflows.db", client_id="test")
+
+    template_id = db.create_template(
+        tenant_id="default",
+        user_id="user-1",
+        title="Socratic",
+        description=None,
+        version=1,
+    )
+
+    db.replace_template_steps(
+        template_id,
+        [
+            {
+                "id": "debate-step",
+                "step_index": 0,
+                "step_type": "dialogue_round_step",
+                "label": "Socratic Dialogue",
+                "base_question": "State your thesis.",
+                "question_mode": "stock",
+                "dialogue_config": {
+                    "goal_prompt": "Test the thesis.",
+                    "opening_prompt_mode": "base_question",
+                    "user_role_label": "Author",
+                    "debate_llm_config": {"provider": "openai", "model": "gpt-4o-mini"},
+                    "moderator_llm_config": {"provider": "openai", "model": "gpt-4o-mini"},
+                    "max_rounds": 4,
+                    "finish_conditions": ["clear compromise"],
+                    "context_refs": [],
+                    "debate_instruction_prompt": "Challenge weak assumptions.",
+                    "moderator_instruction_prompt": "Return structured control output only.",
+                },
+                "context_refs": [],
+            }
+        ],
+    )
+
+    step = db.get_template(template_id)["steps"][0]
+
+    assert step["step_type"] == "dialogue_round_step"
+    assert json.loads(step["dialogue_config_json"])["goal_prompt"] == "Test the thesis."
+
+
+def test_create_run_exposes_dialogue_runtime_state_columns(tmp_path):
+    db = ChatWorkflowsDatabase(db_path=tmp_path / "chat_workflows.db", client_id="test")
+
+    run_id = db.create_run(
+        tenant_id="default",
+        user_id="user-1",
+        template_id=None,
+        template_version=1,
+        source_mode="generated_draft",
+        status="active",
+        template_snapshot={
+            "steps": [
+                {
+                    "id": "dialogue-step",
+                    "step_type": "dialogue_round_step",
+                    "base_question": "State your thesis.",
+                }
+            ]
+        },
+        selected_context_refs=[],
+        resolved_context_snapshot=[],
+    )
+
+    run = db.get_run(run_id)
+
+    assert "active_round_index" in run
+    assert "step_runtime_state_json" in run
+    assert run["active_round_index"] == 0
+
+
+def test_chat_workflow_rounds_table_exists(tmp_path):
+    db = ChatWorkflowsDatabase(db_path=tmp_path / "chat_workflows.db", client_id="test")
+
+    row = db._conn.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'chat_workflow_rounds'
+        """
+    ).fetchone()
+
+    assert row is not None
+
+
+def test_chat_workflow_runs_schema_includes_dialogue_runtime_columns(tmp_path):
+    db = ChatWorkflowsDatabase(db_path=tmp_path / "chat_workflows.db", client_id="test")
+
+    columns = {
+        row["name"]
+        for row in db._conn.execute("PRAGMA table_info(chat_workflow_runs)").fetchall()
+    }
+
+    assert "active_round_index" in columns
+    assert "step_runtime_state_json" in columns
+
+
+def test_chat_workflow_template_steps_schema_includes_dialogue_columns(tmp_path):
+    db = ChatWorkflowsDatabase(db_path=tmp_path / "chat_workflows.db", client_id="test")
+
+    columns = {
+        row["name"]
+        for row in db._conn.execute("PRAGMA table_info(chat_workflow_template_steps)").fetchall()
+    }
+
+    assert "step_type" in columns
+    assert "dialogue_config_json" in columns

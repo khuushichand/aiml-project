@@ -37,9 +37,11 @@ class ChatWorkflowService:
         *,
         db: ChatWorkflowsDatabase,
         question_renderer: ChatWorkflowQuestionRenderer | None,
+        dialogue_orchestrator: Any | None = None,
     ) -> None:
         self.db = db
         self.question_renderer = question_renderer
+        self.dialogue_orchestrator = dialogue_orchestrator
 
     async def _db_call_async(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
         """Run a synchronous DB adapter method on a worker thread."""
@@ -134,6 +136,18 @@ class ChatWorkflowService:
             return None
 
         step = steps[current_step_index]
+        if self._get_step_type(step) == "dialogue_round_step":
+            current_prompt = self._get_dialogue_prompt(step=step, run=run)
+            return {
+                **step,
+                "run_id": run_id,
+                "step_index": current_step_index,
+                "displayed_question": current_prompt,
+                "current_prompt": current_prompt,
+                "current_round_index": int(run.get("active_round_index", 0)),
+                "rounds": await self._db_call_async("list_rounds", run_id, current_step_index),
+            }
+
         cached_question = await self._get_rendered_question_cache_async(
             run_id,
             current_step_index,
@@ -211,6 +225,8 @@ class ChatWorkflowService:
             raise ValueError("run is already complete")
 
         step = steps[current_step_index]
+        if self._get_step_type(step) != "question_step":
+            raise ValueError("current step requires dialogue round responses")
         rendered_question = await self._get_rendered_question_cache_async(
             run_id,
             current_step_index,
@@ -291,18 +307,186 @@ class ChatWorkflowService:
 
         return await self._build_run_result(run_id)
 
+    async def respond_to_round(
+        self,
+        *,
+        run_id: str,
+        round_index: int,
+        user_message: str,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist a dialogue round and advance the run based on moderator control output."""
+        normalized_user_message = str(user_message).strip()
+        if not normalized_user_message:
+            raise ValueError("user_message must not be empty")
+
+        run = await self._require_run_async(run_id)
+        if run.get("status") != "active":
+            raise ValueError("run is not active")
+
+        template_snapshot = self._get_template_snapshot(run)
+        current_step_index = int(run["current_step_index"])
+        steps = template_snapshot["steps"]
+        if current_step_index >= len(steps):
+            raise ValueError("run is already complete")
+
+        step = steps[current_step_index]
+        if self._get_step_type(step) != "dialogue_round_step":
+            raise ValueError("current step does not accept dialogue rounds")
+        if round_index != int(run.get("active_round_index", 0)):
+            raise ValueError(
+                f"invalid round submission: expected round submission for index "
+                f"{int(run.get('active_round_index', 0))}"
+            )
+        if self.dialogue_orchestrator is None:
+            raise ValueError("dialogue orchestration is not configured")
+
+        round_claim = await self._db_call_async(
+            "begin_dialogue_round",
+            run_id=run_id,
+            step_index=current_step_index,
+            round_index=round_index,
+            user_message=normalized_user_message,
+            idempotency_key=idempotency_key,
+        )
+        if round_claim["outcome"] == "replayed":
+            return await self._build_run_result(run_id)
+        if round_claim["outcome"] == "stale":
+            raise ValueError(
+                f"invalid round submission: expected round submission for index "
+                f"{int(round_claim['run']['active_round_index'])}"
+            )
+        if round_claim["outcome"] == "conflict":
+            raise ChatWorkflowConflictError(
+                "idempotency key has already been used for a different dialogue round"
+                if idempotency_key is not None
+                else "round already contains a different response"
+            )
+
+        rounds = await self._db_call_async("list_rounds", run_id, current_step_index)
+        prior_rounds = [
+            row
+            for row in rounds
+            if int(row.get("round_index", -1)) < round_index and row.get("status") == "completed"
+        ]
+        current_prompt = self._get_dialogue_prompt(step=step, run=run)
+
+        try:
+            round_result = await self.dialogue_orchestrator.run_round(
+                run_id=run_id,
+                step_index=current_step_index,
+                round_index=round_index,
+                step=step,
+                dialogue_config=self._get_dialogue_config(step),
+                current_prompt=current_prompt,
+                user_message=normalized_user_message,
+                prior_rounds=prior_rounds,
+                selected_context_refs=_json_loads(
+                    run.get("selected_context_refs_json"),
+                    default=[],
+                ),
+                resolved_context_snapshot=_json_loads(
+                    run.get("resolved_context_snapshot_json"),
+                    default=[],
+                ),
+                question_renderer_model=run.get("question_renderer_model"),
+            )
+            normalized_round_result = self._normalize_dialogue_round_result(round_result)
+        except Exception:
+            await self._db_call_async(
+                "fail_dialogue_round",
+                run_id=run_id,
+                step_index=current_step_index,
+                round_index=round_index,
+            )
+            raise
+
+        should_finish = self._dialogue_round_should_finish(
+            step=step,
+            round_index=round_index,
+            moderator_decision=normalized_round_result["moderator_decision"],
+        )
+        if should_finish:
+            next_step_index = current_step_index + 1
+            next_round_index = 0
+            next_status = "completed" if next_step_index >= len(steps) else "active"
+            step_runtime_state: dict[str, Any] = {}
+            completed_at = _utcnow_iso() if next_status == "completed" else None
+        else:
+            next_step_index = current_step_index
+            next_round_index = round_index + 1
+            next_status = "active"
+            step_runtime_state = {
+                "current_prompt": normalized_round_result["next_user_prompt"]
+                or self._get_dialogue_opening_prompt(step),
+            }
+            completed_at = None
+
+        finalize_result = await self._db_call_async(
+            "complete_dialogue_round",
+            run_id=run_id,
+            step_index=current_step_index,
+            round_index=round_index,
+            debate_llm_message=normalized_round_result["debate_llm_message"],
+            moderator_decision="finish" if should_finish else normalized_round_result["moderator_decision"],
+            moderator_summary=normalized_round_result["moderator_summary"],
+            next_user_prompt=(
+                None if should_finish else step_runtime_state.get("current_prompt")
+            ),
+            next_step_index=next_step_index,
+            next_round_index=next_round_index,
+            next_status=next_status,
+            step_runtime_state_json=step_runtime_state,
+            completed_at=completed_at,
+        )
+        if finalize_result["outcome"] == "stale":
+            await self._db_call_async(
+                "fail_dialogue_round",
+                run_id=run_id,
+                step_index=current_step_index,
+                round_index=round_index,
+            )
+            raise ValueError("workflow state changed during round execution")
+
+        event_type = "run_completed" if next_status == "completed" else "dialogue_round_completed"
+        await self._db_call_async(
+            "append_event",
+            run_id,
+            event_type,
+            {
+                "step_index": current_step_index,
+                "round_index": round_index,
+                "moderator_decision": "finish"
+                if should_finish
+                else normalized_round_result["moderator_decision"],
+                "advanced_to_step_index": next_step_index,
+                "next_round_index": next_round_index,
+            },
+        )
+        return await self._build_run_result(run_id)
+
     def _normalize_template(self, template: dict[str, Any]) -> dict[str, Any]:
         normalized_steps: list[dict[str, Any]] = []
         for index, step in enumerate(template.get("steps", [])):
+            step_type = self._get_step_type(step)
             normalized_steps.append(
                 {
                     "id": str(step.get("id") or step.get("step_id") or f"step-{index + 1}"),
                     "step_index": int(step.get("step_index", index)),
+                    "step_type": step_type,
                     "label": step.get("label"),
                     "base_question": str(step["base_question"]).strip(),
                     "question_mode": str(step.get("question_mode", "stock")).strip().lower().replace("-", "_"),
                     "phrasing_instructions": step.get("phrasing_instructions"),
                     "context_refs": list(step.get("context_refs", [])),
+                    "dialogue_config": (
+                        self._normalize_dialogue_config(
+                            step.get("dialogue_config")
+                            or _json_loads(step.get("dialogue_config_json"), default=None)
+                        )
+                        if step_type == "dialogue_round_step"
+                        else None
+                    ),
                 }
             )
         return {
@@ -329,8 +513,28 @@ class ChatWorkflowService:
         run = await self._require_run_async(run_id)
         result = dict(run)
         result["answers"] = await self._db_call_async("list_answers", run_id)
+        result["selected_context_refs"] = _json_loads(
+            run.get("selected_context_refs_json"),
+            default=[],
+        )
+        result["current_step_kind"] = None
+        result["current_prompt"] = None
+        result["current_round_index"] = None
+        result["rounds"] = []
+        result["current_question"] = None
         if result["status"] == "active":
-            result["current_step"] = await self.get_current_step(run_id)
+            current_step = await self.get_current_step(run_id)
+            result["current_step"] = current_step
+            if current_step is not None:
+                step_type = self._get_step_type(current_step)
+                result["current_step_kind"] = step_type
+                result["current_prompt"] = current_step.get("current_prompt") or current_step.get(
+                    "displayed_question"
+                )
+                result["current_question"] = current_step.get("displayed_question")
+                if step_type == "dialogue_round_step":
+                    result["current_round_index"] = int(run.get("active_round_index", 0))
+                    result["rounds"] = current_step.get("rounds", [])
         return result
 
     def _validate_replayed_answer(
@@ -355,6 +559,79 @@ class ChatWorkflowService:
         if not isinstance(steps, list):
             raise ValueError("run template snapshot is invalid")
         return snapshot
+
+    def _get_step_type(self, step: dict[str, Any]) -> str:
+        """Return the normalized workflow step type."""
+        return str(step.get("step_type", "question_step")).strip().lower().replace("-", "_")
+
+    def _get_dialogue_config(self, step: dict[str, Any]) -> dict[str, Any]:
+        """Return the normalized dialogue configuration for a step."""
+        config = step.get("dialogue_config") or {}
+        if not isinstance(config, dict):
+            raise ValueError("dialogue step configuration is invalid")
+        return config
+
+    def _normalize_dialogue_config(self, config: Any) -> dict[str, Any]:
+        """Normalize a dialogue config payload for template snapshots."""
+        if config is None:
+            return {}
+        if not isinstance(config, dict):
+            raise ValueError("dialogue_config must be an object")
+        normalized = dict(config)
+        opening_prompt_mode = normalized.get("opening_prompt_mode", "base_question")
+        if isinstance(opening_prompt_mode, str):
+            normalized["opening_prompt_mode"] = (
+                opening_prompt_mode.strip().lower().replace("-", "_")
+            )
+        return normalized
+
+    def _get_dialogue_opening_prompt(self, step: dict[str, Any]) -> str:
+        """Resolve the first prompt shown for a dialogue step."""
+        dialogue_config = self._get_dialogue_config(step)
+        if dialogue_config.get("opening_prompt_mode") == "custom_prompt":
+            custom_prompt = str(dialogue_config.get("opening_prompt_text") or "").strip()
+            if custom_prompt:
+                return custom_prompt
+        return str(step.get("base_question") or "").strip()
+
+    def _get_dialogue_prompt(self, *, step: dict[str, Any], run: dict[str, Any]) -> str:
+        """Return the prompt currently shown to the user for a dialogue step."""
+        runtime_state = _json_loads(run.get("step_runtime_state_json"), default={})
+        if isinstance(runtime_state, dict):
+            current_prompt = str(runtime_state.get("current_prompt") or "").strip()
+            if current_prompt:
+                return current_prompt
+        return self._get_dialogue_opening_prompt(step)
+
+    def _normalize_dialogue_round_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Validate and normalize orchestrator control output."""
+        debate_llm_message = str(result.get("debate_llm_message") or "").strip()
+        if not debate_llm_message:
+            raise ValueError("dialogue orchestrator returned an empty debate_llm_message")
+        moderator_decision = str(result.get("moderator_decision") or "").strip().lower()
+        if moderator_decision not in {"continue", "finish"}:
+            raise ValueError("dialogue orchestrator returned an invalid moderator_decision")
+        moderator_summary = str(result.get("moderator_summary") or "").strip() or None
+        next_user_prompt = str(result.get("next_user_prompt") or "").strip() or None
+        return {
+            "debate_llm_message": debate_llm_message,
+            "moderator_decision": moderator_decision,
+            "moderator_summary": moderator_summary,
+            "next_user_prompt": next_user_prompt,
+        }
+
+    def _dialogue_round_should_finish(
+        self,
+        *,
+        step: dict[str, Any],
+        round_index: int,
+        moderator_decision: str,
+    ) -> bool:
+        """Decide whether a dialogue step should advance after this round."""
+        if moderator_decision == "finish":
+            return True
+        max_rounds = int(self._get_dialogue_config(step).get("max_rounds", 1))
+        return round_index + 1 >= max_rounds
 
     async def _get_rendered_question_cache_async(
         self,

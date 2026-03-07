@@ -29,6 +29,16 @@ This guide explains the Chat module’s architecture, key components, and how to
 - Each step uses either:
   - `stock` question mode: render the authored `base_question` directly.
   - `llm_phrased` question mode: route through `core/Chat_Workflows/question_renderer.py`, with service-level fallback to the stock question if phrasing fails.
+- Workflow step kinds are now:
+  - `question_step`: classic one-question, one-answer progression.
+  - `dialogue_round_step`: repeated moderated rounds persisted in `chat_workflow_rounds` while the parent workflow remains on the same step.
+- Dialogue steps are executed through `core/Chat_Workflows/dialogue_orchestrator.py`, which builds prompts for the debate LLM and moderator LLM and routes both calls through `chat_orchestrator.chat_api_call_async`.
+- Moderator output is schema-constrained and controls only the internal round loop:
+  - `continue`
+  - `finish`
+  - `next_user_prompt`
+  - `moderator_summary`
+- Dialogue round persistence uses a two-phase claim/execute/finalize flow so SQLite write locks are not held across provider calls.
 - Completion is stop-by-default. Free chat requires an explicit `POST /api/v1/chat-workflows/runs/{run_id}/continue-chat` handoff.
 - Access is split across dedicated permissions:
   - `chat_workflows.read`
@@ -37,7 +47,9 @@ This guide explains the Chat module’s architecture, key components, and how to
 - Current v1 behavior keeps context explicit:
   - run-level `selected_context_refs` are persisted with the run
   - step-level `context_refs` are persisted with the template snapshot
+  - dialogue-step `dialogue_config.context_refs` are passed explicitly into debate/moderator prompt construction
   - prior answers are fed back into question rendering
+  - prior dialogue rounds are replayed into the moderated round prompts
   - broader context resolution remains intentionally narrow in the current implementation
 
 Published API reference: `Docs/Published/API-related/Chat_Workflows_API.md`

@@ -6,7 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const serviceMocks = vi.hoisted(() => ({
   createChatWorkflowTemplate: vi.fn(),
   listChatWorkflowTemplates: vi.fn(),
-  submitChatWorkflowAnswer: vi.fn()
+  submitChatWorkflowAnswer: vi.fn(),
+  respondChatWorkflowRound: vi.fn()
 }))
 
 vi.mock("@/services/tldw/chat-workflows", () => ({
@@ -15,13 +16,16 @@ vi.mock("@/services/tldw/chat-workflows", () => ({
   listChatWorkflowTemplates: (...args: unknown[]) =>
     serviceMocks.listChatWorkflowTemplates(...args),
   submitChatWorkflowAnswer: (...args: unknown[]) =>
-    serviceMocks.submitChatWorkflowAnswer(...args)
+    serviceMocks.submitChatWorkflowAnswer(...args),
+  respondChatWorkflowRound: (...args: unknown[]) =>
+    serviceMocks.respondChatWorkflowRound(...args)
 }))
 
 import {
   chatWorkflowQueryKeys,
   useChatWorkflowTemplates,
   useCreateChatWorkflowTemplate,
+  useSubmitChatWorkflowRound,
   useSubmitChatWorkflowAnswer
 } from "@/hooks/useChatWorkflows"
 
@@ -125,6 +129,42 @@ describe("useChatWorkflows", () => {
     })
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: chatWorkflowQueryKeys.transcript("run-1")
+    })
+  })
+
+  it("invalidates the run and transcript queries after responding to a dialogue round", async () => {
+    serviceMocks.respondChatWorkflowRound.mockResolvedValueOnce({
+      run_id: "run-2",
+      status: "active",
+      current_step_index: 0,
+      current_round_index: 1,
+      current_step_kind: "dialogue_round_step",
+      current_prompt: "Defend your evidence.",
+      template_version: 1,
+      rounds: []
+    })
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } }
+    })
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries")
+
+    const { result } = renderHook(() => useSubmitChatWorkflowRound("run-2", 0), {
+      wrapper: buildWrapper(queryClient)
+    })
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        user_message: "Here is my defense."
+      })
+    })
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: chatWorkflowQueryKeys.run("run-2")
+      })
+    })
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: chatWorkflowQueryKeys.transcript("run-2")
     })
   })
 })

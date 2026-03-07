@@ -30,6 +30,7 @@ const state = vi.hoisted(() => {
     generateMutateAsync: vi.fn(),
     startRunMutateAsync: vi.fn(),
     submitAnswerMutateAsync: vi.fn(),
+    submitRoundMutateAsync: vi.fn(),
     cancelRunMutateAsync: vi.fn(),
     continueRunMutateAsync: vi.fn(),
     activeRun: null as any,
@@ -79,6 +80,10 @@ vi.mock("@/hooks/useChatWorkflows", () => ({
   }),
   useSubmitChatWorkflowAnswer: () => ({
     mutateAsync: state.submitAnswerMutateAsync,
+    isPending: false
+  }),
+  useSubmitChatWorkflowRound: () => ({
+    mutateAsync: state.submitRoundMutateAsync,
     isPending: false
   }),
   useCancelChatWorkflowRun: () => ({
@@ -196,6 +201,47 @@ describe("ChatWorkflowsPage", () => {
           {
             role: "user",
             content: payload.answer_text,
+            step_index: 0
+          }
+        ]
+      }
+      return state.activeRun
+    })
+    state.submitRoundMutateAsync.mockImplementation(async (payload) => {
+      state.activeRun = {
+        ...state.activeRun,
+        current_step_kind: "dialogue_round_step",
+        current_round_index: 1,
+        current_prompt: "Defend your evidence.",
+        current_question: "Defend your evidence.",
+        rounds: [
+          {
+            round_index: 0,
+            user_message: payload.user_message,
+            debate_llm_message: "Counterargument",
+            moderator_decision: "continue",
+            moderator_summary: "Push harder on the weakest premise.",
+            next_user_prompt: "Defend your evidence.",
+            status: "completed"
+          }
+        ]
+      }
+      state.transcript = {
+        run_id: state.activeRun.run_id,
+        messages: [
+          {
+            role: "user",
+            content: payload.user_message,
+            step_index: 0
+          },
+          {
+            role: "debate_llm",
+            content: "Counterargument",
+            step_index: 0
+          },
+          {
+            role: "moderator",
+            content: "Push harder on the weakest premise.\n\nDefend your evidence.",
             step_index: 0
           }
         ]
@@ -321,6 +367,67 @@ describe("ChatWorkflowsPage", () => {
         selected_context_refs: []
       })
     })
+  })
+
+  it("loads the built-in Socratic dialogue template into the builder", async () => {
+    render(<ChatWorkflowsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Use Socratic Dialogue" }))
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Socratic Dialogue")).toBeInTheDocument()
+    })
+    expect(
+      screen.getByDisplayValue("State your current thesis or position.")
+    ).toBeInTheDocument()
+  })
+
+  it("submits a dialogue response when the active step is a moderated round", async () => {
+    state.startRunMutateAsync.mockImplementationOnce(async () => {
+      state.activeRun = {
+        run_id: "run-dialogue",
+        template_version: 1,
+        status: "active",
+        current_step_index: 0,
+        current_question: "State your current thesis or position.",
+        current_step_kind: "dialogue_round_step",
+        current_prompt: "State your current thesis or position.",
+        current_round_index: 0,
+        selected_context_refs: [],
+        answers: [],
+        rounds: []
+      }
+      state.transcript = {
+        run_id: "run-dialogue",
+        messages: []
+      }
+      return state.activeRun
+    })
+
+    render(<ChatWorkflowsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Use Socratic Dialogue" }))
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Socratic Dialogue")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Run" }))
+
+    await waitFor(() => {
+      expect(screen.getByText("State your current thesis or position.")).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByLabelText("Response for current round"), {
+      target: { value: "My thesis is sound." }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Submit Response" }))
+
+    await waitFor(() => {
+      expect(state.submitRoundMutateAsync).toHaveBeenCalledWith({
+        user_message: "My thesis is sound."
+      })
+    })
+    expect(screen.getByText("Defend your evidence.")).toBeInTheDocument()
   })
 
   it("hands a completed workflow off to free chat", async () => {

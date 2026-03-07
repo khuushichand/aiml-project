@@ -15,6 +15,7 @@ import {
   getChatWorkflowRun,
   getChatWorkflowTemplate,
   getChatWorkflowTranscript,
+  respondChatWorkflowRound,
   listChatWorkflowTemplates,
   startChatWorkflowRun,
   submitChatWorkflowAnswer,
@@ -30,7 +31,8 @@ import type {
   GenerateChatWorkflowDraftInput,
   GenerateChatWorkflowDraftResponse,
   StartChatWorkflowRunInput,
-  SubmitChatWorkflowAnswerInput
+  SubmitChatWorkflowAnswerInput,
+  SubmitChatWorkflowRoundInput
 } from "@/types/chat-workflows"
 
 export const chatWorkflowQueryKeys = {
@@ -177,6 +179,27 @@ export const useSubmitChatWorkflowAnswer = (
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (payload) => submitChatWorkflowAnswer(runId, payload),
+    onSuccess: async (data) => {
+      queryClient.setQueryData(chatWorkflowQueryKeys.run(runId), data)
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: chatWorkflowQueryKeys.run(runId)
+        }),
+        queryClient.invalidateQueries({
+          queryKey: chatWorkflowQueryKeys.transcript(runId)
+        })
+      ])
+    }
+  })
+}
+
+export const useSubmitChatWorkflowRound = (
+  runId: string,
+  roundIndex: number
+): UseMutationResult<ChatWorkflowRun, Error, SubmitChatWorkflowRoundInput> => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (payload) => respondChatWorkflowRound(runId, roundIndex, payload),
     onSuccess: async (data) => {
       queryClient.setQueryData(chatWorkflowQueryKeys.run(runId), data)
       await Promise.all([

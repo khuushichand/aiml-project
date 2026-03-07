@@ -9,7 +9,8 @@ import type {
   GenerateChatWorkflowDraftInput,
   GenerateChatWorkflowDraftResponse,
   StartChatWorkflowRunInput,
-  SubmitChatWorkflowAnswerInput
+  SubmitChatWorkflowAnswerInput,
+  SubmitChatWorkflowRoundInput
 } from "@/types/chat-workflows"
 
 const CHAT_WORKFLOWS_BASE_PATH = "/api/v1/chat-workflows"
@@ -114,6 +115,18 @@ export const submitChatWorkflowAnswer = async (
   })
 }
 
+export const respondChatWorkflowRound = async (
+  runId: string,
+  roundIndex: number,
+  payload: SubmitChatWorkflowRoundInput
+): Promise<ChatWorkflowRun> => {
+  return await bgRequestClient<ChatWorkflowRun>({
+    path: `${CHAT_WORKFLOWS_BASE_PATH}/runs/${encodePathSegment(runId)}/rounds/${encodePathSegment(roundIndex)}/respond`,
+    method: "POST",
+    body: payload
+  })
+}
+
 export const cancelChatWorkflowRun = async (
   runId: string
 ): Promise<ChatWorkflowRun> => {
@@ -142,5 +155,6 @@ export type {
   GenerateChatWorkflowDraftInput,
   GenerateChatWorkflowDraftResponse,
   StartChatWorkflowRunInput,
-  SubmitChatWorkflowAnswerInput
+  SubmitChatWorkflowAnswerInput,
+  SubmitChatWorkflowRoundInput
 }

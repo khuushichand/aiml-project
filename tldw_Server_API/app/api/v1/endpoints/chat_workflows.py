@@ -16,6 +16,7 @@ from tldw_Server_API.app.api.v1.API_Deps.chat_workflows_deps import (
     get_chat_workflows_user,
 )
 from tldw_Server_API.app.api.v1.schemas.chat_workflows import (
+    ChatWorkflowRoundResponse,
     ChatWorkflowRunResponse,
     ChatWorkflowTranscriptResponse,
     ChatWorkflowTemplateCreate,
@@ -27,6 +28,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_workflows import (
     GenerateDraftResponse,
     StartRunRequest,
     SubmitAnswerRequest,
+    SubmitRoundRequest,
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     CHAT_WORKFLOWS_READ,
@@ -35,6 +37,9 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 )
 from tldw_Server_API.app.core.Chat_Workflows.question_renderer import (
     ChatWorkflowQuestionRenderer,
+)
+from tldw_Server_API.app.core.Chat_Workflows.dialogue_orchestrator import (
+    ChatWorkflowDialogueOrchestrator,
 )
 from tldw_Server_API.app.core.Chat_Workflows.service import (
     ChatWorkflowConflictError,
@@ -84,6 +89,7 @@ async def _get_service(
     return ChatWorkflowService(
         db=db,
         question_renderer=ChatWorkflowQuestionRenderer(),
+        dialogue_orchestrator=ChatWorkflowDialogueOrchestrator(),
     )
 
 
@@ -157,15 +163,22 @@ def _serialize_template(template: dict[str, Any]) -> dict[str, Any]:
     """Convert a raw DB template row into the API response shape."""
     serialized_steps: list[dict[str, Any]] = []
     for step in sorted(template.get("steps", []), key=lambda row: int(row.get("step_index", 0))):
+        step_type = str(step.get("step_type") or "question_step")
         serialized_steps.append(
             {
                 "id": str(step.get("step_id") or step.get("id")),
                 "step_index": int(step.get("step_index", 0)),
+                "step_type": step_type,
                 "label": step.get("label"),
                 "base_question": step.get("base_question"),
                 "question_mode": step.get("question_mode", "stock"),
                 "phrasing_instructions": step.get("phrasing_instructions"),
                 "context_refs": _json_loads(step.get("context_refs_json"), default=[]),
+                "dialogue_config": (
+                    _json_loads(step.get("dialogue_config_json"), default=None)
+                    if step_type == "dialogue_round_step"
+                    else None
+                ),
             }
         )
     return {
@@ -195,6 +208,140 @@ def _serialize_answer(answer: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _serialize_round(round_row: dict[str, Any]) -> dict[str, Any]:
+    """Convert a raw DB dialogue round row into the API response shape."""
+    return ChatWorkflowRoundResponse.model_validate(
+        {
+            "round_index": int(round_row.get("round_index", 0)),
+            "user_message": round_row.get("user_message", ""),
+            "debate_llm_message": round_row.get("debate_llm_message"),
+            "moderator_decision": round_row.get("moderator_decision"),
+            "moderator_summary": round_row.get("moderator_summary"),
+            "next_user_prompt": round_row.get("next_user_prompt"),
+            "status": round_row.get("status", "completed"),
+            "created_at": round_row.get("created_at"),
+            "updated_at": round_row.get("updated_at"),
+        }
+    ).model_dump()
+
+
+def _get_run_steps(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the ordered step snapshot for a run."""
+    template_snapshot = _json_loads(run.get("template_snapshot_json"), default={})
+    steps = template_snapshot.get("steps", [])
+    if not isinstance(steps, list):
+        return []
+    return steps
+
+
+async def _project_transcript_messages(
+    *,
+    db: ChatWorkflowsDatabase,
+    service: ChatWorkflowService,
+    run: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Project the canonical workflow transcript from answers and dialogue rounds."""
+    run_id = str(run["run_id"])
+    answers_by_step = {
+        int(answer["step_index"]): answer
+        for answer in await _db_call_async(db, "list_answers", run_id)
+    }
+    current_step = await service.get_current_step(run_id) if run.get("status") == "active" else None
+    current_step_index = int(run.get("current_step_index", 0))
+    messages: list[dict[str, Any]] = []
+
+    for step in _get_run_steps(run):
+        step_index = int(step.get("step_index", 0))
+        step_type = str(step.get("step_type") or "question_step")
+        if step_type == "dialogue_round_step":
+            rounds = [
+                _serialize_round(round_row)
+                for round_row in await _db_call_async(db, "list_rounds", run_id, step_index)
+            ]
+            for round_row in rounds:
+                if round_row.get("user_message"):
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": round_row["user_message"],
+                            "step_index": step_index,
+                        }
+                    )
+                if round_row.get("debate_llm_message"):
+                    messages.append(
+                        {
+                            "role": "debate_llm",
+                            "content": round_row["debate_llm_message"],
+                            "step_index": step_index,
+                        }
+                    )
+                moderator_parts = [
+                    str(round_row.get("moderator_summary") or "").strip(),
+                    str(round_row.get("next_user_prompt") or "").strip(),
+                ]
+                moderator_content = "\n\n".join(part for part in moderator_parts if part)
+                if moderator_content:
+                    messages.append(
+                        {
+                            "role": "moderator",
+                            "content": moderator_content,
+                            "step_index": step_index,
+                        }
+                    )
+            last_prompt = (
+                rounds[-1].get("next_user_prompt")
+                if rounds
+                else None
+            )
+            if (
+                current_step is not None
+                and step_index == current_step_index
+                and current_step.get("displayed_question")
+                and current_step.get("displayed_question") != last_prompt
+            ):
+                messages.append(
+                    {
+                        "role": "moderator",
+                        "content": current_step["displayed_question"],
+                        "step_index": step_index,
+                    }
+                )
+            continue
+
+        answer = answers_by_step.get(step_index)
+        if answer is not None:
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": answer["displayed_question"],
+                    "step_index": step_index,
+                }
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": answer["answer_text"],
+                    "step_index": step_index,
+                }
+            )
+            continue
+
+        if (
+            current_step is not None
+            and step_index == current_step_index
+            and current_step.get("displayed_question")
+        ):
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": current_step["displayed_question"],
+                    "step_index": step_index,
+                }
+            )
+
+    return messages
+
+
 async def _build_run_response(
     *,
     db: ChatWorkflowsDatabase,
@@ -207,10 +354,22 @@ async def _build_run_response(
         for answer in await _db_call_async(db, "list_answers", run["run_id"])
     ]
     current_question: str | None = None
+    current_step_kind: str | None = None
+    current_prompt: str | None = None
+    current_round_index: int | None = None
+    rounds: list[dict[str, Any]] = []
     if run.get("status") == "active":
         current_step = await service.get_current_step(run["run_id"])
         if current_step is not None:
             current_question = current_step.get("displayed_question")
+            current_step_kind = str(current_step.get("step_type") or "question_step")
+            current_prompt = current_step.get("current_prompt") or current_question
+            if current_step_kind == "dialogue_round_step":
+                current_round_index = int(run.get("active_round_index", 0))
+                rounds = [
+                    _serialize_round(round_row)
+                    for round_row in current_step.get("rounds", [])
+                ]
 
     return {
         "run_id": run["run_id"],
@@ -224,6 +383,10 @@ async def _build_run_response(
         "free_chat_conversation_id": run.get("free_chat_conversation_id"),
         "selected_context_refs": _json_loads(run.get("selected_context_refs_json"), default=[]),
         "current_question": current_question,
+        "current_step_kind": current_step_kind,
+        "current_prompt": current_prompt,
+        "current_round_index": current_round_index,
+        "rounds": rounds,
         "answers": answers,
     }
 
@@ -466,35 +629,14 @@ async def get_run_transcript(
         await _db_call_async(db, "get_run", run_id),
         user_context=user_context,
     )
-    messages: list[dict[str, Any]] = []
-    for answer in await _db_call_async(db, "list_answers", run_id):
-        messages.append(
-            {
-                "role": "assistant",
-                "content": answer["displayed_question"],
-                "step_index": int(answer["step_index"]),
-            }
-        )
-        messages.append(
-            {
-                "role": "user",
-                "content": answer["answer_text"],
-                "step_index": int(answer["step_index"]),
-            }
-        )
-
-    if run.get("status") == "active":
-        current_step = await service.get_current_step(run_id)
-        if current_step is not None:
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": current_step["displayed_question"],
-                    "step_index": int(current_step["step_index"]),
-                }
-            )
-
-    return {"run_id": run_id, "messages": messages}
+    return {
+        "run_id": run_id,
+        "messages": await _project_transcript_messages(
+            db=db,
+            service=service,
+            run=run,
+        ),
+    }
 
 
 @router.post(
@@ -520,6 +662,44 @@ async def answer_run_step(
             run_id=run_id,
             step_index=payload.step_index,
             answer_text=payload.answer_text,
+            idempotency_key=payload.idempotency_key,
+        )
+    except ChatWorkflowConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    updated_run = _require_run_access(
+        await _db_call_async(db, "get_run", run_id),
+        user_context=user_context,
+    )
+    return await _build_run_response(db=db, service=service, run=updated_run)
+
+
+@router.post(
+    "/runs/{run_id}/rounds/{round_index}/respond",
+    response_model=ChatWorkflowRunResponse,
+    dependencies=[Depends(auth_deps.require_permissions(CHAT_WORKFLOWS_RUN))],
+)
+async def respond_to_run_round(
+    run_id: str,
+    round_index: int,
+    payload: SubmitRoundRequest,
+    user_context: dict[str, Any] = Depends(_get_user_context),
+    db: ChatWorkflowsDatabase = Depends(_get_db),
+    service: ChatWorkflowService = Depends(_get_service),
+) -> dict[str, Any]:
+    """Submit a user message for the current dialogue round."""
+    _require_run_access(
+        await _db_call_async(db, "get_run", run_id),
+        user_context=user_context,
+    )
+
+    try:
+        await service.respond_to_round(
+            run_id=run_id,
+            round_index=round_index,
+            user_message=payload.user_message,
             idempotency_key=payload.idempotency_key,
         )
     except ChatWorkflowConflictError as exc:

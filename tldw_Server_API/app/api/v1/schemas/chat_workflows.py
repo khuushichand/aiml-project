@@ -23,6 +23,86 @@ def _strip_optional(value: str | None) -> str | None:
     return stripped or None
 
 
+class ChatWorkflowLLMSelection(BaseModel):
+    """Workflow-safe LLM selection fields for dialogue participants."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(..., min_length=1)
+    provider: str | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_tokens: int | None = Field(default=None, ge=1)
+    top_p: float | None = Field(default=None, ge=0, le=1)
+
+    @field_validator("model")
+    @classmethod
+    def _strip_model(cls, value: str) -> str:
+        """Trim the required model identifier."""
+        return _strip_required(value, field_name="model")
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _strip_provider(cls, value: str | None) -> str | None:
+        """Trim the optional provider identifier."""
+        return _strip_optional(value)
+
+
+class ChatWorkflowDialogueConfig(BaseModel):
+    """Configuration for a moderated dialogue step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    goal_prompt: str = Field(..., min_length=1)
+    opening_prompt_mode: Literal["base_question", "custom_prompt"] = "base_question"
+    opening_prompt_text: str | None = None
+    user_role_label: str = Field(..., min_length=1)
+    debate_llm_config: ChatWorkflowLLMSelection
+    moderator_llm_config: ChatWorkflowLLMSelection
+    max_rounds: int = Field(..., ge=1, le=12)
+    finish_conditions: list[str] = Field(default_factory=list)
+    context_refs: list[dict[str, Any]] = Field(default_factory=list)
+    debate_instruction_prompt: str = Field(..., min_length=1)
+    moderator_instruction_prompt: str = Field(..., min_length=1)
+
+    @field_validator(
+        "goal_prompt",
+        "user_role_label",
+        "debate_instruction_prompt",
+        "moderator_instruction_prompt",
+    )
+    @classmethod
+    def _strip_required_text(cls, value: str, info: ValidationInfo) -> str:
+        """Trim required dialogue config text fields."""
+        return _strip_required(value, field_name=info.field_name)
+
+    @field_validator("opening_prompt_text", mode="before")
+    @classmethod
+    def _strip_opening_prompt_text(cls, value: str | None) -> str | None:
+        """Trim the optional custom opening prompt."""
+        return _strip_optional(value)
+
+    @field_validator("opening_prompt_mode", mode="before")
+    @classmethod
+    def _normalize_opening_prompt_mode(cls, value: str) -> str:
+        """Normalize custom/base opening prompt mode values."""
+        if isinstance(value, str):
+            return value.strip().lower().replace("-", "_")
+        return value
+
+    @field_validator("finish_conditions")
+    @classmethod
+    def _strip_finish_conditions(cls, value: list[str]) -> list[str]:
+        """Trim finish-condition strings and drop empties."""
+        return [item.strip() for item in value if item.strip()]
+
+    @model_validator(mode="after")
+    def _validate_opening_prompt(self) -> "ChatWorkflowDialogueConfig":
+        """Require a custom opening prompt when the mode asks for one."""
+        if self.opening_prompt_mode == "custom_prompt" and not self.opening_prompt_text:
+            raise ValueError("custom_prompt mode requires opening_prompt_text")
+        return self
+
+
 class ChatWorkflowTemplateStep(BaseModel):
     """A single authored step in a workflow template or run snapshot."""
 
@@ -30,11 +110,13 @@ class ChatWorkflowTemplateStep(BaseModel):
 
     id: str = Field(..., min_length=1)
     step_index: int = Field(..., ge=0)
+    step_type: Literal["question_step", "dialogue_round_step"] = "question_step"
     label: str | None = None
     base_question: str = Field(..., min_length=1)
     question_mode: Literal["stock", "llm_phrased"] = "stock"
     phrasing_instructions: str | None = None
     context_refs: list[dict[str, Any]] = Field(default_factory=list)
+    dialogue_config: ChatWorkflowDialogueConfig | None = None
 
     @field_validator("id", "base_question")
     @classmethod
@@ -48,13 +130,22 @@ class ChatWorkflowTemplateStep(BaseModel):
         """Trim optional text fields before validation."""
         return _strip_optional(value)
 
-    @field_validator("question_mode", mode="before")
+    @field_validator("question_mode", "step_type", mode="before")
     @classmethod
-    def _normalize_question_mode(cls, value: str) -> str:
-        """Accept hyphenated question modes and normalize them to schema form."""
+    def _normalize_modes(cls, value: str) -> str:
+        """Accept hyphenated mode values and normalize them to schema form."""
         if isinstance(value, str):
             return value.strip().lower().replace("-", "_")
         return value
+
+    @model_validator(mode="after")
+    def _validate_step_shape(self) -> "ChatWorkflowTemplateStep":
+        """Ensure the dialogue fields match the selected step type."""
+        if self.step_type == "dialogue_round_step" and self.dialogue_config is None:
+            raise ValueError("dialogue_round_step requires dialogue_config")
+        if self.step_type == "question_step" and self.dialogue_config is not None:
+            raise ValueError("question_step must not include dialogue_config")
+        return self
 
 
 class ChatWorkflowTemplateDraft(BaseModel):
@@ -198,6 +289,27 @@ class SubmitAnswerRequest(BaseModel):
         return _strip_optional(value)
 
 
+class SubmitRoundRequest(BaseModel):
+    """Request body for responding to the current dialogue round."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_message: str = Field(..., min_length=1)
+    idempotency_key: str | None = None
+
+    @field_validator("user_message")
+    @classmethod
+    def _strip_user_message(cls, value: str) -> str:
+        """Trim the user dialogue message and reject blanks."""
+        return _strip_required(value, field_name="user_message")
+
+    @field_validator("idempotency_key", mode="before")
+    @classmethod
+    def _strip_round_idempotency_key(cls, value: str | None) -> str | None:
+        """Trim the optional round idempotency key."""
+        return _strip_optional(value)
+
+
 class ContinueChatResponse(BaseModel):
     """Response body for continuing a completed run as free chat."""
 
@@ -233,9 +345,37 @@ class ChatWorkflowTranscriptMessage(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    role: Literal["assistant", "user"]
+    role: Literal["assistant", "user", "debate_llm", "moderator"]
     content: str
     step_index: int
+
+
+class ChatWorkflowRoundResponse(BaseModel):
+    """Serialized round state for a dialogue workflow step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    round_index: int = Field(..., ge=0)
+    user_message: str
+    debate_llm_message: str | None = None
+    moderator_decision: Literal["continue", "finish"] | None = None
+    moderator_summary: str | None = None
+    next_user_prompt: str | None = None
+    status: Literal["pending", "completed", "failed"] = "completed"
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    @field_validator(
+        "user_message",
+        "debate_llm_message",
+        "moderator_summary",
+        "next_user_prompt",
+        mode="before",
+    )
+    @classmethod
+    def _strip_round_text(cls, value: str | None) -> str | None:
+        """Trim optional round transcript text fields."""
+        return _strip_optional(value)
 
 
 class ChatWorkflowTranscriptResponse(BaseModel):
@@ -263,4 +403,8 @@ class ChatWorkflowRunResponse(BaseModel):
     free_chat_conversation_id: str | None = None
     selected_context_refs: list[dict[str, Any]] = Field(default_factory=list)
     current_question: str | None = None
+    current_step_kind: Literal["question_step", "dialogue_round_step"] | None = None
+    current_prompt: str | None = None
+    current_round_index: int | None = Field(default=None, ge=0)
+    rounds: list[ChatWorkflowRoundResponse] = Field(default_factory=list)
     answers: list[ChatWorkflowAnswerResponse] = Field(default_factory=list)

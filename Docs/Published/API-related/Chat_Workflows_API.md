@@ -17,10 +17,17 @@ The Chat Workflows module provides a structured, user-facing Q&A flow on top of 
 ## Core Behavior
 
 - Templates are linear step definitions with one authored `base_question` per step.
+- Two step types are supported:
+  - `question_step`: one question, one persisted answer.
+  - `dialogue_round_step`: repeated moderated rounds inside a single workflow step.
 - Runs are immutable snapshots. Starting a run freezes the template or draft so later template edits do not change the in-flight session.
 - Two question modes are supported:
   - `stock`: display the authored question directly.
   - `llm_phrased`: ask the renderer to rephrase the question while preserving authored intent.
+- Dialogue rounds use a two-phase lifecycle:
+  - claim the current round in storage
+  - execute the debate and moderator LLM calls outside the write transaction
+  - finalize with a compare-and-swap update that advances the run only if the step/round is still current
 - Completion is stop-by-default. Free chat requires an explicit `continue-chat` call after the run reaches `completed`.
 - Access control is ownership-scoped for non-admin users. Missing or inaccessible templates/runs return `404`.
 
@@ -52,6 +59,7 @@ Implementation note:
     {
       "id": "goal",
       "step_index": 0,
+      "step_type": "question_step",
       "label": "Goal",
       "base_question": "What outcome are we aiming for?",
       "question_mode": "stock",
@@ -73,7 +81,46 @@ Implementation note:
   "current_step_index": 0,
   "selected_context_refs": [],
   "current_question": "What outcome are we aiming for?",
+  "current_step_kind": "question_step",
+  "current_prompt": "What outcome are we aiming for?",
+  "current_round_index": null,
+  "rounds": [],
   "answers": []
+}
+```
+
+### Dialogue Step
+
+```json
+{
+  "id": "debate",
+  "step_index": 0,
+  "step_type": "dialogue_round_step",
+  "label": "Socratic dialogue",
+  "base_question": "State your current thesis or position.",
+  "question_mode": "stock",
+  "context_refs": [],
+  "dialogue_config": {
+    "goal_prompt": "Stress-test the user's thesis until the reasoning is clarified.",
+    "opening_prompt_mode": "base_question",
+    "opening_prompt_text": null,
+    "user_role_label": "User",
+    "debate_llm_config": {
+      "provider": "openai",
+      "model": "gpt-4o-mini"
+    },
+    "moderator_llm_config": {
+      "provider": "openai",
+      "model": "gpt-4o-mini"
+    },
+    "max_rounds": 4,
+    "finish_conditions": [
+      "The thesis has been adequately challenged or refined."
+    ],
+    "context_refs": [],
+    "debate_instruction_prompt": "Challenge weak assumptions and unsupported claims.",
+    "moderator_instruction_prompt": "Return structured control output only."
+  }
 }
 ```
 
@@ -162,6 +209,7 @@ Response shape:
 - Get run: `GET /api/v1/chat-workflows/runs/{run_id}`
 - Get run transcript: `GET /api/v1/chat-workflows/runs/{run_id}/transcript`
 - Submit answer: `POST /api/v1/chat-workflows/runs/{run_id}/answer`
+- Respond to dialogue round: `POST /api/v1/chat-workflows/runs/{run_id}/rounds/{round_index}/respond`
 - Cancel run: `POST /api/v1/chat-workflows/runs/{run_id}/cancel`
 - Continue into free chat: `POST /api/v1/chat-workflows/runs/{run_id}/continue-chat`
 
@@ -216,7 +264,13 @@ curl -X POST "http://localhost:8000/api/v1/chat-workflows/runs" \
 
 ### Transcript Behavior
 
-`GET /runs/{run_id}/transcript` returns structured assistant/user messages derived from persisted answers. If the run is still active, the current unanswered assistant prompt is appended at the end.
+`GET /runs/{run_id}/transcript` returns structured messages projected from persisted workflow state.
+
+- `question_step` messages use `assistant` and `user` roles.
+- `dialogue_round_step` messages use `user`, `debate_llm`, and `moderator` roles.
+- If the run is still active, the current unanswered prompt is appended at the end using:
+  - `assistant` for `question_step`
+  - `moderator` for `dialogue_round_step`
 
 Example response:
 
@@ -256,6 +310,32 @@ Rules:
 - `step_index` must match the run's current step.
 - `answer_text` must be non-empty after trimming.
 - The response returns the updated run. If the final step was answered, `status` becomes `completed`.
+
+### Respond To Dialogue Round
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/chat-workflows/runs/run-123/rounds/0/respond" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+    "user_message": "My thesis is sound.",
+    "idempotency_key": "round-1"
+  }'
+```
+
+Rules:
+
+- Only `active` runs accept round responses.
+- The current workflow step must be `dialogue_round_step`.
+- `round_index` must match the run's next expected zero-based round.
+- `user_message` must be non-empty after trimming.
+- The response returns the updated run with:
+  - `current_step_kind`
+  - `current_prompt`
+  - `current_round_index`
+  - `rounds`
+- The moderator may keep the run on the same step with `continue` or advance the workflow with `finish`.
+- If debate or moderation generation fails, the claimed round is marked `failed` and the workflow does not advance.
 
 ### Cancel Run
 
