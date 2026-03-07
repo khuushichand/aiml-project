@@ -80,6 +80,8 @@ const ResultCard: React.FC<ResultCardProps> = ({
             value={editedText}
             onChange={(e) => setEditedText(e.target.value)}
             autoSize={{ minRows: 3, maxRows: 8 }}
+            aria-live="polite"
+            aria-label={`Transcript from ${result.model}`}
           />
           <div className="flex flex-wrap items-center gap-2">
             {result.latencyMs != null && (
@@ -173,6 +175,20 @@ export const ComparisonPanel: React.FC<ComparisonPanelProps> = ({
   )
 
   const canTranscribe = !!blob && models.length > 0 && !isRunning
+
+  // Cmd/Ctrl+Enter keyboard shortcut to trigger Transcribe All
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault()
+        if (!!blob && models.length > 0 && !isRunning) {
+          handleTranscribeAll()
+        }
+      }
+    }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
+  }, [blob, models, isRunning, handleTranscribeAll])
 
   return (
     <div className="space-y-3">
