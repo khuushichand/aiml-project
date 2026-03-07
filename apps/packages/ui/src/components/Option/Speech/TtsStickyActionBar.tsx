@@ -100,7 +100,7 @@ export function TtsStickyActionBar({
           icon={<Play className="h-4 w-4" />}
           disabled={isPlayDisabled}
           onClick={onPlay}
-          title={playDisabledReason ?? undefined}
+          title={playDisabledReason ?? "Play (Ctrl+Enter)"}
           aria-label={t("tts.play", "Play")}
         >
           {t("tts.play", "Play")}
@@ -111,7 +111,7 @@ export function TtsStickyActionBar({
           icon={<Square className="h-4 w-4" />}
           disabled={isStopDisabled}
           onClick={onStop}
-          title={stopDisabledReason ?? undefined}
+          title={stopDisabledReason ?? "Stop (Escape)"}
           aria-label={t("tts.stop", "Stop")}
         >
           {t("tts.stop", "Stop")}
@@ -148,6 +148,7 @@ export function TtsStickyActionBar({
           <Button
             icon={<Settings className="h-4 w-4" />}
             onClick={onToggleInspector}
+            title="Configuration (Ctrl+.)"
             aria-label={t("tts.toggleConfig", "Toggle configuration panel")}
             aria-expanded={inspectorOpen}
           />

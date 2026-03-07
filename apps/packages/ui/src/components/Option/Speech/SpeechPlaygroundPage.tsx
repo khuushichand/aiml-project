@@ -1640,6 +1640,31 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     return "gray"
   }, [inspectorOpen, isTtsDisabled, isTldw, hasAudio, showElevenLabsHint, hasElevenLabsKey])
 
+  // Keyboard shortcuts: Ctrl/Cmd+Enter (play/stop), Escape (stop), Ctrl/Cmd+. (toggle inspector)
+  React.useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (mode === "speak") return
+      const mod = e.metaKey || e.ctrlKey
+      if (mod && e.key === "Enter") {
+        e.preventDefault()
+        if (isStreamingActive || isTtsJobRunning || segments.length > 0) {
+          handleStop()
+        } else if (!isPlayDisabled) {
+          void handlePlay()
+        }
+      }
+      if (e.key === "Escape") {
+        handleStop()
+      }
+      if (mod && e.key === ".") {
+        e.preventDefault()
+        setInspectorOpen((prev) => !prev)
+      }
+    }
+    document.addEventListener("keydown", handler)
+    return () => document.removeEventListener("keydown", handler)
+  }, [handlePlay, handleStop, isPlayDisabled, isStreamingActive, isTtsJobRunning, mode, segments.length, setInspectorOpen])
+
   const handleElevenLabsApiKeyFocus = React.useCallback(() => {
     const el = document.getElementById("elevenlabs-api-key")
     if (!el) return
