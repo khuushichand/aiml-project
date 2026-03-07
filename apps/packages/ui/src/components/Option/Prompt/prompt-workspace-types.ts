@@ -1,6 +1,6 @@
 import type { PromptSourceSystem, PromptSyncStatus } from "@/db/dexie/types"
 
-export type PromptSavedView = "all" | "favorites" | "recent" | "most_used"
+export type PromptSavedView = "all" | "favorites" | "recent" | "most_used" | "untagged"
 
 export type PromptListSortKey = "title" | "modifiedAt" | null
 export type PromptListSortOrder = "ascend" | "descend" | null

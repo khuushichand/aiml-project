@@ -67,7 +67,7 @@ For comprehensive documentation, see:
 - `POST /api/v1/text2sql/query` - Run guarded read-only SQL retrieval
   - Request body: `query`, `target_id` (currently `media_db`), optional `max_rows`, `timeout_ms`, `include_sql`
   - RBAC: requires `sql.read`
-  - ACL: target must pass connector ACL checks (returns `403` with `unauthorized_target` when denied)
+  - ACL: target must pass connector ACL checks via `sql.target:*` or `sql.target:<target_id>` (returns `403` with `unauthorized_target` when denied)
   - SQL policy: single read-only statement with guardrails and deterministic limit enforcement
 
 Notes:

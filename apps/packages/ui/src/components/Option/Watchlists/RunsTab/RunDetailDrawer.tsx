@@ -57,6 +57,34 @@ type StreamConnectionState =
 
 const SOURCE_LOOKUP_LIMIT = 1000
 
+/** Maps failure kind → [i18n key, fallback] pairs for the "Common causes" section */
+const COMMON_CAUSES_BY_KIND: Record<string, [string, string][]> = {
+  auth: [
+    ["watchlists:runs.detail.commonCauses.auth1", "Source requires authentication or API key"],
+    ["watchlists:runs.detail.commonCauses.auth2", "Credentials expired or permissions changed"]
+  ],
+  rate_limit: [
+    ["watchlists:runs.detail.commonCauses.rateLimit1", "Monitor schedule is too frequent for this source"],
+    ["watchlists:runs.detail.commonCauses.rateLimit2", "Source has per-IP rate limits"]
+  ],
+  timeout: [
+    ["watchlists:runs.detail.commonCauses.timeout1", "Source is slow to respond or temporarily unavailable"],
+    ["watchlists:runs.detail.commonCauses.timeout2", "Too many concurrent requests — reduce concurrency"]
+  ],
+  dns: [
+    ["watchlists:runs.detail.commonCauses.network1", "Source host is unreachable or has changed"],
+    ["watchlists:runs.detail.commonCauses.network2", "Local network or DNS configuration issue"]
+  ],
+  network: [
+    ["watchlists:runs.detail.commonCauses.network1", "Source host is unreachable or has changed"],
+    ["watchlists:runs.detail.commonCauses.network2", "Local network or DNS configuration issue"]
+  ],
+  tls: [
+    ["watchlists:runs.detail.commonCauses.tls1", "SSL certificate expired or self-signed"],
+    ["watchlists:runs.detail.commonCauses.tls2", "Certificate chain is incomplete"]
+  ]
+}
+
 export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   runId,
   open,
@@ -915,6 +943,21 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
               <div className="p-3 bg-danger/10 border border-danger/30 rounded text-sm text-danger font-mono">
                 {data.error_msg}
               </div>
+              {/* Common causes by failure kind */}
+              {failureKind && failureKind !== "unknown" && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={t("watchlists:runs.detail.commonCausesTitle", "Common causes")}
+                  description={
+                    <ul className="list-disc pl-4 text-sm space-y-1">
+                      {(COMMON_CAUSES_BY_KIND[failureKind] ?? []).map(([key, fallback]) => (
+                        <li key={key}>{t(key, fallback)}</li>
+                      ))}
+                    </ul>
+                  }
+                />
+              )}
             </div>
           )}
 

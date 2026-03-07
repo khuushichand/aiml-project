@@ -90,6 +90,27 @@ def process_media_update(
         result["keywords_updated"] = True
     return result
 
+
+def process_synced_media_update(
+    db: MediaDatabase,
+    *,
+    media_id: int,
+    content: str,
+    prompt: Optional[str] = None,
+    summary: Optional[str] = None,
+    safe_metadata: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Apply a sync-driven content update while preserving main Media/FTS/version invariants.
+    """
+    return db.apply_synced_document_content_update(
+        media_id=media_id,
+        content=content,
+        prompt=prompt,
+        analysis_content=summary,
+        safe_metadata=safe_metadata,
+    )
+
 #
 # End of Media_Update_lib.py
 ########################################################################################################################

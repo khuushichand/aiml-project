@@ -1102,6 +1102,12 @@ export const PlaygroundMessage = (props: Props) => {
     props.isBot &&
     (props.message_type === "character:greeting" ||
       props.message_type === "greeting")
+  const shouldRenderStreamingPlainText =
+    props.isBot &&
+    isLastMessage &&
+    props.isStreaming &&
+    !errorPayload &&
+    !renderGreetingMarkdown
 
   const shouldShowLoadingStatus =
     props.isBot &&
@@ -2282,6 +2288,13 @@ export const PlaygroundMessage = (props: Props) => {
                     }}
                     recoveryActions={errorRecoveryActions}
                   />
+                ) : shouldRenderStreamingPlainText ? (
+                  <p
+                    data-testid="playground-streaming-plain-text"
+                    className={`text-body text-text-muted whitespace-pre-wrap ${assistantTextClass}`}
+                  >
+                    {props.message}
+                  </p>
                 ) : renderGreetingMarkdown ? (
                   <React.Suspense
                     fallback={

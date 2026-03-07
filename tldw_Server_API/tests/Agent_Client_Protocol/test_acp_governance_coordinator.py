@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
+    ACPGovernanceDeniedError,
     ACPGovernanceCoordinator,
     ACPRunnerClient,
     SessionWebSocketRegistry,
@@ -76,10 +77,36 @@ class _PromptGovernanceDeniedRunner:
             "action": "deny",
             "status": "deny",
             "category": "acp",
+            "rollout_mode": "enforce",
         }
 
     async def prompt(self, session_id: str, prompt: list[dict[str, Any]]) -> dict[str, Any]:
-        return {"stopReason": "end", "detail": "unexpected-success"}
+        raise ACPGovernanceDeniedError(governance={
+            "action": "deny",
+            "status": "deny",
+            "category": "acp",
+            "rollout_mode": "enforce",
+        })
+
+
+class _PromptGovernanceShadowDeniedRunner(_PromptGovernanceDeniedRunner):
+    async def check_prompt_governance(
+        self,
+        session_id: str,
+        prompt: list[dict[str, Any]],
+        *,
+        user_id: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        return {
+            "action": "deny",
+            "status": "deny",
+            "category": "acp",
+            "rollout_mode": "shadow",
+        }
+
+    async def prompt(self, session_id: str, prompt: list[dict[str, Any]]) -> dict[str, Any]:
+        return {"stopReason": "end", "detail": "shadow-allowed"}
 
 
 def _new_runner_client_for_permissions() -> ACPRunnerClient:
@@ -106,6 +133,19 @@ def prompt_governance_denied_runner(monkeypatch):
     return runner
 
 
+@pytest.fixture()
+def prompt_governance_shadow_denied_runner(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+    runner = _PromptGovernanceShadowDeniedRunner()
+
+    async def _get_runner_client():
+        return runner
+
+    monkeypatch.setattr(acp_endpoints, "get_runner_client", _get_runner_client)
+    return runner
+
+
 def test_prompt_denied_by_governance_returns_blocked_error(
     client_user_only,
     prompt_governance_denied_runner,
@@ -122,6 +162,24 @@ def test_prompt_denied_by_governance_returns_blocked_error(
     body = response.json()
     assert body["detail"]["code"] == "governance_blocked"
     assert body["detail"]["governance"]["action"] == "deny"
+
+
+def test_prompt_shadow_deny_governance_is_not_blocked_at_endpoint(
+    client_user_only,
+    prompt_governance_shadow_denied_runner,
+):
+    response = client_user_only.post(
+        "/api/v1/acp/sessions/prompt",
+        json={
+            "session_id": "session-gov-shadow",
+            "prompt": [{"role": "user", "content": "ship this change"}],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stop_reason"] == "end"
+    assert body["raw_result"]["detail"] == "shadow-allowed"
 
 
 @pytest.mark.asyncio

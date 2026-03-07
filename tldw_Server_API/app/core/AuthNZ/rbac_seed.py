@@ -30,6 +30,8 @@ _BASELINE_PERMISSIONS: Sequence[PermissionDef] = (
     ("media.read", "Read media", "media"),
     ("media.create", "Create media", "media"),
     ("media.delete", "Delete media", "media"),
+    ("sql.read", "Run read-only SQL retrieval", "sql"),
+    ("sql.target:media_db", "Allow SQL retrieval against media_db target", "sql"),
     ("system.configure", "Configure system", "system"),
     ("users.manage_roles", "Manage user roles", "users"),
     ("claims.review", "Review claims", "claims"),
@@ -50,7 +52,7 @@ def _is_postgres_connection(conn: Any) -> bool:
 def _build_role_grants(permission_names: Iterable[str], *, include_mcp_permissions: bool) -> dict[str, list[str]]:
     base = set(permission_names)
     grants: dict[str, list[str]] = {
-        "user": [p for p in ("media.read", "media.create") if p in base],
+        "user": [p for p in ("media.read", "media.create", "sql.read", "sql.target:media_db") if p in base],
         "viewer": [p for p in ("media.read",) if p in base],
         "reviewer": [p for p in ("media.read", "claims.review") if p in base],
         "admin": sorted(base),

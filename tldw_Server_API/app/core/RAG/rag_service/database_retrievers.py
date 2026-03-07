@@ -10,7 +10,9 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import sqlite3
+import time
 import urllib.parse as _urlparse
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -154,6 +156,12 @@ def _sanitize_media_fts_query(query: Optional[str]) -> Optional[str]:
     if "-" in text and " " not in text:
         return f"\"{text}\""
     return text
+
+
+_SQL_INPUT_PREFIX_RE = re.compile(
+    r"^(?:\s|--[^\n]*\n|/\*.*?\*/)*(select|with)\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -2210,6 +2218,184 @@ class CharacterCardsRetriever(BaseRetriever):
         return {}
 
 
+class _PassThroughSqlGenerator:
+    """Temporary SQL generator used by SQLRetriever until NL generation is added."""
+
+    async def generate(self, *, query: str, target_id: str) -> dict[str, str]:
+        _ = target_id
+        sql = str(query or "").strip()
+        if not sql:
+            raise ValueError("Query must not be empty")
+        if not sql.lower().startswith(("select", "with")):
+            raise ValueError("sql_generation_failed: provide SQL beginning with SELECT or WITH")
+        return {"sql": sql}
+
+
+class SQLRetriever(BaseRetriever):
+    """Retriever that executes read-only SQL and maps result rows to RAG documents."""
+
+    def __init__(
+        self,
+        db_path: Optional[str],
+        config: Optional[RetrievalConfig] = None,
+        *,
+        service: Optional[Any] = None,
+        target_id: str = "media_db",
+        timeout_ms: int = 5000,
+        max_rows: int = 100,
+        allow_nl_generation: bool = False,
+    ) -> None:
+        super().__init__(db_path, config, db_adapter=service)
+        self.target_id = target_id
+        self.timeout_ms = int(timeout_ms)
+        self.max_rows = int(max_rows)
+        self.allow_nl_generation = bool(allow_nl_generation)
+        self._service = service or self._build_default_service()
+
+    @staticmethod
+    def _looks_like_sql(query: str) -> bool:
+        return bool(_SQL_INPUT_PREFIX_RE.match(str(query or "")))
+
+    def _emit_counter(self, outcome: str, reason: Optional[str] = None) -> None:
+        labels: dict[str, str] = {"outcome": str(outcome)}
+        if reason:
+            labels["reason"] = str(reason)
+        try:
+            from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+
+            increment_counter("rag_sql_retriever_requests_total", labels=labels)
+        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+
+    def _emit_duration(self, duration_seconds: float, outcome: str) -> None:
+        try:
+            from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
+
+            observe_histogram(
+                "rag_sql_retriever_duration_seconds",
+                value=max(0.0, float(duration_seconds)),
+                labels={"outcome": str(outcome)},
+            )
+        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+
+    def _emit_rows(self, row_count: int, outcome: str) -> None:
+        try:
+            from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
+
+            observe_histogram(
+                "rag_sql_retriever_rows_returned",
+                value=max(0.0, float(row_count)),
+                labels={"outcome": str(outcome)},
+            )
+        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+
+    def _build_default_service(self) -> Optional[Any]:
+        if not self.db_path:
+            return None
+        try:
+            from tldw_Server_API.app.core.Text2SQL.executor import SqliteReadOnlyExecutor
+            from tldw_Server_API.app.core.Text2SQL.service import Text2SQLCoreService
+            return Text2SQLCoreService(
+                generator=_PassThroughSqlGenerator(),
+                executor=SqliteReadOnlyExecutor(self.db_path),
+            )
+        except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            return None
+
+    async def retrieve(self, query: str, **kwargs) -> list[Document]:
+        started = time.perf_counter()
+        query_text = str(query or "").strip()
+        service = self._service
+        if service is None:
+            self._emit_counter("unavailable", reason="service_missing")
+            self._emit_duration(time.perf_counter() - started, outcome="unavailable")
+            return []
+        if not query_text:
+            self._emit_counter("empty_query")
+            self._emit_duration(time.perf_counter() - started, outcome="empty_query")
+            return []
+        if not self.allow_nl_generation and not self._looks_like_sql(query_text):
+            self._emit_counter("non_sql_input")
+            self._emit_duration(time.perf_counter() - started, outcome="non_sql_input")
+            return []
+
+        target_id = str(kwargs.get("sql_target_id") or self.target_id)
+        timeout_ms = kwargs.get("timeout_ms", self.timeout_ms)
+        max_rows = kwargs.get("max_rows", min(self.max_rows, int(self.config.max_results or self.max_rows)))
+        try:
+            timeout_ms = int(timeout_ms)
+        except (TypeError, ValueError):
+            timeout_ms = self.timeout_ms
+        try:
+            max_rows = int(max_rows)
+        except (TypeError, ValueError):
+            max_rows = min(self.max_rows, int(self.config.max_results or self.max_rows))
+
+        try:
+            result = await service.generate_and_execute(
+                query=query_text,
+                target_id=target_id,
+                timeout_ms=timeout_ms,
+                max_rows=max_rows,
+            )
+        except (
+            AttributeError,
+            ConnectionError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            asyncio.TimeoutError,
+        ) as exc:
+            self._emit_counter("error", reason=type(exc).__name__)
+            self._emit_duration(time.perf_counter() - started, outcome="error")
+            logger.debug(f"SQL retrieval failed: {exc}")
+            return []
+
+        rows = result.get("rows", [])
+        if not isinstance(rows, list):
+            return []
+        columns = [str(value) for value in result.get("columns", [])]
+
+        docs: list[Document] = []
+        capped_rows = rows[: int(self.config.max_results or len(rows))]
+        total = max(1, len(capped_rows))
+        for index, row in enumerate(capped_rows):
+            if isinstance(row, dict):
+                row_data = {str(key): value for key, value in row.items()}
+            else:
+                row_data = {"value": row}
+            content = json.dumps(row_data, ensure_ascii=True, sort_keys=True)
+            score = 1.0 - (float(index) / float(total))
+            docs.append(
+                Document(
+                    id=f"sql:{target_id}:{index}",
+                    content=content,
+                    source=DataSource.SQL,
+                    metadata={
+                        "source": "sql",
+                        "sql": str(result.get("sql", "")),
+                        "columns": columns,
+                        "target_id": target_id,
+                        "row_index": index,
+                        "row_count": int(result.get("row_count", len(capped_rows))),
+                        "guardrail": result.get("guardrail", {}),
+                        "truncated": bool(result.get("truncated", False)),
+                    },
+                    score=score,
+                )
+            )
+        self._emit_counter("success")
+        self._emit_duration(time.perf_counter() - started, outcome="success")
+        self._emit_rows(len(docs), outcome="success")
+        return docs
+
+    async def get_metadata(self, doc_id: str) -> dict[str, Any]:
+        return {"doc_id": doc_id, "source": "sql", "target_id": self.target_id}
+
+
 class MultiDatabaseRetriever:
     """Orchestrates retrieval across multiple databases."""
 
@@ -2219,7 +2405,8 @@ class MultiDatabaseRetriever:
         user_id: str = "0",
         *,
         media_db: Optional[Any] = None,
-        chacha_db: Optional[Any] = None
+        chacha_db: Optional[Any] = None,
+        sql_retriever: Optional[BaseRetriever] = None,
     ):
         """
         Initialize multi-database retriever.
@@ -2264,6 +2451,8 @@ class MultiDatabaseRetriever:
                 self.retrievers[DataSource.CLAIMS] = ClaimsRetriever(db_paths["claims_db"])
             except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.debug(f"ClaimsRetriever init skipped: {e}")
+        if sql_retriever is not None:
+            self.retrievers[DataSource.SQL] = sql_retriever
 
     # Resource management
     def close(self) -> None:
@@ -2475,6 +2664,7 @@ class MultiDatabaseRetriever:
             DataSource.PROMPTS: 0.6,
             DataSource.CHARACTER_CARDS: 0.5,
             DataSource.KANBAN: 0.85,
+            DataSource.SQL: 0.9,
         }
         doc_scores: dict[str, dict[str, Any]] = {}
         for source, docs in source_results.items():
