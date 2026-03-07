@@ -5,6 +5,7 @@ export const REFRESH_TOKEN_COOKIE = 'refresh_token';
 export const API_KEY_COOKIE = 'x_api_key';
 export const LEGACY_API_KEY_COOKIE = 'x-api-key';
 export const SESSION_MARKER_COOKIE = 'admin_session';
+export const AUTH_MODE_COOKIE = 'admin_auth_mode';
 
 const isSecureCookie = process.env.NODE_ENV === 'production';
 
@@ -62,6 +63,12 @@ export const clearAdminSessionCookies = (response: NextResponse): void => {
     ...buildMarkerCookieOptions(),
     ...expired,
   });
+  response.cookies.set({
+    name: AUTH_MODE_COOKIE,
+    value: '',
+    ...buildMarkerCookieOptions(),
+    ...expired,
+  });
 };
 
 export const setJwtSessionCookies = (
@@ -90,6 +97,11 @@ export const setJwtSessionCookies = (
     value: '1',
     ...buildMarkerCookieOptions(payload.expiresIn),
   });
+  response.cookies.set({
+    name: AUTH_MODE_COOKIE,
+    value: 'jwt',
+    ...buildMarkerCookieOptions(payload.expiresIn),
+  });
 };
 
 export const setApiKeySessionCookies = (
@@ -105,6 +117,11 @@ export const setApiKeySessionCookies = (
   response.cookies.set({
     name: SESSION_MARKER_COOKIE,
     value: '1',
+    ...buildMarkerCookieOptions(),
+  });
+  response.cookies.set({
+    name: AUTH_MODE_COOKIE,
+    value: 'api_key',
     ...buildMarkerCookieOptions(),
   });
 };
