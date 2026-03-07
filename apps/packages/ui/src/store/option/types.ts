@@ -5,6 +5,10 @@ import type { RagPinnedResult } from "@/utils/rag-format"
 import type { ToolCall, ToolCallResult } from "@/types/tool-calls"
 import type { DiscoSkillComment } from "@/types/disco-skills"
 import type { MessageSteeringMode } from "@/types/message-steering"
+import type {
+  QueuedRequest,
+  QueuedRequestInput
+} from "@/utils/chat-request-queue"
 
 // Knowledge type is now server-side only; this is a placeholder for legacy compatibility
 export type Knowledge = {
@@ -140,9 +144,9 @@ export type State = {
   messageSteeringForceNarrate: boolean
   setMessageSteeringForceNarrate: (enabled: boolean) => void
   clearMessageSteering: () => void
-  queuedMessages: { message: string; image: string }[]
-  addQueuedMessage: (payload: { message: string; image: string }) => void
-  setQueuedMessages: (messages: { message: string; image: string }[]) => void
+  queuedMessages: QueuedRequest[]
+  addQueuedMessage: (payload: QueuedRequestInput) => void
+  setQueuedMessages: (messages: QueuedRequestInput[]) => void
   clearQueuedMessages: () => void
   selectedKnowledge: Knowledge | null
   setSelectedKnowledge: (selectedKnowledge: Knowledge) => void

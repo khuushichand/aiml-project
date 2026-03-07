@@ -1,5 +1,6 @@
 import { createWithEqualityFn } from "zustand/traditional"
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware"
+import type { QueuedRequest } from "@/utils/chat-request-queue"
 
 const STORAGE_KEY = "tldw-playground-session"
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000 // 24 hours
@@ -27,6 +28,7 @@ export interface PlaygroundSessionData {
   ragTopK: number | null
   ragEnableGeneration: boolean
   ragEnableCitations: boolean
+  queuedMessages: QueuedRequest[]
 
   // Metadata
   lastUpdated: number
@@ -52,6 +54,7 @@ const initialState: PlaygroundSessionData = {
   ragTopK: null,
   ragEnableGeneration: true,
   ragEnableCitations: true,
+  queuedMessages: [],
   lastUpdated: 0
 }
 
@@ -100,6 +103,7 @@ export const usePlaygroundSessionStore = createWithEqualityFn<PlaygroundSessionS
         ragTopK: state.ragTopK,
         ragEnableGeneration: state.ragEnableGeneration,
         ragEnableCitations: state.ragEnableCitations,
+        queuedMessages: state.queuedMessages,
         lastUpdated: state.lastUpdated
       })
     }
