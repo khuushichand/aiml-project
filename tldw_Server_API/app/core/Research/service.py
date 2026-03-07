@@ -450,6 +450,10 @@ class ResearchService:
 
         return ResearchRunSnapshotResponse(
             run=ResearchRunResponse.model_validate(session),
+            latest_event_id=db.get_latest_run_event_id(
+                owner_user_id=owner_user_id,
+                session_id=session_id,
+            ),
             checkpoint=checkpoint_summary,
             artifacts=self._latest_artifact_manifest(db.list_artifacts(session_id)),
         )

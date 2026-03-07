@@ -63,6 +63,7 @@ class ResearchRunSnapshotResponse(BaseModel):
     """Reconnect-safe snapshot for live research progress streams."""
 
     run: ResearchRunResponse
+    latest_event_id: int = 0
     checkpoint: ResearchCheckpointSummary | None = None
     artifacts: list[ResearchArtifactManifestEntry] = Field(default_factory=list)
 

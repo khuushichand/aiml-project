@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import os
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 
 from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import (
@@ -20,6 +20,8 @@ from tldw_Server_API.app.core.Research.streaming import (
     diff_stream_events,
     initial_stream_events,
     load_research_stream_state,
+    persisted_event_to_stream_event,
+    synthetic_terminal_payload,
 )
 from tldw_Server_API.app.core.Research.service import ResearchService
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
@@ -88,6 +90,7 @@ async def get_research_run(
 @router.get("/runs/{session_id}/events/stream", summary="Stream live deep research run events")
 async def stream_research_run_events(
     session_id: str = Path(..., min_length=1),
+    after_id: int = Query(0, ge=0),
     current_user: User = Depends(get_request_user),
     service: ResearchService = Depends(get_research_service),
 ) -> StreamingResponse:
@@ -119,9 +122,75 @@ async def stream_research_run_events(
 
     async def _producer() -> None:
         state = initial_state
-        for event in initial_stream_events(state):
-            await stream.send_event(event.event, event.data)
+        list_run_events_after = getattr(service, "list_run_events_after", None)
+        if not callable(list_run_events_after):
+            for event in initial_stream_events(state):
+                await stream.send_event(event.event, event.data, event_id=event.event_id)
+            if state.snapshot.run.status in _RESEARCH_TERMINAL_STATUSES:
+                await stream.done()
+                return
+
+            while True:
+                await asyncio.sleep(poll_interval)
+                try:
+                    current = load_research_stream_state(
+                        service=service,
+                        owner_user_id=str(current_user.id),
+                        session_id=session_id,
+                        job_manager=job_manager,
+                    )
+                except (KeyError, ValueError) as exc:
+                    await stream.error(
+                        "research_stream_error",
+                        str(exc),
+                        close=True,
+                    )
+                    return
+
+                for event in diff_stream_events(previous=state, current=current):
+                    await stream.send_event(event.event, event.data, event_id=event.event_id)
+                state = current
+                if state.snapshot.run.status in _RESEARCH_TERMINAL_STATUSES:
+                    await stream.done()
+                    return
+
+        snapshot_event = initial_stream_events(state)[0]
+        await stream.send_event(
+            snapshot_event.event,
+            snapshot_event.data,
+            event_id=snapshot_event.event_id,
+        )
+
+        cursor = int(after_id)
+        replayed_terminal = False
+        replay_rows = list_run_events_after(
+            owner_user_id=str(current_user.id),
+            session_id=session_id,
+            after_id=cursor,
+        )
+        for event_row in replay_rows:
+            stream_event = persisted_event_to_stream_event(event_row, replayed=True)
+            await stream.send_event(
+                stream_event.event,
+                stream_event.data,
+                event_id=stream_event.event_id,
+            )
+            cursor = max(cursor, int(event_row.id))
+            if event_row.event_type == "terminal":
+                replayed_terminal = True
+
         if state.snapshot.run.status in _RESEARCH_TERMINAL_STATUSES:
+            if not replayed_terminal:
+                synthetic_terminal = synthetic_terminal_payload(state.snapshot)
+                await stream.send_event(
+                    "terminal",
+                    synthetic_terminal,
+                    event_id=(
+                        str(state.snapshot.latest_event_id)
+                        if state.snapshot.latest_event_id > 0
+                        else None
+                    ),
+                )
             await stream.done()
             return
 
@@ -142,10 +211,37 @@ async def stream_research_run_events(
                 )
                 return
 
-            for event in diff_stream_events(previous=state, current=current):
-                await stream.send_event(event.event, event.data)
+            live_rows = list_run_events_after(
+                owner_user_id=str(current_user.id),
+                session_id=session_id,
+                after_id=cursor,
+            )
+            for event_row in live_rows:
+                stream_event = persisted_event_to_stream_event(event_row, replayed=False)
+                await stream.send_event(
+                    stream_event.event,
+                    stream_event.data,
+                    event_id=stream_event.event_id,
+                )
+                cursor = max(cursor, int(event_row.id))
+                if event_row.event_type == "terminal":
+                    await stream.done()
+                    return
             state = current
-            if state.snapshot.run.status in _RESEARCH_TERMINAL_STATUSES:
+            if (
+                state.snapshot.run.status in _RESEARCH_TERMINAL_STATUSES
+                and state.snapshot.latest_event_id <= cursor
+            ):
+                synthetic_terminal = synthetic_terminal_payload(state.snapshot)
+                await stream.send_event(
+                    "terminal",
+                    synthetic_terminal,
+                    event_id=(
+                        str(state.snapshot.latest_event_id)
+                        if state.snapshot.latest_event_id > 0
+                        else None
+                    ),
+                )
                 await stream.done()
                 return
 

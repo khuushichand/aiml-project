@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import ResearchRunSnapshotResponse
+from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchRunEventRow
 
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
@@ -16,6 +17,7 @@ class ResearchStreamEvent:
 
     event: str
     data: dict[str, Any]
+    event_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -128,10 +130,41 @@ def initial_stream_events(state: ResearchStreamState) -> list[ResearchStreamEven
         events.append(
             ResearchStreamEvent(
                 event="terminal",
-                data=_run_status_payload(state.snapshot),
+                data=synthetic_terminal_payload(state.snapshot),
+                event_id=(
+                    str(state.snapshot.latest_event_id)
+                    if state.snapshot.latest_event_id > 0
+                    else None
+                ),
             )
         )
     return events
+
+
+def persisted_event_to_stream_event(
+    event_row: ResearchRunEventRow,
+    *,
+    replayed: bool,
+) -> ResearchStreamEvent:
+    """Convert a persisted run-event row into an SSE-ready event."""
+
+    payload = dict(event_row.event_payload)
+    payload["event_id"] = int(event_row.id)
+    payload["replayed"] = bool(replayed)
+    return ResearchStreamEvent(
+        event=event_row.event_type,
+        data=payload,
+        event_id=str(event_row.id),
+    )
+
+
+def synthetic_terminal_payload(snapshot: ResearchRunSnapshotResponse) -> dict[str, Any]:
+    """Build a terminal event payload from the current snapshot."""
+
+    payload = _run_status_payload(snapshot)
+    payload["event_id"] = int(snapshot.latest_event_id)
+    payload["replayed"] = False
+    return payload
 
 
 def diff_stream_events(
@@ -194,4 +227,6 @@ __all__ = [
     "diff_stream_events",
     "initial_stream_events",
     "load_research_stream_state",
+    "persisted_event_to_stream_event",
+    "synthetic_terminal_payload",
 ]

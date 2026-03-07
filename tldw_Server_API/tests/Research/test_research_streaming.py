@@ -14,6 +14,7 @@ def _snapshot(
     active_job_id: str | None = "21",
     latest_checkpoint_id: str | None = None,
     completed_at: str | None = None,
+    latest_event_id: int = 0,
     checkpoint: dict | None = None,
     artifacts: list[dict] | None = None,
 ):
@@ -31,6 +32,7 @@ def _snapshot(
             "latest_checkpoint_id": latest_checkpoint_id,
             "completed_at": completed_at,
         },
+        "latest_event_id": latest_event_id,
         "checkpoint": checkpoint,
         "artifacts": artifacts or [],
     }
@@ -203,3 +205,27 @@ def test_initial_and_diff_stream_events_emit_terminal_state_once():
     assert [event.event for event in initial_events] == ["snapshot", "terminal"]
     assert terminal_events[-1].event == "terminal"
     assert terminal_events[-1].data["status"] == "completed"
+
+
+def test_persisted_stream_event_includes_event_id_and_replayed_flag():
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchRunEventRow
+    from tldw_Server_API.app.core.Research.streaming import persisted_event_to_stream_event
+
+    event = persisted_event_to_stream_event(
+        ResearchRunEventRow(
+            id=7,
+            session_id="rs_1",
+            owner_user_id="1",
+            event_type="artifact",
+            event_payload={"artifact_name": "plan.json", "artifact_version": 1},
+            phase="drafting_plan",
+            job_id="22",
+            created_at="2026-03-07T00:00:00+00:00",
+        ),
+        replayed=True,
+    )
+
+    assert event.event == "artifact"
+    assert event.event_id == "7"
+    assert event.data["event_id"] == 7
+    assert event.data["replayed"] is True

@@ -316,6 +316,7 @@ def test_research_run_events_stream_emits_snapshot_then_terminal_for_completed_r
                         "latest_checkpoint_id": "cp_1",
                         "completed_at": "2026-03-07T00:00:00+00:00",
                     },
+                    "latest_event_id": 0,
                     "checkpoint": {
                         "checkpoint_id": "cp_1",
                         "checkpoint_type": "outline_review",
@@ -346,6 +347,98 @@ def test_research_run_events_stream_emits_snapshot_then_terminal_for_completed_r
         assert "event: snapshot" in body
         assert "event: terminal" in body
         assert body.index("event: snapshot") < body.index("event: terminal")
+        assert "\"latest_event_id\":0" in body.replace(" ", "")
+
+
+def test_research_run_events_stream_replays_persisted_rows_with_after_id():
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+    from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import ResearchRunSnapshotResponse
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchRunEventRow
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    class StubService:
+        def get_stream_snapshot(self, **kwargs):
+            assert kwargs["owner_user_id"] == "1"
+            assert kwargs["session_id"] == "rs_1"
+            return ResearchRunSnapshotResponse.model_validate(
+                {
+                    "run": {
+                        "id": "rs_1",
+                        "status": "completed",
+                        "phase": "completed",
+                        "control_state": "running",
+                        "progress_percent": 100.0,
+                        "progress_message": "packaging results",
+                        "active_job_id": None,
+                        "latest_checkpoint_id": None,
+                        "completed_at": "2026-03-07T00:00:00+00:00",
+                    },
+                    "latest_event_id": 5,
+                    "checkpoint": None,
+                    "artifacts": [],
+                }
+            )
+
+        def list_run_events_after(self, **kwargs):
+            assert kwargs["owner_user_id"] == "1"
+            assert kwargs["session_id"] == "rs_1"
+            assert kwargs["after_id"] == 3
+            return [
+                ResearchRunEventRow(
+                    id=4,
+                    session_id="rs_1",
+                    owner_user_id="1",
+                    event_type="artifact",
+                    event_payload={
+                        "artifact_name": "report_v1.md",
+                        "artifact_version": 1,
+                        "content_type": "text/markdown",
+                        "phase": "synthesizing",
+                        "job_id": "81",
+                    },
+                    phase="synthesizing",
+                    job_id="81",
+                    created_at="2026-03-07T00:00:00+00:00",
+                ),
+                ResearchRunEventRow(
+                    id=5,
+                    session_id="rs_1",
+                    owner_user_id="1",
+                    event_type="terminal",
+                    event_payload={
+                        "id": "rs_1",
+                        "status": "completed",
+                        "phase": "completed",
+                        "control_state": "running",
+                        "active_job_id": None,
+                        "latest_checkpoint_id": None,
+                        "completed_at": "2026-03-07T00:00:00+00:00",
+                    },
+                    phase="completed",
+                    job_id=None,
+                    created_at="2026-03-07T00:00:01+00:00",
+                ),
+            ]
+
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        with client.stream("GET", "/api/v1/research/runs/rs_1/events/stream?after_id=3") as response:
+            body = b"".join(response.iter_bytes()).decode("utf-8")
+
+        compact = body.replace(" ", "").replace("\n", "")
+        assert response.status_code == 200
+        assert "event:snapshot" in compact
+        assert "\"latest_event_id\":5" in compact
+        assert "id:4" in compact
+        assert "event:artifact" in compact
+        assert "\"event_id\":4" in compact
+        assert "\"replayed\":true" in compact
+        assert "id:5" in compact
+        assert "event:terminal" in compact
 
 
 def test_research_run_events_stream_maps_missing_run_to_404():
