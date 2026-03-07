@@ -168,7 +168,7 @@ export const SttPlaygroundPage: React.FC = () => {
         })
       }
     },
-    [notification]
+    [notification, t]
   )
 
   const handleRecompare = useCallback(
@@ -192,7 +192,7 @@ export const SttPlaygroundPage: React.FC = () => {
         })
       }
     },
-    [notification]
+    [notification, t]
   )
 
   const handleExport = useCallback(
@@ -225,7 +225,7 @@ export const SttPlaygroundPage: React.FC = () => {
         })
       }
     },
-    [notification]
+    [notification, t]
   )
 
   const handleDeleteEntry = useCallback(
@@ -244,7 +244,7 @@ export const SttPlaygroundPage: React.FC = () => {
         description: t("playground:stt.deletedDesc", "History entry removed.")
       })
     },
-    [history, setHistory, notification]
+    [history, setHistory, notification, t]
   )
 
   const handleClearAll = useCallback(async () => {

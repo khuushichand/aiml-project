@@ -153,13 +153,15 @@ export const ComparisonPanel: React.FC<ComparisonPanelProps> = ({
   }, [blob, models, sttOptions, transcribeAll])
 
   // Notify parent when comparison run finishes
+  const onCompleteRef = useRef(onComparisonComplete)
+  onCompleteRef.current = onComparisonComplete
   const prevIsRunning = useRef(false)
   useEffect(() => {
     if (prevIsRunning.current && !isRunning && results.length > 0) {
-      onComparisonComplete?.(results)
+      onCompleteRef.current?.(results)
     }
     prevIsRunning.current = isRunning
-  }, [isRunning, results, onComparisonComplete])
+  }, [isRunning, results])
 
   const handleCopy = useCallback(
     async (text: string) => {

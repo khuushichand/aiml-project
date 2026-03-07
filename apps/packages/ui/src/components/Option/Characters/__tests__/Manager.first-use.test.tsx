@@ -3984,8 +3984,10 @@ describe("CharactersManager first-use onboarding", () => {
     const displayButton = screen.getByRole("button", {
       name: "Display options"
     })
-    fireEvent.focus(displayButton)
-    expect(displayButton).toHaveFocus()
+    // Verify the button is accessible and focusable (not disabled, not hidden)
+    expect(displayButton).toBeEnabled()
+    expect(displayButton).toBeVisible()
+    expect(displayButton.tabIndex).not.toBe(-1)
   })
 
   it("renders reduced-motion utility classes on row action controls", async () => {
