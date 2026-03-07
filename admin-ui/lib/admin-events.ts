@@ -1,7 +1,6 @@
 'use client';
 
-import { buildApiUrl } from './api-config';
-import { buildAuthHeaders } from './http';
+import { buildAuthHeaders, buildProxyUrl } from './http';
 
 export type AdminEventCategory = 'acp' | 'monitoring' | 'security' | 'budget' | 'jobs' | 'system';
 
@@ -118,7 +117,7 @@ export function subscribeToAdminEvents(
       params.set('categories', categories.join(','));
     }
     const queryString = params.toString();
-    const url = buildApiUrl(`/admin/events/stream${queryString ? `?${queryString}` : ''}`);
+    const url = buildProxyUrl(`/admin/events/stream${queryString ? `?${queryString}` : ''}`);
 
     const headers = new Headers(buildAuthHeaders('GET'));
     headers.set('Accept', 'text/event-stream');

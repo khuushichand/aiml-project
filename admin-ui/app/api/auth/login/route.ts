@@ -1,0 +1,48 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { buildApiUrl } from '@/lib/api-config';
+import { setJwtSessionCookies } from '@/lib/server-auth';
+
+type LoginResponsePayload = {
+  access_token?: string;
+  refresh_token?: string;
+  token_type?: string;
+  expires_in?: number;
+  session_token?: string;
+  mfa_required?: boolean;
+  message?: string;
+};
+
+const sanitizePayload = (payload: LoginResponsePayload): Omit<LoginResponsePayload, 'access_token' | 'refresh_token'> => {
+  const sanitized = { ...payload };
+  delete sanitized.access_token;
+  delete sanitized.refresh_token;
+  return sanitized;
+};
+
+export async function POST(request: NextRequest): Promise<NextResponse> {
+  const body = await request.text();
+  const response = await fetch(buildApiUrl('/auth/login'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': request.headers.get('content-type') ?? 'application/x-www-form-urlencoded',
+    },
+    body,
+    cache: 'no-store',
+  });
+
+  const payload = await response.json().catch(() => null) as LoginResponsePayload | null;
+  if (!response.ok || !payload) {
+    return NextResponse.json(payload ?? { detail: 'Login failed' }, { status: response.status });
+  }
+
+  const nextResponse = NextResponse.json(sanitizePayload(payload), { status: response.status });
+  if (typeof payload.access_token === 'string') {
+    setJwtSessionCookies(nextResponse, {
+      accessToken: payload.access_token,
+      refreshToken: payload.refresh_token,
+      expiresIn: payload.expires_in,
+    });
+  }
+
+  return nextResponse;
+}

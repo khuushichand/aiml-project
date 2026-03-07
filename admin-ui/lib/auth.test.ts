@@ -31,7 +31,7 @@ describe('auth API key storage', () => {
   it('clears existing API key when password login succeeds', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(
-        JSON.stringify({ access_token: 'jwt-token', token_type: 'bearer' }),
+        JSON.stringify({ token_type: 'bearer' }),
         { status: 200, headers: { 'Content-Type': 'application/json' } }
       ))
       .mockResolvedValueOnce(new Response(
@@ -58,28 +58,30 @@ describe('auth API key storage', () => {
 
     expect(result).toEqual({
       status: 'authenticated',
-      accessToken: 'jwt-token',
-      tokenType: 'bearer',
     });
     expect(auth.getApiKey()).toBeNull();
     expect(sessionStorage.getItem('x_api_key')).toBeNull();
-    expect(localStorage.getItem('access_token')).toBe('jwt-token');
+    expect(auth.getJWTToken()).toBeNull();
+    expect(localStorage.getItem('access_token')).toBeNull();
+    expect(localStorage.getItem('user')).toContain('"username":"admin"');
   });
 
   it('clears existing JWT when API key login succeeds', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(
       JSON.stringify({
-        id: 2,
-        uuid: 'user-2',
-        username: 'ops',
-        email: 'ops@example.com',
-        role: 'admin',
-        is_active: true,
-        is_verified: true,
-        storage_quota_mb: 1024,
-        storage_used_mb: 10,
-        created_at: '2026-02-27T00:00:00Z',
-        updated_at: '2026-02-27T00:00:00Z',
+        user: {
+          id: 2,
+          uuid: 'user-2',
+          username: 'ops',
+          email: 'ops@example.com',
+          role: 'admin',
+          is_active: true,
+          is_verified: true,
+          storage_quota_mb: 1024,
+          storage_used_mb: 10,
+          created_at: '2026-02-27T00:00:00Z',
+          updated_at: '2026-02-27T00:00:00Z',
+        },
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     ));
@@ -93,8 +95,9 @@ describe('auth API key storage', () => {
     expect(ok).toBe(true);
     expect(auth.getJWTToken()).toBeNull();
     expect(localStorage.getItem('access_token')).toBeNull();
-    expect(auth.getApiKey()).toBe('fresh-api-key');
+    expect(auth.getApiKey()).toBeNull();
     expect(sessionStorage.getItem('x_api_key')).toBeNull();
+    expect(localStorage.getItem('user')).toContain('"username":"ops"');
   });
 
   it('returns MFA challenge details without storing auth when login requires MFA', async () => {
@@ -120,5 +123,15 @@ describe('auth API key storage', () => {
     });
     expect(localStorage.getItem('access_token')).toBeNull();
     expect(localStorage.getItem('user')).toBeNull();
+  });
+
+  it('does not treat a stored user profile alone as a durable authenticated session after reload', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 1, username: 'admin' }));
+
+    vi.resetModules();
+    const auth = await import('./auth');
+
+    expect(auth.getJWTToken()).toBeNull();
+    expect(auth.hasStoredAuth()).toBe(true);
   });
 });
