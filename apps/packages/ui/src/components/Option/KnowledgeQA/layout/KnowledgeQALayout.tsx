@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from "react"
+import React, { useEffect, useMemo, useRef } from "react"
 import { Download, PanelLeftOpen, PanelLeftClose } from "lucide-react"
 import { cn } from "@/libs/utils"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
@@ -103,6 +103,9 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
   // Mobile always forces simple mode layout (no sidebars)
   const effectiveSimple = isMobile || isSimple
 
+  // Track whether user manually closed the evidence rail for this search
+  const userClosedRailRef = useRef(false)
+
   const hasResults = results.length > 0 || Boolean(answer)
   const showNoResultsState =
     hasSearched && !isSearching && !error && results.length === 0 && !answer
@@ -144,13 +147,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
     return (
       lastSearchScope.preset !== preset ||
       lastSearchScope.webFallback !== settings.enable_web_fallback ||
-      normalizeSourceSet(lastSearchScope.sources) !== normalizeSourceSet(settings.sources) ||
-      normalizeIdentifierSet(
-        Array.isArray(settings.include_media_ids) ? settings.include_media_ids : []
-      ) !== "" ||
-      normalizeIdentifierSet(
-        Array.isArray(settings.include_note_ids) ? settings.include_note_ids : []
-      ) !== ""
+      normalizeSourceSet(lastSearchScope.sources) !== normalizeSourceSet(settings.sources)
     )
   }, [
     lastSearchScope,
@@ -162,8 +159,12 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
   ])
 
   useEffect(() => {
-    if (hasResults && !evidenceRailOpen) {
+    if (hasResults && !evidenceRailOpen && !userClosedRailRef.current) {
       setEvidenceRailOpen(true)
+    }
+    // Reset manual-close flag when results clear (new search)
+    if (!hasResults) {
+      userClosedRailRef.current = false
     }
   }, [hasResults, evidenceRailOpen, setEvidenceRailOpen])
 
@@ -369,7 +370,12 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
           <EvidenceRail
             open={isEvidenceRailOpen}
             tab={evidenceRailTab}
-            onOpenChange={setEvidenceRailOpen}
+            onOpenChange={(open) => {
+              if (!open && hasResults) {
+                userClosedRailRef.current = true
+              }
+              setEvidenceRailOpen(open)
+            }}
             onTabChange={setEvidenceRailTab}
             resultsCount={results.length}
             citationsCount={citations.length}

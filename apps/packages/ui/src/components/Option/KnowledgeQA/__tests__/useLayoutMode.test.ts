@@ -4,6 +4,7 @@ import { useLayoutMode } from "../hooks/useLayoutMode"
 import type { LayoutMode } from "../hooks/useLayoutMode"
 
 const STORAGE_KEY = "knowledge_qa_layout_mode"
+const DISMISSED_KEY = "knowledge_qa_promotion_dismissed"
 
 describe("useLayoutMode", () => {
   beforeEach(() => {
@@ -250,5 +251,41 @@ describe("useLayoutMode", () => {
     })
 
     expect(result.current.showPromotionToast).toBe(false)
+  })
+
+  // ── Requirement 11: dismissPromotion persists to localStorage ──
+
+  it("dismissPromotion persists dismissed state to localStorage", () => {
+    const { result } = renderHook(() =>
+      useLayoutMode({ messageCount: 6 })
+    )
+
+    act(() => {
+      result.current.dismissPromotion()
+    })
+
+    expect(localStorage.getItem(DISMISSED_KEY)).toBe("true")
+  })
+
+  it("reads persisted dismissed state on mount", () => {
+    localStorage.setItem(DISMISSED_KEY, "true")
+
+    const { result } = renderHook(() =>
+      useLayoutMode({ messageCount: 10 })
+    )
+
+    expect(result.current.showPromotionToast).toBe(false)
+  })
+
+  it("acceptPromotion persists dismissed state to localStorage", () => {
+    const { result } = renderHook(() =>
+      useLayoutMode({ messageCount: 6 })
+    )
+
+    act(() => {
+      result.current.acceptPromotion()
+    })
+
+    expect(localStorage.getItem(DISMISSED_KEY)).toBe("true")
   })
 })

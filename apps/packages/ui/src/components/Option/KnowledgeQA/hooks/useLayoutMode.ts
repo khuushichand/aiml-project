@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect } from "react"
 export type LayoutMode = "simple" | "research" | "expert"
 
 const STORAGE_KEY = "knowledge_qa_layout_mode"
+const DISMISSED_KEY = "knowledge_qa_promotion_dismissed"
 
 function readPersistedMode(): LayoutMode | null {
   try {
@@ -33,7 +34,13 @@ export function useLayoutMode({ messageCount }: UseLayoutModeOptions) {
     () => readPersistedMode() ?? "simple"
   )
   const [showPromotionToast, setShowPromotionToast] = useState(false)
-  const [promotionDismissed, setPromotionDismissed] = useState(false)
+  const [promotionDismissed, setPromotionDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(DISMISSED_KEY) === "true"
+    } catch {
+      return false
+    }
+  })
 
   const setLayoutMode = useCallback((next: LayoutMode) => {
     setModeRaw(next)
@@ -55,11 +62,13 @@ export function useLayoutMode({ messageCount }: UseLayoutModeOptions) {
   const dismissPromotion = useCallback(() => {
     setShowPromotionToast(false)
     setPromotionDismissed(true)
+    try { localStorage.setItem(DISMISSED_KEY, "true") } catch { /* ignore */ }
   }, [])
 
   const acceptPromotion = useCallback(() => {
     setLayoutMode("research")
     setPromotionDismissed(true)
+    try { localStorage.setItem(DISMISSED_KEY, "true") } catch { /* ignore */ }
   }, [setLayoutMode])
 
   const isSimple = mode === "simple"
