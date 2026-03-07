@@ -121,6 +121,7 @@ type ChatModeOverrides = {
 } & Record<string, unknown>
 
 const loadActorSettings = () => import("@/services/actor-settings")
+const STREAMING_UPDATE_INTERVAL_MS = 80
 
 type SaveMessagePayload = Omit<SaveMessageData, "setHistoryId"> & {
   setHistoryId?: SaveMessageData["setHistoryId"]
@@ -970,6 +971,45 @@ export const useChatActions = ({
         ? normalizeMessageVariants(regenerateFromMessage)
         : []
     const resolvedModel = model?.trim()
+    let streamingTimer: ReturnType<typeof setTimeout> | null = null
+    let pendingStreamingText = ""
+    let pendingReasoningTime = 0
+    let lastStreamingUpdateAt = 0
+
+    const flushStreamingUpdate = () => {
+      if (pendingStreamingText.length === 0) return
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === generateMessageId
+            ? updateActiveVariant(m, {
+                message: pendingStreamingText,
+                reasoning_time_taken: pendingReasoningTime
+              })
+            : m
+        )
+      )
+      pendingStreamingText = ""
+      pendingReasoningTime = 0
+      lastStreamingUpdateAt = Date.now()
+    }
+
+    const scheduleStreamingUpdate = (text: string, reasoningTime: number) => {
+      pendingStreamingText = text
+      pendingReasoningTime = reasoningTime
+      if (streamingTimer !== null) return
+      const elapsed = Date.now() - lastStreamingUpdateAt
+      const delay = Math.max(0, STREAMING_UPDATE_INTERVAL_MS - elapsed)
+      streamingTimer = setTimeout(() => {
+        streamingTimer = null
+        flushStreamingUpdate()
+      }, delay)
+    }
+
+    const cancelStreamingUpdate = () => {
+      if (streamingTimer === null) return
+      clearTimeout(streamingTimer)
+      streamingTimer = null
+    }
 
     try {
       if (!resolvedModel) {
@@ -1320,16 +1360,7 @@ export const useChatActions = ({
         apiReasoning = chunkState.apiReasoning
 
         if (chunkState.token) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === generateMessageId
-                ? updateActiveVariant(m, {
-                    message: fullText + "▋",
-                    reasoning_time_taken: timetaken
-                  })
-                : m
-            )
-          )
+          scheduleStreamingUpdate(`${fullText}▋`, timetaken)
         }
         if (count === 0) {
           setIsProcessing(true)
@@ -1353,6 +1384,8 @@ export const useChatActions = ({
         count++
         if (signal?.aborted) break
       }
+      cancelStreamingUpdate()
+      flushStreamingUpdate()
 
       if (signal?.aborted) {
         const abortError = new Error("AbortError")
@@ -1574,6 +1607,7 @@ export const useChatActions = ({
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      cancelStreamingUpdate()
       await attemptCharacterStreamRecoveryPersist({
         chatId: activeChatId,
         temporaryChat,
@@ -1645,6 +1679,7 @@ export const useChatActions = ({
       setIsProcessing(false)
       setStreaming(false)
     } finally {
+      cancelStreamingUpdate()
       setAbortController(null)
     }
   }
