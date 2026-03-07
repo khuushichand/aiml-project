@@ -17,13 +17,13 @@ const OptionLayout = dynamic(
 )
 
 // Ordered to match high-traffic navigation:
-// - Route-registry eager imports (chat/media/media-multi/workspace-playground)
+// - Route-registry eager imports (chat/media/media-multi/research)
 // - Default sidebar shortcut selections (prompts/characters/dictionaries/world-books/knowledge)
 const PRIMARY_WARM_PREFETCH_ROUTES = [
   "/chat",
   "/media",
   "/media-multi",
-  "/workspace-playground",
+  "/research",
   "/knowledge",
   "/prompts",
   "/characters",

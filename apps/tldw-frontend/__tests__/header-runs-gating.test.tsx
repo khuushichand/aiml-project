@@ -49,14 +49,14 @@ const resetEnv = () => {
   }
 }
 
-describe("Header runs link role gating", () => {
+describe("Header research link", () => {
   beforeEach(() => {
     authState.logout.mockClear()
     process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK = "1"
     process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN = "1"
   })
 
-  it("hides Runs when admin is required and user is non-admin", () => {
+  it("shows Research for non-admin users even when the legacy admin flag is enabled", () => {
     authState.user = {
       username: "normal-user",
       role: "user",
@@ -66,10 +66,12 @@ describe("Header runs link role gating", () => {
 
     render(<Header />)
 
-    expect(screen.queryByRole("link", { name: "Runs" })).toBeNull()
+    const link = screen.getByRole("link", { name: "Research" })
+    expect(link).toBeInTheDocument()
+    expect(link.getAttribute("href")).toBe("/research")
   })
 
-  it("shows Runs when admin is required and user role is admin", () => {
+  it("shows Research for admin users", () => {
     authState.user = {
       username: "admin-user",
       role: "admin",
@@ -79,12 +81,12 @@ describe("Header runs link role gating", () => {
 
     render(<Header />)
 
-    const link = screen.getByRole("link", { name: "Runs" })
+    const link = screen.getByRole("link", { name: "Research" })
     expect(link).toBeInTheDocument()
-    expect(link.getAttribute("href")).toBe("/admin/watchlists-runs")
+    expect(link.getAttribute("href")).toBe("/research")
   })
 
-  it("shows Runs when admin is required and user has admin claims shape", () => {
+  it("shows Research when the user has an admin claims shape", () => {
     authState.user = {
       username: "claims-admin-user",
       role: "user",
@@ -94,10 +96,10 @@ describe("Header runs link role gating", () => {
 
     render(<Header />)
 
-    expect(screen.getByRole("link", { name: "Runs" })).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Research" })).toBeInTheDocument()
   })
 
-  it("shows Runs for non-admin when admin requirement is disabled", () => {
+  it("shows Research for non-admin when the legacy admin requirement is disabled", () => {
     process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN = "0"
     authState.user = {
       username: "normal-user-2",
@@ -108,7 +110,7 @@ describe("Header runs link role gating", () => {
 
     render(<Header />)
 
-    expect(screen.getByRole("link", { name: "Runs" })).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Research" })).toBeInTheDocument()
   })
 })
 
