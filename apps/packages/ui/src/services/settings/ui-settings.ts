@@ -424,7 +424,7 @@ export const DEFAULT_SIDEBAR_SHORTCUT_SELECTION: SidebarShortcutId[] = [
   "chat",
   "prompts",
   "characters",
-  "chat-dictionaries",
+  "deep-research",
   "world-books",
   "knowledge-qa",
   "media",
