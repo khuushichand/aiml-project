@@ -11,12 +11,13 @@ and this project adheres to Some kind of Versioning
 
 - Text2SQL security hardening:
   - Added `sql.read` RBAC permission constant and seeded baseline grants for default `user` and `admin` roles.
+  - Added SQL target ACL claims (`sql.target:*`, `sql.target:media_db`) and removed implicit default target allow.
   - Enforced connector ACL checks in `POST /api/v1/text2sql/query` with explicit `403 unauthorized_target` on denied targets.
   - Added RBAC/ACL regression tests in `tldw_Server_API/tests/Security/test_text2sql_rbac_and_acl.py`.
   - Added baseline seed consistency for `sql.read` in `rbac_seed` paths.
 - API documentation updates for SQL retrieval:
   - Documented standalone Text2SQL endpoint in `Docs/API-related/API_README.md`.
-  - Documented unified RAG SQL source usage (`sources=["sql"]`, `sql_target_id`) in `Docs/API-related/RAG_API_Documentation.md`.
+  - Documented unified RAG SQL source usage (`sources=["sql"]`, `sql_target_id`) and required SQL ACL claims in `Docs/API-related/RAG_API_Documentation.md`.
 
 ## [0.1.32] 2026-03-06
 
