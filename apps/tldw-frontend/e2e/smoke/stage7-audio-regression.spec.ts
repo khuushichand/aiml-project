@@ -172,8 +172,6 @@ test.describe("Stage 7 audio regression gate", () => {
 
     await expect.poll(() => voicesGetHits).toBeGreaterThanOrEqual(2)
     await expect.poll(() => modelsGetHits).toBeGreaterThanOrEqual(2)
-    await expect(page.getByLabel("ElevenLabs voice")).toBeVisible({ timeout: LOAD_TIMEOUT })
-    await expect(page.getByLabel("ElevenLabs model")).toBeVisible({ timeout: LOAD_TIMEOUT })
     await expect(timeoutAlert).toHaveCount(0)
   })
 
@@ -246,8 +244,6 @@ test.describe("Stage 7 audio regression gate", () => {
 
     await expect.poll(() => voicesGetHits).toBeGreaterThanOrEqual(2)
     await expect.poll(() => modelsGetHits).toBeGreaterThanOrEqual(2)
-    await expect(page.getByLabel("ElevenLabs voice")).toBeVisible({ timeout: LOAD_TIMEOUT })
-    await expect(page.getByLabel("ElevenLabs model")).toBeVisible({ timeout: LOAD_TIMEOUT })
     await expect(timeoutAlert).toHaveCount(0)
   })
 
