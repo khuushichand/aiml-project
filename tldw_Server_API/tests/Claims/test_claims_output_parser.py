@@ -1,5 +1,6 @@
 import pytest
 
+import tldw_Server_API.app.core.Claims_Extraction.output_parser as output_parser
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     ClaimsOutputNoJsonError,
     ClaimsOutputParseError,
@@ -146,6 +147,70 @@ def test_response_format_none_when_provider_blocks_field(monkeypatch):
         json_schema={"type": "object"},
     )
     assert response_format is None
+
+
+@pytest.mark.unit
+def test_claims_uses_shared_orchestrator_for_response_format_resolution(monkeypatch):
+    observed: dict[str, object] = {"called_shared_negotiation": False}
+
+    def _fake_resolve(
+        provider: str,
+        *,
+        schema_name: str,
+        json_schema: dict[str, object] | None = None,
+        provider_capabilities=None,
+        allowed_fields=None,
+    ):
+        observed["called_shared_negotiation"] = True
+        observed["provider"] = provider
+        observed["schema_name"] = schema_name
+        observed["json_schema"] = json_schema
+        return {"type": "json_object"}
+
+    monkeypatch.setattr(output_parser, "resolve_structured_response_format", _fake_resolve, raising=False)
+
+    response_format = resolve_claims_response_format(
+        "openai",
+        schema_name="claims_schema",
+        json_schema={"type": "object"},
+    )
+
+    assert observed["called_shared_negotiation"] is True
+    assert observed["provider"] == "openai"
+    assert observed["schema_name"] == "claims_schema"
+    assert response_format == {"type": "json_object"}
+
+
+@pytest.mark.unit
+def test_claims_parse_path_uses_shared_schema_validation(monkeypatch):
+    observed: dict[str, object] = {"called_shared_parse_validate": False}
+
+    def _fake_parse_validate(
+        *,
+        raw_text,
+        schema,
+        parse_mode: str = "lenient",
+        strip_think_tags: bool = True,
+    ):
+        observed["called_shared_parse_validate"] = True
+        observed["raw_text"] = raw_text
+        observed["schema"] = schema
+        observed["parse_mode"] = parse_mode
+        observed["strip_think_tags"] = strip_think_tags
+        return {"claims": [{"text": "Claim via shared parser"}]}
+
+    monkeypatch.setattr(output_parser, "parse_and_validate_structured_output", _fake_parse_validate, raising=False)
+
+    payload = parse_claims_llm_output(
+        '{"claims":[{"text":"Claim via shared parser"}]}',
+        parse_mode="lenient",
+        strip_think_tags=True,
+    )
+
+    assert observed["called_shared_parse_validate"] is True
+    assert observed["parse_mode"] == "lenient"
+    assert observed["strip_think_tags"] is True
+    assert payload == {"claims": [{"text": "Claim via shared parser"}]}
 
 
 @pytest.mark.unit

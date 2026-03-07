@@ -305,6 +305,61 @@ def test_chat_completion_default_model_tracks_model(authenticated_client, mock_c
         assert captured.get("model") == "default-model"
 
 
+def test_chat_completion_downgrades_structured_response_format_before_provider_call(
+    authenticated_client, mock_chacha_db, setup_dependencies, monkeypatch
+):
+    """Providers that only accept json_object should not receive json_schema payloads."""
+
+    class _JsonObjectOnlyAdapter:
+        def capabilities(self):
+            return {"response_format_types": ["json_object"]}
+
+    class _Registry:
+        def get_adapter(self, _provider: str):
+            return _JsonObjectOnlyAdapter()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.adapter_registry.get_registry",
+        lambda: _Registry(),
+    )
+
+    request_data = ChatCompletionRequest(
+        model="test-model",
+        api_provider="openai",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Return structured JSON")],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                },
+            },
+        },
+    )
+
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+    ):
+        mock_llm.return_value = {
+            "id": "chatcmpl-test",
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": '{"answer":"ok"}'},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
+
+        assert response.status_code == status.HTTP_200_OK
+        assert mock_llm.call_args.kwargs["response_format"] == {"type": "json_object"}
+
+
 def test_chat_completion_openai_oauth_auth_failure_retries_once(
     authenticated_client,
     mock_chacha_db,

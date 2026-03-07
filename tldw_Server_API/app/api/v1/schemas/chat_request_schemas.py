@@ -655,8 +655,30 @@ ChatCompletionMessageParam = Union[
 
 
 # --- Response Format ---
+class ResponseFormatJsonSchemaSpec(BaseModel):
+    """Schema spec for structured output response format."""
+
+    name: str = Field(..., description="Unique schema name for provider-side schema routing.")
+    schema: dict[str, Any] = Field(..., description="JSON Schema object used to validate output.")
+    strict: Optional[bool] = Field(None, description="Provider hint to enforce strict schema adherence.")
+
+
 class ResponseFormat(BaseModel):
-    type: Literal["text", "json_object"] = Field("text", description="Must be one of `text` or `json_object`.")
+    type: Literal["text", "json_object", "json_schema"] = Field(
+        "text", description="Must be one of `text`, `json_object`, or `json_schema`."
+    )
+    json_schema: Optional[ResponseFormatJsonSchemaSpec] = Field(
+        None,
+        description="Required when `type` is `json_schema`; must be omitted otherwise.",
+    )
+
+    @model_validator(mode="after")
+    def validate_json_schema_requirements(self) -> "ResponseFormat":
+        if self.type == "json_schema" and self.json_schema is None:
+            raise ValueError("json_schema must be provided when type is 'json_schema'")
+        if self.type != "json_schema" and self.json_schema is not None:
+            raise ValueError("json_schema is only allowed when type is 'json_schema'")
+        return self
 
 
 # --- Continuation Controls (tldw extension) ---
