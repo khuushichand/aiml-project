@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react"
 import { act, renderHook } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { useChatActions } from "../useChatActions"
 import {
@@ -438,6 +438,8 @@ describe("useChatActions image event sync integration", () => {
 
 describe("useChatActions character stream throttling integration", () => {
   beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-03-07T00:00:00.000Z"))
     vi.clearAllMocks()
     storageValues.clear()
     storageValues.set(PLAYGROUND_IMAGE_EVENT_SYNC_DEFAULT_STORAGE_KEY, "off")
@@ -470,6 +472,10 @@ describe("useChatActions character stream throttling integration", () => {
     })
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it("coalesces rapid tiny character chunks into bounded setMessages updates", async () => {
     const { options, setMessages, getCurrentMessages } = createHookOptions([])
     options.serverChatId = null
@@ -491,7 +497,7 @@ describe("useChatActions character stream throttling integration", () => {
       })
     })
 
-    // Includes setup/persistence/finalization updates, but should not be per-token.
+    // Fake timers freeze the throttle window so this bound stays deterministic in CI.
     expect(setMessages.mock.calls.length).toBeLessThan(40)
     expect(streamCharacterChatCompletionMock).toHaveBeenCalledTimes(1)
     expect(normalChatModeMock).not.toHaveBeenCalled()
@@ -499,6 +505,6 @@ describe("useChatActions character stream throttling integration", () => {
     const finalAssistant = getCurrentMessages()
       .filter((message: any) => message.isBot)
       .at(-1)
-    expect(String(finalAssistant?.message || "").length).toBeGreaterThan(100)
+    expect(finalAssistant?.message).toBe("x".repeat(180))
   })
 })
