@@ -56,7 +56,11 @@ describe('auth API key storage', () => {
     auth.setApiKey('legacy-api-key');
     const result = await auth.loginWithPassword('admin', 'password');
 
-    expect(result?.access_token).toBe('jwt-token');
+    expect(result).toEqual({
+      status: 'authenticated',
+      accessToken: 'jwt-token',
+      tokenType: 'bearer',
+    });
     expect(auth.getApiKey()).toBeNull();
     expect(sessionStorage.getItem('x_api_key')).toBeNull();
     expect(localStorage.getItem('access_token')).toBe('jwt-token');
@@ -91,5 +95,30 @@ describe('auth API key storage', () => {
     expect(localStorage.getItem('access_token')).toBeNull();
     expect(auth.getApiKey()).toBe('fresh-api-key');
     expect(sessionStorage.getItem('x_api_key')).toBeNull();
+  });
+
+  it('returns MFA challenge details without storing auth when login requires MFA', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(
+      JSON.stringify({
+        session_token: 'mfa-session-token',
+        mfa_required: true,
+        expires_in: 300,
+        message: 'MFA required. Submit your TOTP or backup code.',
+      }),
+      { status: 202, headers: { 'Content-Type': 'application/json' } }
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const auth = await import('./auth');
+    const result = await auth.loginWithPassword('admin', 'password');
+
+    expect(result).toEqual({
+      status: 'mfa_required',
+      sessionToken: 'mfa-session-token',
+      expiresIn: 300,
+      message: 'MFA required. Submit your TOTP or backup code.',
+    });
+    expect(localStorage.getItem('access_token')).toBeNull();
+    expect(localStorage.getItem('user')).toBeNull();
   });
 });
