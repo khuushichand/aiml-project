@@ -16,7 +16,7 @@ const mockUseSetting = vi.hoisted(() => vi.fn())
 
 const ALL_SHORTCUT_IDS = [
   "chat", "prompts", "prompt-studio", "characters",
-  "chat-dictionaries", "world-books", "workspace-playground",
+  "chat-dictionaries", "world-books", "deep-research", "workspace-playground",
   "knowledge-qa", "media", "document-workspace",
   "repo2txt",
   "multi-item-review", "content-review", "collections",
@@ -137,6 +137,7 @@ describe("HeaderShortcuts launcher modal", () => {
     // Items should be visible
     expect(screen.getByText("Chat")).toBeInTheDocument()
     expect(screen.getByText("Prompts")).toBeInTheDocument()
+    expect(screen.getByText("Deep Research")).toBeInTheDocument()
     expect(screen.getByText("Repo2Txt")).toBeInTheDocument()
     expect(screen.getByText("Settings")).toBeInTheDocument()
   })

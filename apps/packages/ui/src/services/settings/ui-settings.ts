@@ -328,6 +328,7 @@ export const HEADER_SHORTCUT_IDS = [
   "characters",
   "chat-dictionaries",
   "world-books",
+  "deep-research",
   "knowledge-qa",
   "media",
   "document-workspace",
