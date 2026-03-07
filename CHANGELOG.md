@@ -22,12 +22,18 @@ and this project adheres to Some kind of Versioning
   - Keyboard shortcuts: Ctrl/Cmd+Enter (play), Escape (stop), Ctrl/Cmd+. (toggle inspector)
   - `aria-live="polite"` on provider strip for screen reader announcements
   - 24 component tests across 6 test files
-- **STT Playground Comparison Redesign** — Three-zone layout (Recording Strip + Comparison Panel + History):
-  - Rewrote `SttPlaygroundPage` with comparison-first three-zone architecture
-  - Added Cmd/Ctrl+Enter keyboard shortcut for transcription
-  - Added `aria-live` regions on transcript outputs
-  - Added Space key hint on record button
-  - Integration and keyboard shortcut tests for STT playground
+- **STT Playground Comparison-First Redesign** — Record once, compare across multiple models:
+  - Rewrote `SttPlaygroundPage` from 736-line single-model tool into three-zone comparison architecture
+  - **Zone 1 — RecordingStrip**: Record/stop with real-time duration timer, animated audio level meter (`role="meter"`), native audio playback, file upload (`accept="audio/*"`), collapsible settings gear toggle
+  - **Zone 2 — ComparisonPanel**: Multi-select model picker, parallel transcription via `Promise.allSettled`, responsive card grid (1/2/3 cols), per-card skeleton loading, editable transcripts, latency + word count metrics, copy-to-clipboard, save to Notes, per-card retry on error
+  - **Zone 3 — HistoryPanel**: Collapsible past recordings with re-compare (loads blob from IndexedDB), markdown export to clipboard, single-delete and confirmed clear-all via Modal
+  - **Dexie/IndexedDB persistence** (`stt-recordings.ts`): Audio blobs stored with 20-recording cap and oldest-eviction, schema version bump in `schema.ts`
+  - **`useAudioRecorder` hook**: MediaRecorder lifecycle, 200ms timer, blob retention, `loadBlob()` for re-compare, cleanup on unmount
+  - **`useComparisonTranscribe` hook**: Parallel multi-model transcription, per-model status (pending/running/done/error), `performance.now()` latency, retry single model, multi-format response extraction
+  - **`InlineSettingsPanel`**: Playground-local overrides for language, task, format, temperature, prompt, segmentation (progressive disclosure); "Reset to defaults" restores global settings
+  - **Keyboard shortcuts**: Space to toggle record (when no text input focused), Cmd/Ctrl+Enter for Transcribe All, shortcut hints on buttons
+  - **Accessibility**: Dynamic `aria-label` on record button with shortcut hint, `aria-live="polite"` on duration timer and transcript textareas, `role="region"` with model-specific labels on result cards, multi-state visual feedback (icon + color + text, not color alone)
+  - 51 tests across 9 test files (Dexie store, both hooks, all 4 components, keyboard shortcuts, page integration)
 
 ### Fixed
 
