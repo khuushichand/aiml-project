@@ -3008,7 +3008,13 @@ describe("CharactersManager first-use onboarding", () => {
 
     render(<CharactersManager />)
 
-    await user.click(screen.getByRole("button", { name: /Writer Coach/i }))
+    // Click "Start from a template" onboarding card to open drawer with templates
+    const templateCard = screen.getByText("Start from a template").closest("button")!
+    await user.click(templateCard)
+
+    // Click the Writer Coach template in the drawer
+    const writerCoachButton = await screen.findByRole("button", { name: /Writer Coach/i })
+    await user.click(writerCoachButton)
     expect(await screen.findByDisplayValue("Writer Coach")).toBeInTheDocument()
 
     const createSubmitButton = await waitFor(() => {
@@ -3020,10 +3026,15 @@ describe("CharactersManager first-use onboarding", () => {
     })
     fireEvent.click(createSubmitButton)
 
-    const nameCell = await screen.findByText("Writer Coach")
-    const tableRow = nameCell.closest("tr")
-    expect(tableRow).not.toBeNull()
-    const chatButton = within(tableRow as HTMLElement).getByRole("button", {
+    // After creation the drawer closes and the table re-renders with the new character.
+    // Wait until "Writer Coach" appears inside a table row (not in the drawer).
+    const tableRow = await waitFor(() => {
+      const candidates = screen.getAllByText("Writer Coach")
+      const row = candidates.map((el) => el.closest("tr")).find(Boolean)
+      if (!row) throw new Error("Writer Coach not found inside a <tr> yet")
+      return row as HTMLElement
+    })
+    const chatButton = within(tableRow).getByRole("button", {
       name: /Chat/i
     })
     await user.click(chatButton)

@@ -1,89 +1,33 @@
-import React from "react"
+import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
-import { useTranslation } from "react-i18next"
-import {
-  Alert,
-  Button,
-  Card,
-  Input,
-  List,
-  Select,
-  Space,
-  Switch,
-  Tag,
-  Tooltip,
-  Typography
-} from "antd"
-import { Mic, Pause, Save, Trash2 } from "lucide-react"
+import { Typography } from "antd"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { PageShell } from "@/components/Common/PageShell"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { isTimeoutLikeError } from "@/utils/request-timeout"
-import { withTemplateFallback } from "@/utils/template-guards"
+import { RecordingStrip } from "./RecordingStrip"
+import { InlineSettingsPanel } from "./InlineSettingsPanel"
+import type { SttLocalSettings } from "./InlineSettingsPanel"
+import { ComparisonPanel } from "./ComparisonPanel"
+import { HistoryPanel } from "./HistoryPanel"
+import type { SttHistoryEntry } from "./HistoryPanel"
+import {
+  saveSttRecording,
+  getSttRecording,
+  deleteSttRecording
+} from "@/db/dexie/stt-recordings"
 
 const { Text, Title } = Typography
 
-type RecordedItem = {
-  id: string
-  createdAt: string
-  durationMs?: number
-  model?: string
-  language?: string
-  text: string
-}
-
 export const SttPlaygroundPage: React.FC = () => {
-  const { t } = useTranslation(["playground", "settings"])
   const notification = useAntdNotification()
-  const [speechToTextLanguage] = useStorage("speechToTextLanguage", "en-US")
-  const [sttModel] = useStorage("sttModel", "whisper-1")
-  const [sttTask] = useStorage("sttTask", "transcribe")
-  const [sttResponseFormat] = useStorage("sttResponseFormat", "json")
-  const [sttTemperature] = useStorage("sttTemperature", 0)
-  const [sttUseSegmentation] = useStorage("sttUseSegmentation", false)
-  const [sttTimestampGranularities] = useStorage(
-    "sttTimestampGranularities",
-    "segment"
-  )
-  const [sttPrompt] = useStorage("sttPrompt", "")
-  const [sttSegK] = useStorage("sttSegK", 6)
-  const [sttSegMinSegmentSize] = useStorage("sttSegMinSegmentSize", 5)
-  const [sttSegLambdaBalance] = useStorage("sttSegLambdaBalance", 0.01)
-  const [sttSegUtteranceExpansionWidth] = useStorage(
-    "sttSegUtteranceExpansionWidth",
-    2
-  )
-  const [sttSegEmbeddingsProvider] = useStorage(
-    "sttSegEmbeddingsProvider",
-    ""
-  )
-  const [sttSegEmbeddingsModel] = useStorage(
-    "sttSegEmbeddingsModel",
-    ""
-  )
 
-  const [serverModels, setServerModels] = React.useState<string[]>([])
-  const [serverModelsLoading, setServerModelsLoading] = React.useState(false)
-  const [serverModelsError, setServerModelsError] = React.useState<string | null>(
-    null
-  )
-  const [modelsLoadAttempt, setModelsLoadAttempt] = React.useState(0)
-  const [activeModel, setActiveModel] = React.useState<string | undefined>()
-  const [isRecording, setIsRecording] = React.useState(false)
-  const [isTranscribing, setIsTranscribing] = React.useState(false)
-  const [useLongRunning, setUseLongRunning] = React.useState(false)
-  const [liveText, setLiveText] = React.useState("")
-  const [items, setItems] = React.useState<RecordedItem[]>([])
-  const recorderRef = React.useRef<MediaRecorder | null>(null)
-  const chunksRef = React.useRef<BlobPart[]>([])
-  const startedAtRef = React.useRef<number | null>(null)
-  const liveTextRef = React.useRef<string>("")
+  // ── Server models (fetched on mount) ──────────────────────────────
+  const [serverModels, setServerModels] = useState<string[]>([])
 
-  React.useEffect(() => {
+  useEffect(() => {
     let cancelled = false
     const fetchModels = async () => {
-      setServerModelsLoading(true)
-      setServerModelsError(null)
       try {
         const res = await tldwClient.getTranscriptionModels({
           timeoutMs: 10_000
@@ -94,34 +38,15 @@ export const SttPlaygroundPage: React.FC = () => {
         if (!cancelled && all.length > 0) {
           const unique = Array.from(new Set(all)).sort()
           setServerModels(unique)
-          if (!activeModel) {
-            const initial = sttModel && unique.includes(sttModel)
-              ? sttModel
-              : unique[0]
-            setActiveModel(initial)
-          }
         }
       } catch (e) {
         if (!cancelled) {
-          setServerModelsError(
-            isTimeoutLikeError(e)
-              ? (t(
-                  "playground:stt.modelsTimeout",
-                  "Model list took longer than 10 seconds. Check server health and retry."
-                ) as string)
-              : (t(
-                  "playground:stt.modelsLoadError",
-                  "Unable to load transcription models. Retry or check server settings."
-                ) as string)
-          )
-        }
-        if ((import.meta as any)?.env?.DEV) {
-          // eslint-disable-next-line no-console
-          console.warn("Failed to load transcription models for STT Playground", e)
-        }
-      } finally {
-        if (!cancelled) {
-          setServerModelsLoading(false)
+          notification.error({
+            message: "Model load failed",
+            description: isTimeoutLikeError(e)
+              ? "Model list took longer than 10 seconds. Check server health and retry."
+              : "Unable to load transcription models. Retry or check server settings."
+          })
         }
       }
     }
@@ -129,604 +54,225 @@ export const SttPlaygroundPage: React.FC = () => {
     return () => {
       cancelled = true
     }
-  }, [activeModel, modelsLoadAttempt, sttModel, t])
-
-  const handleStopRecording = React.useCallback(async () => {
-    const recorder = recorderRef.current
-    if (!recorder) return
-    try {
-      recorder.stop()
-      setIsRecording(false)
-      setIsTranscribing(true)
-    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const appendLiveText = React.useCallback((textChunk: string) => {
-    if (!textChunk) return
-    setLiveText((prev) => {
-      const next = prev ? `${prev} ${textChunk}` : textChunk
-      liveTextRef.current = next
-      return next
-    })
+  // ── Current blob from RecordingStrip ──────────────────────────────
+  const [currentBlob, setCurrentBlob] = useState<Blob | null>(null)
+  const [currentDurationMs, setCurrentDurationMs] = useState<number>(0)
+
+  const handleBlobReady = useCallback((blob: Blob, durationMs: number) => {
+    setCurrentBlob(blob)
+    setCurrentDurationMs(durationMs)
   }, [])
 
-  const transcribeBlob = React.useCallback(
-    async (blob: Blob, modelOverride?: string): Promise<string> => {
-      const sttOptions: Record<string, any> = {
-        language: speechToTextLanguage
-      }
-      const modelToUse = modelOverride || activeModel || sttModel
-      if (modelToUse && modelToUse.trim().length > 0) {
-        sttOptions.model = modelToUse.trim()
-      }
-      if (sttTimestampGranularities) {
-        sttOptions.timestamp_granularities = sttTimestampGranularities
-      }
-      if (sttPrompt && sttPrompt.trim().length > 0) {
-        sttOptions.prompt = sttPrompt.trim()
-      }
-      if (sttTask) {
-        sttOptions.task = sttTask
-      }
-      if (sttResponseFormat) {
-        sttOptions.response_format = sttResponseFormat
-      }
-      if (typeof sttTemperature === "number") {
-        sttOptions.temperature = sttTemperature
-      }
-      if (sttUseSegmentation) {
-        sttOptions.segment = true
-        if (typeof sttSegK === "number") {
-          sttOptions.seg_K = sttSegK
-        }
-        if (typeof sttSegMinSegmentSize === "number") {
-          sttOptions.seg_min_segment_size = sttSegMinSegmentSize
-        }
-        if (typeof sttSegLambdaBalance === "number") {
-          sttOptions.seg_lambda_balance = sttSegLambdaBalance
-        }
-        if (typeof sttSegUtteranceExpansionWidth === "number") {
-          sttOptions.seg_utterance_expansion_width =
-            sttSegUtteranceExpansionWidth
-        }
-        if (sttSegEmbeddingsProvider?.trim()) {
-          sttOptions.seg_embeddings_provider =
-            sttSegEmbeddingsProvider.trim()
-        }
-        if (sttSegEmbeddingsModel?.trim()) {
-          sttOptions.seg_embeddings_model = sttSegEmbeddingsModel.trim()
-        }
-      }
-      const res = await tldwClient.transcribeAudio(blob, sttOptions)
-      let text = ""
-      if (res) {
-        if (typeof res === "string") {
-          text = res
-        } else if (typeof (res as any).text === "string") {
-          text = (res as any).text
-        } else if (typeof (res as any).transcript === "string") {
-          text = (res as any).transcript
-        } else if (Array.isArray((res as any).segments)) {
-          text = (res as any).segments
-            .map((s: any) => s?.text || "")
-            .join(" ")
-            .trim()
-        }
-      }
-      return text
-    },
-    [
-      activeModel,
-      speechToTextLanguage,
-      sttModel,
-      sttPrompt,
-      sttResponseFormat,
-      sttSegEmbeddingsModel,
-      sttSegEmbeddingsProvider,
-      sttSegK,
-      sttSegLambdaBalance,
-      sttSegMinSegmentSize,
-      sttSegUtteranceExpansionWidth,
-      sttTask,
-      sttTemperature,
-      sttTimestampGranularities,
-      sttUseSegmentation
-    ]
+  // ── Settings ──────────────────────────────────────────────────────
+  const [sttSettings, setSttSettings] = useState<SttLocalSettings | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
+
+  const toggleSettings = useCallback(() => {
+    setShowSettings((prev) => !prev)
+  }, [])
+
+  const sttOptions = useMemo(() => {
+    if (!sttSettings) return {}
+    const opts: Record<string, unknown> = {}
+    if (sttSettings.language) opts.language = sttSettings.language
+    if (sttSettings.task) opts.task = sttSettings.task
+    if (sttSettings.responseFormat)
+      opts.response_format = sttSettings.responseFormat
+    if (typeof sttSettings.temperature === "number")
+      opts.temperature = sttSettings.temperature
+    if (sttSettings.prompt) opts.prompt = sttSettings.prompt
+    if (sttSettings.timestampGranularities)
+      opts.timestamp_granularities = sttSettings.timestampGranularities
+    if (sttSettings.useSegmentation) {
+      opts.segment = true
+      if (typeof sttSettings.segK === "number") opts.seg_K = sttSettings.segK
+      if (typeof sttSettings.segMinSegmentSize === "number")
+        opts.seg_min_segment_size = sttSettings.segMinSegmentSize
+      if (typeof sttSettings.segLambdaBalance === "number")
+        opts.seg_lambda_balance = sttSettings.segLambdaBalance
+      if (typeof sttSettings.segUtteranceExpansionWidth === "number")
+        opts.seg_utterance_expansion_width =
+          sttSettings.segUtteranceExpansionWidth
+      if (sttSettings.segEmbeddingsProvider)
+        opts.seg_embeddings_provider = sttSettings.segEmbeddingsProvider
+      if (sttSettings.segEmbeddingsModel)
+        opts.seg_embeddings_model = sttSettings.segEmbeddingsModel
+    }
+    return opts
+  }, [sttSettings])
+
+  // ── History (persisted via Plasmo storage) ────────────────────────
+  const [history, setHistory] = useStorage<SttHistoryEntry[]>(
+    "sttComparisonHistory",
+    []
   )
 
-  const handleStartRecording = async () => {
-    if (isTranscribing) {
-      return
-    }
-    if (isRecording) {
-      await handleStopRecording()
-      return
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const recorder = new MediaRecorder(stream)
-      recorderRef.current = recorder
-      chunksRef.current = []
-      startedAtRef.current = Date.now()
-      liveTextRef.current = ""
-      setLiveText("")
+  // ── Callbacks ─────────────────────────────────────────────────────
 
-      recorder.ondataavailable = async (ev: BlobEvent) => {
-        if (!ev.data || ev.data.size === 0) return
-        if (useLongRunning) {
-          try {
-            const text = await transcribeBlob(ev.data)
-            if (text) {
-              appendLiveText(text)
-            }
-          } catch (e: any) {
-            // eslint-disable-next-line no-console
-            console.error("Streaming STT chunk failed", e)
+  const handleSaveToNotes = useCallback(
+    async (text: string, model: string) => {
+      const title = `STT Comparison: ${model} - ${new Date().toLocaleString()}`
+      try {
+        await tldwClient.createNote(text, {
+          title,
+          metadata: {
+            origin: "stt-playground",
+            stt_model: model
           }
-        } else {
-          chunksRef.current.push(ev.data)
-        }
-      }
-
-      recorder.onerror = (event: Event) => {
-        // eslint-disable-next-line no-console
-        console.error("MediaRecorder error", event)
-        notification.error({
-          message: t("playground:actions.speechErrorTitle", "Dictation failed"),
-          description: t(
-            "playground:actions.speechErrorBody",
-            "Microphone recording error. Check your permissions and try again."
-          )
         })
-        setIsRecording(false)
-        setIsTranscribing(false)
+        notification.success({
+          message: "Saved to Notes",
+          description: "Transcription saved as a note."
+        })
+      } catch (e: any) {
+        notification.error({
+          message: "Error",
+          description: e?.message || "Something went wrong"
+        })
       }
+    },
+    [notification]
+  )
 
-      recorder.onstop = async () => {
-        try {
-          const startedAt = startedAtRef.current
-          startedAtRef.current = null
-          if (useLongRunning) {
-            const text = liveTextRef.current.trim()
-            if (!text) {
-              return
-            }
-            const nowIso = new Date().toISOString()
-            const durationMs =
-              startedAt != null ? Date.now() - startedAt : undefined
-            const item: RecordedItem = {
-              id: `${nowIso}-${Math.random().toString(36).slice(2, 8)}`,
-              createdAt: nowIso,
-              durationMs,
-              model: activeModel || sttModel,
-              language: speechToTextLanguage,
-              text
-            }
-            setItems((prev) => [item, ...prev])
-          } else {
-            const blob = new Blob(chunksRef.current, {
-              type: recorder.mimeType || "audio/webm"
-            })
-            chunksRef.current = []
-            if (blob.size === 0) {
-              return
-            }
-            const text = await transcribeBlob(blob)
-            if (!text) {
-              notification.error({
-                message: t(
-                  "playground:actions.speechErrorTitle",
-                  "Dictation failed"
-                ),
-                description: t(
-                  "playground:actions.speechNoText",
-                  "The transcription did not return any text."
-                )
-              })
-              return
-            }
-            setLiveText(text)
-            liveTextRef.current = text
-            const nowIso = new Date().toISOString()
-            const durationMs =
-              startedAt != null ? Date.now() - startedAt : undefined
-            const item: RecordedItem = {
-              id: `${nowIso}-${Math.random().toString(36).slice(2, 8)}`,
-              createdAt: nowIso,
-              durationMs,
-              model: activeModel || sttModel,
-              language: speechToTextLanguage,
-              text
-            }
-            setItems((prev) => [item, ...prev])
-          }
-        } catch (e: any) {
+  const handleRecompare = useCallback(
+    async (entry: SttHistoryEntry) => {
+      try {
+        const blob = await getSttRecording(entry.recordingId)
+        if (blob) {
+          setCurrentBlob(blob)
+          setCurrentDurationMs(entry.durationMs ?? 0)
+        } else {
           notification.error({
-            message: t(
-              "playground:actions.speechErrorTitle",
-              "Dictation failed"
-            ),
+            message: "Recording not found",
             description:
-              e?.message ||
-              t(
-                "playground:actions.speechErrorBody",
-                "Transcription request failed. Check tldw server health."
-              )
+              "The audio recording was not found in local storage. It may have been deleted."
           })
-        } finally {
-          try {
-            stream.getTracks().forEach((trk) => trk.stop())
-          } catch {}
-          setIsRecording(false)
-          setIsTranscribing(false)
+        }
+      } catch (e: any) {
+        notification.error({
+          message: "Error",
+          description: e?.message || "Failed to load recording"
+        })
+      }
+    },
+    [notification]
+  )
+
+  const handleExport = useCallback(
+    async (entry: SttHistoryEntry) => {
+      const lines = [
+        `# STT Comparison - ${new Date(entry.createdAt).toLocaleString()}`,
+        "",
+        `Duration: ${entry.durationMs ? (entry.durationMs / 1000).toFixed(1) + "s" : "unknown"}`,
+        ""
+      ]
+      if (entry.results) {
+        for (const result of entry.results) {
+          lines.push(`## ${result.model}`)
+          lines.push("")
+          lines.push(result.text || "(no text)")
+          lines.push("")
         }
       }
+      const markdown = lines.join("\n")
+      try {
+        await navigator.clipboard.writeText(markdown)
+        notification.success({
+          message: "Copied",
+          description: "Comparison results copied to clipboard as Markdown."
+        })
+      } catch {
+        notification.error({
+          message: "Copy failed",
+          description: "Unable to copy to clipboard."
+        })
+      }
+    },
+    [notification]
+  )
 
-      recorder.start(useLongRunning ? 5000 : undefined)
-      setIsRecording(true)
-    } catch (e: any) {
-      notification.error({
-        message: t("playground:actions.speechErrorTitle", "Dictation failed"),
-        description: t(
-          "playground:actions.speechMicError",
-          "Unable to access your microphone. Check browser permissions and try again."
-        )
-      })
-      setIsRecording(false)
-    }
-  }
-
-  const handleSaveToNotes = async (item: RecordedItem) => {
-    const title = `STT: ${new Date(item.createdAt).toLocaleString()}`
-    try {
-      await tldwClient.createNote(item.text, {
-        title,
-        metadata: {
-          origin: "stt-playground",
-          stt_model: item.model,
-          stt_language: item.language
+  const handleDeleteEntry = useCallback(
+    async (id: string) => {
+      const entry = (history ?? []).find((e) => e.id === id)
+      if (entry) {
+        try {
+          await deleteSttRecording(entry.recordingId)
+        } catch {
+          // Dexie record may already be gone; proceed with removal
         }
+      }
+      setHistory((prev) => (prev ?? []).filter((e) => e.id !== id))
+      notification.info({
+        message: "Deleted",
+        description: "History entry removed."
       })
-      notification.success({
-        message: t(
-          "settings:healthPage.copyDiagnostics",
-          "Saved to Notes"
-        ),
-        description: t(
-          "playground:tts.savedToNotes",
-          "Transcription saved as a note."
-        )
-      })
-    } catch (e: any) {
-      notification.error({
-        message: t("error", "Error"),
-        description: e?.message || t("somethingWentWrong", "Something went wrong")
-      })
+    },
+    [history, setHistory, notification]
+  )
+
+  const handleClearAll = useCallback(async () => {
+    const entries = history ?? []
+    for (const entry of entries) {
+      try {
+        await deleteSttRecording(entry.recordingId)
+      } catch {
+        // best-effort cleanup
+      }
     }
-  }
+    setHistory([])
+  }, [history, setHistory])
 
-  const handleDeleteItem = (id: string) => {
-    setItems((prev) => prev.filter((i) => i.id !== id))
-  }
+  // ── Keyboard shortcuts ────────────────────────────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase()
+      const isEditable = (e.target as HTMLElement)?.isContentEditable
+      if (
+        tag === "input" ||
+        tag === "textarea" ||
+        tag === "select" ||
+        isEditable
+      ) {
+        return
+      }
+      e.preventDefault()
+      window.dispatchEvent(new CustomEvent("stt-toggle-record"))
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [])
 
-  const transcriptPlaceholder = isTranscribing
-    ? t(
-        "playground:stt.transcribingPlaceholder",
-        "Transcribing audio..."
-      )
-    : t(
-        "playground:stt.currentTranscriptPlaceholder",
-        "Live transcript will appear here while recording."
-      )
-
+  // ── Render ────────────────────────────────────────────────────────
   return (
-    <PageShell maxWidthClassName="max-w-4xl" className="py-6">
-      <Title level={3} className="!mb-1">
-        {t("playground:stt.title", "STT Playground")}
-      </Title>
+    <PageShell maxWidthClassName="max-w-5xl" className="py-6">
+      <Title level={3}>STT Playground</Title>
       <Text type="secondary">
-        {t(
-          "playground:stt.subtitle",
-          "Try out transcription models, run longer dictation sessions, and save transcripts into Notes."
-        )}
+        Record audio and compare transcription results across multiple models.
       </Text>
 
       <div className="mt-4 space-y-4">
-        <Card>
-          <Space orientation="vertical" className="w-full" size="middle">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="space-y-1">
-                <Text strong>
-                  {t(
-                    "playground:stt.currentModelLabel",
-                    "Current transcription model"
-                  )}
-                  :
-                </Text>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Select
-                    showSearch
-                    allowClear
-                    placeholder={sttModel || "whisper-1"}
-                    loading={serverModelsLoading}
-                    value={activeModel}
-                    onChange={(value) => setActiveModel(value)}
-                    style={{ minWidth: 220 }}
-                    options={serverModels.map((m) => ({
-                      label: m,
-                      value: m
-                    }))}
-                  />
-                  {sttModel && (
-                    <Tag bordered>
-                      {t(
-                        "playground:stt.defaultModel",
-                        "Default from Settings"
-                      )}
-                      :{" "}
-                      <Text code className="ml-1">
-                        {sttModel}
-                      </Text>
-                    </Tag>
-                  )}
-                </div>
-                <div className="text-xs text-text-muted ">
-                  {t(
-                    "playground:stt.settingsNotice",
-                    "Language, task, response format, segmentation, and prompt reuse your Speech-to-Text defaults from Settings."
-                  )}
-                </div>
-                {serverModelsError && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    title={serverModelsError}
-                    action={
-                      <Button
-                        size="small"
-                        onClick={() =>
-                          setModelsLoadAttempt((prev) => prev + 1)
-                        }
-                        disabled={serverModelsLoading}
-                      >
-                        {t("common:retry", "Retry")}
-                      </Button>
-                    }
-                  />
-                )}
-              </div>
-              <div className="space-y-1">
-                <Text type="secondary" className="block text-xs">
-                  {t(
-                    "playground:stt.sessionMode",
-                    "Session mode"
-                  )}
-                </Text>
-                <div className="flex items-center gap-2">
-                  <Switch
-                    checked={useLongRunning}
-                    onChange={setUseLongRunning}
-                    size="small"
-                  />
-                  <span className="text-xs text-text-muted ">
-                    {useLongRunning
-                      ? t(
-                          "playground:stt.modeLong",
-                          "Long-running (chunked recording)"
-                        )
-                      : t(
-                          "playground:stt.modeShort",
-                          "Short dictation (single clip)"
-                        )}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between gap-3 pt-2">
-              <div className="flex flex-wrap items-center gap-3">
-                <Tag color="blue" bordered>
-                  {t(
-                    "playground:stt.languageTag",
-                    "Language"
-                  )}
-                  :{" "}
-                  <Text code className="ml-1">
-                    {speechToTextLanguage || "auto"}
-                  </Text>
-                </Tag>
-                <Tag bordered>
-                  {t("playground:stt.taskTag", "Task")}{" "}
-                  <Text code className="ml-1">
-                    {sttTask || "transcribe"}
-                  </Text>
-                </Tag>
-                <Tag bordered>
-                  {t("playground:stt.formatTag", "Format")}{" "}
-                  <Text code className="ml-1">
-                    {sttResponseFormat || "json"}
-                  </Text>
-                </Tag>
-                {sttUseSegmentation && (
-                  <Tag color="purple" bordered>
-                    {t(
-                      "playground:stt.segmentationEnabled",
-                      "Segmentation enabled"
-                    )}
-                  </Tag>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <Tooltip
-                  placement="left"
-                  title={
-                    isTranscribing
-                      ? (t(
-                          "playground:stt.transcribingTooltip",
-                          "Transcribing audio..."
-                        ) as string)
-                      : isRecording
-                      ? (t(
-                          "playground:stt.stopTooltip",
-                          "Stop and send to server"
-                        ) as string)
-                      : (t(
-                          "playground:stt.startTooltip",
-                          "Start recording audio for transcription"
-                        ) as string)
-                  }>
-                  <Button
-                    type={isRecording || isTranscribing ? "default" : "primary"}
-                    danger={isRecording}
-                    loading={isTranscribing}
-                    disabled={isTranscribing}
-                    icon={
-                      isRecording ? (
-                        <Pause className="h-4 w-4" />
-                      ) : !isTranscribing ? (
-                        <Mic className="h-4 w-4" />
-                      ) : undefined
-                    }
-                    onClick={handleStartRecording}
-                  >
-                    {isRecording
-                      ? t("playground:stt.stopButton", "Stop")
-                      : isTranscribing
-                        ? t(
-                            "playground:stt.transcribingButton",
-                            "Transcribing..."
-                          )
-                      : t("playground:stt.recordButton", "Record")}
-                  </Button>
-                </Tooltip>
-              </div>
-            </div>
-            <div className="text-xs text-text-muted ">
-              {withTemplateFallback(
-                t(
-                  "playground:tooltip.speechToTextDetails",
-                  "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.",
-                  {
-                    model: activeModel || sttModel || "whisper-1",
-                    task: sttTask === "translate" ? "translate" : "transcribe",
-                    format: (sttResponseFormat || "json").toUpperCase()
-                  } as any
-                ),
-                `Uses ${
-                  activeModel || sttModel || "whisper-1"
-                } · ${sttTask === "translate" ? "translate" : "transcribe"} · ${(
-                  sttResponseFormat || "json"
-                ).toUpperCase()}. Configure in Settings -> General -> Speech-to-Text.`
-              )}
-            </div>
-            {(liveText || isRecording || isTranscribing) && (
-              <div className="pt-3">
-                <Text strong className="text-xs block mb-1">
-                  {t(
-                    "playground:stt.currentTranscriptTitle",
-                    "Current session transcript"
-                  )}
-                </Text>
-                <Input.TextArea
-                  value={liveText}
-                  readOnly
-                  autoSize={{ minRows: 3, maxRows: 8 }}
-                  placeholder={transcriptPlaceholder as string}
-                />
-              </div>
-            )}
-          </Space>
-        </Card>
-
-        <Card>
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <Text strong>
-              {t("playground:stt.historyTitle", "Transcription history")}
-            </Text>
-            {items.length > 0 && (
-              <Button
-                size="small"
-                type="text"
-                icon={<Trash2 className="h-3 w-3" />}
-                onClick={() => setItems([])}
-              >
-                {t("playground:stt.clearAll", "Clear all")}
-              </Button>
-            )}
-          </div>
-          {items.length === 0 ? (
-            <Text type="secondary" className="text-xs">
-              {t(
-                "playground:stt.emptyHistory",
-                "Start a recording to see transcripts here. You can save any item into Notes."
-              )}
-            </Text>
-          ) : (
-            <List
-              itemLayout="vertical"
-              dataSource={items}
-              renderItem={(item) => (
-                <List.Item
-                  key={item.id}
-                  actions={[
-                    <Button
-                      key="save"
-                      size="small"
-                      icon={<Save className="h-3 w-3" />}
-                      onClick={() => handleSaveToNotes(item)}
-                    >
-                      {t("playground:stt.saveToNotes", "Save to Notes")}
-                    </Button>,
-                    <Button
-                      key="delete"
-                      size="small"
-                      type="text"
-                      icon={<Trash2 className="h-3 w-3" />}
-                      onClick={() => handleDeleteItem(item.id)}
-                    >
-                      {t("playground:stt.delete", "Delete")}
-                    </Button>
-                  ]}
-                >
-                  <List.Item.Meta
-                    title={
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Text>
-                          {new Date(item.createdAt).toLocaleString()}
-                        </Text>
-                        {item.durationMs != null && (
-                          <Tag bordered>
-                            {t(
-                              "playground:stt.durationTag",
-                              "Duration"
-                            )}
-                            :{" "}
-                            <Text code className="ml-1">
-                              {(item.durationMs / 1000).toFixed(1)}s
-                            </Text>
-                          </Tag>
-                        )}
-                        {item.model && (
-                          <Tag bordered>
-                            {t("playground:stt.modelTag", "Model")}{" "}
-                            <Text code className="ml-1">
-                              {item.model}
-                            </Text>
-                          </Tag>
-                        )}
-                      </div>
-                    }
-                  />
-                  <Input.TextArea
-                    value={item.text}
-                    autoSize={{ minRows: 3, maxRows: 8 }}
-                    readOnly
-                  />
-                </List.Item>
-              )}
-            />
-          )}
-        </Card>
+        <RecordingStrip
+          onBlobReady={handleBlobReady}
+          onSettingsToggle={toggleSettings}
+        />
+        {showSettings && <InlineSettingsPanel onChange={setSttSettings} />}
+        <ComparisonPanel
+          blob={currentBlob}
+          availableModels={serverModels}
+          sttOptions={sttOptions}
+          onSaveToNotes={handleSaveToNotes}
+        />
+        <HistoryPanel
+          entries={history ?? []}
+          onRecompare={handleRecompare}
+          onExport={handleExport}
+          onDelete={handleDeleteEntry}
+          onClearAll={handleClearAll}
+        />
       </div>
     </PageShell>
   )

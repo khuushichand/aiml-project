@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.31] 2026-03-06
+
+### Added
+
+- Docker runner integration test (`test_docker_runner_integration.py`) for full container lifecycle validation (session → upload → run → artifacts → cleanup), skipped without Docker daemon.
+
+### Changed
+
+- Updated misleading docstrings in `DockerRunner`, `SandboxService`, `LinuxLimaEnforcer`, and `MacOSLimaEnforcer` to accurately reflect implemented functionality.
+
+### Fixed
+
+- Fixed `PostgresStore._coerce_created_at()` `AttributeError`: moved method from `SQLiteStore` to `SandboxStore` base class so both SQLite and Postgres backends inherit it. Admin list/count endpoints with date filters on Postgres would crash without this fix.
+- Fixed event loop closure causing cascading "Event loop is closed" test failures in `RunStreamHub._schedule_dispatch()`: now clears stale `self._loop` reference and falls through to the threading.Timer fallback. Added `reset_loop()` method for test fixture cleanup.
+- Fixed config cache leaking between sandbox tests: added `_sandbox_clear_config_cache` and `_sandbox_reset_stream_hub` autouse fixtures to sandbox `conftest.py` so environment variable changes and stale event loop references don't bleed across tests.
+- Added debug logging to 8 silent `except ... pass` handlers in `network_policy.py` (`expand_allowlist_to_targets`, `pin_dns_map`, `apply_egress_rules_atomic`, `delete_rules_by_label`) so iptables/DNS failures are observable instead of silently swallowed.
+
 ## [0.1.30] 2026-03-06
 
 ### Added
