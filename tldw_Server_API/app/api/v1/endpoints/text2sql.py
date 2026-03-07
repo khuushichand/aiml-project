@@ -20,7 +20,10 @@ from tldw_Server_API.app.api.v1.schemas.text2sql_schemas import (
     Text2SQLRequest,
     Text2SQLResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.permissions import SQL_READ
+from tldw_Server_API.app.core.AuthNZ.permissions import (
+    SQL_READ,
+    SQL_TARGET_ANY,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
@@ -85,10 +88,9 @@ def _shape_rows(columns: list[str], rows: list[Any]) -> list[dict[str, Any]]:
 def _connector_acl_allows(current_user: User, target_id: str) -> bool:
     """Fail-closed ACL hook for SQL connector targets."""
     permissions = {str(p) for p in (getattr(current_user, "permissions", []) or [])}
-    if "sql.target:*" in permissions or f"sql.target:{target_id}" in permissions:
+    if SQL_TARGET_ANY in permissions or f"sql.target:{target_id}" in permissions:
         return True
-    # Backward-compatible default for the built-in media DB target.
-    return target_id == "media_db"
+    return False
 
 
 @router.post(

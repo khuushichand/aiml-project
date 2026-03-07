@@ -101,14 +101,8 @@ def test_text2sql_requires_sql_read_permission(tmp_path: Path, monkeypatch: pyte
 
 
 @pytest.mark.security
-def test_text2sql_enforces_connector_acl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_text2sql_requires_explicit_target_acl_permission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(text2sql_mod, "Text2SQLCoreService", _FakeText2SQLCoreService)
-    monkeypatch.setattr(
-        text2sql_mod,
-        "_connector_acl_allows",
-        lambda current_user, target_id: False,
-        raising=False,
-    )
 
     app = _build_test_app(
         principal=_make_principal(permissions=["sql.read", "media.read"]),
@@ -136,3 +130,68 @@ def test_text2sql_enforces_connector_acl(tmp_path: Path, monkeypatch: pytest.Mon
         assert detail.get("code") == "unauthorized_target"
     else:
         assert "unauthorized_target" in str(detail)
+
+
+@pytest.mark.security
+def test_text2sql_enforces_connector_acl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(text2sql_mod, "Text2SQLCoreService", _FakeText2SQLCoreService)
+    monkeypatch.setattr(
+        text2sql_mod,
+        "_connector_acl_allows",
+        lambda current_user, target_id: False,
+        raising=False,
+    )
+
+    app = _build_test_app(
+        principal=_make_principal(permissions=["sql.read", "media.read", "sql.target:media_db"]),
+        user=User(
+            id=1,
+            username="test-user",
+            email=None,
+            is_active=True,
+            roles=["user"],
+            permissions=["sql.read", "media.read", "sql.target:media_db"],
+            is_admin=False,
+        ),
+        db_path=tmp_path / "media.db",
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/text2sql/query",
+            json={"query": "SELECT 1 AS n", "target_id": "media_db"},
+        )
+
+    assert response.status_code == 403
+    detail = response.json().get("detail")
+    if isinstance(detail, dict):
+        assert detail.get("code") == "unauthorized_target"
+    else:
+        assert "unauthorized_target" in str(detail)
+
+
+@pytest.mark.security
+def test_text2sql_allows_explicit_target_acl_permission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(text2sql_mod, "Text2SQLCoreService", _FakeText2SQLCoreService)
+
+    app = _build_test_app(
+        principal=_make_principal(permissions=["sql.read", "sql.target:media_db"]),
+        user=User(
+            id=1,
+            username="test-user",
+            email=None,
+            is_active=True,
+            roles=["user"],
+            permissions=["sql.read", "sql.target:media_db"],
+            is_admin=False,
+        ),
+        db_path=tmp_path / "media.db",
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/text2sql/query",
+            json={"query": "SELECT 1 AS n", "target_id": "media_db"},
+        )
+
+    assert response.status_code == 200

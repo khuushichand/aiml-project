@@ -55,6 +55,7 @@ async def test_ensure_baseline_rbac_seed_sqlite_idempotent():
             "media.create",
             "media.delete",
             "sql.read",
+            "sql.target:media_db",
             "system.configure",
             "users.manage_roles",
             "modules.read",
@@ -73,7 +74,7 @@ async def test_ensure_baseline_rbac_seed_sqlite_idempotent():
             FROM permissions
             WHERE name IN (
                 'media.read','media.create','media.delete','system.configure',
-                'users.manage_roles','sql.read','modules.read','tools.execute:*'
+                'users.manage_roles','sql.read','sql.target:media_db','modules.read','tools.execute:*'
             )
             """
         )
@@ -87,6 +88,7 @@ async def test_ensure_baseline_rbac_seed_sqlite_idempotent():
         assert perm_id["media.read"] in user_perm_ids
         assert perm_id["media.create"] in user_perm_ids
         assert perm_id["sql.read"] in user_perm_ids
+        assert perm_id["sql.target:media_db"] in user_perm_ids
         assert perm_id["modules.read"] in user_perm_ids
 
         cur = await conn.execute(

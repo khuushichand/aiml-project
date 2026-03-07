@@ -1137,6 +1137,7 @@ class UserDatabase:
             ("media.create", "Create media", "media"),
             ("media.delete", "Delete media", "media"),
             ("sql.read", "Run read-only SQL retrieval", "sql"),
+            ("sql.target:media_db", "Allow SQL retrieval against media_db target", "sql"),
             ("system.configure", "Configure system", "system"),
             ("users.manage_roles", "Manage user roles", "users"),
         ]
@@ -1159,7 +1160,7 @@ class UserDatabase:
             return _get_id(sel_perm_id, name)
 
         # user role defaults
-        for pname in ("media.read", "media.create", "sql.read"):
+        for pname in ("media.read", "media.create", "sql.read", "sql.target:media_db"):
             rid = user_id
             pid = _pid(pname)
             if rid and pid:
@@ -1178,6 +1179,7 @@ class UserDatabase:
                 "media.create",
                 "media.delete",
                 "sql.read",
+                "sql.target:media_db",
                 "system.configure",
                 "users.manage_roles",
             ):

@@ -273,6 +273,8 @@ MEDIA_EXPORT = "media.export"
 
 # SQL retrieval permissions
 SQL_READ = "sql.read"
+SQL_TARGET_ANY = "sql.target:*"
+SQL_TARGET_MEDIA_DB = "sql.target:media_db"
 
 # User permissions
 USERS_CREATE = "users.create"
