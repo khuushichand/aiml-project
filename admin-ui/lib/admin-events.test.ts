@@ -32,9 +32,7 @@ describe('subscribeToAdminEvents', () => {
     vi.unstubAllGlobals();
   });
 
-  it('does not include credentials in query params and sends auth as headers', async () => {
-    localStorage.setItem('access_token', 'jwt-token-value');
-
+  it('does not include credentials in query params and uses the same-origin proxy', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       makeEventStreamResponse([
         'event: connected\ndata: {"event":"connected","category":"system","data":{},"timestamp":"2026-02-27T00:00:00Z"}\n\n',
@@ -56,12 +54,13 @@ describe('subscribeToAdminEvents', () => {
     });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain('/admin/events/stream?categories=system%2Csecurity');
+    expect(url).toBe('/api/proxy/admin/events/stream?categories=system%2Csecurity');
     expect(url).not.toContain('token=');
     expect(url).not.toContain('api_key=');
 
     const headers = new Headers(init.headers);
-    expect(headers.get('Authorization')).toBe('Bearer jwt-token-value');
+    expect(headers.get('Authorization')).toBeNull();
+    expect(headers.get('X-API-KEY')).toBeNull();
     expect(headers.get('Accept')).toBe('text/event-stream');
     expect(onConnect).toHaveBeenCalledTimes(1);
 

@@ -1321,5 +1321,64 @@ async def test_refresh_single_user_respects_ip_allowlist(monkeypatch):
             session_manager=object(),
             db=None,
             settings=auth.get_settings(),
-        )
+    )
     assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_login_rejects_single_user_mode_for_enterprise_admin_ui(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "single-key")
+    monkeypatch.setenv("ADMIN_UI_ENTERPRISE_MODE", "true")
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    async def _fake_get_auth_governor():
+        return SimpleNamespace()
+
+    async def _fake_fetch_user_by_login_identifier(_db, _identifier: str):
+        return {
+            "id": 42,
+            "username": "admin",
+            "email": "admin@example.com",
+            "role": "admin",
+            "is_active": True,
+            "password_hash": "hashed-password",
+        }
+
+    monkeypatch.setattr(auth, "get_auth_governor", _fake_get_auth_governor)
+    monkeypatch.setattr(auth, "fetch_user_by_login_identifier", _fake_fetch_user_by_login_identifier)
+
+    request = Request({
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/login",
+        "headers": [],
+        "client": ("203.0.113.10", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    })
+    response = Response()
+
+    password_service = SimpleNamespace(
+        verify_password=lambda _password, _hash: (True, False),
+    )
+    rate_limiter = SimpleNamespace(enabled=False)
+
+    with pytest.raises(auth.HTTPException) as exc:
+        await auth.login(
+            request=request,
+            response=response,
+            form_data=SimpleNamespace(username="admin", password="password123"),
+            db=None,
+            jwt_service=object(),
+            password_service=password_service,
+            session_manager=SimpleNamespace(),
+            rate_limiter=rate_limiter,
+            settings=auth.get_settings(),
+        )
+
+    assert exc.value.status_code == 403
+    assert "enterprise admin ui" in exc.value.detail.lower()

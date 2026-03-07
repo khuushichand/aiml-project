@@ -9,9 +9,11 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
     get_db_transaction,
+    get_password_service_dep,
     get_registration_service_dep,
 )
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
+    AdminPrivilegedActionRequest,
     AdminMfaRequirementRequest,
     AdminMfaRequirementResponse,
     AdminPasswordResetRequest,
@@ -188,12 +190,14 @@ async def update_user(
     request: UserUpdateRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: Any = Depends(get_db_transaction),
+    password_service=Depends(get_password_service_dep),
 ) -> MessageResponse:
     return await admin_users_service.update_user(
         principal,
         user_id,
         request,
         db,
+        password_service,
         is_pg_fn=_get_is_pg_fn(),
     )
 
@@ -204,12 +208,14 @@ async def reset_user_password(
     request: AdminPasswordResetRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: Any = Depends(get_db_transaction),
+    password_service=Depends(get_password_service_dep),
 ) -> AdminPasswordResetResponse:
     result = await admin_users_service.reset_user_password(
         principal,
         user_id,
         request,
         db,
+        password_service,
         is_pg_fn=_get_is_pg_fn(),
     )
     return AdminPasswordResetResponse(**result)
@@ -221,12 +227,14 @@ async def set_user_mfa_requirement(
     request: AdminMfaRequirementRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: Any = Depends(get_db_transaction),
+    password_service=Depends(get_password_service_dep),
 ) -> AdminMfaRequirementResponse:
     result = await admin_users_service.set_user_mfa_requirement(
         principal,
         user_id,
         request,
         db,
+        password_service,
         is_pg_fn=_get_is_pg_fn(),
     )
     return AdminMfaRequirementResponse(**result)
@@ -235,12 +243,16 @@ async def set_user_mfa_requirement(
 @router.delete("/users/{user_id}", response_model=MessageResponse)
 async def delete_user(
     user_id: int,
+    request: AdminPrivilegedActionRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: Any = Depends(get_db_transaction),
+    password_service=Depends(get_password_service_dep),
 ) -> MessageResponse:
     return await admin_users_service.delete_user(
         principal,
         user_id,
+        request,
         db,
+        password_service,
         is_pg_fn=_get_is_pg_fn(),
     )
