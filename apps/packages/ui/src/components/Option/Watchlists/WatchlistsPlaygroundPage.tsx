@@ -847,35 +847,27 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   }), [navigateToTab, openSourceForm, openJobForm, triggerRefresh, startGuidedTour])
   const commandPaletteCommands = useWatchlistsCommands(commandPaletteActions)
 
-  // Keyboard shortcuts
-  const primaryTabKeys = PROGRESSIVE_PRIMARY_TABS
-  useWatchlistsKeyboardShortcuts(
-    {
-      onOpenCommandPalette: () => setCommandPaletteOpen(true),
-      onSwitchTab: (index: number) => {
-        if (index >= 0 && index < primaryTabKeys.length) {
-          handleTabChange(primaryTabKeys[index])
-        }
-      },
-      onNewEntity: () => {
-        // Context-sensitive: create based on active tab
-        const resolved = resolvedActiveTab
-        if (resolved === "sources") openSourceForm()
-        else if (resolved === "jobs") openJobForm()
-        else openSourceForm() // default to creating a feed
-      },
-      onRefresh: triggerRefresh,
-      onFocusSearch: () => {
-        // Focus the first search input on the page
-        const searchInput = document.querySelector<HTMLInputElement>(
-          '[data-testid*="search"] input, .watchlists-tabs input[type="text"]'
-        )
-        if (searchInput) searchInput.focus()
-      },
-      onShowHelp: () => setShortcutsHelpOpen(true)
+  // Keyboard shortcuts — memoize actions to avoid event listener churn
+  const keyboardShortcutActions = useMemo(() => ({
+    onOpenCommandPalette: () => setCommandPaletteOpen(true),
+    onSwitchTab: (index: number) => {
+      if (index >= 0 && index < PROGRESSIVE_PRIMARY_TABS.length) {
+        navigateToTab(PROGRESSIVE_PRIMARY_TABS[index])
+      }
     },
-    isOnline
-  )
+    onNewEntity: () => {
+      openSourceForm()
+    },
+    onRefresh: triggerRefresh,
+    onFocusSearch: () => {
+      const searchInput = document.querySelector<HTMLInputElement>(
+        '[data-testid*="search"] input, .watchlists-tabs input[type="text"]'
+      )
+      if (searchInput) searchInput.focus()
+    },
+    onShowHelp: () => setShortcutsHelpOpen(true)
+  }), [navigateToTab, openSourceForm, triggerRefresh])
+  useWatchlistsKeyboardShortcuts(keyboardShortcutActions, isOnline)
 
   const openRunFromNotification = useCallback((runId: number, key: string) => {
     notification.destroy(key)
@@ -1372,10 +1364,6 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         })()
       : allTabItems
 
-  // Tab bar change handler — delegates to navigateToTab which handles progressive mode
-  const handleTabChange = useCallback((key: string) => {
-    navigateToTab(key)
-  }, [navigateToTab])
 
   // Resolve active tab for the tab bar (in progressive mode, secondary tabs map to their parent)
   const resolvedActiveTab = useProgressiveLayout && SECONDARY_IN_PRIMARY[activeTab]
@@ -1557,7 +1545,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       </div>
 
       {/* Persistent health bar — replaces Overview tab in progressive layout */}
-      <WatchlistsHealthBar onOpenSettings={() => setSettingsDrawerOpen(true)} />
+      <WatchlistsHealthBar onOpenSettings={() => setSettingsDrawerOpen(true)} onNavigate={navigateToTab} />
 
       {orientationDismissed ? (
         <div className="mb-4">
@@ -1685,7 +1673,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         <>
           <Select
             value={resolvedActiveTab}
-            onChange={handleTabChange}
+            onChange={navigateToTab}
             className="mb-4 w-full"
             data-testid="watchlists-mobile-tab-select"
             options={renderedTabItems?.map((item) => ({
@@ -1701,7 +1689,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         <Tabs
           key={refreshKey}
           activeKey={resolvedActiveTab}
-          onChange={handleTabChange}
+          onChange={navigateToTab}
           items={renderedTabItems}
           className="watchlists-tabs"
         />

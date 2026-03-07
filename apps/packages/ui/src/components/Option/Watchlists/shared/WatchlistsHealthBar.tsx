@@ -43,9 +43,10 @@ const writeHealthBarExpanded = (expanded: boolean): void => {
 
 interface HealthBarProps {
   onOpenSettings?: () => void
+  onNavigate?: (tab: string) => void
 }
 
-export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }) => {
+export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings, onNavigate }) => {
   const { t } = useTranslation(["watchlists", "common"])
   const [expanded, setExpanded] = useState(readHealthBarExpanded)
   const [data, setData] = useState<WatchlistsOverviewData | null>(null)
@@ -54,8 +55,9 @@ export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const setOverviewHealth = useWatchlistsStore((s) => s.setOverviewHealth)
-  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const storeSetActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const overviewHealth = useWatchlistsStore((s) => s.overviewHealth)
+  const goToTab = onNavigate ?? storeSetActiveTab
 
   const loadData = useCallback(
     async (showLoading: boolean) => {
@@ -235,7 +237,7 @@ export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }
                     })
                   : undefined
               }
-              onClick={() => setActiveTab("sources")}
+              onClick={() => goToTab("sources")}
             />
             {/* Monitors health */}
             <HealthCard
@@ -250,7 +252,7 @@ export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }
                     })
                   : undefined
               }
-              onClick={() => setActiveTab("jobs")}
+              onClick={() => goToTab("jobs")}
             />
             {/* Activity health */}
             <HealthCard
@@ -275,7 +277,7 @@ export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }
                     })
                   : undefined
               }
-              onClick={() => setActiveTab("runs")}
+              onClick={() => goToTab("runs")}
             />
             {/* Articles */}
             <HealthCard
@@ -283,7 +285,7 @@ export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }
               label={t("watchlists:terminology.canonical.articles", "Articles")}
               value={String(data.items.unread)}
               detail={t("watchlists:healthBar.articlesUnread", "unread")}
-              onClick={() => setActiveTab("items")}
+              onClick={() => goToTab("items")}
             />
           </div>
 
@@ -294,7 +296,7 @@ export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }
                 <Tag
                   color="warning"
                   className="cursor-pointer"
-                  onClick={() => setActiveTab("sources")}
+                  onClick={() => goToTab("sources")}
                 >
                   {t("watchlists:overview.attention.sources", "Feeds need review ({{count}})", {
                     count: overviewHealth?.attention?.sources ?? 0
@@ -305,7 +307,7 @@ export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }
                 <Tag
                   color="error"
                   className="cursor-pointer"
-                  onClick={() => setActiveTab("runs")}
+                  onClick={() => goToTab("runs")}
                 >
                   {t("watchlists:overview.attention.runs", "Failed activity runs ({{count}})", {
                     count: overviewHealth?.attention?.runs ?? 0
@@ -316,7 +318,7 @@ export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }
                 <Tag
                   color="warning"
                   className="cursor-pointer"
-                  onClick={() => setActiveTab("outputs")}
+                  onClick={() => goToTab("outputs")}
                 >
                   {t("watchlists:overview.attention.outputs", "Reports with delivery issues ({{count}})", {
                     count: overviewHealth?.attention?.outputs ?? 0
@@ -327,7 +329,7 @@ export const WatchlistsHealthBar: React.FC<HealthBarProps> = ({ onOpenSettings }
                 <Tag
                   color="warning"
                   className="cursor-pointer"
-                  onClick={() => setActiveTab("jobs")}
+                  onClick={() => goToTab("jobs")}
                 >
                   {t("watchlists:overview.attention.jobs", "Monitors need schedule fixes ({{count}})", {
                     count: overviewHealth?.attention?.jobs ?? 0

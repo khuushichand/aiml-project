@@ -62,21 +62,6 @@ const parseTabParam = (params: URLSearchParams): WatchlistTab | undefined => {
   return undefined
 }
 
-/** Handle ?expand= param to auto-expand inline secondary sections */
-const parseExpandParam = (params: URLSearchParams): string | undefined => {
-  return parseStringParam(params, ["expand"])
-}
-
-/** Handle ?settings=open to open the settings drawer */
-const parseSettingsParam = (params: URLSearchParams): boolean => {
-  return parseStringParam(params, ["settings"]) === "open"
-}
-
-/** Handle ?view=all to force show-all-views mode */
-const parseViewParam = (params: URLSearchParams): boolean => {
-  return parseStringParam(params, ["view"]) === "all"
-}
-
 const OptionWatchlists = () => {
   const [searchParams] = useSearchParams()
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
