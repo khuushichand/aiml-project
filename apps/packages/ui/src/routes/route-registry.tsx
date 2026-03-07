@@ -193,6 +193,7 @@ const OptionKanbanPlayground = lazy(() => import("./option-kanban-playground"))
 const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
 const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
+const OptionChatWorkflows = lazy(() => import("./option-chat-workflows"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
 const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
 const OptionMcpHub = lazy(() => import("./option-mcp-hub"))
@@ -633,6 +634,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "option:header.audiobookStudio",
       icon: Headphones,
       order: 10,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/chat-workflows",
+    element: <OptionChatWorkflows />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.chatWorkflows",
+      icon: ClipboardList,
+      order: 10.5,
       beta: true
     }
   },
