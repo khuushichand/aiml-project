@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import secrets
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 from loguru import logger
 from starlette.status import HTTP_403_FORBIDDEN, HTTP_500_INTERNAL_SERVER_ERROR
 
@@ -22,8 +25,10 @@ from tldw_Server_API.app.api.v1.schemas.connectors import (
     ConnectorPolicy,
     ConnectorProvider,
     ConnectorSource,
+    ConnectorSourceSyncSummary,
     ConnectorSourceCreateRequest,
     ConnectorSourcePatchRequest,
+    ConnectorSourceSyncStatus,
     ImportJob,
     SyncOptions,
 )
@@ -43,9 +48,14 @@ from tldw_Server_API.app.core.External_Sources.connectors_service import (
     get_account_for_user,
     get_account_tokens,
     get_policy,
+    get_source_by_id,
+    get_source_by_webhook_subscription,
+    get_source_sync_state,
     list_accounts,
     list_sources,
+    record_webhook_receipt,
     update_source,
+    upsert_source_sync_state,
     upsert_policy,
 )
 from tldw_Server_API.app.core.External_Sources.policy import (
@@ -117,6 +127,129 @@ def _principal_role_for_policy(principal: AuthPrincipal) -> str:
 def get_connectors_job_counter() -> Callable[[int], int]:
     """Dependency to supply the connectors job counter (overrideable in tests)."""
     return count_connectors_jobs_today
+
+
+def _as_str_or_none(value: Any) -> str | None:
+    return str(value) if value is not None else None
+
+
+def _derive_sync_state(sync_state: dict[str, Any] | None, active_job: dict[str, Any] | None) -> str:
+    status = str((active_job or {}).get("status") or "").strip().lower()
+    if status == "processing":
+        return "running"
+    if status == "queued":
+        return "queued"
+    if sync_state and sync_state.get("needs_full_rescan"):
+        return "needs_full_rescan"
+    if sync_state and sync_state.get("last_sync_failed_at"):
+        return "failed"
+    if sync_state and sync_state.get("last_sync_succeeded_at"):
+        return "succeeded"
+    return "idle"
+
+
+def _summarize_job(job: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not job:
+        return None
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    return {
+        "id": str(job.get("id") or job.get("job_id") or job.get("uuid")),
+        "type": str(job.get("job_type") or "import"),
+        "status": str(job.get("status") or "queued"),
+        "progress_pct": int(job.get("progress_percent") or 0),
+        "counts": {
+            "processed": int((result or {}).get("processed") or 0),
+            "skipped": int((result or {}).get("skipped") or 0),
+            "failed": int((result or {}).get("failed") or 0),
+        },
+    }
+
+
+def _load_active_job(sync_state: dict[str, Any] | None) -> dict[str, Any] | None:
+    active_job_id = str((sync_state or {}).get("active_job_id") or "").strip() or None
+    if not active_job_id:
+        return None
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+        return JobManager().get_job(int(active_job_id))
+    except Exception:
+        return None
+
+
+def _build_source_sync_summary(sync_state: dict[str, Any] | None) -> ConnectorSourceSyncSummary | None:
+    if not sync_state:
+        return None
+    active_job = _load_active_job(sync_state)
+    return ConnectorSourceSyncSummary(
+        state=_derive_sync_state(sync_state, active_job),
+        sync_mode=str(sync_state.get("sync_mode") or "manual"),
+        last_sync_succeeded_at=_as_str_or_none(sync_state.get("last_sync_succeeded_at")),
+        last_sync_failed_at=_as_str_or_none(sync_state.get("last_sync_failed_at")),
+        last_error=sync_state.get("last_error"),
+        webhook_status=sync_state.get("webhook_status"),
+        needs_full_rescan=bool(sync_state.get("needs_full_rescan")),
+        active_job_id=str(sync_state.get("active_job_id") or "").strip() or None,
+    )
+
+
+def _webhook_payload_hash(payload: dict[str, Any]) -> str:
+    normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _webhook_receipt_key(notification: dict[str, Any]) -> tuple[str | None, str | None]:
+    subscription_id = str(notification.get("subscriptionId") or "").strip() or None
+    if not subscription_id:
+        return None, None
+    payload_hash = _webhook_payload_hash(notification)
+    return f"{subscription_id}:{payload_hash}", payload_hash
+
+
+def _drive_webhook_receipt_key(request: Request) -> tuple[str | None, str | None, str | None]:
+    channel_id = str(request.headers.get("X-Goog-Channel-Id") or "").strip() or None
+    message_number = str(request.headers.get("X-Goog-Message-Number") or "").strip() or None
+    resource_state = str(request.headers.get("X-Goog-Resource-State") or "").strip() or None
+    resource_id = str(request.headers.get("X-Goog-Resource-Id") or "").strip() or None
+    if not channel_id or not message_number or not resource_state:
+        return channel_id, None, None
+    receipt_key = f"{channel_id}:{message_number}:{resource_state}:{resource_id or ''}"
+    payload_hash = hashlib.sha256(receipt_key.encode("utf-8")).hexdigest()
+    return channel_id, receipt_key, payload_hash
+
+
+async def _queue_source_job(
+    *,
+    source_id: int,
+    request: Request,
+    principal: AuthPrincipal,
+    org_policy: dict[str, Any],
+    count_jobs_fn: Callable[[int], int],
+    job_type: str = "import",
+) -> ImportJob:
+    user_id = _get_user_id(principal)
+    role = _principal_role_for_policy(principal)
+    qpr = org_policy.get("quotas_per_role") or {}
+    limits = qpr.get(role) or {}
+    max_jobs = int(limits.get("max_jobs_per_day") or 0)
+    if max_jobs > 0:
+        try:
+            today_count = count_jobs_fn(user_id)
+        except Exception as exc:
+            logger.exception(f"Quota check failed for user_id={user_id}: {exc}")
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Daily import quota check failed",
+            ) from exc
+        if today_count >= max_jobs:
+            raise HTTPException(status_code=429, detail="Daily import quota reached for your role")
+    rid = ensure_request_id(request) if request is not None else None
+    tp = ensure_traceparent(request) if request is not None else ""
+    job = await create_import_job(user_id, source_id, request_id=rid, job_type=job_type)
+    get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="connectors", traceparent=tp).info(
+        "Queued connectors job: type=%s job_id=%s source_id=%s", job_type, job.get("id"), source_id
+    )
+    return ImportJob(**job)
 
 
 def _gmail_connector_enabled() -> bool:
@@ -367,6 +500,7 @@ async def browse_provider_sources(
 
 @router.post("/sources", response_model=ConnectorSource)
 async def add_source(
+    request: Request,
     payload: ConnectorSourceCreateRequest,
     db=Depends(get_db_transaction),
     principal: AuthPrincipal = Depends(get_auth_principal),
@@ -412,6 +546,58 @@ async def add_source(
         options=options,
         enabled=True,
     )
+    if provider in {"onedrive", "drive"}:
+        try:
+            tokens = await get_account_tokens(db, user_id, account_id)
+            if tokens:
+                conn = get_connector_by_name(provider)
+                callback_base = _resolve_redirect_base(request, conn)
+                callback_url = f"{callback_base}/api/v1/connectors/providers/{provider}/webhook"
+                resource_id = str(remote_id or "root").strip("/") or "root"
+                if provider == "onedrive":
+                    resource = {
+                        "resource": "me/drive/root" if resource_id == "root" else f"me/drive/items/{resource_id}",
+                        "change_type": "updated",
+                        "clientState": secrets.token_urlsafe(24),
+                    }
+                else:
+                    resource = {
+                        "pageToken": options.get("cursor"),
+                        "clientState": secrets.token_urlsafe(24),
+                    }
+                subscription = await conn.subscribe_webhook(
+                    {**acct, "tokens": tokens},
+                    resource=resource,
+                    callback_url=callback_url,
+                )
+                sync_updates: dict[str, Any] = {
+                    "sync_mode": "hybrid",
+                    "webhook_status": "pending",
+                }
+                if subscription:
+                    sync_updates["webhook_status"] = "active"
+                    sync_updates["webhook_subscription_id"] = subscription.subscription_id
+                    sync_updates["webhook_expires_at"] = subscription.expires_at
+                    sync_updates["webhook_metadata"] = subscription.metadata or {}
+                    if provider == "drive":
+                        page_token = str((subscription.metadata or {}).get("pageToken") or "").strip()
+                        if page_token:
+                            sync_updates["cursor"] = page_token
+                            sync_updates["cursor_kind"] = "drive_start_page_token"
+                await upsert_source_sync_state(
+                    db,
+                    source_id=int(row.get("id")),
+                    **sync_updates,
+                )
+        except Exception as exc:
+            logger.warning(f"{provider} webhook provisioning failed for source {row.get('id')}: {exc}")
+            await upsert_source_sync_state(
+                db,
+                source_id=int(row.get("id")),
+                sync_mode="hybrid",
+                webhook_status="failed",
+                last_error=str(exc),
+            )
     return ConnectorSource(
         id=int(row.get("id")),
         account_id=int(row.get("account_id")),
@@ -433,6 +619,7 @@ async def get_sources(
     rows = await list_sources(db, user_id)
     out: list[ConnectorSource] = []
     for r in rows:
+        sync_state = await get_source_sync_state(db, source_id=int(r.get("id")))
         out.append(
             ConnectorSource(
                 id=int(r.get("id")),
@@ -444,6 +631,7 @@ async def get_sources(
                 options=SyncOptions(**(r.get("options") or {})),
                 enabled=bool(r.get("enabled", True)),
                 last_synced_at=str(r.get("last_synced_at")) if r.get("last_synced_at") else None,
+                sync=_build_source_sync_summary(sync_state),
             )
         )
     return out
@@ -484,33 +672,238 @@ async def import_source(
     org_policy: dict[str, Any] = Depends(get_org_policy_from_principal),
     count_jobs_fn: Callable[[int], int] = Depends(get_connectors_job_counter),
 ) -> ImportJob:
-    # Enforce per-role daily quota from org policy for all modes; single-user
-    # admin callers naturally bypass via their configured role/quotas.
-    user_id = _get_user_id(principal)
-    role = _principal_role_for_policy(principal)
-    qpr = org_policy.get("quotas_per_role") or {}
-    limits = qpr.get(role) or {}
-    max_jobs = int(limits.get("max_jobs_per_day") or 0)
-    if max_jobs > 0:
-        try:
-            today_count = count_jobs_fn(user_id)
-        except Exception as exc:
-            logger.exception(f"Quota check failed for user_id={user_id}: {exc}")
-            raise HTTPException(
-                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Daily import quota check failed",
-            ) from exc
-        if today_count >= max_jobs:
-            raise HTTPException(status_code=429, detail="Daily import quota reached for your role")
-    # Correlate request → job
-    rid = ensure_request_id(request) if request is not None else None
-    tp = ensure_traceparent(request) if request is not None else ""
-    job = await create_import_job(user_id, source_id, request_id=rid)
-    # Structured log for queued import
-    get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="connectors", traceparent=tp).info(
-        "Queued connectors import job: job_id=%s source_id=%s", job.get("id"), source_id
+    return await _queue_source_job(
+        source_id=source_id,
+        request=request,
+        principal=principal,
+        org_policy=org_policy,
+        count_jobs_fn=count_jobs_fn,
+        job_type="import",
     )
-    return ImportJob(**job)
+
+
+@router.get("/sources/{source_id}/sync", response_model=ConnectorSourceSyncStatus)
+async def get_source_sync_status(
+    source_id: int,
+    db=Depends(get_db_transaction),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> ConnectorSourceSyncStatus:
+    user_id = _get_user_id(principal)
+    source = await get_source_by_id(db, user_id, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    sync_state = await get_source_sync_state(db, source_id=source_id) or {}
+    active_job = _load_active_job(sync_state)
+    active_job_id = str(sync_state.get("active_job_id") or "").strip() or None
+
+    return ConnectorSourceSyncStatus(
+        source_id=int(source_id),
+        provider=str(source.get("provider")),
+        enabled=bool(source.get("enabled", True)),
+        state=_derive_sync_state(sync_state, active_job),
+        sync_mode=str(sync_state.get("sync_mode") or "manual"),
+        cursor=sync_state.get("cursor"),
+        cursor_kind=sync_state.get("cursor_kind"),
+        last_bootstrap_at=_as_str_or_none(sync_state.get("last_bootstrap_at")),
+        last_sync_started_at=_as_str_or_none(sync_state.get("last_sync_started_at")),
+        last_sync_succeeded_at=_as_str_or_none(sync_state.get("last_sync_succeeded_at")),
+        last_sync_failed_at=_as_str_or_none(sync_state.get("last_sync_failed_at")),
+        last_error=sync_state.get("last_error"),
+        retry_backoff_count=int(sync_state.get("retry_backoff_count") or 0),
+        webhook_status=sync_state.get("webhook_status"),
+        webhook_expires_at=_as_str_or_none(sync_state.get("webhook_expires_at")),
+        needs_full_rescan=bool(sync_state.get("needs_full_rescan")),
+        active_job_id=active_job_id,
+        active_job_started_at=_as_str_or_none(sync_state.get("active_job_started_at")),
+        active_job=_summarize_job(active_job),
+    )
+
+
+@router.post("/sources/{source_id}/sync")
+async def trigger_source_sync(
+    source_id: int,
+    request: Request,
+    db=Depends(get_db_transaction),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    org_policy: dict[str, Any] = Depends(get_org_policy_from_principal),
+    count_jobs_fn: Callable[[int], int] = Depends(get_connectors_job_counter),
+) -> dict[str, Any]:
+    user_id = _get_user_id(principal)
+    source = await get_source_by_id(db, user_id, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    job = await _queue_source_job(
+        source_id=source_id,
+        request=request,
+        principal=principal,
+        org_policy=org_policy,
+        count_jobs_fn=count_jobs_fn,
+        job_type="incremental_sync",
+    )
+    return {
+        "source_id": int(source_id),
+        "provider": str(source.get("provider")),
+        "status": "queued",
+        "job": job.model_dump(),
+    }
+
+
+@router.api_route("/providers/{provider}/webhook", methods=["GET", "POST"])
+async def provider_webhook_callback(
+    provider: str,
+    request: Request,
+    validation_token: str | None = Query(None, alias="validationToken"),
+    db=Depends(get_db_transaction),
+) -> Any:
+    provider = _ensure_connector_provider_enabled(provider)
+    if validation_token is not None:
+        return PlainTextResponse(validation_token)
+
+    if provider == "drive":
+        request_id = ensure_request_id(request)
+        channel_id, receipt_key, payload_hash = _drive_webhook_receipt_key(request)
+        if not channel_id or not receipt_key:
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "provider": provider,
+                    "status": "ignored",
+                    "queued_jobs": 0,
+                    "duplicate_notifications": 0,
+                    "ignored_notifications": 1,
+                    "source_ids": [],
+                },
+            )
+
+        source = await get_source_by_webhook_subscription(
+            db,
+            provider=provider,
+            subscription_id=channel_id,
+        )
+        if not source:
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "provider": provider,
+                    "status": "ignored",
+                    "queued_jobs": 0,
+                    "duplicate_notifications": 0,
+                    "ignored_notifications": 1,
+                    "source_ids": [],
+                },
+            )
+
+        source_id = int(source.get("id"))
+        is_new = await record_webhook_receipt(
+            db,
+            provider=provider,
+            receipt_key=receipt_key,
+            source_id=source_id,
+            payload_hash=payload_hash,
+        )
+        if not is_new:
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "provider": provider,
+                    "status": "duplicate",
+                    "queued_jobs": 0,
+                    "duplicate_notifications": 1,
+                    "ignored_notifications": 0,
+                    "source_ids": [],
+                },
+            )
+
+        await create_import_job(
+            int(source.get("user_id")),
+            source_id,
+            request_id=request_id,
+            job_type="incremental_sync",
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "provider": provider,
+                "status": "queued",
+                "queued_jobs": 1,
+                "duplicate_notifications": 0,
+                "ignored_notifications": 0,
+                "source_ids": [source_id],
+            },
+        )
+
+    if provider != "onedrive":
+        raise HTTPException(status_code=404, detail="Webhook callback not supported for this provider")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    notifications = payload.get("value") if isinstance(payload, dict) else []
+    if not isinstance(notifications, list):
+        notifications = []
+
+    request_id = ensure_request_id(request)
+    queued_source_ids: list[int] = []
+    queued_jobs = 0
+    duplicate_notifications = 0
+    ignored_notifications = 0
+    seen_source_ids: set[int] = set()
+
+    for notification in notifications:
+        if not isinstance(notification, dict):
+            ignored_notifications += 1
+            continue
+        receipt_key, payload_hash = _webhook_receipt_key(notification)
+        subscription_id = str(notification.get("subscriptionId") or "").strip()
+        if not receipt_key or not subscription_id:
+            ignored_notifications += 1
+            continue
+        source = await get_source_by_webhook_subscription(
+            db,
+            provider=provider,
+            subscription_id=subscription_id,
+        )
+        if not source:
+            ignored_notifications += 1
+            continue
+        source_id = int(source.get("id"))
+        is_new = await record_webhook_receipt(
+            db,
+            provider=provider,
+            receipt_key=receipt_key,
+            source_id=source_id,
+            payload_hash=payload_hash,
+        )
+        if not is_new:
+            duplicate_notifications += 1
+            continue
+        if source_id in seen_source_ids:
+            continue
+        seen_source_ids.add(source_id)
+        await create_import_job(
+            int(source.get("user_id")),
+            source_id,
+            request_id=request_id,
+            job_type="incremental_sync",
+        )
+        queued_source_ids.append(source_id)
+        queued_jobs += 1
+
+    status = "queued" if queued_jobs else ("duplicate" if duplicate_notifications else "ignored")
+    return JSONResponse(
+        status_code=202,
+        content={
+            "provider": provider,
+            "status": status,
+            "queued_jobs": queued_jobs,
+            "duplicate_notifications": duplicate_notifications,
+            "ignored_notifications": ignored_notifications,
+            "source_ids": queued_source_ids,
+        },
+    )
 
 
 @router.get("/jobs/{job_id}")

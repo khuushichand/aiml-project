@@ -27,6 +27,17 @@ class SyncOptions(BaseModel):
     export_format_overrides: dict[str, str] = Field(default_factory=dict)
 
 
+class ConnectorSourceSyncSummary(BaseModel):
+    state: str = "idle"
+    sync_mode: str = "manual"
+    last_sync_succeeded_at: str | None = None
+    last_sync_failed_at: str | None = None
+    last_error: str | None = None
+    webhook_status: str | None = None
+    needs_full_rescan: bool = False
+    active_job_id: str | None = None
+
+
 class ConnectorSource(BaseModel):
     id: int
     account_id: int
@@ -37,18 +48,49 @@ class ConnectorSource(BaseModel):
     options: SyncOptions = Field(default_factory=SyncOptions)
     enabled: bool = True
     last_synced_at: str | None = None
+    sync: ConnectorSourceSyncSummary | None = None
 
 
 class ImportJob(BaseModel):
     id: str = Field(..., description="Job identifier (UUID)")
     source_id: int
-    type: Literal["import", "sync"] = "import"
+    type: str = "import"
     status: Literal["queued", "running", "succeeded", "failed", "canceled"] = "queued"
     progress_pct: int = 0
     counts: dict[str, int] = Field(default_factory=lambda: {"processed": 0, "skipped": 0, "failed": 0})
     started_at: str | None = None
     finished_at: str | None = None
     error: str | None = None
+
+
+class ConnectorSyncJobSummary(BaseModel):
+    id: str
+    type: str = "import"
+    status: str
+    progress_pct: int = 0
+    counts: dict[str, int] = Field(default_factory=lambda: {"processed": 0, "skipped": 0, "failed": 0})
+
+
+class ConnectorSourceSyncStatus(BaseModel):
+    source_id: int
+    provider: Literal["drive", "notion", "gmail", "onedrive"]
+    enabled: bool = True
+    state: str = "idle"
+    sync_mode: str = "manual"
+    cursor: str | None = None
+    cursor_kind: str | None = None
+    last_bootstrap_at: str | None = None
+    last_sync_started_at: str | None = None
+    last_sync_succeeded_at: str | None = None
+    last_sync_failed_at: str | None = None
+    last_error: str | None = None
+    retry_backoff_count: int = 0
+    webhook_status: str | None = None
+    webhook_expires_at: str | None = None
+    needs_full_rescan: bool = False
+    active_job_id: str | None = None
+    active_job_started_at: str | None = None
+    active_job: ConnectorSyncJobSummary | None = None
 
 
 class AuthorizeURLResponse(BaseModel):

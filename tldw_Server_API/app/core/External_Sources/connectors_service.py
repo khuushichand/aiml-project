@@ -47,6 +47,7 @@ _SYNC_STATE_FIELDS = (
     "webhook_status",
     "webhook_subscription_id",
     "webhook_expires_at",
+    "webhook_metadata",
     "needs_full_rescan",
     "active_job_id",
     "active_job_started_at",
@@ -113,6 +114,7 @@ def _normalize_sync_state_row(row: Any) -> dict[str, Any] | None:
         return None
     data = _row_to_dict(row)
     data["needs_full_rescan"] = _normalize_bool(data.get("needs_full_rescan"))
+    data["webhook_metadata"] = _json_loads(data.get("webhook_metadata"), {})
     return data
 
 
@@ -125,6 +127,35 @@ def _normalize_external_item_row(row: Any) -> dict[str, Any] | None:
     if "sync_status" not in data or data.get("sync_status") is None:
         data["sync_status"] = "active"
     return data
+
+
+def _job_is_active(job: dict[str, Any] | None) -> bool:
+    if not job:
+        return False
+    return str(job.get("status") or "").strip().lower() in {"queued", "processing"}
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
+        return int(default)
+
+
+def _format_connectors_job(job: dict[str, Any], *, source_id: int, default_type: str) -> dict[str, Any]:
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    return {
+        "id": str(job.get("id") or job.get("job_id") or job.get("uuid")),
+        "source_id": source_id,
+        "type": str(job.get("job_type") or default_type),
+        "status": str(job.get("status") or "queued"),
+        "progress_pct": _coerce_int(job.get("progress_percent") or job.get("progress_pct") or 0),
+        "counts": {
+            "processed": _coerce_int((result or {}).get("processed"), 0),
+            "skipped": _coerce_int((result or {}).get("skipped"), 0),
+            "failed": _coerce_int((result or {}).get("failed"), 0),
+        },
+    }
 
 
 async def _sqlite_column_names(db, table_name: str) -> set[str]:
@@ -345,10 +376,17 @@ async def _ensure_tables(db) -> None:
                     webhook_status TEXT,
                     webhook_subscription_id TEXT,
                     webhook_expires_at TIMESTAMP NULL,
+                    webhook_metadata JSONB,
                     needs_full_rescan BOOLEAN DEFAULT FALSE,
                     active_job_id TEXT,
                     active_job_started_at TIMESTAMP NULL
                 )
+                """
+            )
+            await db.execute(
+                """
+                ALTER TABLE external_source_sync_state
+                ADD COLUMN IF NOT EXISTS webhook_metadata JSONB
                 """
             )
             await db.execute(
@@ -360,6 +398,19 @@ async def _ensure_tables(db) -> None:
                     job_id TEXT,
                     payload_json JSONB,
                     occurred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS external_webhook_receipts (
+                    id SERIAL PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    receipt_key TEXT NOT NULL,
+                    source_id INTEGER NULL REFERENCES external_sources(id) ON DELETE SET NULL,
+                    payload_hash TEXT,
+                    received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(provider, receipt_key)
                 )
                 """
             )
@@ -471,11 +522,18 @@ async def _ensure_tables(db) -> None:
                     webhook_status TEXT,
                     webhook_subscription_id TEXT,
                     webhook_expires_at TEXT,
+                    webhook_metadata TEXT,
                     needs_full_rescan INTEGER DEFAULT 0,
                     active_job_id TEXT,
                     active_job_started_at TEXT
                 )
                 """,
+            )
+            await _ensure_sqlite_column(
+                db,
+                "external_source_sync_state",
+                "webhook_metadata",
+                "webhook_metadata TEXT",
             )
             await db.execute(
                 """
@@ -486,6 +544,19 @@ async def _ensure_tables(db) -> None:
                     job_id TEXT,
                     payload_json TEXT,
                     occurred_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS external_webhook_receipts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    provider TEXT NOT NULL,
+                    receipt_key TEXT NOT NULL,
+                    source_id INTEGER,
+                    payload_hash TEXT,
+                    received_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(provider, receipt_key)
                 )
                 """,
             )
@@ -970,6 +1041,7 @@ async def upsert_source_sync_state(db, *, source_id: int, **updates: Any) -> dic
         data.get("webhook_status"),
         data.get("webhook_subscription_id"),
         data.get("webhook_expires_at"),
+        (data.get("webhook_metadata") or {}),
         bool(data.get("needs_full_rescan")),
         data.get("active_job_id"),
         data.get("active_job_started_at"),
@@ -991,12 +1063,13 @@ async def upsert_source_sync_state(db, *, source_id: int, **updates: Any) -> dic
                 webhook_status,
                 webhook_subscription_id,
                 webhook_expires_at,
+                webhook_metadata,
                 needs_full_rescan,
                 active_job_id,
                 active_job_started_at
             ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8,
-                $9, $10, $11, $12, $13, $14, $15, $16
+                $9, $10, $11, $12, $13, $14, $15, $16, $17
             )
             ON CONFLICT (source_id) DO UPDATE SET
                 sync_mode = EXCLUDED.sync_mode,
@@ -1011,6 +1084,7 @@ async def upsert_source_sync_state(db, *, source_id: int, **updates: Any) -> dic
                 webhook_status = EXCLUDED.webhook_status,
                 webhook_subscription_id = EXCLUDED.webhook_subscription_id,
                 webhook_expires_at = EXCLUDED.webhook_expires_at,
+                webhook_metadata = EXCLUDED.webhook_metadata,
                 needs_full_rescan = EXCLUDED.needs_full_rescan,
                 active_job_id = EXCLUDED.active_job_id,
                 active_job_started_at = EXCLUDED.active_job_started_at
@@ -1036,10 +1110,11 @@ async def upsert_source_sync_state(db, *, source_id: int, **updates: Any) -> dic
             webhook_status,
             webhook_subscription_id,
             webhook_expires_at,
+            webhook_metadata,
             needs_full_rescan,
             active_job_id,
             active_job_started_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id) DO UPDATE SET
             sync_mode = excluded.sync_mode,
             cursor = excluded.cursor,
@@ -1053,6 +1128,7 @@ async def upsert_source_sync_state(db, *, source_id: int, **updates: Any) -> dic
             webhook_status = excluded.webhook_status,
             webhook_subscription_id = excluded.webhook_subscription_id,
             webhook_expires_at = excluded.webhook_expires_at,
+            webhook_metadata = excluded.webhook_metadata,
             needs_full_rescan = excluded.needs_full_rescan,
             active_job_id = excluded.active_job_id,
             active_job_started_at = excluded.active_job_started_at
@@ -1071,12 +1147,333 @@ async def upsert_source_sync_state(db, *, source_id: int, **updates: Any) -> dic
             values[10],
             values[11],
             values[12],
-            1 if values[13] else 0,
+            json.dumps(values[13] or {}),
             values[14],
             values[15],
+            values[16],
         ),
     )
     await getattr(db, "commit", lambda: None)()
+    return await get_source_sync_state(db, source_id=source_id) or {}
+
+
+async def get_source_by_webhook_subscription(
+    db,
+    *,
+    provider: str,
+    subscription_id: str,
+) -> dict[str, Any] | None:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            SELECT
+                s.id,
+                s.account_id,
+                s.provider,
+                s.remote_id,
+                s.type,
+                s.path,
+                s.options,
+                s.enabled,
+                s.last_synced_at,
+                a.user_id,
+                a.email
+            FROM external_source_sync_state st
+            JOIN external_sources s ON s.id = st.source_id
+            JOIN external_accounts a ON a.id = s.account_id
+            WHERE s.provider = $1
+              AND st.webhook_subscription_id = $2
+            LIMIT 1
+            """,
+            provider,
+            subscription_id,
+        )
+        if not row:
+            return None
+        data = dict(row)
+        data["options"] = _json_loads(data.get("options"), {})
+        return data
+
+    cur = await db.execute(
+        """
+        SELECT
+            s.id,
+            s.account_id,
+            s.provider,
+            s.remote_id,
+            s.type,
+            s.path,
+            s.options,
+            s.enabled,
+            s.last_synced_at,
+            a.user_id,
+            a.email
+        FROM external_source_sync_state st
+        JOIN external_sources s ON s.id = st.source_id
+        JOIN external_accounts a ON a.id = s.account_id
+        WHERE s.provider = ?
+          AND st.webhook_subscription_id = ?
+        LIMIT 1
+        """,
+        (provider, subscription_id),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    data["options"] = _json_loads(data.get("options"), {})
+    return data
+
+
+async def record_webhook_receipt(
+    db,
+    *,
+    provider: str,
+    receipt_key: str,
+    source_id: int | None = None,
+    payload_hash: str | None = None,
+) -> bool:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            INSERT INTO external_webhook_receipts (
+                provider,
+                receipt_key,
+                source_id,
+                payload_hash
+            ) VALUES ($1, $2, $3, $4)
+            ON CONFLICT (provider, receipt_key) DO NOTHING
+            RETURNING id
+            """,
+            provider,
+            receipt_key,
+            source_id,
+            payload_hash,
+        )
+        return bool(row)
+
+    cur = await db.execute(
+        """
+        INSERT OR IGNORE INTO external_webhook_receipts (
+            provider,
+            receipt_key,
+            source_id,
+            payload_hash
+        ) VALUES (?, ?, ?, ?)
+        """,
+        (provider, receipt_key, source_id, payload_hash),
+    )
+    await getattr(db, "commit", lambda: None)()
+    return int(getattr(cur, "rowcount", 0) or 0) > 0
+
+
+async def reserve_source_sync_job(
+    db,
+    *,
+    source_id: int,
+    job_id: str,
+) -> dict[str, Any]:
+    await _ensure_tables(db)
+    if not await get_source_sync_state(db, source_id=source_id):
+        await upsert_source_sync_state(db, source_id=source_id)
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            UPDATE external_source_sync_state
+            SET active_job_id = $1,
+                active_job_started_at = NULL
+            WHERE source_id = $2
+              AND (active_job_id IS NULL OR active_job_id = $1)
+            RETURNING *
+            """,
+            str(job_id),
+            source_id,
+        )
+        return _normalize_sync_state_row(row) or await get_source_sync_state(db, source_id=source_id) or {}
+    cur = await db.execute(
+        """
+        UPDATE external_source_sync_state
+        SET active_job_id = ?,
+            active_job_started_at = NULL
+        WHERE source_id = ?
+          AND (active_job_id IS NULL OR active_job_id = ?)
+        """,
+        (str(job_id), source_id, str(job_id)),
+    )
+    await getattr(db, "commit", lambda: None)()
+    if getattr(cur, "rowcount", 0) == 0:
+        return await get_source_sync_state(db, source_id=source_id) or {}
+    return await get_source_sync_state(db, source_id=source_id) or {}
+
+
+async def start_source_sync_job(
+    db,
+    *,
+    source_id: int,
+    job_id: str,
+) -> dict[str, Any]:
+    await _ensure_tables(db)
+    if not await get_source_sync_state(db, source_id=source_id):
+        await upsert_source_sync_state(db, source_id=source_id)
+    started_at = _utc_now_text()
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            UPDATE external_source_sync_state
+            SET active_job_id = $1,
+                active_job_started_at = $2,
+                last_sync_started_at = $2,
+                last_error = NULL
+            WHERE source_id = $3
+              AND (active_job_id IS NULL OR active_job_id = $1)
+            RETURNING *
+            """,
+            str(job_id),
+            started_at,
+            source_id,
+        )
+        return _normalize_sync_state_row(row) or await get_source_sync_state(db, source_id=source_id) or {}
+    cur = await db.execute(
+        """
+        UPDATE external_source_sync_state
+        SET active_job_id = ?,
+            active_job_started_at = ?,
+            last_sync_started_at = ?,
+            last_error = NULL
+        WHERE source_id = ?
+          AND (active_job_id IS NULL OR active_job_id = ?)
+        """,
+        (str(job_id), started_at, started_at, source_id, str(job_id)),
+    )
+    await getattr(db, "commit", lambda: None)()
+    if getattr(cur, "rowcount", 0) == 0:
+        return await get_source_sync_state(db, source_id=source_id) or {}
+    return await get_source_sync_state(db, source_id=source_id) or {}
+
+
+async def finish_source_sync_job(
+    db,
+    *,
+    source_id: int,
+    job_id: str,
+    outcome: str,
+    error: str | None = None,
+) -> dict[str, Any]:
+    await _ensure_tables(db)
+    completed_at = _utc_now_text()
+    outcome_key = str(outcome or "").strip().lower()
+    is_pg = _is_postgres_connection(db)
+
+    if outcome_key == "success":
+        if is_pg:
+            row = await db.fetchrow(
+                """
+                UPDATE external_source_sync_state
+                SET active_job_id = NULL,
+                    active_job_started_at = NULL,
+                    last_sync_succeeded_at = $1,
+                    last_error = NULL,
+                    retry_backoff_count = 0
+                WHERE source_id = $2
+                  AND (active_job_id IS NULL OR active_job_id = $3)
+                RETURNING *
+                """,
+                completed_at,
+                source_id,
+                str(job_id),
+            )
+            return _normalize_sync_state_row(row) or await get_source_sync_state(db, source_id=source_id) or {}
+        cur = await db.execute(
+            """
+            UPDATE external_source_sync_state
+            SET active_job_id = NULL,
+                active_job_started_at = NULL,
+                last_sync_succeeded_at = ?,
+                last_error = NULL,
+                retry_backoff_count = 0
+            WHERE source_id = ?
+              AND (active_job_id IS NULL OR active_job_id = ?)
+            """,
+            (completed_at, source_id, str(job_id)),
+        )
+        await getattr(db, "commit", lambda: None)()
+        if getattr(cur, "rowcount", 0) == 0:
+            return await get_source_sync_state(db, source_id=source_id) or {}
+        return await get_source_sync_state(db, source_id=source_id) or {}
+
+    if outcome_key == "failure":
+        if is_pg:
+            row = await db.fetchrow(
+                """
+                UPDATE external_source_sync_state
+                SET active_job_id = NULL,
+                    active_job_started_at = NULL,
+                    last_sync_failed_at = $1,
+                    last_error = $2,
+                    retry_backoff_count = COALESCE(retry_backoff_count, 0) + 1
+                WHERE source_id = $3
+                  AND (active_job_id IS NULL OR active_job_id = $4)
+                RETURNING *
+                """,
+                completed_at,
+                error,
+                source_id,
+                str(job_id),
+            )
+            return _normalize_sync_state_row(row) or await get_source_sync_state(db, source_id=source_id) or {}
+        cur = await db.execute(
+            """
+            UPDATE external_source_sync_state
+            SET active_job_id = NULL,
+                active_job_started_at = NULL,
+                last_sync_failed_at = ?,
+                last_error = ?,
+                retry_backoff_count = COALESCE(retry_backoff_count, 0) + 1
+            WHERE source_id = ?
+              AND (active_job_id IS NULL OR active_job_id = ?)
+            """,
+            (completed_at, error, source_id, str(job_id)),
+        )
+        await getattr(db, "commit", lambda: None)()
+        if getattr(cur, "rowcount", 0) == 0:
+            return await get_source_sync_state(db, source_id=source_id) or {}
+        return await get_source_sync_state(db, source_id=source_id) or {}
+
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            UPDATE external_source_sync_state
+            SET active_job_id = NULL,
+                active_job_started_at = NULL,
+                last_error = NULL
+            WHERE source_id = $1
+              AND (active_job_id IS NULL OR active_job_id = $2)
+            RETURNING *
+            """,
+            source_id,
+            str(job_id),
+        )
+        return _normalize_sync_state_row(row) or await get_source_sync_state(db, source_id=source_id) or {}
+    cur = await db.execute(
+        """
+        UPDATE external_source_sync_state
+        SET active_job_id = NULL,
+            active_job_started_at = NULL,
+            last_error = NULL
+        WHERE source_id = ?
+          AND (active_job_id IS NULL OR active_job_id = ?)
+        """,
+        (source_id, str(job_id)),
+    )
+    await getattr(db, "commit", lambda: None)()
+    if getattr(cur, "rowcount", 0) == 0:
+        return await get_source_sync_state(db, source_id=source_id) or {}
     return await get_source_sync_state(db, source_id=source_id) or {}
 
 
@@ -1416,6 +1813,107 @@ async def mark_external_item_archived(
     )
 
 
+async def restore_external_item_binding(
+    db,
+    *,
+    source_id: int,
+    provider: str,
+    external_id: str,
+    name: str | None = None,
+    version: str | None = None,
+    modified_at: str | None = None,
+    remote_parent_id: str | None = None,
+    remote_path: str | None = None,
+    content_hash: str | None = None,
+    current_version_number: int | None = None,
+    provider_metadata: dict[str, Any] | None = None,
+    sync_status: str = "active",
+) -> dict[str, Any] | None:
+    await _ensure_tables(db)
+    restored_at = _utc_now_text()
+    is_pg = _is_postgres_connection(db)
+    provider_metadata_value = provider_metadata or None
+    sqlite_provider_metadata = json.dumps(provider_metadata_value) if provider_metadata_value is not None else None
+
+    if is_pg:
+        await db.execute(
+            """
+            UPDATE external_items
+            SET sync_status = $1,
+                name = COALESCE($2, name),
+                version = COALESCE($3, version),
+                modified_at = COALESCE($4, modified_at),
+                remote_parent_id = COALESCE($5, remote_parent_id),
+                remote_path = COALESCE($6, remote_path),
+                hash = COALESCE($7, hash),
+                current_version_number = COALESCE($8, current_version_number),
+                remote_deleted_at = NULL,
+                access_revoked_at = NULL,
+                last_seen_at = $9,
+                last_metadata_sync_at = $9,
+                provider_metadata = COALESCE($10, provider_metadata)
+            WHERE source_id = $11 AND provider = $12 AND external_id = $13
+            """,
+            sync_status,
+            name,
+            version,
+            modified_at,
+            remote_parent_id,
+            remote_path,
+            content_hash,
+            current_version_number,
+            restored_at,
+            provider_metadata_value,
+            source_id,
+            provider,
+            external_id,
+        )
+    else:
+        await db.execute(
+            """
+            UPDATE external_items
+            SET sync_status = ?,
+                name = COALESCE(?, name),
+                version = COALESCE(?, version),
+                modified_at = COALESCE(?, modified_at),
+                remote_parent_id = COALESCE(?, remote_parent_id),
+                remote_path = COALESCE(?, remote_path),
+                hash = COALESCE(?, hash),
+                current_version_number = COALESCE(?, current_version_number),
+                remote_deleted_at = NULL,
+                access_revoked_at = NULL,
+                last_seen_at = ?,
+                last_metadata_sync_at = ?,
+                provider_metadata = COALESCE(?, provider_metadata)
+            WHERE source_id = ? AND provider = ? AND external_id = ?
+            """,
+            (
+                sync_status,
+                name,
+                version,
+                modified_at,
+                remote_parent_id,
+                remote_path,
+                content_hash,
+                current_version_number,
+                restored_at,
+                restored_at,
+                sqlite_provider_metadata,
+                source_id,
+                provider,
+                external_id,
+            ),
+        )
+        await getattr(db, "commit", lambda: None)()
+
+    return await get_external_item_binding(
+        db,
+        source_id=source_id,
+        provider=provider,
+        external_id=external_id,
+    )
+
+
 async def should_ingest_item(
     db, *, source_id: int, provider: str, external_id: str, version: str | None, modified_at: str | None, content_hash: str | None
 ) -> bool:
@@ -1618,6 +2116,131 @@ async def list_sources(db, user_id: int) -> list[dict[str, Any]]:
     return out
 
 
+async def list_sources_for_scheduler(db) -> list[dict[str, Any]]:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        rows = await db.fetch(
+            """
+            SELECT
+                s.id,
+                s.account_id,
+                s.provider,
+                s.remote_id,
+                s.type,
+                s.path,
+                s.options,
+                s.enabled,
+                s.last_synced_at,
+                a.user_id,
+                a.email,
+                st.sync_mode,
+                st.cursor,
+                st.cursor_kind,
+                st.last_bootstrap_at,
+                st.last_sync_started_at,
+                st.last_sync_succeeded_at,
+                st.last_sync_failed_at,
+                st.last_error,
+                st.retry_backoff_count,
+                st.webhook_status,
+                st.webhook_subscription_id,
+                st.webhook_expires_at,
+                st.webhook_metadata,
+                st.needs_full_rescan,
+                st.active_job_id,
+                st.active_job_started_at
+            FROM external_sources s
+            JOIN external_accounts a ON s.account_id = a.id
+            LEFT JOIN external_source_sync_state st ON st.source_id = s.id
+            ORDER BY s.id ASC
+            """
+        )
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            data = dict(row)
+            data["options"] = _json_loads(data.get("options"), {})
+            data["webhook_metadata"] = _json_loads(data.get("webhook_metadata"), {})
+            out.append(data)
+        return out
+    cur = await db.execute(
+        """
+        SELECT
+            s.id,
+            s.account_id,
+            s.provider,
+            s.remote_id,
+            s.type,
+            s.path,
+            s.options,
+            s.enabled,
+            s.last_synced_at,
+            a.user_id,
+            a.email,
+            st.sync_mode,
+            st.cursor,
+            st.cursor_kind,
+            st.last_bootstrap_at,
+            st.last_sync_started_at,
+            st.last_sync_succeeded_at,
+            st.last_sync_failed_at,
+            st.last_error,
+            st.retry_backoff_count,
+            st.webhook_status,
+            st.webhook_subscription_id,
+            st.webhook_expires_at,
+            st.webhook_metadata,
+            st.needs_full_rescan,
+            st.active_job_id,
+            st.active_job_started_at
+        FROM external_sources s
+        JOIN external_accounts a ON s.account_id = a.id
+        LEFT JOIN external_source_sync_state st ON st.source_id = s.id
+        ORDER BY s.id ASC
+        """
+    )
+    rows = await cur.fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            out.append(
+                {
+                    "id": row[0],
+                    "account_id": row[1],
+                    "provider": row[2],
+                    "remote_id": row[3],
+                    "type": row[4],
+                    "path": row[5],
+                    "options": _json_loads(row[6], {}),
+                    "enabled": bool(row[7]),
+                    "last_synced_at": row[8],
+                    "user_id": row[9],
+                    "email": row[10],
+                    "sync_mode": row[11],
+                    "cursor": row[12],
+                    "cursor_kind": row[13],
+                    "last_bootstrap_at": row[14],
+                    "last_sync_started_at": row[15],
+                    "last_sync_succeeded_at": row[16],
+                    "last_sync_failed_at": row[17],
+                    "last_error": row[18],
+                    "retry_backoff_count": row[19],
+                    "webhook_status": row[20],
+                    "webhook_subscription_id": row[21],
+                    "webhook_expires_at": row[22],
+                    "webhook_metadata": _json_loads(row[23], {}),
+                    "needs_full_rescan": bool(row[24]) if row[24] is not None else False,
+                    "active_job_id": row[25],
+                    "active_job_started_at": row[26],
+                }
+            )
+        except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
+            data = dict(row)
+            data["options"] = _json_loads(data.get("options"), {})
+            out.append(data)
+    return out
+
+
 async def update_source(db, user_id: int, source_id: int, *, enabled: bool | None = None, options: dict[str, Any] | None = None) -> dict[str, Any] | None:
     await _ensure_tables(db)
     is_pg = _is_postgres_connection(db)
@@ -1696,30 +2319,80 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: bool | Non
         return row
 
 
-async def create_import_job(user_id: int, source_id: int, *, request_id: str | None = None) -> dict[str, Any]:
+async def create_import_job(
+    user_id: int,
+    source_id: int,
+    *,
+    request_id: str | None = None,
+    job_type: str = "import",
+) -> dict[str, Any]:
     """Create a generic job in the core Jobs manager for connector import.
 
     Scaffold behavior: creates a job with payload but does not perform ingestion.
     """
     try:
+        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
         from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+        pool = await get_db_pool()
         jm = JobManager()
+        async with pool.transaction() as db:
+            src = await get_source_by_id(db, user_id, source_id)
+            if not src:
+                raise ValueError("source not found or not owned by user")  # noqa: TRY003
+            sync_state = await get_source_sync_state(db, source_id=source_id)
+            active_job_id = str((sync_state or {}).get("active_job_id") or "").strip() or None
+            if active_job_id:
+                active_job = None
+                with contextlib.suppress(_CONNECTORS_NONCRITICAL_EXCEPTIONS):
+                    active_job = jm.get_job(int(active_job_id))
+                if _job_is_active(active_job):
+                    return _format_connectors_job(active_job or {}, source_id=source_id, default_type=job_type)
+                await finish_source_sync_job(
+                    db,
+                    source_id=source_id,
+                    job_id=active_job_id,
+                    outcome="cleared",
+                )
+
         payload = {
             "source_id": source_id,
             "user_id": user_id,
         }
         if request_id:
             payload["request_id"] = request_id
-        job = jm.create_job(domain="connectors", queue="default", job_type="import", owner_user_id=str(user_id), payload=payload, priority=50, request_id=request_id)
+        idempotency_key = (
+            f"connectors-source:{source_id}:job:{job_type}:request:{request_id}"
+            if request_id
+            else None
+        )
+        job = jm.create_job(
+            domain="connectors",
+            queue="default",
+            job_type=job_type,
+            owner_user_id=str(user_id),
+            payload=payload,
+            priority=5,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+        )
         job_id = job.get("id") or job.get("job_id") or job.get("uuid")
-        return {
-            "id": str(job_id),
-            "source_id": source_id,
-            "type": "import",
-            "status": "queued",
-            "progress_pct": 0,
-            "counts": {"processed": 0, "skipped": 0, "failed": 0},
-        }
+        async with pool.transaction() as db:
+            sync_state = await reserve_source_sync_job(
+                db,
+                source_id=source_id,
+                job_id=str(job_id),
+            )
+            reserved_job_id = str((sync_state or {}).get("active_job_id") or "").strip() or None
+            if reserved_job_id and reserved_job_id != str(job_id):
+                with contextlib.suppress(_CONNECTORS_NONCRITICAL_EXCEPTIONS):
+                    jm.cancel_job(int(job_id), reason="superseded_by_active_source_job")
+                active_job = None
+                with contextlib.suppress(_CONNECTORS_NONCRITICAL_EXCEPTIONS):
+                    active_job = jm.get_job(int(reserved_job_id))
+                if _job_is_active(active_job):
+                    return _format_connectors_job(active_job or {}, source_id=source_id, default_type=job_type)
+        return _format_connectors_job(job, source_id=source_id, default_type=job_type)
     except _CONNECTORS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to create connectors job via JobManager: {e}")
         # Fallback to synthetic ID
@@ -1728,7 +2401,7 @@ async def create_import_job(user_id: int, source_id: int, *, request_id: str | N
         return {
             "id": jid,
             "source_id": source_id,
-            "type": "import",
+            "type": job_type,
             "status": "queued",
             "progress_pct": 0,
             "counts": {"processed": 0, "skipped": 0, "failed": 0},

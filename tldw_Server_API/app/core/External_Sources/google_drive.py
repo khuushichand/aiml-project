@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import os
 import re
+import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from tldw_Server_API.app.core.http_client import afetch
 
 from .connector_base import BaseConnector
-from .sync_adapter import FileSyncChange
+from .sync_adapter import FileSyncChange, FileSyncWebhookSubscription
 
 
 class GoogleDriveConnector(BaseConnector):
@@ -105,6 +107,17 @@ class GoogleDriveConnector(BaseConnector):
     @staticmethod
     def _access_token_from_account(account: dict[str, Any]) -> str | None:
         return (account.get("tokens") or {}).get("access_token") or account.get("access_token")
+
+    @staticmethod
+    def _expiration_millis_to_iso(value: Any) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            millis = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return datetime.fromtimestamp(millis / 1000, tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     async def get_start_page_token(self, account: dict[str, Any]) -> str | None:
         token = self._access_token_from_account(account)
@@ -255,6 +268,109 @@ class GoogleDriveConnector(BaseConnector):
         if query_id:
             return await self.get_item_metadata(account, str(query_id))
         return None
+
+    async def subscribe_webhook(
+        self,
+        account: dict[str, Any],
+        *,
+        resource: dict[str, Any],
+        callback_url: str,
+    ) -> FileSyncWebhookSubscription | None:
+        token = self._access_token_from_account(account)
+        if not token:
+            return None
+        page_token = str(resource.get("pageToken") or "").strip() or await self.get_start_page_token(account)
+        if not page_token:
+            return None
+        channel_id = str(resource.get("subscription_id") or "").strip() or uuid.uuid4().hex
+        client_state = str(resource.get("clientState") or "").strip() or None
+        expiration_millis = resource.get("expiration")
+        if expiration_millis is None:
+            expiration_millis = int((datetime.now(UTC) + timedelta(days=1)).timestamp() * 1000)
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        body = {
+            "id": channel_id,
+            "type": "web_hook",
+            "address": callback_url,
+            "expiration": expiration_millis,
+        }
+        if client_state:
+            body["token"] = client_state
+        resp = await afetch(
+            method="POST",
+            url="https://www.googleapis.com/drive/v3/changes/watch",
+            headers=headers,
+            params={"pageToken": page_token, "supportsAllDrives": True, "includeItemsFromAllDrives": True},
+            json=body,
+            timeout=30,
+        )
+        try:
+            resp.raise_for_status()
+            data = resp.json() or {}
+        finally:
+            close = getattr(resp, "aclose", None)
+            if callable(close):
+                await close()
+        metadata = dict(data)
+        metadata["pageToken"] = page_token
+        metadata["callback_url"] = callback_url
+        if client_state:
+            metadata["clientState"] = client_state
+        return FileSyncWebhookSubscription(
+            subscription_id=str(data.get("id") or channel_id),
+            expires_at=self._expiration_millis_to_iso(data.get("expiration") or expiration_millis),
+            metadata=metadata,
+        )
+
+    async def renew_webhook(
+        self,
+        account: dict[str, Any],
+        *,
+        subscription: FileSyncWebhookSubscription,
+    ) -> FileSyncWebhookSubscription | None:
+        metadata = dict(subscription.metadata or {})
+        callback_url = str(metadata.get("callback_url") or "").strip()
+        if not callback_url:
+            return None
+        with_client_state = str(metadata.get("clientState") or "").strip() or None
+        page_token = str(metadata.get("pageToken") or "").strip() or await self.get_start_page_token(account)
+        if not page_token:
+            return None
+        await self.revoke_webhook(account, subscription=subscription)
+        resource = {"pageToken": page_token}
+        if with_client_state:
+            resource["clientState"] = with_client_state
+        return await self.subscribe_webhook(
+            account,
+            resource=resource,
+            callback_url=callback_url,
+        )
+
+    async def revoke_webhook(
+        self,
+        account: dict[str, Any],
+        *,
+        subscription: FileSyncWebhookSubscription,
+    ) -> bool:
+        token = self._access_token_from_account(account)
+        resource_id = str((subscription.metadata or {}).get("resourceId") or "").strip()
+        if not token or not subscription.subscription_id or not resource_id:
+            return False
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        resp = await afetch(
+            method="POST",
+            url="https://www.googleapis.com/drive/v3/channels/stop",
+            headers=headers,
+            json={"id": subscription.subscription_id, "resourceId": resource_id},
+            timeout=30,
+        )
+        try:
+            resp.raise_for_status()
+            return True
+        finally:
+            close = getattr(resp, "aclose", None)
+            if callable(close):
+                await close()
 
     async def list_files(self, account: dict[str, Any], parent_remote_id: str, *, page_size: int = 50, cursor: str | None = None):
         """List files/folders under a parent. Returns (items, next_cursor)."""

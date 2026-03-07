@@ -161,6 +161,10 @@ async def test_sync_storage_helpers_track_bindings_events_and_archive_state(
         sync_mode="hybrid",
         cursor="delta-token",
         cursor_kind="drive_start_page_token",
+        webhook_metadata={
+            "resourceId": "drive-resource-1",
+            "pageToken": "delta-token",
+        },
     )
     binding = await svc.upsert_external_item_binding(
         sqlite_db,
@@ -197,6 +201,7 @@ async def test_sync_storage_helpers_track_bindings_events_and_archive_state(
 
     assert state["cursor"] == "delta-token"
     assert state["cursor_kind"] == "drive_start_page_token"
+    assert state["webhook_metadata"]["resourceId"] == "drive-resource-1"
     assert binding["media_id"] == 55
     assert event["event_type"] == "content_updated"
     assert archived["sync_status"] == "archived_upstream_removed"

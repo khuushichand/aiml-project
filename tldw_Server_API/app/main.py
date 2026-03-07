@@ -3190,6 +3190,21 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Reminders scheduler: {e}")
 
+    # Start Connectors sync scheduler (periodic submission into Jobs)
+    connectors_sync_sched_task = None
+    try:
+        from tldw_Server_API.app.services.connectors_sync_scheduler import (
+            start_connectors_sync_scheduler,
+        )
+
+        connectors_sync_sched_task = await start_connectors_sync_scheduler()
+        if connectors_sync_sched_task:
+            logger.info("Connectors sync scheduler started")
+        else:
+            logger.info("Connectors sync scheduler disabled (CONNECTORS_SYNC_SCHEDULER_ENABLED != true)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Connectors sync scheduler: {e}")
+
     # Display authentication mode (API key masked by default unless explicitly requested)
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
@@ -3624,6 +3639,20 @@ async def lifespan(app: FastAPI):
             try:
                 if "reminders_sched_task" in locals() and reminders_sched_task:
                     reminders_sched_task.cancel()
+            except _STARTUP_GUARD_EXCEPTIONS:
+                pass
+        # Stop Connectors sync scheduler
+        try:
+            if "connectors_sync_sched_task" in locals():
+                from tldw_Server_API.app.services.connectors_sync_scheduler import (
+                    stop_connectors_sync_scheduler as _stop_connectors_sync_scheduler,
+                )
+
+                await _stop_connectors_sync_scheduler(connectors_sync_sched_task)
+        except _STARTUP_GUARD_EXCEPTIONS:
+            try:
+                if "connectors_sync_sched_task" in locals() and connectors_sync_sched_task:
+                    connectors_sync_sched_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
                 pass
         # Jobs metrics gauges worker shutdown
