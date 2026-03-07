@@ -37,18 +37,6 @@ function normalizeSourceSet(values: string[]): string {
   return [...values].sort((left, right) => left.localeCompare(right)).join("|")
 }
 
-function normalizeIdentifierSet(values: Array<string | number | null | undefined>): string {
-  return values
-    .map((value) => {
-      if (typeof value === "string") return value.trim()
-      if (typeof value === "number" && Number.isFinite(value)) return String(Math.round(value))
-      return ""
-    })
-    .filter(Boolean)
-    .sort((left, right) => left.localeCompare(right))
-    .join("|")
-}
-
 function hasConversationId(item: { conversationId?: string }): boolean {
   return (
     typeof item.conversationId === "string" &&
@@ -153,8 +141,6 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
     lastSearchScope,
     preset,
     settings.enable_web_fallback,
-    settings.include_media_ids,
-    settings.include_note_ids,
     settings.sources,
   ])
 
