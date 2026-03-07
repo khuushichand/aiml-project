@@ -7,6 +7,12 @@ type ResolveApiProviderOptions = {
   providerHint?: string | null
 }
 
+type ResolveExplicitProviderForSelectedModelOptions = {
+  currentSelectedModel?: string | null
+  requestedSelectedModel?: string | null
+  explicitProvider?: string | null
+}
+
 const PROVIDER_ALIASES: Record<string, string> = {
   "custom_openai_api": "custom-openai-api",
   "custom-openai-api2": "custom-openai-api-2",
@@ -81,6 +87,29 @@ const normalizeKnownProvider = (value: unknown): string => {
   if (!normalized) return ""
   if (!KNOWN_PROVIDER_KEYS.has(normalized)) return ""
   return normalized
+}
+
+export const resolveExplicitProviderForSelectedModel = ({
+  currentSelectedModel,
+  requestedSelectedModel,
+  explicitProvider
+}: ResolveExplicitProviderForSelectedModelOptions): string | undefined => {
+  const normalizedExplicitProvider = normalizeProvider(explicitProvider)
+  if (!normalizedExplicitProvider) return undefined
+
+  const normalizedRequestedModel = normalizeModelId(requestedSelectedModel)
+  if (!normalizedRequestedModel) {
+    return normalizedExplicitProvider
+  }
+
+  const normalizedCurrentModel = normalizeModelId(currentSelectedModel)
+  if (!normalizedCurrentModel) {
+    return undefined
+  }
+
+  return normalizedRequestedModel === normalizedCurrentModel
+    ? normalizedExplicitProvider
+    : undefined
 }
 
 const inferInlineProvider = (normalizedModelId: string): string => {

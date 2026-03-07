@@ -66,7 +66,10 @@ import { updatePageTitle } from "@/utils/update-page-title"
 import { useAntdNotification } from "./useAntdNotification"
 import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
 import { normalizeConversationState } from "@/utils/conversation-state"
-import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
+import {
+  resolveApiProviderForModel,
+  resolveExplicitProviderForSelectedModel
+} from "@/utils/resolve-api-provider"
 import type { ChatDocuments } from "@/models/ChatTypes"
 import type { UploadedFile } from "@/db/dexie/types"
 import { applyMcpModuleDisclosureFromToolCalls } from "@/utils/mcp-disclosure"
@@ -75,6 +78,7 @@ import {
   findUnavailableChatModel,
   normalizeChatModelId
 } from "@/utils/chat-model-availability"
+import { discardAbortedTurnIfRequested } from "@/hooks/chat/abort-turn-cleanup"
 import {
   collectGreetings,
   isGreetingMessageType
@@ -103,6 +107,7 @@ export const useMessage = () => {
     embeddingController,
     setEmbeddingController
   } = usePageAssist()
+  const discardCurrentTurnOnAbortRef = React.useRef(false)
 
   // Messages now come from Zustand store (single source of truth)
   const messages = useStoreMessageOption((state) => state.messages)
@@ -771,6 +776,22 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: messages,
+          previousHistory: history,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        setIsEmbedding(false)
+        return
+      }
+
       console.error(e)
       const assistantContent = buildAssistantErrorContent(fullText, e)
       setMessages((prev) =>
@@ -807,6 +828,7 @@ export const useMessage = () => {
       setStreaming(false)
       setIsEmbedding(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
       setEmbeddingController(null)
     }
@@ -1079,6 +1101,22 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: messages,
+          previousHistory: history,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        setIsEmbedding(false)
+        return
+      }
+
       const assistantContent = buildAssistantErrorContent(fullText, e)
       setMessages((prev) =>
         prev.map((msg) =>
@@ -1114,6 +1152,7 @@ export const useMessage = () => {
       setStreaming(false)
       setIsEmbedding(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
       setEmbeddingController(null)
     }
@@ -1482,9 +1521,14 @@ export const useMessage = () => {
       let timetaken = 0
       let apiReasoning = false
 
+      const explicitProvider = resolveExplicitProviderForSelectedModel({
+        currentSelectedModel: selectedModel,
+        requestedSelectedModel: model,
+        explicitProvider: currentChatModelSettings.apiProvider
+      })
       const resolvedApiProvider = await resolveApiProviderForModel({
         modelId: model,
-        explicitProvider: currentChatModelSettings.apiProvider
+        explicitProvider
       })
 
       const normalizedModel = model.replace(/^tldw:/, "").trim()
@@ -1738,6 +1782,21 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: messages,
+          previousHistory: history,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        return
+      }
+
       const assistantContent = buildAssistantErrorContent(fullText, e)
       if (generateMessageId) {
         setMessages((prev) =>
@@ -1775,6 +1834,7 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
     }
   }
@@ -2035,6 +2095,21 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: messages,
+          previousHistory: history,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        return
+      }
+
       const assistantContent = buildAssistantErrorContent(fullText, e)
       setMessages((prev) =>
         prev.map((msg) =>
@@ -2070,6 +2145,7 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
     }
   }
@@ -2086,6 +2162,7 @@ export const useMessage = () => {
     docs,
     uploadedFiles,
     imageBackendOverride,
+    requestOverrides,
     serverChatIdOverride
   }: {
     message: string
@@ -2099,6 +2176,14 @@ export const useMessage = () => {
     docs?: ChatDocuments
     uploadedFiles?: UploadedFile[]
     imageBackendOverride?: string
+    requestOverrides?: {
+      selectedModel?: string | null
+      selectedSystemPrompt?: string | null
+      toolChoice?: "auto" | "none" | "required"
+      useOCR?: boolean
+      webSearch?: boolean
+      chatMode?: "normal" | "rag" | "vision"
+    }
     serverChatIdOverride?: string | null
   }) => {
     resetChatLoopState()
@@ -2107,12 +2192,44 @@ export const useMessage = () => {
         ? imageBackendOverride.trim()
         : ""
     const hasExplicitImageBackend = trimmedImageBackendOverride.length > 0
+    const resolvedSelectedModel =
+      typeof requestOverrides?.selectedModel === "string" &&
+      requestOverrides.selectedModel.trim().length > 0
+        ? requestOverrides.selectedModel.trim()
+        : selectedModel || ""
+    const resolvedSelectedSystemPrompt =
+      requestOverrides && Object.prototype.hasOwnProperty.call(
+        requestOverrides,
+        "selectedSystemPrompt"
+      )
+        ? (requestOverrides.selectedSystemPrompt ?? "")
+        : selectedSystemPrompt ?? ""
+    const resolvedToolChoice =
+      requestOverrides?.toolChoice === "auto" ||
+      requestOverrides?.toolChoice === "required" ||
+      requestOverrides?.toolChoice === "none"
+        ? requestOverrides.toolChoice
+        : toolChoice
+    const resolvedUseOCR =
+      typeof requestOverrides?.useOCR === "boolean"
+        ? requestOverrides.useOCR
+        : useOCR
+    const resolvedWebSearch =
+      typeof requestOverrides?.webSearch === "boolean"
+        ? requestOverrides.webSearch
+        : webSearch
+    const resolvedChatMode =
+      requestOverrides?.chatMode === "normal" ||
+      requestOverrides?.chatMode === "rag" ||
+      requestOverrides?.chatMode === "vision"
+        ? requestOverrides.chatMode
+        : chatMode
     if (!hasExplicitImageBackend) {
-      if (!validateBeforeSubmit(selectedModel || "", t, notification)) {
+      if (!validateBeforeSubmit(resolvedSelectedModel, t, notification)) {
         return
       }
       const modelAvailable = await ensureSelectedChatModelIsAvailable(
-        selectedModel || ""
+        resolvedSelectedModel
       )
       if (!modelAvailable) {
         return
@@ -2121,8 +2238,8 @@ export const useMessage = () => {
 
     const model =
       (hasExplicitImageBackend
-        ? trimmedImageBackendOverride || selectedModel
-        : selectedModel
+        ? trimmedImageBackendOverride || resolvedSelectedModel
+        : resolvedSelectedModel
       ).trim() || "image-generation"
     let signal: AbortSignal
     if (!controller) {
@@ -2137,7 +2254,7 @@ export const useMessage = () => {
       Boolean(replyTarget) &&
       !isRegenerate &&
       !messageType &&
-      chatMode === "normal" &&
+      resolvedChatMode === "normal" &&
       !selectedCharacter?.id
     const replyOverrides = replyActive
       ? (() => {
@@ -2169,8 +2286,8 @@ export const useMessage = () => {
           signal,
           {
             selectedModel: model,
-            useOCR,
-            selectedSystemPrompt: selectedSystemPrompt ?? "",
+            useOCR: resolvedUseOCR,
+            selectedSystemPrompt: resolvedSelectedSystemPrompt,
             currentChatModelSettings,
             setMessages,
             saveMessageOnSuccess,
@@ -2184,7 +2301,7 @@ export const useMessage = () => {
               id: string,
               options?: { preserveServerChatId?: boolean }
             ) => void,
-            webSearch,
+            webSearch: resolvedWebSearch,
             setIsSearchingInternet,
             uploadedFiles: hasExplicitImageBackend ? [] : uploadedFiles,
             imageBackendOverride: hasExplicitImageBackend
@@ -2207,9 +2324,9 @@ export const useMessage = () => {
           uploadedFiles,
           {
             selectedModel: model,
-            useOCR,
+            useOCR: resolvedUseOCR,
             currentChatModelSettings,
-            toolChoice,
+            toolChoice: resolvedToolChoice,
             setMessages,
             saveMessageOnSuccess,
             saveMessageOnError,
@@ -2238,9 +2355,9 @@ export const useMessage = () => {
           signal,
           {
             selectedModel: model,
-            useOCR,
-            selectedSystemPrompt: selectedSystemPrompt ?? "",
-            toolChoice,
+            useOCR: resolvedUseOCR,
+            selectedSystemPrompt: resolvedSelectedSystemPrompt,
+            toolChoice: resolvedToolChoice,
             setMessages,
             saveMessageOnSuccess,
             saveMessageOnError,
@@ -2269,7 +2386,7 @@ export const useMessage = () => {
           regenerateFromMessage
         )
       } else {
-        if (chatMode === "normal") {
+        if (resolvedChatMode === "normal") {
           if (selectedCharacter?.id) {
             await characterChatMode(
               message,
@@ -2292,8 +2409,8 @@ export const useMessage = () => {
               signal,
               {
                 selectedModel: model,
-                useOCR,
-                selectedSystemPrompt: selectedSystemPrompt ?? "",
+                useOCR: resolvedUseOCR,
+                selectedSystemPrompt: resolvedSelectedSystemPrompt,
                 currentChatModelSettings,
                 setMessages,
                 saveMessageOnSuccess,
@@ -2307,14 +2424,14 @@ export const useMessage = () => {
                   id: string,
                   options?: { preserveServerChatId?: boolean }
                 ) => void,
-                webSearch,
+                webSearch: resolvedWebSearch,
                 setIsSearchingInternet,
                 regenerateFromMessage,
                 ...replyOverrides
               }
             )
           }
-        } else if (chatMode === "vision") {
+        } else if (resolvedChatMode === "vision") {
           await visionChatMode(
             message,
             image,
@@ -2347,7 +2464,18 @@ export const useMessage = () => {
     }
   }
 
-  const stopStreamingRequest = () => {
+  const stopStreamingRequest = (options?: unknown) => {
+    const discardTurn =
+      typeof options === "object" &&
+      options !== null &&
+      "discardTurn" in options &&
+      options.discardTurn === true
+    if (
+      discardTurn &&
+      (isEmbedding || abortController || embeddingController)
+    ) {
+      discardCurrentTurnOnAbortRef.current = true
+    }
     if (isEmbedding) {
       if (embeddingController) {
         embeddingController.abort()
