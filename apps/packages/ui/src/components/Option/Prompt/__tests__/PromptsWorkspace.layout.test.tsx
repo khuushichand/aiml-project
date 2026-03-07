@@ -82,7 +82,7 @@ describe("PromptsWorkspace layout", () => {
     render(<PromptsWorkspace />)
 
     const shell = screen.getByTestId("prompts-page-shell")
-    expect(shell.className).toContain("max-w-5xl")
+    expect(shell.className).toContain("max-w-7xl")
     expect(shell.className).not.toContain("max-w-none")
   })
 })
