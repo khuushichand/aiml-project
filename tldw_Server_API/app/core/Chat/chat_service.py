@@ -2907,6 +2907,7 @@ async def execute_streaming_call(
         nonlocal stream_metrics_recorded
         saved_message_id: str | None = None
         tool_execution_payload: list[dict[str, Any]] | None = None
+        structured_events: list[dict[str, Any]] = []
         full_reply_to_save = full_reply
         post_stream_blocked = False
 
@@ -3048,6 +3049,41 @@ async def execute_streaming_call(
                     full_reply_to_save = moderation.redact_text(full_reply, eff_policy)
         except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
+
+        structured_request = cleaned_args.get("response_format")
+        structured_schema = _extract_structured_schema_from_response_format(structured_request)
+        if structured_schema is not None:
+            try:
+                decision = negotiate_structured_response_mode(
+                    provider=selected_provider,
+                    requested=structured_request,
+                )
+                validated_payload = parse_and_validate_structured_output(
+                    raw_text=full_reply_to_save,
+                    schema=structured_schema,
+                )
+                structured_events.append(
+                    {
+                        "event": "structured_result",
+                        "data": {
+                            "validated": True,
+                            "mode_used": decision.mode_used,
+                            "fallback_used": decision.fallback_used,
+                            "validated_payload": validated_payload,
+                        },
+                    }
+                )
+            except (
+                StructuredGenerationCapabilityError,
+                StructuredGenerationParseError,
+                StructuredGenerationSchemaError,
+            ) as structured_exc:
+                structured_events.append(
+                    {
+                        "event": "structured_error",
+                        "data": _structured_error_detail(structured_exc),
+                    }
+                )
 
         if callable(on_stream_full_reply):
             try:
@@ -3198,13 +3234,14 @@ async def execute_streaming_call(
                 await on_success(selected_provider)
         except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
+        events: list[dict[str, Any]] = list(structured_events)
         if tool_execution_payload is not None:
-            events: list[dict[str, Any]] = [
+            events.append(
                 {
                     "event": "tool_results",
                     "data": {"tool_results": tool_execution_payload},
                 }
-            ]
+            )
             if loop_compat_enabled:
                 seq = 1
                 events.append(
@@ -3235,14 +3272,9 @@ async def execute_streaming_call(
                         "data": {"run_id": loop_compat_run_id, "seq": seq},
                     }
                 )
-            return {
-                "saved_message_id": saved_message_id,
-                "events": events,
-            }
-        if loop_compat_enabled:
-            return {
-                "saved_message_id": saved_message_id,
-                "events": [
+        elif loop_compat_enabled:
+            events.extend(
+                [
                     {
                         "event": "run_started",
                         "data": {"run_id": loop_compat_run_id, "seq": 1},
@@ -3251,7 +3283,13 @@ async def execute_streaming_call(
                         "event": "run_complete",
                         "data": {"run_id": loop_compat_run_id, "seq": 2},
                     },
-                ],
+                ]
+            )
+
+        if events:
+            return {
+                "saved_message_id": saved_message_id,
+                "events": events,
             }
         return saved_message_id
 
