@@ -15,6 +15,8 @@ from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import (
 )
 from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import (
     ResearchArtifactRow,
+    ResearchCheckpointRow,
+    ResearchRunEventRow,
     ResearchSessionRow,
     ResearchSessionsDB,
 )
@@ -79,6 +81,10 @@ class ResearchService:
             return self._job_manager
         return jobs_manager_from_env()
 
+    @staticmethod
+    def _normalized_event_payload_json(payload: dict[str, Any]) -> str:
+        return json.dumps(payload or {}, sort_keys=True)
+
     def get_job_manager(self) -> Any:
         """Return the Jobs manager used for research phase execution and progress reads."""
         return self._job_manager_for_session()
@@ -134,6 +140,21 @@ class ResearchService:
             return ("packaging", True)
         raise ValueError(f"unsupported checkpoint type: {checkpoint_type}")
 
+    @staticmethod
+    def _checkpoint_event_payload(
+        *,
+        checkpoint: ResearchCheckpointRow,
+        phase: str | None,
+    ) -> dict[str, Any]:
+        return {
+            "checkpoint_id": checkpoint.id,
+            "checkpoint_type": checkpoint.checkpoint_type,
+            "status": checkpoint.status,
+            "resolution": checkpoint.resolution,
+            "phase": phase,
+            "has_proposed_payload": bool(checkpoint.proposed_payload),
+        }
+
     def create_session(
         self,
         *,
@@ -164,6 +185,60 @@ class ResearchService:
         return db.attach_active_job(
             session.id,
             self._job_identifier(job),
+        )
+
+    def record_run_event(
+        self,
+        *,
+        owner_user_id: str,
+        session_id: str,
+        event_type: str,
+        event_payload: dict[str, Any],
+        phase: str | None = None,
+        job_id: str | None = None,
+    ) -> ResearchRunEventRow:
+        db = self._db_for_user(owner_user_id)
+        session = db.get_session(session_id)
+        if session is None or session.owner_user_id != str(owner_user_id):
+            raise KeyError(session_id)
+
+        normalized_payload = self._normalized_event_payload_json(event_payload)
+        latest = db.get_latest_run_event(
+            owner_user_id=str(owner_user_id),
+            session_id=session_id,
+            event_type=event_type,
+        )
+        if (
+            latest is not None
+            and latest.phase == phase
+            and latest.job_id == job_id
+            and self._normalized_event_payload_json(latest.event_payload) == normalized_payload
+        ):
+            return latest
+
+        return db.record_run_event(
+            owner_user_id=str(owner_user_id),
+            session_id=session_id,
+            event_type=event_type,
+            event_payload=event_payload,
+            phase=phase,
+            job_id=job_id,
+        )
+
+    def list_run_events_after(
+        self,
+        *,
+        owner_user_id: str,
+        session_id: str,
+        after_id: int,
+        limit: int | None = None,
+    ) -> list[ResearchRunEventRow]:
+        db = self._db_for_user(owner_user_id)
+        return db.list_run_events_after(
+            owner_user_id=str(owner_user_id),
+            session_id=session_id,
+            after_id=after_id,
+            limit=limit,
         )
 
     def approve_checkpoint(

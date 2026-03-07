@@ -448,44 +448,60 @@ class ResearchSessionsDB:
         completed_at: str | None = None,
     ) -> ResearchSessionRow:
         now = _utc_now()
+        sql, params = self._build_update_status_statement(
+            session_id=session_id,
+            status=status,
+            control_state=control_state,
+            active_job_id=active_job_id,
+            completed_at=completed_at,
+            updated_at=now,
+        )
+        return self._execute_session_update(session_id=session_id, sql=sql, params=params)
+
+    @staticmethod
+    def _build_update_status_statement(
+        *,
+        session_id: str,
+        status: str,
+        control_state: str | None = None,
+        active_job_id: str | None | object = _UNSET,
+        completed_at: str | None = None,
+        updated_at: str,
+    ) -> tuple[str, tuple[Any, ...]]:
         if active_job_id is _UNSET and control_state is None:
-            return self._execute_session_update(
-                session_id=session_id,
-                sql="""
+            return (
+                """
                     UPDATE research_sessions
                     SET status = ?, completed_at = ?, updated_at = ?
                     WHERE id = ?
                 """,
-                params=(status, completed_at, now, session_id),
+                (status, completed_at, updated_at, session_id),
             )
         if active_job_id is _UNSET:
-            return self._execute_session_update(
-                session_id=session_id,
-                sql="""
+            return (
+                """
                     UPDATE research_sessions
                     SET status = ?, completed_at = ?, control_state = ?, updated_at = ?
                     WHERE id = ?
                 """,
-                params=(status, completed_at, control_state, now, session_id),
+                (status, completed_at, control_state, updated_at, session_id),
             )
         if control_state is None:
-            return self._execute_session_update(
-                session_id=session_id,
-                sql="""
+            return (
+                """
                     UPDATE research_sessions
                     SET status = ?, completed_at = ?, active_job_id = ?, updated_at = ?
                     WHERE id = ?
                 """,
-                params=(status, completed_at, active_job_id, now, session_id),
+                (status, completed_at, active_job_id, updated_at, session_id),
             )
-        return self._execute_session_update(
-            session_id=session_id,
-            sql="""
+        return (
+            """
                 UPDATE research_sessions
                 SET status = ?, completed_at = ?, control_state = ?, active_job_id = ?, updated_at = ?
                 WHERE id = ?
             """,
-            params=(status, completed_at, control_state, active_job_id, now, session_id),
+            (status, completed_at, control_state, active_job_id, updated_at, session_id),
         )
 
     def _execute_session_update(
@@ -635,28 +651,95 @@ class ResearchSessionsDB:
         now = _utc_now()
         payload_json = json.dumps(event_payload or {}, sort_keys=True)
         with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO research_run_events (
-                    session_id, owner_user_id, event_type, event_payload_json,
-                    phase, job_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    session_id,
-                    str(owner_user_id),
-                    event_type,
-                    payload_json,
-                    phase,
-                    job_id,
-                    now,
-                ),
+            event_id = self._record_run_event_with_conn(
+                conn,
+                owner_user_id=str(owner_user_id),
+                session_id=session_id,
+                event_type=event_type,
+                event_payload_json=payload_json,
+                phase=phase,
+                job_id=job_id,
+                created_at=now,
             )
-            event_id = int(cursor.lastrowid)
         event = self.get_run_event(event_id)
         if event is None:
             raise RuntimeError("failed_to_record_research_run_event")
         return event
+
+    def _record_run_event_with_conn(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        owner_user_id: str,
+        session_id: str,
+        event_type: str,
+        event_payload_json: str,
+        phase: str | None,
+        job_id: str | None,
+        created_at: str,
+    ) -> int:
+        cursor = conn.execute(
+            """
+            INSERT INTO research_run_events (
+                session_id, owner_user_id, event_type, event_payload_json,
+                phase, job_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                owner_user_id,
+                event_type,
+                event_payload_json,
+                phase,
+                job_id,
+                created_at,
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def update_status_with_event(
+        self,
+        session_id: str,
+        *,
+        status: str,
+        owner_user_id: str,
+        event_type: str,
+        event_payload: dict[str, Any],
+        phase: str | None = None,
+        job_id: str | None = None,
+        control_state: str | None = None,
+        active_job_id: str | None | object = _UNSET,
+        completed_at: str | None = None,
+    ) -> tuple[ResearchSessionRow, ResearchRunEventRow]:
+        now = _utc_now()
+        sql, params = self._build_update_status_statement(
+            session_id=session_id,
+            status=status,
+            control_state=control_state,
+            active_job_id=active_job_id,
+            completed_at=completed_at,
+            updated_at=now,
+        )
+        payload_json = json.dumps(event_payload or {}, sort_keys=True)
+        with self._connect() as conn:
+            conn.execute(sql, params)
+            event_id = self._record_run_event_with_conn(
+                conn,
+                owner_user_id=str(owner_user_id),
+                session_id=session_id,
+                event_type=event_type,
+                event_payload_json=payload_json,
+                phase=phase,
+                job_id=job_id,
+                created_at=now,
+            )
+        session = self.get_session(session_id)
+        event = self.get_run_event(event_id)
+        if session is None:
+            raise KeyError(session_id)
+        if event is None:
+            raise RuntimeError("failed_to_record_research_run_event")
+        return session, event
 
     def get_run_event(self, event_id: int) -> ResearchRunEventRow | None:
         with self._connect() as conn:

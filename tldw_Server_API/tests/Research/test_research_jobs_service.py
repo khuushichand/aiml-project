@@ -318,6 +318,138 @@ async def test_create_session_persists_provider_overrides_and_planning_writes_pr
     assert provider_config["content"]["local"]["top_k"] == 4
 
 
+def test_record_run_event_dedupes_identical_payloads_and_writes_new_row_for_changes(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=None,
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Deduplicate research status events",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+    )
+
+    first = service.record_run_event(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        event_type="status",
+        event_payload={"status": "queued", "phase": "drafting_plan"},
+        phase="drafting_plan",
+        job_id="301",
+    )
+    duplicate = service.record_run_event(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        event_type="status",
+        event_payload={"phase": "drafting_plan", "status": "queued"},
+        phase="drafting_plan",
+        job_id="301",
+    )
+    changed = service.record_run_event(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        event_type="status",
+        event_payload={"status": "running", "phase": "drafting_plan"},
+        phase="drafting_plan",
+        job_id="301",
+    )
+
+    assert first.id == duplicate.id
+    assert changed.id > first.id
+    assert [
+        event.id
+        for event in service.list_run_events_after(
+            owner_user_id=session.owner_user_id,
+            session_id=session.id,
+            after_id=0,
+        )
+    ] == [first.id, changed.id]
+
+
+def test_checkpoint_event_payload_is_compact_metadata_only(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=None,
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Compact checkpoint payload",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+    )
+    checkpoint = db.create_checkpoint(
+        session_id=session.id,
+        checkpoint_type="sources_review",
+        proposed_payload={
+            "source_inventory": [{"source_id": "src_1", "title": "Primary source"}],
+            "collection_summary": {"source_count": 1},
+        },
+    )
+
+    payload = service._checkpoint_event_payload(checkpoint=checkpoint, phase="awaiting_source_review")
+
+    assert payload == {
+        "checkpoint_id": checkpoint.id,
+        "checkpoint_type": "sources_review",
+        "status": "pending",
+        "resolution": None,
+        "phase": "awaiting_source_review",
+        "has_proposed_payload": True,
+    }
+
+
+def test_update_status_with_event_rolls_back_when_event_insert_fails(tmp_path, monkeypatch):
+    import sqlite3
+
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Transactional event writer",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+    )
+
+    def fail_record_run_event_with_conn(self, conn, **kwargs):
+        raise sqlite3.OperationalError("event insert failed")
+
+    monkeypatch.setattr(
+        ResearchSessionsDB,
+        "_record_run_event_with_conn",
+        fail_record_run_event_with_conn,
+    )
+
+    with pytest.raises(sqlite3.OperationalError):
+        db.update_status_with_event(
+            session_id=session.id,
+            status="completed",
+            owner_user_id=session.owner_user_id,
+            event_type="status",
+            event_payload={"status": "completed", "phase": session.phase},
+            phase=session.phase,
+            job_id=None,
+        )
+
+    reloaded = db.get_session(session.id)
+    assert reloaded is not None
+    assert reloaded.status == "queued"
+
+
 def test_research_session_defaults_include_control_and_progress_fields(tmp_path):
     from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import ResearchRunResponse
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
