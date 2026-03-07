@@ -6,14 +6,20 @@ from __future__ import annotations
 ALIAS_MAP: dict[str, str] = {
     "media": "media_db",
     "media_db": "media_db",
+    "media_db_v2": "media_db",
     "notes": "notes",
+    "notes_db": "notes",
     "characters": "characters",
+    "character_cards_db": "characters",
     "character_cards": "characters",
     "chats": "chats",
+    "chat_history": "chats",
     "kanban": "kanban",
     "kanban_db": "kanban",
     "prompts": "prompts",
+    "prompts_db": "prompts",
     "claims": "claims",
+    "claims_db": "claims",
     "sql": "sql",
 }
 
