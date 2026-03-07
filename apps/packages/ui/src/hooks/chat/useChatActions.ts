@@ -56,7 +56,10 @@ import {
   type ImageGenerationPromptMode,
   type ImageGenerationRequestSnapshot
 } from "@/utils/image-generation-chat"
-import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
+import {
+  resolveApiProviderForModel,
+  resolveExplicitProviderForSelectedModel
+} from "@/utils/resolve-api-provider"
 import { consumeStreamingChunk } from "@/utils/streaming-chunks"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeConversationState } from "@/utils/conversation-state"
@@ -1283,9 +1286,14 @@ export const useChatActions = ({
       let streamTransportInterrupted = false
       let streamTransportInterruptionReason: string | null = null
 
+      const explicitProvider = resolveExplicitProviderForSelectedModel({
+        currentSelectedModel: selectedModel,
+        requestedSelectedModel: resolvedModel,
+        explicitProvider: currentChatModelSettings.apiProvider
+      })
       const resolvedApiProvider = await resolveApiProviderForModel({
         modelId: resolvedModel,
-        explicitProvider: currentChatModelSettings.apiProvider
+        explicitProvider
       })
       const normalizedModel = resolvedModel.replace(/^tldw:/, "").trim()
       const streamModel =

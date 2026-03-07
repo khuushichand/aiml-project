@@ -66,7 +66,10 @@ import { updatePageTitle } from "@/utils/update-page-title"
 import { useAntdNotification } from "./useAntdNotification"
 import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
 import { normalizeConversationState } from "@/utils/conversation-state"
-import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
+import {
+  resolveApiProviderForModel,
+  resolveExplicitProviderForSelectedModel
+} from "@/utils/resolve-api-provider"
 import type { ChatDocuments } from "@/models/ChatTypes"
 import type { UploadedFile } from "@/db/dexie/types"
 import { applyMcpModuleDisclosureFromToolCalls } from "@/utils/mcp-disclosure"
@@ -1518,9 +1521,14 @@ export const useMessage = () => {
       let timetaken = 0
       let apiReasoning = false
 
+      const explicitProvider = resolveExplicitProviderForSelectedModel({
+        currentSelectedModel: selectedModel,
+        requestedSelectedModel: model,
+        explicitProvider: currentChatModelSettings.apiProvider
+      })
       const resolvedApiProvider = await resolveApiProviderForModel({
         modelId: model,
-        explicitProvider: currentChatModelSettings.apiProvider
+        explicitProvider
       })
 
       const normalizedModel = model.replace(/^tldw:/, "").trim()
