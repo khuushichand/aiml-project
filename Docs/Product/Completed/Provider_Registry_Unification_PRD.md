@@ -85,7 +85,7 @@ Provide a `ProviderRegistryBase` with:
 - STT registry wraps `ProviderRegistryBase` and keeps model-to-provider resolution logic.
 
 ### 9.4 Related Work
-- This PRD complements the LLM Adapter Registry Migration (`Docs/Product/LLM_Adapter_Registry_Migration_PRD.md`) by providing shared registry infrastructure, not changing the LLM adapter contract.
+- This PRD complements the LLM Adapter Registry Migration (`Docs/Product/Completed/LLM_Adapter_Registry_Migration_PRD.md`) by providing shared registry infrastructure, not changing the LLM adapter contract.
 
 ## 10. Migration Plan
 ### Phase 0: Base Registry Implementation

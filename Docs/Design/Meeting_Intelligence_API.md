@@ -3,7 +3,7 @@
 Design metadata:
 - `design_created`: 2026-02-23
 - `moved_to_docs_design`: 2026-02-24
-- `original_location`: `Docs/API-related/Meeting_Intelligence_API.md`
+- `original_location`: historical API-related path (moved during docs reorganization)
 
 Meeting Intelligence v1 is exposed under `/api/v1/meetings` and provides:
 - Meeting sessions, templates, and artifacts CRUD.

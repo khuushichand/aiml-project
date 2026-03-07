@@ -40,7 +40,7 @@ Appendable metadata requirements:
 Non-functional requirements:
 - Keep prompt assembly deterministic and testable.
 - Avoid regressions in non-character chat prompt assembly.
-- Enforce shared prompt budget caps for presets. See `Docs/Product/Character_Chat_Prompt_Assembly_Preview_PRD.md`.
+- Enforce shared prompt budget caps for presets. See `Docs/Product/Completed/Character_Chat_Prompt_Assembly_Preview_PRD.md`.
 
 ## UX Notes
 - Preset selection lives in the character edit UI with optional quick access in chat settings.

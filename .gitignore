@@ -281,9 +281,20 @@ errors.log
 !apps/packages/ui/src/assets/locale/*/settings.json
 !apps/packages/ui/src/assets/locale/*/sidepanel.json
 !Docs/Product/WebUI/M1_4_Alias_Rollup_Week3_Natural_2026_02_13.json
+!Docs/Deployment/sidecar_workers_manifest.json
 !Docs/Monitoring/claims_grafana_dashboard.json
+<<<<<<< HEAD
 !Docs/Development/schema/embeddings_v1.schema.json
 !Docs/Development/schema/embeddings_registry.json
+=======
+!Docs/Monitoring/http_client_grafana_dashboard.json
+!Docs/Deployment/Monitoring/Grafana_Streaming_Basics.json
+!Docs/Development/schema/embeddings_registry.json
+!Docs/Development/schema/embeddings_v1.schema.json
+!Docs/Evals/samples/*.json
+!Docs/Examples/PromptStudio/mcts/*.json
+!Docs/Schemas/*.json
+>>>>>>> worktree-agent-a71a6d7f
 !admin-ui/package.json
 all_summaries.txt
 all_transcriptions.json

@@ -96,7 +96,7 @@ Finding IDs: `H8.1` through `H8.3`
   - telemetry transition assertions for experimental sessions
   - hidden-tab route integrity assertions (`jobs`/`items`/`templates`)
 - Added final IA recommendation + migration/fallback decision record:
-  - `Docs/Plans/DECISION_RECORD_watchlists_h8_stage3_ia_experiment_2026_02_19.md`
+  - `Docs/Product/Completed/Plans/DECISION_RECORD_watchlists_h8_stage3_ia_experiment_2026_02_19.md`
 
 ## Dependencies
 

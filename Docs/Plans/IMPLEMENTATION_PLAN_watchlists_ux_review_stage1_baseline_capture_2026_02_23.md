@@ -52,7 +52,7 @@ Dependency source: `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_ux_review_program_
 | Help and docs links | `bun run test:watchlists:help` | Passed (2 files, 7 tests) | `/tmp/watchlists_ux_stage1_baseline_watchlists_help_2026_02_23.txt` |
 | IA, terminology, route state | `bunx vitest run src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/routes/__tests__/option-watchlists.route-state.test.tsx --maxWorkers=1 --no-file-parallelism` | Passed (3 files, 10 tests) | `/tmp/watchlists_ux_stage1_baseline_ia_terms_routes_2026_02_23.txt` |
 | Telemetry contract | `bunx vitest run src/utils/__tests__/watchlists-onboarding-telemetry.test.ts src/utils/__tests__/watchlists-ia-experiment-telemetry.test.ts --maxWorkers=1 --no-file-parallelism` | Passed (2 files, 4 tests) | `/tmp/watchlists_ux_stage1_baseline_telemetry_contracts_2026_02_23.txt` |
-| Group plan status initialization | `rg -n '^## Stage [0-9]+:|^\\*\\*Status\\*\\*:' Docs/Plans/IMPLEMENTATION_PLAN_watchlists_ux_review_0*_2026_02_23.md` | Captured stage/status map for all group plans | `/tmp/watchlists_ux_stage1_plan_status_matrix_2026_02_23.txt` |
+| Group plan status initialization | `cd Docs/Plans && rg -n '^## Stage [0-9]+:|^\*\*Status\*\*:' IMPLEMENTATION_PLAN_watchlists_ux_review_0*_2026_02_23.md` | Captured stage/status map for all group plans | `/tmp/watchlists_ux_stage1_plan_status_matrix_2026_02_23.txt` |
 
 ## 5) Remaining Stage 1 Completion Tasks
 

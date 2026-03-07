@@ -445,5 +445,5 @@ Cookie format: list of dicts with `name` and `value` (extra fields like `domain`
 - `Docs/Scraper_Analyzers.md`
 - `tldw_Server_API/Config_Files/Prompts/webscraping.prompts.yaml`
 - `Docs/Design/WebScraping.md`
-- `Docs/Design/Collections_Feeds_Ingestion.md`
+- `Docs/Product/Collections_Feeds_Ingestion.md`
 - `Docs/Design/WebSearch.md`

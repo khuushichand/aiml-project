@@ -554,5 +554,5 @@ Risks & Mitigations
 - Content variability: prefer URL submission to server; avoid raw DOM capture.
 
 References
-- Server APIs: see tldw_Server_API/README.md and Docs/Product/Content_Collections_PRD.md
+- Server APIs: see tldw_Server_API/README.md and Docs/Product/Completed/Content_Collections_PRD.md
 - Extension implementation plan lives in the separate extension repo’s Extension-Plan-1.md

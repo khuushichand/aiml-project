@@ -1,6 +1,6 @@
 # Workflows (v0.1)
 
-This document captures the current state of the Workflows module, its APIs, data model, execution engine behavior, security model, and the near-term roadmap. It supersedes the placeholder links that were here previously. For the consolidated PRD, see `Docs/Design/Workflows_PRD.md` (the historical draft remains at `Workflows-PRD-1.md`).
+This document captures the current state of the Workflows module, its APIs, data model, execution engine behavior, security model, and the near-term roadmap. It supersedes the placeholder links that were here previously. For the consolidated PRD, see `Docs/Product/Completed/Workflows_PRD.md` (the historical draft remains at `Workflows-PRD-1.md`).
 
 ## Status & Scope
 

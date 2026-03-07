@@ -250,10 +250,10 @@
 
 ## References
 
-- PRD: `Docs/Product/Media_Endpoint_Refactor-PRD.md`
+- PRD: `Docs/Product/Completed/Media_Endpoint_Refactor-PRD.md`
 - Core ingestion docs: `Docs/Code_Documentation/Ingestion_Media_Processing.md`
 - Chunking docs: `Docs/Code_Documentation/Chunking-Module.md`
-- Claims design: `Docs/Design/ingestion_claims.md`
+- Claims design: `Docs/Code_Documentation/Claims_Extraction.md`
 
 ## Canonical Import Paths (For Contributors)
 

@@ -131,6 +131,57 @@ class _DummyTTSService:
             yield chunk
 
 
+class _DummyRealtimeSession:
+    """Minimal realtime TTS session used by overlap tests."""
+
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._buffer = ""
+        self._closed = False
+
+    async def push_text(self, delta: str) -> None:
+        if self._closed:
+            return
+        self._buffer += str(delta or "")
+
+    async def commit(self) -> None:
+        if self._closed:
+            return
+        text = self._buffer.strip()
+        self._buffer = ""
+        if text:
+            await self._queue.put(f"rt:{text}".encode("utf-8"))
+
+    async def finish(self) -> None:
+        if self._closed:
+            return
+        if self._buffer.strip():
+            await self.commit()
+        self._closed = True
+        await self._queue.put(None)
+
+    async def audio_stream(self) -> AsyncIterator[bytes]:
+        while True:
+            item = await self._queue.get()
+            if item is None:
+                break
+            yield item
+
+
+class _DummyRealtimeCapableTTSService:
+    """TTS service exposing both realtime and buffered methods for overlap tests."""
+
+    def __init__(self) -> None:
+        self.session = _DummyRealtimeSession()
+
+    async def open_realtime_session(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ARG002
+        return SimpleNamespace(session=self.session, provider="stub-realtime", warning=None)
+
+    async def generate_speech(self, *args: Any, **kwargs: Any) -> AsyncIterator[bytes]:  # noqa: ARG002
+        # Legacy fallback path (pre-overlap implementation).
+        yield b"legacy-tts"
+
+
 async def _llm_stub(**kwargs: Any) -> AsyncIterator[str]:  # noqa: ARG002
     """Stubbed streaming LLM generator returning a short response."""
 

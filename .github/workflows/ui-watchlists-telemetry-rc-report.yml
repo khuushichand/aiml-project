@@ -90,7 +90,7 @@ jobs:
 
       - name: Upload telemetry RC report artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: watchlists-telemetry-rc-report
           if-no-files-found: ignore

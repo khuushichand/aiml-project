@@ -4,18 +4,18 @@
 Index and dependency map for the SillyTavern-style character chat enhancement PRDs.
 
 ## PRD List
-1. `Docs/Product/Character_Chat_Greeting_Picker_PRD.md`
-2. `Docs/Product/Character_Chat_Prompt_Presets_PRD.md`
-3. `Docs/Product/Character_Chat_Greeting_Inclusion_PRD.md`
-4. `Docs/Product/Character_Chat_Authors_Note_PRD.md`
-5. `Docs/Product/Character_Card_Import_Export_STv2_PRD.md`
-6. `Docs/Product/Lorebook_Trigger_Diagnostics_PRD.md`
-7. `Docs/Product/Character_Chat_Prompt_Assembly_Preview_PRD.md`
-8. `Docs/Product/Character_Generation_Presets_PRD.md`
-9. `Docs/Product/Group_Multi_Character_Chats_PRD.md`
-10. `Docs/Product/Message_Steering_Controls_PRD.md`
-11. `Docs/Product/Chat_Auto_Summarization_Pinned_PRD.md`
-12. `Docs/Product/Character_Chat_Settings_Metadata_PRD.md`
+1. `Docs/Product/Completed/Character_Chat_Greeting_Picker_PRD.md`
+2. `Docs/Product/Completed/Character_Chat_Prompt_Presets_PRD.md`
+3. `Docs/Product/Completed/Character_Chat_Greeting_Inclusion_PRD.md`
+4. `Docs/Product/Completed/Character_Chat_Authors_Note_PRD.md`
+5. `Docs/Product/Completed/Character_Card_Import_Export_STv2_PRD.md`
+6. `Docs/Product/Completed/Lorebook_Trigger_Diagnostics_PRD.md`
+7. `Docs/Product/Completed/Character_Chat_Prompt_Assembly_Preview_PRD.md`
+8. `Docs/Product/Completed/Character_Generation_Presets_PRD.md`
+9. `Docs/Product/Completed/Group_Multi_Character_Chats_PRD.md`
+10. `Docs/Product/Completed/Message_Steering_Controls_PRD.md`
+11. `Docs/Product/Completed/Chat_Auto_Summarization_Pinned_PRD.md`
+12. `Docs/Product/Completed/Character_Chat_Settings_Metadata_PRD.md`
 
 ## Dependencies and Relationships
 1. Greeting picker depends on per-chat settings persistence and sync.
@@ -32,9 +32,9 @@ Index and dependency map for the SillyTavern-style character chat enhancement PR
 12. Settings metadata is a shared foundation for server-backed per-chat settings and sync.
 
 ## Shared Constraints
-1. Token budgets, truncation order, and section visibility are defined in `Docs/Product/Character_Chat_Prompt_Assembly_Preview_PRD.md` and referenced by other PRDs.
-2. Per-chat settings persistence and sync rules are defined in `Docs/Product/Character_Chat_Greeting_Picker_PRD.md` and referenced by other PRDs.
-3. Server metadata schema and migration details are defined in `Docs/Product/Character_Chat_Settings_Metadata_PRD.md`.
+1. Token budgets, truncation order, and section visibility are defined in `Docs/Product/Completed/Character_Chat_Prompt_Assembly_Preview_PRD.md` and referenced by other PRDs.
+2. Per-chat settings persistence and sync rules are defined in `Docs/Product/Completed/Character_Chat_Greeting_Picker_PRD.md` and referenced by other PRDs.
+3. Server metadata schema and migration details are defined in `Docs/Product/Completed/Character_Chat_Settings_Metadata_PRD.md`.
 
 ## Suggested Implementation Order
 1. Per-chat settings storage and migration foundation.

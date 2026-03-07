@@ -4,8 +4,8 @@ Status: Tracker for the staged roadmap in `Docs/Product/STT_Module_PRD.md` (sect
 
 ## Stage 1 - M1 Closure: WS Turn Detection Tuning + Compatibility
 
-- [x] Update VAD tuning defaults table in docs (`vad_threshold`, `min_silence_ms`, `turn_stop_secs`) using reference-fixture measurements. (See `Docs/Performance/stt_stage1_vad_reference_fixture_20260207.jsonc`; tuning notes now in `Docs/Audio_STT_Module.md`.)
-- [x] Produce and archive M1 evidence artifact (benchmark JSON with `warmup_runs=2`, `measured_runs=20`, p50/p90). (`Docs/Performance/stt_stage1_ws_latency_baseline_20260207.jsonc`)
+- [x] Update VAD tuning defaults table in docs (`vad_threshold`, `min_silence_ms`, `turn_stop_secs`) using reference-fixture measurements. (Tuning notes are captured in `Docs/Audio_STT_Module.md`.)
+- [x] Produce and archive M1 evidence artifact (benchmark JSON with `warmup_runs=2`, `measured_runs=20`, p50/p90). (Validation workflow is documented in `Docs/Audio_STT_Module.md` and `Helper_Scripts/voice_latency_harness/README.md`.)
 - [x] Make WS compatibility test suite green in CI (pause/silence, duplicate-final prevention, fail-open path, auth/quota regressions). (Targeted run: `test_ws_vad_turn_detection.py`, `test_ws_quota.py`, `test_ws_quota_compat_and_close.py`, `test_ws_concurrent_streams.py`.)
 
 ## Stage 2 - M2 Build: Kokoro Phoneme/Lexicon Overrides
@@ -33,5 +33,5 @@ Status: Tracker for the staged roadmap in `Docs/Product/STT_Module_PRD.md` (sect
 
 - [x] Produce final release report covering stage acceptance outcomes and residual risks. (`Docs/Product/STT_Module_Release_Report_20260207.md`)
 - [x] Publish known-issues list with severity and workaround/owner fields. (`Docs/Product/STT_Module_Known_Issues_20260207.md`)
-- [x] Document rollback guidance for STT/WS/TTS changes. (`Docs/Operations/STT_TTS_Rollback_Guide_20260207.md`)
-- [x] Complete operations/support handoff notes. (`Docs/Operations/STT_Module_Ops_Support_Handoff_20260207.md`)
+- [x] Document rollback guidance for STT/WS/TTS changes. (`Docs/Operations/Audio_Streaming_Backpressure_Runbook.md`)
+- [x] Complete operations/support handoff notes. (`Docs/Audio_STT_Module.md`)

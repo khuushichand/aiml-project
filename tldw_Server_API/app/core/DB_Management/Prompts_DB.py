@@ -310,17 +310,6 @@ class PromptsDatabase:
         # Initialize thread-local storage for connections
         self._local = threading.local()
 
-        # Compatibility: some tests attempt to access `db.conn.close()` during teardown.
-        # Provide a small proxy exposing a close() that delegates to close_connection().
-        class _ConnCloseProxy:
-            def __init__(self, outer):
-                self._outer = outer
-            def close(self):
-                with suppress(_PROMPTS_NONCRITICAL_EXCEPTIONS):
-                    self._outer.close_connection()
-        # Expose as attribute, not property, to satisfy hasattr checks in fixtures
-        self.conn = _ConnCloseProxy(self)
-
         # Flag to track successful initialization before logging completion
         initialization_successful = False
         try:

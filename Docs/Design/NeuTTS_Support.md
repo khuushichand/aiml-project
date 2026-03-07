@@ -2,7 +2,7 @@
 
 ## Overview
 
-Integrate NeuTTS (Nano/Air) into the existing TTS adapter framework with offline-first defaults, stored voice references, and GGUF-only streaming. This design complements `Docs/Product/PRD_NeuTTS.md` and focuses on implementation details and integration points.
+Integrate NeuTTS (Nano/Air) into the existing TTS adapter framework with offline-first defaults, stored voice references, and GGUF-only streaming. This design complements `Docs/Product/Completed/PRD_NeuTTS.md` and focuses on implementation details and integration points.
 
 ## Key Decisions
 

@@ -174,4 +174,4 @@ Additional References
 - tldw_Server_API/app/core/TTS/TTS-DEPLOYMENT.md:1
 - tldw_Server_API/app/core/TTS/TTS-VOICE-CLONING.md:1
 - Docs/STT-TTS/TTS-SETUP-GUIDE.md:1
-- Docs/Design/TTS_Module_PRD.md:1
+- Docs/Product/TTS_Module_PRD.md:1

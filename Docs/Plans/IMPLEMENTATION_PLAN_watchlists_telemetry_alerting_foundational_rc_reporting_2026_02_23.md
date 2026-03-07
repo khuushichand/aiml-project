@@ -253,4 +253,4 @@
 3. Existing metrics module exports onboarding/summary telemetry operational metrics.
 4. Frontend onboarding utility sends best-effort backend telemetry while preserving local behavior.
 5. Dedicated RC telemetry report workflow runs on `release/**`, `rc/**`, and manual dispatch with reporting-only threshold evaluation.
-6. Docs/runbooks are updated and validation + Bandit checks pass for touched scope.
+6. Docs/Operations/ runbooks are updated and validation + Bandit checks pass for touched scope.

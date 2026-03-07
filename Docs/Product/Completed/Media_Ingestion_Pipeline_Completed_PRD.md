@@ -106,5 +106,5 @@ That document tracks unfinished Stage 3+ items:
 - Remaining PRD: `Docs/Product/Media_Ingestion_Pipeline_PRD.md`.
 - Ingestion code: `tldw_Server_API/app/core/Ingestion_Media_Processing/`.
 - Database: `tldw_Server_API/app/core/DB_Management/Media_DB_v2.py`.
-- Collections & Watchlists: `Docs/Product/Content_Collections_PRD.md`, `Docs/Product/Watchlist_PRD.md`.
-- Infrastructure: `Docs/Product/Infrastructure_Module_PRD.md`.
+- Collections & Watchlists: `Docs/Product/Completed/Content_Collections_PRD.md`, `Docs/Product/Watchlists/Watchlist_PRD.md`.
+- Infrastructure: `Docs/Product/Completed/Infrastructure_Module_PRD.md`.

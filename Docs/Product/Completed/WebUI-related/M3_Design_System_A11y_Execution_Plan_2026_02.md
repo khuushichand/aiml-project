@@ -37,19 +37,19 @@ Establish enforceable design-token and accessibility baselines for core WebUI jo
   - `apps/packages/ui/src/components/Layouts/ChatHeader.tsx`
   - `apps/packages/ui/src/components/Common/ChatSidebar.tsx`
 - Captured full M3.2 desktop/mobile route-matrix evidence set:
-  - `Docs/Product/WebUI/evidence/m3_2_a11y_focus_2026_02_13/`
+  - `Docs/Product/Completed/WebUI-related/evidence/m3_2_a11y_focus_2026_02_13/`
 - Added focus-visible regression assertions for high-frequency non-shell modal controls:
   - `apps/packages/ui/src/components/Common/CommandPalette.tsx`
   - `apps/packages/ui/src/components/Common/__tests__/CommandPalette.shortcuts.test.tsx`
   - `apps/packages/ui/src/components/Common/__tests__/KeyboardShortcutsModal.focus.test.tsx`
 - Finalized M3.3/M4 non-core theme hard-gate cut-line memo:
-  - `Docs/Product/WebUI/M3_3_NonCore_Theme_Contrast_HardGate_Decision_2026_02.md`
+  - `Docs/Product/Completed/WebUI-related/M3_3_NonCore_Theme_Contrast_HardGate_Decision_2026_02.md`
 - Published M3.3 component token baseline for alert/empty-state variants:
-  - `Docs/Product/WebUI/M3_3_Component_Baseline_Alerts_EmptyStates_2026_02.md`
+  - `Docs/Product/Completed/WebUI-related/M3_3_Component_Baseline_Alerts_EmptyStates_2026_02.md`
 - Added M3 accessibility release-gate checklist linkage:
-  - `Docs/Product/WebUI/M3_Release_Checklist_A11y_Baseline_2026_02.md`
+  - `Docs/Product/Completed/WebUI-related/M3_Release_Checklist_A11y_Baseline_2026_02.md`
 - Committed owned M4 non-core theme remediation backlog by theme/token pair:
-  - `Docs/Product/WebUI/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`
+  - `Docs/Product/Completed/WebUI-related/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`
 - Remediated non-core decorative theme contrast token pairs (solarized/nord/rose-pine):
   - `apps/packages/ui/src/themes/presets.ts`
 - Promoted contrast hard-gate coverage to all shipped built-in themes:
@@ -84,7 +84,7 @@ Establish enforceable design-token and accessibility baselines for core WebUI jo
 - `bun /tmp/m4_contrast_audit.ts`
   - Outcome: no failures (all built-in themes satisfy current text/focus thresholds)
 - `bun /tmp/m4_pair_ratios.ts`
-  - Outcome: recorded patched pair ratios for solarized/nord/rose-pine in `Docs/Product/WebUI/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`
+  - Outcome: recorded patched pair ratios for solarized/nord/rose-pine in `Docs/Product/Completed/WebUI-related/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`
 - `TLDW_SERVER_URL=http://127.0.0.1:8000 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Key Navigation Targets|Wayfinding|Route Error Boundaries" --reporter=line`
   - Outcome: `25 passed` (post all-theme hard-gate promotion)
 - `TLDW_SERVER_URL=http://127.0.0.1:8000 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/smoke/invalid-api-key.spec.ts --reporter=line`
@@ -92,7 +92,7 @@ Establish enforceable design-token and accessibility baselines for core WebUI jo
 
 ## 6) Remaining Work for Current Milestone (M3.3)
 
-1. QA + accessibility sign-off against `Docs/Product/WebUI/M3_Release_Checklist_A11y_Baseline_2026_02.md`.
+1. QA + accessibility sign-off against `Docs/Product/Completed/WebUI-related/M3_Release_Checklist_A11y_Baseline_2026_02.md`.
 
 ## 7) Risks
 
