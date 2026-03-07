@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+_UNSET = object()
+
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
@@ -38,6 +40,9 @@ class ResearchSessionRow:
     autonomy_mode: str
     limits_json: dict[str, Any]
     provider_overrides_json: dict[str, Any]
+    control_state: str
+    progress_percent: float | None
+    progress_message: str | None
     active_job_id: str | None
     latest_checkpoint_id: str | None
     created_at: str
@@ -103,6 +108,9 @@ class ResearchSessionsDB:
                     autonomy_mode TEXT NOT NULL,
                     limits_json TEXT NOT NULL DEFAULT '{}',
                     provider_overrides_json TEXT NOT NULL DEFAULT '{}',
+                    control_state TEXT NOT NULL DEFAULT 'running',
+                    progress_percent REAL,
+                    progress_message TEXT,
                     active_job_id TEXT,
                     latest_checkpoint_id TEXT,
                     created_at TEXT NOT NULL,
@@ -151,6 +159,14 @@ class ResearchSessionsDB:
                 conn.execute(
                     "ALTER TABLE research_sessions ADD COLUMN provider_overrides_json TEXT NOT NULL DEFAULT '{}'"
                 )
+            if "control_state" not in columns:
+                conn.execute(
+                    "ALTER TABLE research_sessions ADD COLUMN control_state TEXT NOT NULL DEFAULT 'running'"
+                )
+            if "progress_percent" not in columns:
+                conn.execute("ALTER TABLE research_sessions ADD COLUMN progress_percent REAL")
+            if "progress_message" not in columns:
+                conn.execute("ALTER TABLE research_sessions ADD COLUMN progress_message TEXT")
 
     @staticmethod
     def _session_from_row(row: sqlite3.Row | None) -> ResearchSessionRow | None:
@@ -170,6 +186,21 @@ class ResearchSessionsDB:
                 _parse_json_dict(row["provider_overrides_json"])
                 if "provider_overrides_json" in keys
                 else {}
+            ),
+            control_state=(
+                str(row["control_state"])
+                if "control_state" in keys and row["control_state"] is not None
+                else "running"
+            ),
+            progress_percent=(
+                float(row["progress_percent"])
+                if "progress_percent" in keys and row["progress_percent"] is not None
+                else None
+            ),
+            progress_message=(
+                str(row["progress_message"])
+                if "progress_message" in keys and row["progress_message"] is not None
+                else None
             ),
             active_job_id=str(row["active_job_id"]) if row["active_job_id"] else None,
             latest_checkpoint_id=str(row["latest_checkpoint_id"]) if row["latest_checkpoint_id"] else None,
@@ -233,8 +264,9 @@ class ResearchSessionsDB:
                 """
                 INSERT INTO research_sessions (
                     id, owner_user_id, status, phase, query, source_policy,
-                    autonomy_mode, limits_json, provider_overrides_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    autonomy_mode, limits_json, provider_overrides_json, control_state,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -246,6 +278,7 @@ class ResearchSessionsDB:
                     autonomy_mode,
                     payload,
                     provider_payload,
+                    "running",
                     now,
                     now,
                 ),
@@ -270,33 +303,159 @@ class ResearchSessionsDB:
         phase: str,
         status: str,
         completed_at: str | None = None,
+        control_state: str | None = None,
+        active_job_id: str | None | object = _UNSET,
     ) -> ResearchSessionRow:
         now = _utc_now()
-        with self._connect() as conn:
-            conn.execute(
-                """
+        params: tuple[Any, ...]
+        sql: str
+        if active_job_id is _UNSET and control_state is None:
+            sql = """
                 UPDATE research_sessions
                 SET phase = ?, status = ?, completed_at = ?, updated_at = ?
                 WHERE id = ?
-                """,
-                (phase, status, completed_at, now, session_id),
-            )
-        session = self.get_session(session_id)
-        if session is None:
-            raise KeyError(session_id)
-        return session
+            """
+            params = (phase, status, completed_at, now, session_id)
+        elif active_job_id is _UNSET:
+            sql = """
+                UPDATE research_sessions
+                SET phase = ?, status = ?, completed_at = ?, control_state = ?, updated_at = ?
+                WHERE id = ?
+            """
+            params = (phase, status, completed_at, control_state, now, session_id)
+        elif control_state is None:
+            sql = """
+                UPDATE research_sessions
+                SET phase = ?, status = ?, completed_at = ?, active_job_id = ?, updated_at = ?
+                WHERE id = ?
+            """
+            params = (phase, status, completed_at, active_job_id, now, session_id)
+        else:
+            sql = """
+                UPDATE research_sessions
+                SET phase = ?, status = ?, completed_at = ?, control_state = ?, active_job_id = ?, updated_at = ?
+                WHERE id = ?
+            """
+            params = (phase, status, completed_at, control_state, active_job_id, now, session_id)
+        return self._execute_session_update(session_id=session_id, sql=sql, params=params)
 
     def attach_active_job(self, session_id: str, job_id: str | None) -> ResearchSessionRow:
         now = _utc_now()
-        with self._connect() as conn:
-            conn.execute(
-                """
+        return self._execute_session_update(
+            session_id=session_id,
+            sql="""
                 UPDATE research_sessions
                 SET active_job_id = ?, updated_at = ?
                 WHERE id = ?
+            """,
+            params=(job_id, now, session_id),
+        )
+
+    def update_control_state(
+        self,
+        session_id: str,
+        *,
+        control_state: str,
+        active_job_id: str | None | object = _UNSET,
+    ) -> ResearchSessionRow:
+        now = _utc_now()
+        if active_job_id is _UNSET:
+            return self._execute_session_update(
+                session_id=session_id,
+                sql="""
+                    UPDATE research_sessions
+                    SET control_state = ?, updated_at = ?
+                    WHERE id = ?
                 """,
-                (job_id, now, session_id),
+                params=(control_state, now, session_id),
             )
+        return self._execute_session_update(
+            session_id=session_id,
+            sql="""
+                UPDATE research_sessions
+                SET control_state = ?, active_job_id = ?, updated_at = ?
+                WHERE id = ?
+            """,
+            params=(control_state, active_job_id, now, session_id),
+        )
+
+    def update_progress(
+        self,
+        session_id: str,
+        *,
+        progress_percent: float | None,
+        progress_message: str | None,
+    ) -> ResearchSessionRow:
+        now = _utc_now()
+        return self._execute_session_update(
+            session_id=session_id,
+            sql="""
+                UPDATE research_sessions
+                SET progress_percent = ?, progress_message = ?, updated_at = ?
+                WHERE id = ?
+            """,
+            params=(progress_percent, progress_message, now, session_id),
+        )
+
+    def update_status(
+        self,
+        session_id: str,
+        *,
+        status: str,
+        control_state: str | None = None,
+        active_job_id: str | None | object = _UNSET,
+        completed_at: str | None = None,
+    ) -> ResearchSessionRow:
+        now = _utc_now()
+        if active_job_id is _UNSET and control_state is None:
+            return self._execute_session_update(
+                session_id=session_id,
+                sql="""
+                    UPDATE research_sessions
+                    SET status = ?, completed_at = ?, updated_at = ?
+                    WHERE id = ?
+                """,
+                params=(status, completed_at, now, session_id),
+            )
+        if active_job_id is _UNSET:
+            return self._execute_session_update(
+                session_id=session_id,
+                sql="""
+                    UPDATE research_sessions
+                    SET status = ?, completed_at = ?, control_state = ?, updated_at = ?
+                    WHERE id = ?
+                """,
+                params=(status, completed_at, control_state, now, session_id),
+            )
+        if control_state is None:
+            return self._execute_session_update(
+                session_id=session_id,
+                sql="""
+                    UPDATE research_sessions
+                    SET status = ?, completed_at = ?, active_job_id = ?, updated_at = ?
+                    WHERE id = ?
+                """,
+                params=(status, completed_at, active_job_id, now, session_id),
+            )
+        return self._execute_session_update(
+            session_id=session_id,
+            sql="""
+                UPDATE research_sessions
+                SET status = ?, completed_at = ?, control_state = ?, active_job_id = ?, updated_at = ?
+                WHERE id = ?
+            """,
+            params=(status, completed_at, control_state, active_job_id, now, session_id),
+        )
+
+    def _execute_session_update(
+        self,
+        *,
+        session_id: str,
+        sql: str,
+        params: tuple[Any, ...],
+    ) -> ResearchSessionRow:
+        with self._connect() as conn:
+            conn.execute(sql, params)
         session = self.get_session(session_id)
         if session is None:
             raise KeyError(session_id)

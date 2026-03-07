@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,15 @@ from .artifact_store import ResearchArtifactStore
 from .checkpoint_service import apply_checkpoint_patch
 from .exporter import build_final_package
 from .jobs import enqueue_research_phase_job
+
+_EXECUTABLE_PHASES = {"drafting_plan", "collecting", "synthesizing", "packaging"}
+_CHECKPOINT_PHASES = {
+    "awaiting_plan_review",
+    "awaiting_source_review",
+    "awaiting_outline_review",
+}
+_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+_CHECKPOINT_BLOCKED_CONTROL_STATES = {"paused", "pause_requested", "cancel_requested", "cancelled"}
 
 
 class ResearchService:
@@ -70,6 +80,39 @@ class ResearchService:
             return str(job_id)
         job_uuid = job.get("uuid")
         return str(job_uuid) if job_uuid else None
+
+    @staticmethod
+    def _is_executable_phase(phase: str) -> bool:
+        return phase in _EXECUTABLE_PHASES
+
+    @staticmethod
+    def _is_checkpoint_phase(phase: str) -> bool:
+        return phase in _CHECKPOINT_PHASES
+
+    @staticmethod
+    def _is_terminal(session: ResearchSessionRow) -> bool:
+        return session.status in _TERMINAL_STATUSES or session.control_state == "cancelled"
+
+    @staticmethod
+    def _numeric_job_id(job_id: str | None) -> int | None:
+        if job_id is None:
+            return None
+        if not str(job_id).isdigit():
+            return None
+        return int(job_id)
+
+    def _cancel_active_job_best_effort(self, session: ResearchSessionRow, *, reason: str) -> None:
+        numeric_job_id = self._numeric_job_id(session.active_job_id)
+        if numeric_job_id is None:
+            return
+        manager = self._job_manager_for_session()
+        cancel_job = getattr(manager, "cancel_job", None)
+        if cancel_job is None:
+            return
+        try:
+            cancel_job(numeric_job_id, reason=reason)
+        except Exception:
+            return
 
     @staticmethod
     def _next_phase_for_checkpoint(checkpoint_type: str) -> tuple[str, bool]:
@@ -126,6 +169,8 @@ class ResearchService:
         session = db.get_session(session_id)
         if session is None:
             raise KeyError(session_id)
+        if session.control_state in _CHECKPOINT_BLOCKED_CONTROL_STATES:
+            raise ValueError("checkpoint_approval_not_allowed")
 
         checkpoint = db.get_checkpoint(checkpoint_id)
         if checkpoint is None or checkpoint.session_id != session_id:
@@ -214,7 +259,100 @@ class ResearchService:
         session = db.get_session(session_id)
         if session is None:
             raise KeyError(session_id)
-        return session
+        numeric_job_id = self._numeric_job_id(session.active_job_id)
+        if numeric_job_id is None:
+            return session
+
+        manager = self._job_manager if self._job_manager is not None else self._job_manager_for_session()
+        get_job = getattr(manager, "get_job", None)
+        if get_job is None:
+            return session
+
+        job = get_job(numeric_job_id)
+        if not isinstance(job, dict):
+            return session
+
+        progress_percent = session.progress_percent
+        progress_message = session.progress_message
+        if progress_percent is None and job.get("progress_percent") is not None:
+            progress_percent = float(job["progress_percent"])
+        if progress_message is None and job.get("progress_message") is not None:
+            progress_message = str(job["progress_message"])
+        if progress_percent == session.progress_percent and progress_message == session.progress_message:
+            return session
+        return replace(
+            session,
+            progress_percent=progress_percent,
+            progress_message=progress_message,
+        )
+
+    def pause_run(self, *, owner_user_id: str, session_id: str) -> ResearchSessionRow:
+        db = self._db_for_user(owner_user_id)
+        session = db.get_session(session_id)
+        if session is None:
+            raise KeyError(session_id)
+        if self._is_terminal(session):
+            raise ValueError("pause_not_allowed")
+        if session.control_state in {"paused", "pause_requested"}:
+            return session
+        if self._is_executable_phase(session.phase) and session.active_job_id:
+            return db.update_control_state(session.id, control_state="pause_requested")
+        return db.update_control_state(session.id, control_state="paused")
+
+    def resume_run(self, *, owner_user_id: str, session_id: str) -> ResearchSessionRow:
+        db = self._db_for_user(owner_user_id)
+        session = db.get_session(session_id)
+        if session is None:
+            raise KeyError(session_id)
+        if session.control_state != "paused":
+            raise ValueError("resume_not_allowed")
+        if self._is_terminal(session):
+            raise ValueError("resume_not_allowed")
+        if self._is_checkpoint_phase(session.phase):
+            return db.update_phase(
+                session.id,
+                phase=session.phase,
+                status="waiting_human",
+                control_state="running",
+                active_job_id=None,
+            )
+        if not self._is_executable_phase(session.phase):
+            raise ValueError("resume_not_allowed")
+        if session.active_job_id:
+            return db.update_control_state(session.id, control_state="running")
+
+        job = enqueue_research_phase_job(
+            jm=self._job_manager_for_session(),
+            session_id=session.id,
+            phase=session.phase,
+            owner_user_id=session.owner_user_id,
+        )
+        return db.update_phase(
+            session.id,
+            phase=session.phase,
+            status="queued",
+            control_state="running",
+            active_job_id=self._job_identifier(job),
+        )
+
+    def cancel_run(self, *, owner_user_id: str, session_id: str) -> ResearchSessionRow:
+        db = self._db_for_user(owner_user_id)
+        session = db.get_session(session_id)
+        if session is None:
+            raise KeyError(session_id)
+        if self._is_terminal(session):
+            raise ValueError("cancel_not_allowed")
+        if session.control_state == "cancel_requested":
+            return session
+        if self._is_executable_phase(session.phase) and session.active_job_id:
+            self._cancel_active_job_best_effort(session, reason="research_cancel_requested")
+            return db.update_control_state(session.id, control_state="cancel_requested")
+        return db.update_status(
+            session.id,
+            status="cancelled",
+            control_state="cancelled",
+            active_job_id=None,
+        )
 
     def get_bundle(self, *, owner_user_id: str, session_id: str) -> dict[str, Any]:
         artifact = self.get_artifact(

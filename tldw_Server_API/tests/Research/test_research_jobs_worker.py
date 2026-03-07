@@ -254,6 +254,165 @@ async def test_collecting_job_advances_autonomous_run_to_synthesizing(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_collecting_job_parks_paused_before_phase_start(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Pause before collecting",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="collecting",
+        status="queued",
+    )
+    db.update_control_state(session.id, control_state="pause_requested")
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="plan.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["background"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+        phase="collecting",
+        job_id=None,
+    )
+
+    class StubBroker:
+        async def collect_focus_area(self, **kwargs):
+            raise AssertionError(f"phase should have paused before broker call: {kwargs}")
+
+    await handle_research_phase_job(
+        {
+            "id": 700,
+            "payload": {
+                "session_id": session.id,
+                "phase": "collecting",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        broker=StubBroker(),
+    )
+
+    updated = db.get_session(session.id)
+    assert updated is not None
+    assert updated.control_state == "paused"
+    assert updated.phase == "collecting"
+    assert updated.active_job_id is None
+    assert updated.progress_percent is None
+    assert updated.progress_message is None
+
+
+@pytest.mark.asyncio
+async def test_collecting_job_advances_phase_and_parks_paused_when_pause_requested_during_work(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+    from tldw_Server_API.app.core.Research.models import (
+        ResearchCollectionResult,
+        ResearchEvidenceNote,
+        ResearchSourceRecord,
+    )
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Pause after collecting work",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="collecting",
+        status="queued",
+    )
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="plan.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["background"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+        phase="collecting",
+        job_id=None,
+    )
+
+    class StubBroker:
+        async def collect_focus_area(self, **kwargs):
+            db.update_control_state(session.id, control_state="pause_requested")
+            return ResearchCollectionResult(
+                sources=[
+                    ResearchSourceRecord(
+                        source_id="src_pause",
+                        focus_area="background",
+                        source_type="local_document",
+                        provider="local_corpus",
+                        title="Internal source",
+                        url=None,
+                        snippet="Internal summary",
+                        published_at=None,
+                        retrieved_at="2026-03-07T00:00:00+00:00",
+                        fingerprint="fp_pause",
+                        trust_tier="internal",
+                        metadata={},
+                    )
+                ],
+                evidence_notes=[
+                    ResearchEvidenceNote(
+                        note_id="note_pause",
+                        source_id="src_pause",
+                        focus_area="background",
+                        kind="summary",
+                        text="Internal summary",
+                        citation_locator=None,
+                        confidence=0.9,
+                        metadata={},
+                    )
+                ],
+                collection_metrics={"lane_counts": {"local": 1, "academic": 0, "web": 0}, "deduped_sources": 0},
+                remaining_gaps=[],
+            )
+
+    await handle_research_phase_job(
+        {
+            "id": 701,
+            "payload": {
+                "session_id": session.id,
+                "phase": "collecting",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        broker=StubBroker(),
+    )
+
+    updated = db.get_session(session.id)
+    assert updated is not None
+    assert updated.phase == "synthesizing"
+    assert updated.status == "queued"
+    assert updated.control_state == "paused"
+    assert updated.active_job_id is None
+    assert updated.progress_percent == 45.0
+    assert updated.progress_message == "collecting sources"
+
+
+@pytest.mark.asyncio
 async def test_collecting_job_reads_provider_config_and_passes_lane_settings(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
     from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
@@ -910,6 +1069,8 @@ async def test_packaging_job_writes_bundle_and_completes_session(tmp_path):
     assert updated.phase == "completed"
     assert updated.status == "completed"
     assert updated.completed_at is not None
+    assert updated.progress_percent == 100.0
+    assert updated.progress_message == "packaging results"
     assert result["phase"] == "completed"
     assert result["artifacts_written"] >= 1
 
@@ -917,6 +1078,45 @@ async def test_packaging_job_writes_bundle_and_completes_session(tmp_path):
     assert bundle is not None
     assert bundle["question"] == session.query
     assert bundle["claims"][0]["citations"][0]["source_id"] == "src_1"
+
+
+@pytest.mark.asyncio
+async def test_synthesizing_job_cancels_before_phase_start(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Cancel before synthesizing",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="synthesizing",
+        status="queued",
+    )
+    db.update_control_state(session.id, control_state="cancel_requested")
+
+    await handle_research_phase_job(
+        {
+            "id": 702,
+            "payload": {
+                "session_id": session.id,
+                "phase": "synthesizing",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+    )
+
+    updated = db.get_session(session.id)
+    assert updated is not None
+    assert updated.status == "cancelled"
+    assert updated.control_state == "cancelled"
+    assert updated.active_job_id is None
+    assert updated.phase == "synthesizing"
 
 
 @pytest.mark.asyncio

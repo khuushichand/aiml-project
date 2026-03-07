@@ -4,6 +4,28 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
+class _RecordingJobs:
+    def __init__(self):
+        self.created_jobs: list[dict[str, object]] = []
+        self.cancelled_jobs: list[tuple[int, str | None]] = []
+        self.job_reads: list[int] = []
+        self.job_payloads: dict[int, dict[str, object]] = {}
+
+    def create_job(self, **kwargs):
+        job_id = len(self.created_jobs) + 100
+        job = {"id": job_id, "uuid": f"job-{job_id}", "status": "queued", **kwargs}
+        self.created_jobs.append(job)
+        return job
+
+    def get_job(self, job_id: int):
+        self.job_reads.append(job_id)
+        return self.job_payloads.get(job_id)
+
+    def cancel_job(self, job_id: int, *, reason: str | None = None):
+        self.cancelled_jobs.append((job_id, reason))
+        return True
+
+
 def test_create_session_enqueues_planning_job(tmp_path):
     from tldw_Server_API.app.core.Research.service import ResearchService
 
@@ -296,7 +318,292 @@ async def test_create_session_persists_provider_overrides_and_planning_writes_pr
     assert provider_config["content"]["local"]["top_k"] == 4
 
 
-def test_research_sessions_db_migrates_provider_overrides_column(tmp_path):
+def test_research_session_defaults_include_control_and_progress_fields(tmp_path):
+    from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import ResearchRunResponse
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Defaults test",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+    )
+
+    assert session.control_state == "running"
+    assert session.progress_percent is None
+    assert session.progress_message is None
+
+    payload = ResearchRunResponse.model_validate(session)
+    assert payload.control_state == "running"
+    assert payload.progress_percent is None
+    assert payload.progress_message is None
+
+
+def test_pause_run_marks_active_executable_session_pause_requested(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=_RecordingJobs(),
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Pause active run",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="collecting",
+        status="queued",
+    )
+    db.attach_active_job(session.id, "22")
+
+    updated = service.pause_run(owner_user_id="1", session_id=session.id)
+
+    assert updated.control_state == "pause_requested"
+    assert updated.active_job_id == "22"
+    assert updated.phase == "collecting"
+
+
+def test_pause_run_marks_idle_and_checkpoint_sessions_paused(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=_RecordingJobs(),
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    queued = db.create_session(
+        owner_user_id="1",
+        query="Pause queued run",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="collecting",
+        status="queued",
+    )
+    checkpoint = db.create_session(
+        owner_user_id="1",
+        query="Pause checkpoint run",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="awaiting_plan_review",
+        status="waiting_human",
+    )
+
+    paused_queued = service.pause_run(owner_user_id="1", session_id=queued.id)
+    paused_checkpoint = service.pause_run(owner_user_id="1", session_id=checkpoint.id)
+
+    assert paused_queued.control_state == "paused"
+    assert paused_queued.active_job_id is None
+    assert paused_checkpoint.control_state == "paused"
+    assert paused_checkpoint.status == "waiting_human"
+
+
+def test_resume_run_reenqueues_executable_phase_and_restores_checkpoint_wait(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    jobs = _RecordingJobs()
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=jobs,
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    queued = db.create_session(
+        owner_user_id="1",
+        query="Resume queued run",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="synthesizing",
+        status="queued",
+    )
+    db.update_control_state(queued.id, control_state="paused")
+    checkpoint = db.create_session(
+        owner_user_id="1",
+        query="Resume checkpoint run",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="awaiting_outline_review",
+        status="waiting_human",
+    )
+    db.update_control_state(checkpoint.id, control_state="paused")
+
+    resumed_queued = service.resume_run(owner_user_id="1", session_id=queued.id)
+    resumed_checkpoint = service.resume_run(owner_user_id="1", session_id=checkpoint.id)
+
+    assert resumed_queued.control_state == "running"
+    assert resumed_queued.active_job_id == "100"
+    assert jobs.created_jobs[0]["payload"]["phase"] == "synthesizing"
+    assert resumed_checkpoint.control_state == "running"
+    assert resumed_checkpoint.status == "waiting_human"
+    assert resumed_checkpoint.active_job_id is None
+
+
+def test_cancel_run_requests_active_work_and_terminalizes_idle_sessions(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    jobs = _RecordingJobs()
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=jobs,
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    active = db.create_session(
+        owner_user_id="1",
+        query="Cancel active run",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="collecting",
+        status="queued",
+    )
+    db.attach_active_job(active.id, "41")
+    checkpoint = db.create_session(
+        owner_user_id="1",
+        query="Cancel checkpoint run",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="awaiting_plan_review",
+        status="waiting_human",
+    )
+
+    cancel_requested = service.cancel_run(owner_user_id="1", session_id=active.id)
+    cancelled = service.cancel_run(owner_user_id="1", session_id=checkpoint.id)
+
+    assert cancel_requested.control_state == "cancel_requested"
+    assert cancel_requested.status == "queued"
+    assert cancel_requested.active_job_id == "41"
+    assert jobs.cancelled_jobs == [(41, "research_cancel_requested")]
+    assert cancelled.control_state == "cancelled"
+    assert cancelled.status == "cancelled"
+    assert cancelled.active_job_id is None
+
+    with pytest.raises(ValueError, match="resume_not_allowed"):
+        service.resume_run(owner_user_id="1", session_id=checkpoint.id)
+
+
+def test_approve_checkpoint_rejects_paused_or_cancellation_pending_sessions(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=_RecordingJobs(),
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    paused_session = db.create_session(
+        owner_user_id="1",
+        query="Paused checkpoint",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="awaiting_plan_review",
+        status="waiting_human",
+    )
+    paused_checkpoint = db.create_checkpoint(
+        session_id=paused_session.id,
+        checkpoint_type="plan_review",
+        proposed_payload={"focus_areas": ["background"]},
+    )
+    db.update_control_state(paused_session.id, control_state="paused")
+
+    cancelling_session = db.create_session(
+        owner_user_id="1",
+        query="Cancelling checkpoint",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="awaiting_source_review",
+        status="waiting_human",
+    )
+    cancelling_checkpoint = db.create_checkpoint(
+        session_id=cancelling_session.id,
+        checkpoint_type="sources_review",
+        proposed_payload={"source_inventory": []},
+    )
+    db.update_control_state(cancelling_session.id, control_state="cancel_requested")
+
+    with pytest.raises(ValueError, match="checkpoint_approval_not_allowed"):
+        service.approve_checkpoint(
+            owner_user_id="1",
+            session_id=paused_session.id,
+            checkpoint_id=paused_checkpoint.id,
+        )
+
+    with pytest.raises(ValueError, match="checkpoint_approval_not_allowed"):
+        service.approve_checkpoint(
+            owner_user_id="1",
+            session_id=cancelling_session.id,
+            checkpoint_id=cancelling_checkpoint.id,
+        )
+
+
+def test_get_session_uses_session_progress_as_primary_and_job_progress_as_fallback(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    jobs = _RecordingJobs()
+    jobs.job_payloads[77] = {"id": 77, "progress_percent": 52.5, "progress_message": "collecting sources"}
+    jobs.job_payloads[78] = {"id": 78, "progress_percent": 90.0, "progress_message": "job overlay"}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=jobs,
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    fallback_session = db.create_session(
+        owner_user_id="1",
+        query="Fallback progress",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="collecting",
+        status="queued",
+    )
+    db.attach_active_job(fallback_session.id, "77")
+    primary_session = db.create_session(
+        owner_user_id="1",
+        query="Primary progress",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="synthesizing",
+        status="queued",
+    )
+    db.attach_active_job(primary_session.id, "78")
+    db.update_progress(
+        primary_session.id,
+        progress_percent=75.0,
+        progress_message="synthesizing report",
+    )
+
+    loaded_fallback = service.get_session(owner_user_id="1", session_id=fallback_session.id)
+    loaded_primary = service.get_session(owner_user_id="1", session_id=primary_session.id)
+
+    assert loaded_fallback.progress_percent == 52.5
+    assert loaded_fallback.progress_message == "collecting sources"
+    assert loaded_primary.progress_percent == 75.0
+    assert loaded_primary.progress_message == "synthesizing report"
+    assert jobs.job_reads == [77, 78]
+
+
+def test_research_sessions_db_migrates_provider_overrides_and_run_control_columns(tmp_path):
     import sqlite3
 
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
@@ -329,6 +636,9 @@ def test_research_sessions_db_migrates_provider_overrides_column(tmp_path):
         cols = {row[1] for row in conn.execute("PRAGMA table_info('research_sessions')").fetchall()}
 
     assert "provider_overrides_json" in cols
+    assert "control_state" in cols
+    assert "progress_percent" in cols
+    assert "progress_message" in cols
 
 
 def test_get_artifact_rejects_disallowed_name(tmp_path):

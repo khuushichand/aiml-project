@@ -249,3 +249,103 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
     assert export.status == "ready"
     assert export.content.startswith(b"# Research Report")
     assert (outputs_dir / "research" / session_id / "bundle.json").exists()
+
+
+def test_deep_research_run_controls_support_pause_resume_cancel_and_progress_polling(tmp_path):
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    class DummyJobs:
+        def __init__(self):
+            self.next_id = 50
+            self.cancelled: list[tuple[int, str | None]] = []
+
+        def create_job(self, **kwargs):
+            self.next_id += 1
+            return {"id": self.next_id, "uuid": f"job-{self.next_id}", "status": "queued", **kwargs}
+
+        def cancel_job(self, job_id: int, *, reason: str | None = None):
+            self.cancelled.append((job_id, reason))
+            return True
+
+    jobs = DummyJobs()
+    research_db_path = tmp_path / "research.db"
+    outputs_dir = tmp_path / "outputs"
+    service = ResearchService(
+        research_db_path=research_db_path,
+        outputs_dir=outputs_dir,
+        job_manager=jobs,
+    )
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+    app.dependency_overrides[research_runs.get_research_service] = lambda: service
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/api/v1/research/runs",
+            json={"query": "Pause and cancel deep research", "autonomy_mode": "checkpointed"},
+        )
+        assert create_resp.status_code == 200
+        session_id = create_resp.json()["id"]
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 51,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "drafting_plan",
+                    "checkpoint_id": None,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+        )
+    )
+
+    db = ResearchSessionsDB(research_db_path)
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.latest_checkpoint_id is not None
+
+    with TestClient(app) as client:
+        poll_resp = client.get(f"/api/v1/research/runs/{session_id}")
+        pause_resp = client.post(f"/api/v1/research/runs/{session_id}/pause")
+        paused_approve_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={},
+        )
+        resume_resp = client.post(f"/api/v1/research/runs/{session_id}/resume")
+        approve_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={},
+        )
+        cancel_resp = client.post(f"/api/v1/research/runs/{session_id}/cancel")
+        cancelled_poll_resp = client.get(f"/api/v1/research/runs/{session_id}")
+        cancelled_resume_resp = client.post(f"/api/v1/research/runs/{session_id}/resume")
+
+        assert poll_resp.status_code == 200
+        assert poll_resp.json()["progress_percent"] == 10.0
+        assert poll_resp.json()["progress_message"] == "planning research"
+        assert pause_resp.status_code == 200
+        assert pause_resp.json()["control_state"] == "paused"
+        assert paused_approve_resp.status_code == 400
+        assert resume_resp.status_code == 200
+        assert resume_resp.json()["status"] == "waiting_human"
+        assert resume_resp.json()["control_state"] == "running"
+        assert approve_resp.status_code == 200
+        assert approve_resp.json()["phase"] == "collecting"
+        assert approve_resp.json()["active_job_id"] == "52"
+        assert cancel_resp.status_code == 200
+        assert cancel_resp.json()["control_state"] == "cancel_requested"
+        assert cancel_resp.json()["active_job_id"] == "52"
+        assert cancelled_poll_resp.status_code == 200
+        assert cancelled_poll_resp.json()["control_state"] == "cancel_requested"
+        assert cancelled_resume_resp.status_code == 400
+
+    assert jobs.cancelled == [(52, "research_cancel_requested")]

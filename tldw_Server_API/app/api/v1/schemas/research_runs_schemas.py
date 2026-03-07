@@ -31,6 +31,9 @@ class ResearchRunResponse(BaseModel):
     id: str
     status: str
     phase: str
+    control_state: str = "running"
+    progress_percent: float | None = None
+    progress_message: str | None = None
     active_job_id: str | None = None
     latest_checkpoint_id: str | None = None
     completed_at: str | None = None

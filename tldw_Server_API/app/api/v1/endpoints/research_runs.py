@@ -21,6 +21,14 @@ def get_research_service() -> ResearchService:
     return ResearchService(research_db_path=None, outputs_dir=None, job_manager=None)
 
 
+def _raise_research_http_error(exc: Exception) -> None:
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if isinstance(exc, KeyError):
+        raise HTTPException(status_code=404, detail=f"research_not_found:{exc.args[0]}") from None
+    raise exc
+
+
 @router.post("/runs", response_model=ResearchRunResponse, summary="Create a deep research run")
 async def create_research_run(
     payload: ResearchRunCreateRequest = Body(...),
@@ -49,8 +57,56 @@ async def get_research_run(
             owner_user_id=str(current_user.id),
             session_id=session_id,
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"research_not_found:{exc.args[0]}") from None
+    except (KeyError, ValueError) as exc:
+        _raise_research_http_error(exc)
+    return ResearchRunResponse.model_validate(session)
+
+
+@router.post("/runs/{session_id}/pause", response_model=ResearchRunResponse, summary="Pause a deep research run")
+async def pause_research_run(
+    session_id: str = Path(..., min_length=1),
+    current_user: User = Depends(get_request_user),
+    service: ResearchService = Depends(get_research_service),
+) -> ResearchRunResponse:
+    try:
+        session = service.pause_run(
+            owner_user_id=str(current_user.id),
+            session_id=session_id,
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_research_http_error(exc)
+    return ResearchRunResponse.model_validate(session)
+
+
+@router.post("/runs/{session_id}/resume", response_model=ResearchRunResponse, summary="Resume a deep research run")
+async def resume_research_run(
+    session_id: str = Path(..., min_length=1),
+    current_user: User = Depends(get_request_user),
+    service: ResearchService = Depends(get_research_service),
+) -> ResearchRunResponse:
+    try:
+        session = service.resume_run(
+            owner_user_id=str(current_user.id),
+            session_id=session_id,
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_research_http_error(exc)
+    return ResearchRunResponse.model_validate(session)
+
+
+@router.post("/runs/{session_id}/cancel", response_model=ResearchRunResponse, summary="Cancel a deep research run")
+async def cancel_research_run(
+    session_id: str = Path(..., min_length=1),
+    current_user: User = Depends(get_request_user),
+    service: ResearchService = Depends(get_research_service),
+) -> ResearchRunResponse:
+    try:
+        session = service.cancel_run(
+            owner_user_id=str(current_user.id),
+            session_id=session_id,
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_research_http_error(exc)
     return ResearchRunResponse.model_validate(session)
 
 
@@ -65,8 +121,8 @@ async def get_research_bundle(
             owner_user_id=str(current_user.id),
             session_id=session_id,
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"research_not_found:{exc.args[0]}") from None
+    except (KeyError, ValueError) as exc:
+        _raise_research_http_error(exc)
 
 
 @router.get(
@@ -86,10 +142,8 @@ async def get_research_artifact(
             session_id=session_id,
             artifact_name=artifact_name,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from None
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"research_not_found:{exc.args[0]}") from None
+    except (KeyError, ValueError) as exc:
+        _raise_research_http_error(exc)
     return ResearchArtifactResponse.model_validate(artifact)
 
 
@@ -112,6 +166,6 @@ async def patch_and_approve_research_checkpoint(
             checkpoint_id=checkpoint_id,
             patch_payload=payload.patch_payload,
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"research_not_found:{exc.args[0]}") from None
+    except (KeyError, ValueError) as exc:
+        _raise_research_http_error(exc)
     return ResearchRunResponse.model_validate(session)

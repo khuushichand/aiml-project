@@ -26,6 +26,12 @@ from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
 RESEARCH_DOMAIN = "research"
 RESEARCH_JOB_TYPE = "research_phase"
 RESEARCH_QUEUE = "default"
+_PHASE_PROGRESS = {
+    "drafting_plan": (10.0, "planning research"),
+    "collecting": (45.0, "collecting sources"),
+    "synthesizing": (75.0, "synthesizing report"),
+    "packaging": (95.0, "packaging results"),
+}
 
 
 def _utc_now() -> str:
@@ -131,6 +137,11 @@ async def _handle_planning_phase(
     artifact_store: ResearchArtifactStore,
     job_id: str | None,
 ) -> dict[str, Any]:
+    halted = _halt_for_control_before_phase(db=db, session_id=session.id)
+    if halted is not None:
+        return halted
+    _set_phase_progress(db=db, session_id=session.id, phase="drafting_plan")
+
     plan = build_initial_plan(
         query=session.query,
         source_policy=session.source_policy,
@@ -167,14 +178,14 @@ async def _handle_planning_phase(
         next_phase = "awaiting_plan_review"
         next_status = "waiting_human"
 
-    db.update_phase(session.id, phase=next_phase, status=next_status)
-    db.attach_active_job(session.id, None)
-    return {
-        "session_id": session.id,
-        "phase": next_phase,
-        "checkpoint_id": checkpoint_id,
-        "artifacts_written": 2,
-    }
+    return _finalize_phase_transition(
+        db=db,
+        session_id=session.id,
+        next_phase=next_phase,
+        next_status=next_status,
+        checkpoint_id=checkpoint_id,
+        artifacts_written=2,
+    )
 
 
 async def _handle_collecting_phase(
@@ -185,6 +196,11 @@ async def _handle_collecting_phase(
     job_id: str | None,
     broker: ResearchBroker,
 ) -> dict[str, Any]:
+    halted = _halt_for_control_before_phase(db=db, session_id=session.id)
+    if halted is not None:
+        return halted
+    _set_phase_progress(db=db, session_id=session.id, phase="collecting")
+
     plan = _load_effective_plan(session=session, artifact_store=artifact_store)
     provider_config = _load_provider_config(session=session, artifact_store=artifact_store)
 
@@ -301,14 +317,14 @@ async def _handle_collecting_phase(
         next_phase = "awaiting_source_review"
         next_status = "waiting_human"
 
-    db.update_phase(session.id, phase=next_phase, status=next_status)
-    db.attach_active_job(session.id, None)
-    return {
-        "session_id": session.id,
-        "phase": next_phase,
-        "checkpoint_id": checkpoint_id,
-        "artifacts_written": 3,
-    }
+    return _finalize_phase_transition(
+        db=db,
+        session_id=session.id,
+        next_phase=next_phase,
+        next_status=next_status,
+        checkpoint_id=checkpoint_id,
+        artifacts_written=3,
+    )
 
 
 def _load_provider_config(
@@ -330,6 +346,11 @@ async def _handle_synthesizing_phase(
     job_id: str | None,
     synthesizer: ResearchSynthesizer,
 ) -> dict[str, Any]:
+    halted = _halt_for_control_before_phase(db=db, session_id=session.id)
+    if halted is not None:
+        return halted
+    _set_phase_progress(db=db, session_id=session.id, phase="synthesizing")
+
     plan = _load_effective_plan(session=session, artifact_store=artifact_store)
     provider_config = _load_provider_config(session=session, artifact_store=artifact_store)
     source_registry_payload = artifact_store.read_json(session_id=session.id, artifact_name="source_registry.json")
@@ -421,14 +442,14 @@ async def _handle_synthesizing_phase(
         next_phase = "awaiting_outline_review"
         next_status = "waiting_human"
 
-    db.update_phase(session.id, phase=next_phase, status=next_status)
-    db.attach_active_job(session.id, None)
-    return {
-        "session_id": session.id,
-        "phase": next_phase,
-        "checkpoint_id": checkpoint_id,
-        "artifacts_written": 4,
-    }
+    return _finalize_phase_transition(
+        db=db,
+        session_id=session.id,
+        next_phase=next_phase,
+        next_status=next_status,
+        checkpoint_id=checkpoint_id,
+        artifacts_written=4,
+    )
 
 
 async def _handle_packaging_phase(
@@ -438,6 +459,11 @@ async def _handle_packaging_phase(
     artifact_store: ResearchArtifactStore,
     job_id: str | None,
 ) -> dict[str, Any]:
+    halted = _halt_for_control_before_phase(db=db, session_id=session.id)
+    if halted is not None:
+        return halted
+    _set_phase_progress(db=db, session_id=session.id, phase="packaging")
+
     plan = _load_effective_plan(session=session, artifact_store=artifact_store)
     outline = artifact_store.read_json(session_id=session.id, artifact_name="outline_v1.json")
     if outline is None:
@@ -473,13 +499,110 @@ async def _handle_packaging_phase(
         job_id=job_id,
     )
 
-    db.update_phase(session.id, phase="completed", status="completed", completed_at=_utc_now())
-    db.attach_active_job(session.id, None)
+    db.update_progress(
+        session.id,
+        progress_percent=100.0,
+        progress_message="packaging results",
+    )
+    return _finalize_phase_transition(
+        db=db,
+        session_id=session.id,
+        next_phase="completed",
+        next_status="completed",
+        checkpoint_id=None,
+        artifacts_written=1,
+        completed_at=_utc_now(),
+    )
+
+
+def _set_phase_progress(*, db: ResearchSessionsDB, session_id: str, phase: str) -> None:
+    progress = _PHASE_PROGRESS.get(phase)
+    if progress is None:
+        return
+    db.update_progress(
+        session_id,
+        progress_percent=progress[0],
+        progress_message=progress[1],
+    )
+
+
+def _halt_for_control_before_phase(*, db: ResearchSessionsDB, session_id: str) -> dict[str, Any] | None:
+    session = db.get_session(session_id)
+    if session is None:
+        raise KeyError(session_id)
+    if session.control_state == "cancel_requested":
+        return _cancel_session(db=db, session_id=session_id)
+    if session.control_state in {"pause_requested", "paused"}:
+        updated = db.update_control_state(session_id, control_state="paused", active_job_id=None)
+        return {
+            "session_id": updated.id,
+            "phase": updated.phase,
+            "checkpoint_id": updated.latest_checkpoint_id,
+            "artifacts_written": 0,
+        }
+    return None
+
+
+def _cancel_session(*, db: ResearchSessionsDB, session_id: str) -> dict[str, Any]:
+    updated = db.update_status(
+        session_id,
+        status="cancelled",
+        control_state="cancelled",
+        active_job_id=None,
+    )
     return {
-        "session_id": session.id,
-        "phase": "completed",
-        "checkpoint_id": None,
-        "artifacts_written": 1,
+        "session_id": updated.id,
+        "phase": updated.phase,
+        "checkpoint_id": updated.latest_checkpoint_id,
+        "artifacts_written": 0,
+    }
+
+
+def _finalize_phase_transition(
+    *,
+    db: ResearchSessionsDB,
+    session_id: str,
+    next_phase: str,
+    next_status: str,
+    checkpoint_id: str | None,
+    artifacts_written: int,
+    completed_at: str | None = None,
+) -> dict[str, Any]:
+    current = db.get_session(session_id)
+    if current is None:
+        raise KeyError(session_id)
+    if current.control_state == "cancel_requested":
+        return _cancel_session(db=db, session_id=session_id)
+    if current.control_state in {"pause_requested", "paused"} and next_phase != "completed":
+        updated = db.update_phase(
+            session_id,
+            phase=next_phase,
+            status=next_status,
+            control_state="paused",
+            active_job_id=None,
+            completed_at=completed_at,
+        )
+        return {
+            "session_id": updated.id,
+            "phase": updated.phase,
+            "checkpoint_id": checkpoint_id,
+            "artifacts_written": artifacts_written,
+        }
+    updated = db.update_phase(
+        session_id,
+        phase=next_phase,
+        status=next_status,
+        control_state=(
+            "running" if next_phase == "completed" and current.control_state in {"pause_requested", "paused"} else current.control_state
+        ),
+        active_job_id=None,
+        completed_at=completed_at,
+    )
+    return {
+        "session_id": updated.id,
+        "phase": updated.phase,
+        "checkpoint_id": checkpoint_id,
+        "artifacts_written": artifacts_written,
     }
 
 

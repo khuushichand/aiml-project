@@ -24,6 +24,9 @@ def test_create_and_approve_research_run():
                 "id": "rs_1",
                 "status": "queued",
                 "phase": "drafting_plan",
+                "control_state": "running",
+                "progress_percent": None,
+                "progress_message": None,
                 "active_job_id": "9",
                 "latest_checkpoint_id": None,
             }
@@ -35,6 +38,9 @@ def test_create_and_approve_research_run():
                 "id": kwargs["session_id"],
                 "phase": "collecting",
                 "status": "queued",
+                "control_state": "running",
+                "progress_percent": 10.0,
+                "progress_message": "planning research",
                 "active_job_id": "10",
                 "latest_checkpoint_id": kwargs["checkpoint_id"],
             }
@@ -69,6 +75,9 @@ def test_create_research_run_passes_provider_overrides():
                 "id": "rs_2",
                 "status": "queued",
                 "phase": "drafting_plan",
+                "control_state": "running",
+                "progress_percent": None,
+                "progress_message": None,
                 "active_job_id": "11",
                 "latest_checkpoint_id": None,
             }
@@ -104,6 +113,9 @@ def test_read_research_run_bundle_and_artifact():
                 "id": "rs_1",
                 "status": "completed",
                 "phase": "completed",
+                "control_state": "running",
+                "progress_percent": 100.0,
+                "progress_message": "packaging results",
                 "active_job_id": None,
                 "latest_checkpoint_id": "cp_1",
                 "completed_at": "2026-03-07T00:00:00+00:00",
@@ -135,10 +147,81 @@ def test_read_research_run_bundle_and_artifact():
 
         assert run_resp.status_code == 200
         assert run_resp.json()["completed_at"] == "2026-03-07T00:00:00+00:00"
+        assert run_resp.json()["control_state"] == "running"
+        assert run_resp.json()["progress_percent"] == 100.0
+        assert run_resp.json()["progress_message"] == "packaging results"
         assert bundle_resp.status_code == 200
         assert bundle_resp.json()["question"] == "What changed?"
         assert artifact_resp.status_code == 200
         assert artifact_resp.json()["content_type"] == "text/markdown"
+
+
+def test_pause_resume_and_cancel_research_run_endpoints():
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    class StubService:
+        def pause_run(self, **kwargs):
+            assert kwargs["session_id"] == "rs_1"
+            return {
+                "id": "rs_1",
+                "status": "queued",
+                "phase": "collecting",
+                "control_state": "pause_requested",
+                "progress_percent": 45.0,
+                "progress_message": "collecting sources",
+                "active_job_id": "22",
+                "latest_checkpoint_id": None,
+                "completed_at": None,
+            }
+
+        def resume_run(self, **kwargs):
+            assert kwargs["session_id"] == "rs_1"
+            return {
+                "id": "rs_1",
+                "status": "waiting_human",
+                "phase": "awaiting_plan_review",
+                "control_state": "running",
+                "progress_percent": 10.0,
+                "progress_message": "planning research",
+                "active_job_id": None,
+                "latest_checkpoint_id": "cp_1",
+                "completed_at": None,
+            }
+
+        def cancel_run(self, **kwargs):
+            assert kwargs["session_id"] == "rs_1"
+            return {
+                "id": "rs_1",
+                "status": "cancelled",
+                "phase": "awaiting_plan_review",
+                "control_state": "cancelled",
+                "progress_percent": 10.0,
+                "progress_message": "planning research",
+                "active_job_id": None,
+                "latest_checkpoint_id": "cp_1",
+                "completed_at": None,
+            }
+
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        pause_resp = client.post("/api/v1/research/runs/rs_1/pause")
+        resume_resp = client.post("/api/v1/research/runs/rs_1/resume")
+        cancel_resp = client.post("/api/v1/research/runs/rs_1/cancel")
+
+        assert pause_resp.status_code == 200
+        assert pause_resp.json()["control_state"] == "pause_requested"
+        assert pause_resp.json()["progress_percent"] == 45.0
+        assert resume_resp.status_code == 200
+        assert resume_resp.json()["status"] == "waiting_human"
+        assert resume_resp.json()["control_state"] == "running"
+        assert cancel_resp.status_code == 200
+        assert cancel_resp.json()["status"] == "cancelled"
+        assert cancel_resp.json()["control_state"] == "cancelled"
 
 
 def test_read_research_artifact_maps_not_found_and_disallowed_errors():
@@ -172,3 +255,37 @@ def test_read_research_artifact_maps_not_found_and_disallowed_errors():
         assert bundle_resp.status_code == 404
         assert bad_artifact_resp.status_code == 400
         assert missing_artifact_resp.status_code == 404
+
+
+def test_run_control_endpoints_map_invalid_transition_and_missing_run_errors():
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    class StubService:
+        def pause_run(self, **kwargs):
+            if kwargs["session_id"] == "rs_missing":
+                raise KeyError(kwargs["session_id"])
+            raise ValueError("pause_not_allowed")
+
+        def resume_run(self, **kwargs):
+            if kwargs["session_id"] == "rs_missing":
+                raise KeyError(kwargs["session_id"])
+            raise ValueError("resume_not_allowed")
+
+        def cancel_run(self, **kwargs):
+            if kwargs["session_id"] == "rs_missing":
+                raise KeyError(kwargs["session_id"])
+            raise ValueError("cancel_not_allowed")
+
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        assert client.post("/api/v1/research/runs/rs_1/pause").status_code == 400
+        assert client.post("/api/v1/research/runs/rs_1/resume").status_code == 400
+        assert client.post("/api/v1/research/runs/rs_1/cancel").status_code == 400
+        assert client.post("/api/v1/research/runs/rs_missing/pause").status_code == 404
+        assert client.post("/api/v1/research/runs/rs_missing/resume").status_code == 404
+        assert client.post("/api/v1/research/runs/rs_missing/cancel").status_code == 404
