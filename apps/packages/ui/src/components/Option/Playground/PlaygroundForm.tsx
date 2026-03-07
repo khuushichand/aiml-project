@@ -87,6 +87,7 @@ import { PASTED_TEXT_CHAR_LIMIT } from "@/utils/constant"
 import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { ActorPopout } from "@/components/Common/Settings/ActorPopout"
+import { ChatQueuePanel } from "@/components/Common/ChatQueuePanel"
 import { useConnectionState } from "@/hooks/useConnectionState"
 import { ConnectionPhase, deriveConnectionUxState } from "@/types/connection"
 import { Link, useNavigate } from "react-router-dom"
@@ -171,6 +172,8 @@ import {
   type CollapsedRange,
   type ModelSortMode
 } from "@/hooks/playground"
+import { useQueuedRequests } from "@/hooks/chat/useQueuedRequests"
+import type { ChatDocuments } from "@/models/ChatTypes"
 import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
 import { formatCost } from "@/utils/model-pricing"
 import {
@@ -218,6 +221,7 @@ import {
   buildImagePromptRefineMessages,
   extractImagePromptRefineCandidate
 } from "@/utils/image-prompt-refinement"
+import type { QueuedRequest } from "@/utils/chat-request-queue"
 import {
   createImagePromptDraftFromStrategy,
   deriveImagePromptRawContext,
@@ -269,6 +273,12 @@ const collectStringSegments = (
       collectStringSegments(entry, segments, depth + 1)
     )
   }
+}
+
+type PlaygroundQueuedSourceContext = {
+  documents?: ChatDocuments
+  imageBackendOverride?: string
+  isImageCommand?: boolean
 }
 
 export const PlaygroundForm = ({ droppedFiles }: Props) => {
@@ -333,8 +343,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     removeUploadedFile,
     clearUploadedFiles,
     queuedMessages,
-    addQueuedMessage,
-    clearQueuedMessages,
+    setQueuedMessages,
     serverChatId,
     setServerChatId,
     serverChatState,
@@ -527,7 +536,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   })
   const [hasShownConnectBanner, setHasShownConnectBanner] = React.useState(false)
   const [showConnectBanner, setShowConnectBanner] = React.useState(false)
-  const [showQueuedBanner, setShowQueuedBanner] = React.useState(true)
   const [documentGeneratorOpen, setDocumentGeneratorOpen] =
     React.useState(false)
   const [voiceModeSelectorOpen, setVoiceModeSelectorOpen] = React.useState(false)
@@ -2336,11 +2344,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [isConnectionReady])
 
-  React.useEffect(() => {
-    const next = queuedMessages.length > 0
-    setShowQueuedBanner((prev) => (prev === next ? prev : next))
-  }, [queuedMessages.length])
-
   const notifyImageAttachmentDisabled = React.useCallback(() => {
     notificationApi.warning({
       message: t(
@@ -3272,6 +3275,379 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     [availableChatModelIds, form, t]
   )
 
+  const buildQueuedDocuments = React.useCallback(
+    (): ChatDocuments =>
+      selectedDocuments.map((doc) => ({
+        type: "tab",
+        tabId: doc.id,
+        title: doc.title,
+        url: doc.url,
+        favIconUrl: doc.favIconUrl
+      })),
+    [selectedDocuments]
+  )
+
+  const buildQueuedRequestSnapshot = React.useCallback(
+    () => ({
+      selectedModel,
+      chatMode,
+      webSearch,
+      compareMode: compareModeActive,
+      compareSelectedModels,
+      selectedSystemPrompt,
+      selectedQuickPrompt,
+      toolChoice,
+      useOCR
+    }),
+    [
+      chatMode,
+      compareModeActive,
+      compareSelectedModels,
+      selectedModel,
+      selectedQuickPrompt,
+      selectedSystemPrompt,
+      toolChoice,
+      useOCR,
+      webSearch
+    ]
+  )
+
+  const isQueuedDispatchBlockedByComposerState = React.useMemo(
+    () =>
+      uploadedFiles.length > 0 ||
+      contextFiles.length > 0 ||
+      (Array.isArray(documentContext) && documentContext.length > 0),
+    [contextFiles.length, documentContext, uploadedFiles.length]
+  )
+
+  const validateQueuedRequest = React.useCallback(
+    (item: QueuedRequest) => {
+      if (isQueuedDispatchBlockedByComposerState) {
+        return t(
+          "playground:composer.queue.currentDraftAttachmentConflict",
+          "Clear the current draft attachments/context before sending queued requests."
+        )
+      }
+
+      const sourceContext = (item.sourceContext ??
+        null) as PlaygroundQueuedSourceContext | null
+
+      if (!sourceContext?.isImageCommand) {
+        if (!item.snapshot.compareMode) {
+          const normalizedSelectedModel = normalizeChatModelId(
+            item.snapshot.selectedModel
+          )
+          if (!normalizedSelectedModel) {
+            return t("formError.noModel")
+          }
+          const unavailableModel = findUnavailableChatModel(
+            [normalizedSelectedModel],
+            availableChatModelIds
+          )
+          if (unavailableModel) {
+            return t(
+              "playground:composer.validationModelUnavailableInline",
+              "Selected model is not available on this server. Refresh models or choose a different model."
+            )
+          }
+        } else if (
+          !item.snapshot.compareSelectedModels ||
+          item.snapshot.compareSelectedModels.length < 2
+        ) {
+          return t(
+            "playground:composer.validationCompareMinModelsInline",
+            "Select at least two models for Compare mode."
+          )
+        } else {
+          const unavailableModel = findUnavailableChatModel(
+            item.snapshot.compareSelectedModels,
+            availableChatModelIds
+          )
+          if (unavailableModel) {
+            return t(
+              "playground:composer.validationModelUnavailableInline",
+              "Selected model is not available on this server. Refresh models or choose a different model."
+            )
+          }
+        }
+
+        if (
+          item.snapshot.compareMode &&
+          item.image.length > 0 &&
+          !compareModelsSupportCapability(
+            item.snapshot.compareSelectedModels,
+            "vision"
+          )
+        ) {
+          return t(
+            "playground:composer.validationCompareVisionInline",
+            "One or more selected compare models do not support image input."
+          )
+        }
+      }
+
+      return null
+    },
+    [
+      availableChatModelIds,
+      compareModelsSupportCapability,
+      isQueuedDispatchBlockedByComposerState,
+      t
+    ]
+  )
+
+  const sendQueuedRequest = React.useCallback(
+    async (item: QueuedRequest) => {
+      const validationError = validateQueuedRequest(item)
+      if (validationError) {
+        form.setFieldError("message", validationError)
+        throw new Error(validationError)
+      }
+
+      setSelectedModel(item.snapshot.selectedModel)
+      setChatMode(item.snapshot.chatMode)
+      setWebSearch(item.snapshot.webSearch)
+      setCompareMode(item.snapshot.compareMode)
+      setCompareSelectedModels(item.snapshot.compareSelectedModels)
+      setSelectedSystemPrompt(item.snapshot.selectedSystemPrompt ?? "")
+      setSelectedQuickPrompt(item.snapshot.selectedQuickPrompt ?? "")
+      if (
+        item.snapshot.toolChoice === "auto" ||
+        item.snapshot.toolChoice === "required" ||
+        item.snapshot.toolChoice === "none"
+      ) {
+        setToolChoice(item.snapshot.toolChoice)
+      }
+      setUseOCR(item.snapshot.useOCR)
+
+      const sourceContext = (item.sourceContext ??
+        null) as PlaygroundQueuedSourceContext | null
+      const documents = Array.isArray(sourceContext?.documents)
+        ? sourceContext.documents
+        : []
+
+      const projectedForSubmission = projectTokenBudget({
+        conversationTokens: conversationTokenCount,
+        draftTokens: estimateTokensForText(item.promptText),
+        maxTokens: resolvedMaxContext
+      })
+      if (
+        projectedForSubmission.isOverLimit ||
+        projectedForSubmission.isNearLimit
+      ) {
+        notificationApi.warning({
+          message: t(
+            "playground:tokens.preSendWarningTitle",
+            "Context budget warning"
+          ),
+          description: projectedForSubmission.isOverLimit
+            ? t(
+                "playground:tokens.preSendOverLimit",
+                "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
+              )
+            : t(
+                "playground:tokens.preSendNearLimit",
+                "Projected send is near the context window limit."
+              )
+        })
+      }
+
+      setLastSubmittedContext(currentContextSnapshot)
+      await sendMessage({
+        image: sourceContext?.isImageCommand ? "" : item.image,
+        message: item.promptText,
+        docs: sourceContext?.isImageCommand ? [] : documents,
+        imageBackendOverride: sourceContext?.isImageCommand
+          ? sourceContext.imageBackendOverride
+          : undefined,
+        userMessageType: sourceContext?.isImageCommand
+          ? IMAGE_GENERATION_USER_MESSAGE_TYPE
+          : undefined,
+        assistantMessageType: sourceContext?.isImageCommand
+          ? IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
+          : undefined,
+        imageGenerationSource: sourceContext?.isImageCommand
+          ? "slash-command"
+          : undefined
+      })
+    },
+    [
+      conversationTokenCount,
+      currentContextSnapshot,
+      form,
+      notificationApi,
+      resolvedMaxContext,
+      sendMessage,
+      setChatMode,
+      setCompareMode,
+      setCompareSelectedModels,
+      setLastSubmittedContext,
+      setSelectedModel,
+      setSelectedQuickPrompt,
+      setSelectedSystemPrompt,
+      setToolChoice,
+      setUseOCR,
+      setWebSearch,
+      t,
+      validateQueuedRequest
+    ]
+  )
+
+  const queuedRequestActions = useQueuedRequests({
+    isConnectionReady,
+    isStreaming: isSending,
+    queue: queuedMessages,
+    setQueue: setQueuedMessages,
+    sendQueuedRequest,
+    stopStreamingRequest
+  })
+
+  const queueSubmission = React.useCallback(
+    ({
+      promptText,
+      image,
+      intent
+    }: {
+      promptText: string
+      image: string
+      intent: ReturnType<typeof resolveSubmissionIntent>
+    }) => {
+      if (isQueuedDispatchBlockedByComposerState) {
+        notificationApi.warning({
+          message: t(
+            "playground:composer.queue.attachmentsNeedManualRepairTitle",
+            "Queue needs a simpler draft"
+          ),
+          description: t(
+            "playground:composer.queue.attachmentsNeedManualRepairBody",
+            "Queued requests currently support text, images, and tab mentions. Clear attached files/context before queueing this draft."
+          )
+        })
+        return null
+      }
+
+      const documents = buildQueuedDocuments()
+      const queuedItem = queuedRequestActions.enqueue({
+        conversationId: historyId ?? serverChatId ?? null,
+        promptText,
+        image: intent.isImageCommand ? "" : image,
+        attachments: documents,
+        sourceContext: {
+          documents,
+          imageBackendOverride: intent.isImageCommand
+            ? intent.imageBackendOverride
+            : undefined,
+          isImageCommand: intent.isImageCommand
+        },
+        snapshot: buildQueuedRequestSnapshot()
+      })
+
+      form.reset()
+      clearSelectedDocuments()
+      clearUploadedFiles()
+      textAreaFocus()
+      notificationApi.info({
+        message: t("playground:composer.queue.requestQueued", "Request queued"),
+        description: isSending
+          ? t(
+              "playground:composer.queue.requestQueuedWhileBusy",
+              "We'll run it after the current response finishes."
+            )
+          : t(
+              "playground:composer.queue.requestQueuedWhileOffline",
+              "We'll send it when your tldw server reconnects."
+            )
+      })
+      return queuedItem
+    },
+    [
+      buildQueuedDocuments,
+      buildQueuedRequestSnapshot,
+      clearSelectedDocuments,
+      clearUploadedFiles,
+      form,
+      historyId,
+      isQueuedDispatchBlockedByComposerState,
+      isSending,
+      notificationApi,
+      queuedRequestActions,
+      serverChatId,
+      t,
+      textAreaFocus
+    ]
+  )
+
+  const cancelCurrentAndRunDisabledReason =
+    isSending && serverChatId
+      ? t(
+          "playground:composer.queue.cancelAndRunDisabled",
+          "Cancel current & run now is not available for server-backed turns yet."
+        )
+      : null
+
+  const handleRunQueuedRequest = React.useCallback(
+    async (requestId: string) => {
+      if (isSending && cancelCurrentAndRunDisabledReason) {
+        return
+      }
+      await queuedRequestActions.runNow(requestId)
+      if (!isSending && isConnectionReady) {
+        await queuedRequestActions.flushNext()
+      }
+    },
+    [
+      cancelCurrentAndRunDisabledReason,
+      isConnectionReady,
+      isSending,
+      queuedRequestActions
+    ]
+  )
+
+  const handleRunNextQueuedRequest = React.useCallback(async () => {
+    const next = queuedMessages[0]
+    if (!next) return
+    if (isSending && cancelCurrentAndRunDisabledReason) {
+      return
+    }
+    if (next.status === "blocked") {
+      await handleRunQueuedRequest(next.id)
+      return
+    }
+    await queuedRequestActions.flushNext()
+  }, [
+    cancelCurrentAndRunDisabledReason,
+    handleRunQueuedRequest,
+    isSending,
+    queuedMessages,
+    queuedRequestActions
+  ])
+
+  const autoDrainingQueuedRequestsRef = React.useRef(false)
+  React.useEffect(() => {
+    const next = queuedMessages[0]
+    if (
+      autoDrainingQueuedRequestsRef.current ||
+      !next ||
+      !isConnectionReady ||
+      isSending ||
+      next.status !== "queued" ||
+      isQueuedDispatchBlockedByComposerState
+    ) {
+      return
+    }
+
+    autoDrainingQueuedRequestsRef.current = true
+    void queuedRequestActions.flushNext().finally(() => {
+      autoDrainingQueuedRequestsRef.current = false
+    })
+  }, [
+    isConnectionReady,
+    isQueuedDispatchBlockedByComposerState,
+    isSending,
+    queuedMessages,
+    queuedRequestActions
+  ])
+
   const submitForm = (options?: { ignorePinnedResults?: boolean }) => {
     form.onSubmit(async (value) => {
       const intent = resolveSubmissionIntent(value.message)
@@ -3307,17 +3683,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       ) {
         return
       }
-      if (!isConnectionReady) {
-        addQueuedMessage({
-          message: trimmed,
-          image: value.image
-        })
-        form.reset()
-        clearSelectedDocuments()
-        clearUploadedFiles()
-        return
-      }
-      const defaultEM = await defaultEmbeddingModelForRag()
+      const shouldQueueInsteadOfSend = isSending || !isConnectionReady
       if (!intent.isImageCommand) {
         if (!compareModeActive) {
           const normalizedSelectedModel = normalizeChatModelId(selectedModel)
@@ -3356,18 +3722,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               "playground:composer.validationCompareVisionInline",
               "One or more selected compare models do not support image input."
             )
-          )
+            )
           return
         }
       }
 
-      if (!intent.isImageCommand && webSearch) {
-        const simpleSearch = await getIsSimpleInternetSearch()
-        if (!defaultEM && !simpleSearch) {
-          form.setFieldError("message", t("formError.noEmbeddingModel"))
-          return
-        }
-      }
       if (intent.isImageCommand && trimmed.length === 0) {
         notificationApi.error({
           message: t("error", { defaultValue: "Error" }),
@@ -3377,6 +3736,24 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           )
         })
         return
+      }
+
+      if (shouldQueueInsteadOfSend) {
+        queueSubmission({
+          promptText: trimmed,
+          image: value.image,
+          intent
+        })
+        return
+      }
+
+      const defaultEM = await defaultEmbeddingModelForRag()
+      if (!intent.isImageCommand && webSearch) {
+        const simpleSearch = await getIsSimpleInternetSearch()
+        if (!defaultEM && !simpleSearch) {
+          form.setFieldError("message", t("formError.noEmbeddingModel"))
+          return
+        }
       }
       form.reset()
       clearSelectedDocuments()
@@ -3432,153 +3809,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   React.useEffect(() => {
     submitFormRef.current = submitForm
   }, [submitForm])
-
-  const submitFormFromQueued = (message: string, image: string) => {
-    if (!isConnectionReady) {
-      return
-    }
-    form.onSubmit(async () => {
-      const intent = resolveSubmissionIntent(message)
-      if (intent.invalidImageCommand) {
-        notificationApi.error({
-          message: t("error", { defaultValue: "Error" }),
-          description: intent.imageCommandMissingProvider
-            ? t(
-                "imageCommand.missingProvider",
-                "Pick an Image provider in More tools or use /generate-image:<provider> <prompt>."
-              )
-            : t(
-                "imageCommand.invalidUsage",
-                "Use /generate-image:<provider> <prompt>."
-              )
-        })
-        return
-      }
-      const nextMessage = intent.message
-      const combinedMessage = intent.isImageCommand
-        ? nextMessage
-        : buildPinnedMessage(nextMessage)
-      const trimmed = combinedMessage.trim()
-      if (
-        !intent.isImageCommand &&
-        trimmed.length === 0 &&
-        image.length === 0 &&
-        selectedDocuments.length === 0 &&
-        uploadedFiles.length === 0
-      ) {
-        return
-      }
-      const defaultEM = await defaultEmbeddingModelForRag()
-      if (!intent.isImageCommand) {
-        if (!compareModeActive) {
-          const normalizedSelectedModel = normalizeChatModelId(selectedModel)
-          if (!normalizedSelectedModel) {
-            form.setFieldError("message", t("formError.noModel"))
-            return
-          }
-          if (!validateSelectedChatModelsAvailability([normalizedSelectedModel])) {
-            return
-          }
-        } else if (
-          !compareSelectedModels ||
-          compareSelectedModels.length < 2
-        ) {
-          form.setFieldError(
-            "message",
-            t(
-              "playground:composer.validationCompareMinModelsInline",
-              "Select at least two models for Compare mode."
-            )
-          )
-          return
-        } else if (
-          !validateSelectedChatModelsAvailability(compareSelectedModels)
-        ) {
-          return
-        }
-        if (
-          compareModeActive &&
-          image.length > 0 &&
-          !compareModelsSupportCapability(compareSelectedModels, "vision")
-        ) {
-          form.setFieldError(
-            "message",
-            t(
-              "playground:composer.validationCompareVisionInline",
-              "One or more selected compare models do not support image input."
-            )
-          )
-          return
-        }
-      }
-      if (!intent.isImageCommand && webSearch) {
-        const simpleSearch = await getIsSimpleInternetSearch()
-        if (!defaultEM && !simpleSearch) {
-          form.setFieldError("message", t("formError.noEmbeddingModel"))
-          return
-        }
-      }
-      if (intent.isImageCommand && trimmed.length === 0) {
-        notificationApi.error({
-          message: t("error", { defaultValue: "Error" }),
-          description: t(
-            "imageCommand.missingPrompt",
-            "Image prompt is required."
-          )
-        })
-        return
-      }
-      form.reset()
-      clearSelectedDocuments()
-      clearUploadedFiles()
-      textAreaFocus()
-      const projectedForSubmission = projectTokenBudget({
-        conversationTokens: conversationTokenCount,
-        draftTokens: estimateTokensForText(trimmed),
-        maxTokens: resolvedMaxContext
-      })
-      if (projectedForSubmission.isOverLimit || projectedForSubmission.isNearLimit) {
-        notificationApi.warning({
-          message: t("playground:tokens.preSendWarningTitle", "Context budget warning"),
-          description: projectedForSubmission.isOverLimit
-            ? t(
-                "playground:tokens.preSendOverLimit",
-                "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
-              )
-            : t(
-                "playground:tokens.preSendNearLimit",
-                "Projected send is near the context window limit."
-              )
-        })
-      }
-      setLastSubmittedContext(currentContextSnapshot)
-      await sendMessage({
-        image: intent.isImageCommand ? "" : image,
-        message: trimmed,
-        docs: intent.isImageCommand
-          ? []
-          : selectedDocuments.map((doc) => ({
-              type: "tab",
-              tabId: doc.id,
-              title: doc.title,
-              url: doc.url,
-              favIconUrl: doc.favIconUrl
-            })),
-        imageBackendOverride: intent.isImageCommand
-          ? intent.imageBackendOverride
-          : undefined,
-        userMessageType: intent.isImageCommand
-          ? IMAGE_GENERATION_USER_MESSAGE_TYPE
-          : undefined,
-        assistantMessageType: intent.isImageCommand
-          ? IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
-          : undefined,
-        imageGenerationSource: intent.isImageCommand
-          ? "slash-command"
-          : undefined
-      })
-    })()
-  }
 
   const privateChatLocked = temporaryChat && history.length > 0
 
@@ -5637,7 +5867,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         e,
         sendWhenEnter,
         typing,
-        isSending
+        isSending: false
       })
     ) {
       e.preventDefault()
@@ -5654,7 +5884,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         e,
         sendWhenEnter,
         typing,
-        isSending
+        isSending: false
       })
       if (shouldSend) return false
 
@@ -7003,138 +7233,157 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     </div>
   )
 
-  const sendControl = !isSending ? (
-    <Space.Compact
-      className={`!justify-end !w-auto ${
-        isProMode ? "" : "!h-9 !rounded-full !px-3 !text-xs"
-      }`}
-    >
-      <Button
-        size={isMobileViewport ? "large" : isProMode ? "middle" : "small"}
-        htmlType="submit"
-        disabled={isSending || !isConnectionReady || compareNeedsMoreModels}
-        className={isMobileViewport ? "min-h-[44px] min-w-[44px]" : undefined}
-        title={
-          !isConnectionReady
-            ? (t(
-                "playground:composer.connectToSend",
-                "Connect to your tldw server to start chatting."
-              ) as string)
-            : compareNeedsMoreModels
-              ? (t(
-                  "playground:composer.validationCompareMinModelsInline",
-                  "Select at least two models for Compare mode."
-                ) as string)
-            : sendWhenEnter
-              ? (t("playground:composer.submitAriaEnter", "Send message (Enter)") as string)
-              : (t(
-                  "playground:composer.submitAriaModEnter",
-                  isMac ? "Send message (⌘+Enter)" : "Send message (Ctrl+Enter)"
-                ) as string)
-        }
-        aria-label={
-          t("playground:composer.submitAria", "Send message") as string
-        }
-      >
-        <div
-          className={`inline-flex items-center ${
-            isProMode ? "gap-2" : "gap-1"
-          }`}
-        >
-          {sendWhenEnter ? (
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              className="h-5 w-5"
-              viewBox="0 0 24 24">
-              <path d="M9 10L4 15 9 20"></path>
-              <path d="M20 4v7a4 4 0 01-4 4H4"></path>
-            </svg>
-          ) : null}
-          <span
-            className={
-              isProMode
-                ? ""
-                : "text-[11px] font-semibold uppercase tracking-[0.12em]"
-            }>
-            {sendLabel}
-          </span>
-        </div>
-      </Button>
-      <Dropdown
-        open={sendMenuOpen}
-        onOpenChange={(open) => setSendMenuOpen(open)}
-        disabled={isSending || !isConnectionReady || compareNeedsMoreModels}
-        trigger={["click"]}
-        menu={{
-          items: [
-            {
-              key: 1,
-              label: (
-                <Checkbox
-                  checked={sendWhenEnter}
-                  onChange={(e) =>
-                    setSendWhenEnter(e.target.checked)
-                  }>
-                  {t("sendWhenEnter")}
-                </Checkbox>
-              )
-            }
-          ]
-        }}
+  const shouldQueuePrimaryAction = isSending || !isConnectionReady
+  const primaryActionLabel = shouldQueuePrimaryAction
+    ? t("common:queue", "Queue")
+    : sendLabel
+  const primaryActionTitle = compareNeedsMoreModels
+    ? (t(
+        "playground:composer.validationCompareMinModelsInline",
+        "Select at least two models for Compare mode."
+      ) as string)
+    : shouldQueuePrimaryAction
+      ? (isSending
+          ? t(
+              "playground:composer.queue.primaryWhileBusy",
+              "Queue this request to run after the current response."
+            )
+          : t(
+              "playground:composer.queue.primaryWhileOffline",
+              "Queue this request until your tldw server reconnects."
+            )) as string
+      : sendWhenEnter
+        ? (t("playground:composer.submitAriaEnter", "Send message (Enter)") as string)
+        : (t(
+            "playground:composer.submitAriaModEnter",
+            isMac ? "Send message (⌘+Enter)" : "Send message (Ctrl+Enter)"
+          ) as string)
+
+  const sendControl = (
+    <div className="flex items-center gap-2">
+      <Space.Compact
+        className={`!justify-end !w-auto ${
+          isProMode ? "" : "!h-9 !rounded-full !px-3 !text-xs"
+        }`}
       >
         <Button
           size={isMobileViewport ? "large" : isProMode ? "middle" : "small"}
-          disabled={isSending || !isConnectionReady || compareNeedsMoreModels}
+          htmlType={shouldQueuePrimaryAction ? "button" : "submit"}
+          onClick={
+            shouldQueuePrimaryAction
+              ? () => {
+                  stopListening()
+                  submitForm()
+                }
+              : undefined
+          }
+          disabled={compareNeedsMoreModels}
           className={isMobileViewport ? "min-h-[44px] min-w-[44px]" : undefined}
+          title={primaryActionTitle}
           aria-label={
-            t(
-              "playground:composer.sendOptions",
-              "Open send options"
-            ) as string
+            shouldQueuePrimaryAction
+              ? (t("playground:composer.queue.primaryAria", "Queue request") as string)
+              : (t("playground:composer.submitAria", "Send message") as string)
           }
-          title={
-            t(
-              "playground:composer.sendOptions",
-              "Open send options"
-            ) as string
-          }
-          icon={
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={1.5}
-              stroke="currentColor"
-              className={isProMode ? "w-5 h-5" : "w-4 h-4"}>
-              <path
+        >
+          <div
+            className={`inline-flex items-center ${
+              isProMode ? "gap-2" : "gap-1"
+            }`}
+          >
+            {!shouldQueuePrimaryAction && sendWhenEnter ? (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                stroke="currentColor"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                d="m19.5 8.25-7.5 7.5-7.5-7.5"
-              />
-            </svg>
-          }
-        />
-      </Dropdown>
-    </Space.Compact>
-  ) : (
-    <Tooltip
-      title={
-        t("tooltip.stopStreaming") as string
-      }>
-      <TldwButton
-        variant="outline"
-        size={isMobileViewport ? "lg" : "md"}
-        iconOnly
-        onClick={stopStreamingRequest}
-        ariaLabel={t("tooltip.stopStreaming") as string}>
-        <StopCircleIcon className="size-5 sm:size-4" />
-      </TldwButton>
-    </Tooltip>
+                strokeWidth="2"
+                className="h-5 w-5"
+                viewBox="0 0 24 24">
+                <path d="M9 10L4 15 9 20"></path>
+                <path d="M20 4v7a4 4 0 01-4 4H4"></path>
+              </svg>
+            ) : null}
+            <span
+              className={
+                isProMode
+                  ? ""
+                  : "text-[11px] font-semibold uppercase tracking-[0.12em]"
+              }>
+              {primaryActionLabel}
+            </span>
+          </div>
+        </Button>
+        <Dropdown
+          open={sendMenuOpen}
+          onOpenChange={(open) => setSendMenuOpen(open)}
+          disabled={compareNeedsMoreModels}
+          trigger={["click"]}
+          menu={{
+            items: [
+              {
+                key: 1,
+                label: (
+                  <Checkbox
+                    checked={sendWhenEnter}
+                    onChange={(e) =>
+                      setSendWhenEnter(e.target.checked)
+                    }>
+                    {t("sendWhenEnter")}
+                  </Checkbox>
+                )
+              }
+            ]
+          }}
+        >
+          <Button
+            size={isMobileViewport ? "large" : isProMode ? "middle" : "small"}
+            disabled={compareNeedsMoreModels}
+            className={isMobileViewport ? "min-h-[44px] min-w-[44px]" : undefined}
+            aria-label={
+              t(
+                "playground:composer.sendOptions",
+                "Open send options"
+              ) as string
+            }
+            title={
+              t(
+                "playground:composer.sendOptions",
+                "Open send options"
+              ) as string
+            }
+            icon={
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={1.5}
+                stroke="currentColor"
+                className={isProMode ? "w-5 h-5" : "w-4 h-4"}>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="m19.5 8.25-7.5 7.5-7.5-7.5"
+                />
+              </svg>
+            }
+          />
+        </Dropdown>
+      </Space.Compact>
+      {isSending ? (
+        <Tooltip title={t("tooltip.stopStreaming") as string}>
+          <TldwButton
+            variant="outline"
+            size={isMobileViewport ? "lg" : "md"}
+            iconOnly
+            onClick={stopStreamingRequest}
+            ariaLabel={t("tooltip.stopStreaming") as string}>
+            <StopCircleIcon className="size-5 sm:size-4" />
+          </TldwButton>
+        </Tooltip>
+      ) : null}
+    </div>
   )
 
   const startupTemplatePromptResolution = startupTemplatePreview
@@ -7207,148 +7456,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             <div>
               <div className="flex w-full min-w-0 bg-transparent">
                 <form
-                  onSubmit={form.onSubmit(async (value) => {
+                  onSubmit={(event) => {
+                    event.preventDefault()
                     stopListening()
-                    const intent = resolveSubmissionIntent(value.message)
-                    if (intent.handled && !intent.invalidImageCommand) {
-                      form.setFieldValue("message", intent.message)
-                    }
-                    if (intent.invalidImageCommand) {
-                      notificationApi.error({
-                        message: t("error", { defaultValue: "Error" }),
-                        description: intent.imageCommandMissingProvider
-                          ? t(
-                              "imageCommand.missingProvider",
-                              "Pick an Image provider in More tools or use /generate-image:<provider> <prompt>."
-                            )
-                          : t(
-                              "imageCommand.invalidUsage",
-                              "Use /generate-image:<provider> <prompt>."
-                            )
-                      })
-                      return
-                    }
-                    if (!intent.isImageCommand) {
-                      if (!compareModeActive) {
-                        const normalizedSelectedModel = normalizeChatModelId(selectedModel)
-                        if (!normalizedSelectedModel) {
-                          form.setFieldError("message", t("formError.noModel"))
-                          return
-                        }
-                        if (!validateSelectedChatModelsAvailability([normalizedSelectedModel])) {
-                          return
-                        }
-                      } else if (
-                        !compareSelectedModels ||
-                        compareSelectedModels.length < 2
-                      ) {
-                        form.setFieldError(
-                          "message",
-                          t(
-                            "playground:composer.validationCompareMinModelsInline",
-                            "Select at least two models for Compare mode."
-                          )
-                        )
-                        return
-                      } else if (
-                        !validateSelectedChatModelsAvailability(compareSelectedModels)
-                      ) {
-                        return
-                      }
-                      if (
-                        value.image.length > 0 &&
-                        !compareModelsSupportCapability(compareSelectedModels, "vision")
-                      ) {
-                        form.setFieldError(
-                          "message",
-                          t(
-                            "playground:composer.validationCompareVisionInline",
-                            "One or more selected compare models do not support image input."
-                          )
-                        )
-                        return
-                      }
-                    }
-                    const defaultEM = await defaultEmbeddingModelForRag()
-
-                    if (!intent.isImageCommand && webSearch) {
-                      const simpleSearch = await getIsSimpleInternetSearch()
-                      if (!defaultEM && !simpleSearch) {
-                        form.setFieldError(
-                          "message",
-                          t("formError.noEmbeddingModel")
-                        )
-                        return
-                      }
-                    }
-                    if (
-                      !intent.isImageCommand &&
-                      intent.message.trim().length === 0 &&
-                      value.image.length === 0 &&
-                      selectedDocuments.length === 0 &&
-                      uploadedFiles.length === 0
-                    ) {
-                      return
-                    }
-                    if (intent.isImageCommand && intent.message.trim().length === 0) {
-                      notificationApi.error({
-                        message: t("error", { defaultValue: "Error" }),
-                        description: t(
-                          "imageCommand.missingPrompt",
-                          "Image prompt is required."
-                        )
-                      })
-                      return
-                    }
-                    form.reset()
-                    clearSelectedDocuments()
-                    clearUploadedFiles()
-                    textAreaFocus()
-                    const projectedForSubmission = projectTokenBudget({
-                      conversationTokens: conversationTokenCount,
-                      draftTokens: estimateTokensForText(intent.message.trim()),
-                      maxTokens: resolvedMaxContext
-                    })
-                    if (projectedForSubmission.isOverLimit || projectedForSubmission.isNearLimit) {
-                      notificationApi.warning({
-                        message: t("playground:tokens.preSendWarningTitle", "Context budget warning"),
-                        description: projectedForSubmission.isOverLimit
-                          ? t(
-                              "playground:tokens.preSendOverLimit",
-                              "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
-                            )
-                          : t(
-                              "playground:tokens.preSendNearLimit",
-                              "Projected send is near the context window limit."
-                            )
-                      })
-                    }
-                    setLastSubmittedContext(currentContextSnapshot)
-                    await sendMessage({
-                      image: intent.isImageCommand ? "" : value.image,
-                      message: intent.message.trim(),
-                      docs: intent.isImageCommand
-                        ? []
-                        : selectedDocuments.map((doc) => ({
-                            type: "tab",
-                            tabId: doc.id,
-                            title: doc.title,
-                            url: doc.url
-                          })),
-                      imageBackendOverride: intent.isImageCommand
-                        ? intent.imageBackendOverride
-                        : undefined,
-                      userMessageType: intent.isImageCommand
-                        ? IMAGE_GENERATION_USER_MESSAGE_TYPE
-                        : undefined,
-                      assistantMessageType: intent.isImageCommand
-                        ? IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
-                        : undefined,
-                      imageGenerationSource: intent.isImageCommand
-                        ? "slash-command"
-                        : undefined
-                    })
-                  })}
+                    submitForm()
+                  }}
                   className="flex w-full min-w-0 flex-col items-center">
                   <input
                     id="file-upload"
@@ -8044,78 +8156,19 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         </div>
                       </div>
                     )}
-                    {queuedMessages.length > 0 && showQueuedBanner && (
-                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
-                        <p className="max-w-xs text-left">
-                          <span className="block font-medium">
-                            {t(
-                              "playground:composer.queuedBanner.title",
-                              "Queued while offline"
-                            )}
-                          </span>
-                          {t(
-                            "playground:composer.queuedBanner.body",
-                            "We’ll hold these messages and send them once your tldw server is connected."
-                          )}
-                        </p>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            className={`rounded-md border border-success/30 bg-surface px-2 py-1 text-xs font-medium text-success hover:bg-success/10 ${
-                              !isConnectionReady ? "cursor-not-allowed opacity-60" : ""
-                            }`}
-                            title={t(
-                              "playground:composer.queuedBanner.sendNow",
-                              "Send queued messages"
-                            ) as string}
-                            disabled={!isConnectionReady}
-                            onClick={async () => {
-                              if (!isConnectionReady) return
-                              for (const item of queuedMessages) {
-                                await submitFormFromQueued(item.message, item.image)
-                              }
-                              clearQueuedMessages()
-                            }}>
-                            {t(
-                              "playground:composer.queuedBanner.sendNow",
-                              "Send queued messages"
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            className="text-xs font-medium text-success underline hover:text-success"
-                            title={t(
-                              "playground:composer.queuedBanner.clear",
-                              "Clear queue"
-                            ) as string}
-                            onClick={() => {
-                              clearQueuedMessages()
-                            }}>
-                            {t(
-                              "playground:composer.queuedBanner.clear",
-                              "Clear queue"
-                            )}
-                          </button>
-                          <Link
-                            to="/settings/health"
-                            className="text-xs font-medium text-success underline hover:text-success"
-                          >
-                            {t(
-                              "settings:healthSummary.diagnostics",
-                              "Health & diagnostics"
-                            )}
-                          </Link>
-                          <button
-                            type="button"
-                            onClick={() => setShowQueuedBanner(false)}
-                            className="inline-flex items-center rounded-full p-1 text-success hover:bg-success/10"
-                            aria-label={t("common:close", "Dismiss")}
-                            title={t("common:close", "Dismiss") as string}>
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                    <ChatQueuePanel
+                      queue={queuedMessages}
+                      isConnectionReady={isConnectionReady}
+                      isStreaming={isSending}
+                      onRunNext={handleRunNextQueuedRequest}
+                      onRunNow={handleRunQueuedRequest}
+                      onDelete={queuedRequestActions.remove}
+                      onMove={queuedRequestActions.move}
+                      onUpdate={queuedRequestActions.update}
+                      onClearAll={queuedRequestActions.clear}
+                      onOpenDiagnostics={() => navigate("/settings/health")}
+                      forceRunDisabledReason={cancelCurrentAndRunDisabledReason}
+                    />
                   </div>
                 </form>
               </div>

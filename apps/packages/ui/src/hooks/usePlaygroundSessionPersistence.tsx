@@ -42,6 +42,7 @@ export function usePlaygroundSessionPersistence() {
     ragTopK,
     ragEnableGeneration,
     ragEnableCitations,
+    queuedMessages,
     temporaryChat,
     setHistoryId,
     setServerChatId,
@@ -54,6 +55,7 @@ export function usePlaygroundSessionPersistence() {
     setRagTopK,
     setRagEnableGeneration,
     setRagEnableCitations,
+    setQueuedMessages,
     setHistory,
     setMessages,
     setSelectedSystemPrompt
@@ -70,6 +72,7 @@ export function usePlaygroundSessionPersistence() {
       ragTopK: state.ragTopK,
       ragEnableGeneration: state.ragEnableGeneration,
       ragEnableCitations: state.ragEnableCitations,
+      queuedMessages: state.queuedMessages,
       temporaryChat: state.temporaryChat,
       setHistoryId: state.setHistoryId,
       setServerChatId: state.setServerChatId,
@@ -82,6 +85,7 @@ export function usePlaygroundSessionPersistence() {
       setRagTopK: state.setRagTopK,
       setRagEnableGeneration: state.setRagEnableGeneration,
       setRagEnableCitations: state.setRagEnableCitations,
+      setQueuedMessages: state.setQueuedMessages,
       setHistory: state.setHistory,
       setMessages: state.setMessages,
       setSelectedSystemPrompt: state.setSelectedSystemPrompt
@@ -92,11 +96,12 @@ export function usePlaygroundSessionPersistence() {
   const { setSystemPrompt } = useStoreChatModelSettings()
 
   const buildPersistableSessionSnapshot = useCallback(() => {
-    // Don't save if restoring or if temporary chat
-    if (isRestoringRef.current || temporaryChat) return null
+    // Don't save while a restore is replaying into the stores.
+    if (isRestoringRef.current) return null
 
-    // Don't save if no conversation started
-    if (!historyId && !serverChatId) return null
+    // Allow queue-only restores even before a history/server chat id exists.
+    if (temporaryChat && queuedMessages.length === 0) return null
+    if (!historyId && !serverChatId && queuedMessages.length === 0) return null
 
     return {
       historyId,
@@ -109,7 +114,8 @@ export function usePlaygroundSessionPersistence() {
       ragSearchMode,
       ragTopK,
       ragEnableGeneration,
-      ragEnableCitations
+      ragEnableCitations,
+      queuedMessages
     }
   }, [
     historyId,
@@ -123,6 +129,7 @@ export function usePlaygroundSessionPersistence() {
     ragTopK,
     ragEnableGeneration,
     ragEnableCitations,
+    queuedMessages,
     temporaryChat
   ])
 
@@ -192,34 +199,37 @@ export function usePlaygroundSessionPersistence() {
     }
 
     const savedHistoryId = sessionStore.historyId
-    if (!savedHistoryId) return false
+    const savedQueue = sessionStore.queuedMessages ?? []
+    if (!savedHistoryId && savedQueue.length === 0) return false
 
     isRestoringRef.current = true
 
     try {
-      // Restore messages from Dexie
-      const chatData = await getFullChatData(savedHistoryId)
-      if (!chatData) {
-        // History was deleted, clear session
-        clearSession()
-        return false
-      }
-
-      // Restore messages and history
-      setHistoryId(savedHistoryId)
-      setHistory(formatToChatHistory(chatData.messages))
-      setMessages(formatToMessage(chatData.messages))
-
-      // Restore system prompt if present
-      const lastUsedPrompt = (chatData.historyInfo as any)?.last_used_prompt
-      if (lastUsedPrompt?.prompt_id) {
-        const prompt = await getPromptById(lastUsedPrompt.prompt_id)
-        if (prompt) {
-          setSelectedSystemPrompt(lastUsedPrompt.prompt_id)
-          setSystemPrompt(prompt.content)
+      if (savedHistoryId) {
+        // Restore messages from Dexie
+        const chatData = await getFullChatData(savedHistoryId)
+        if (!chatData) {
+          // History was deleted, clear session
+          clearSession()
+          return false
         }
-      } else if (lastUsedPrompt?.prompt_content) {
-        setSystemPrompt(lastUsedPrompt.prompt_content)
+
+        // Restore messages and history
+        setHistoryId(savedHistoryId)
+        setHistory(formatToChatHistory(chatData.messages))
+        setMessages(formatToMessage(chatData.messages))
+
+        // Restore system prompt if present
+        const lastUsedPrompt = (chatData.historyInfo as any)?.last_used_prompt
+        if (lastUsedPrompt?.prompt_id) {
+          const prompt = await getPromptById(lastUsedPrompt.prompt_id)
+          if (prompt) {
+            setSelectedSystemPrompt(lastUsedPrompt.prompt_id)
+            setSystemPrompt(prompt.content)
+          }
+        } else if (lastUsedPrompt?.prompt_content) {
+          setSystemPrompt(lastUsedPrompt.prompt_content)
+        }
       }
 
       // Restore settings from session store
@@ -243,6 +253,7 @@ export function usePlaygroundSessionPersistence() {
       }
       setRagEnableGeneration(sessionStore.ragEnableGeneration)
       setRagEnableCitations(sessionStore.ragEnableCitations)
+      setQueuedMessages(savedQueue)
 
       return true
     } catch (error) {
@@ -270,7 +281,8 @@ export function usePlaygroundSessionPersistence() {
     setRagSearchMode,
     setRagTopK,
     setRagEnableGeneration,
-    setRagEnableCitations
+    setRagEnableCitations,
+    setQueuedMessages
   ])
 
   // Clear persisted session (call when user starts new chat)

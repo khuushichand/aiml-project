@@ -29,7 +29,14 @@ describe("useQueuedRequests", () => {
     })
 
     expect(stopStreamingRequest).toHaveBeenCalledTimes(1)
-    expect(setQueue).toHaveBeenCalledWith([queue[1], queue[0]])
+    expect(setQueue).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: queue[1].id,
+        status: "queued",
+        blockedReason: null
+      }),
+      queue[0]
+    ])
   })
 
   it("enqueues normalized queued requests and only flushes when connection is ready", async () => {
@@ -78,6 +85,78 @@ describe("useQueuedRequests", () => {
       await result.current.flushNext()
     })
 
-    expect(sendQueuedRequest).toHaveBeenCalledWith(queue[0])
+    expect(sendQueuedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptText: "existing",
+        status: "sending"
+      })
+    )
+  })
+
+  it("removes the flushed request after a successful send", async () => {
+    const first = buildQueuedRequest({ promptText: "first" })
+    const second = buildQueuedRequest({ promptText: "second" })
+    let queue = [first, second]
+    const setQueue = vi.fn((nextQueue) => {
+      queue = nextQueue
+    })
+    const sendQueuedRequest = vi.fn().mockResolvedValue(undefined)
+
+    const { result } = renderHook(() =>
+      useQueuedRequests({
+        isConnectionReady: true,
+        isStreaming: false,
+        queue,
+        setQueue,
+        sendQueuedRequest,
+        stopStreamingRequest: vi.fn()
+      })
+    )
+
+    await act(async () => {
+      await result.current.flushNext()
+    })
+
+    expect(sendQueuedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: first.id,
+        status: "sending"
+      })
+    )
+    expect(queue.map((item) => item.id)).toEqual([second.id])
+  })
+
+  it("blocks the next queued request when dispatch fails", async () => {
+    const first = buildQueuedRequest({ promptText: "first" })
+    const second = buildQueuedRequest({ promptText: "second" })
+    let queue = [first, second]
+    const setQueue = vi.fn((nextQueue) => {
+      queue = nextQueue
+    })
+    const sendQueuedRequest = vi
+      .fn()
+      .mockRejectedValue(new Error("selected model unavailable"))
+
+    const { result } = renderHook(() =>
+      useQueuedRequests({
+        isConnectionReady: true,
+        isStreaming: false,
+        queue,
+        setQueue,
+        sendQueuedRequest,
+        stopStreamingRequest: vi.fn()
+      })
+    )
+
+    await act(async () => {
+      await result.current.flushNext()
+    })
+
+    expect(queue[0]).toMatchObject({
+      id: first.id,
+      status: "blocked",
+      blockedReason: "selected model unavailable"
+    })
+    expect(queue[1]?.id).toBe(second.id)
   })
 })

@@ -79,11 +79,14 @@ export const usePlaygroundSessionStore = createWithEqualityFn<PlaygroundSessionS
       },
 
       isSessionValid: () => {
-        const { historyId, serverChatId, lastUpdated } = get()
-        // Session is valid if we have an ID and it's not stale
-        const hasId = historyId !== null || serverChatId !== null
+        const { historyId, serverChatId, queuedMessages, lastUpdated } = get()
+        // Session is valid if we have a conversation or queued work and it's not stale.
+        const hasConversationOrQueue =
+          historyId !== null ||
+          serverChatId !== null ||
+          queuedMessages.length > 0
         const isNotStale = lastUpdated > 0 && Date.now() - lastUpdated <= STALE_THRESHOLD_MS
-        return hasId && isNotStale
+        return hasConversationOrQueue && isNotStale
       }
     }),
     {
