@@ -26,7 +26,7 @@ class BaseConnector(ABC):
 
     async def refresh_token(self, refresh_token: str) -> dict[str, Any]:
         """Refresh tokens. Default: not implemented in scaffold."""
-        return {"access_token": None, "expires_in": None}
+        return {"access_token": None, "expires_in": None}  # nosec B105 - scaffold placeholder, not a credential
 
     async def list_sources(
         self,
