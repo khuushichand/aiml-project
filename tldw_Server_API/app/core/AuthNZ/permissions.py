@@ -271,6 +271,9 @@ MEDIA_DELETE = "media.delete"
 MEDIA_TRANSCRIBE = "media.transcribe"
 MEDIA_EXPORT = "media.export"
 
+# SQL retrieval permissions
+SQL_READ = "sql.read"
+
 # User permissions
 USERS_CREATE = "users.create"
 USERS_READ = "users.read"

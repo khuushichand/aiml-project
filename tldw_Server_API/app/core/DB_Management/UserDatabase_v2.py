@@ -1136,6 +1136,7 @@ class UserDatabase:
             ("media.read", "Read media", "media"),
             ("media.create", "Create media", "media"),
             ("media.delete", "Delete media", "media"),
+            ("sql.read", "Run read-only SQL retrieval", "sql"),
             ("system.configure", "Configure system", "system"),
             ("users.manage_roles", "Manage user roles", "users"),
         ]
@@ -1158,7 +1159,7 @@ class UserDatabase:
             return _get_id(sel_perm_id, name)
 
         # user role defaults
-        for pname in ("media.read", "media.create"):
+        for pname in ("media.read", "media.create", "sql.read"):
             rid = user_id
             pid = _pid(pname)
             if rid and pid:
@@ -1172,7 +1173,14 @@ class UserDatabase:
                 self.backend.execute(rp_sql, (rid, pid))
         # admin all
         if admin_id:
-            for pname in ("media.read", "media.create", "media.delete", "system.configure", "users.manage_roles"):
+            for pname in (
+                "media.read",
+                "media.create",
+                "media.delete",
+                "sql.read",
+                "system.configure",
+                "users.manage_roles",
+            ):
                 pid = _pid(pname)
                 if pid:
                     with contextlib.suppress(_USERDB_NONCRITICAL_EXCEPTIONS):

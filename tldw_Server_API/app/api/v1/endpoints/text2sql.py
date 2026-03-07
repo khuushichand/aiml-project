@@ -20,7 +20,7 @@ from tldw_Server_API.app.api.v1.schemas.text2sql_schemas import (
     Text2SQLRequest,
     Text2SQLResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_READ
+from tldw_Server_API.app.core.AuthNZ.permissions import SQL_READ
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
@@ -82,25 +82,42 @@ def _shape_rows(columns: list[str], rows: list[Any]) -> list[dict[str, Any]]:
     return shaped
 
 
+def _connector_acl_allows(current_user: User, target_id: str) -> bool:
+    """Fail-closed ACL hook for SQL connector targets."""
+    permissions = {str(p) for p in (getattr(current_user, "permissions", []) or [])}
+    if "sql.target:*" in permissions or f"sql.target:{target_id}" in permissions:
+        return True
+    # Backward-compatible default for the built-in media DB target.
+    return target_id == "media_db"
+
+
 @router.post(
     "/query",
     response_model=Text2SQLResponse,
     dependencies=[
         Depends(check_rate_limit),
         Depends(rbac_rate_limit("text2sql.query")),
-        Depends(require_permissions(MEDIA_READ)),
+        Depends(require_permissions(SQL_READ)),
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="text2sql.query", count_as="call")),
         Depends(require_within_limit(LimitCategory.RAG_QUERIES_DAY, 1)),
     ],
 )
 async def query_text2sql(
     request: Text2SQLRequest,
-    _current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_request_user),
     media_db: MediaDatabase = Depends(get_media_db_for_user),
 ) -> Text2SQLResponse:
     """Execute a read-only SQL query through Text2SQL policy guardrails."""
-    _ = _current_user
     target_id, db_path = _resolve_internal_target(request.target_id, media_db)
+    if not _connector_acl_allows(current_user, target_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "unauthorized_target",
+                "message": f"Target '{target_id}' is not authorized for this user",
+            },
+        )
+
     service = Text2SQLCoreService(
         generator=_PassThroughSqlGenerator(),
         executor=SqliteReadOnlyExecutor(db_path),
@@ -153,4 +170,3 @@ async def query_text2sql(
         guardrail=result.get("guardrail", {}),
         truncated=bool(result.get("truncated", False)),
     )
-
