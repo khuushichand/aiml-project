@@ -12,7 +12,7 @@
 
 ### Task 1: Add The Research Run History List API
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/DB_Management/ResearchSessionsDB.py`
@@ -80,7 +80,7 @@ git commit -m "feat(research): add run history list api"
 
 ### Task 2: Extract A Shared Structured SSE Reader
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/tldw-frontend/lib/sse.ts`
@@ -144,7 +144,7 @@ git commit -m "feat(frontend): add structured sse helper"
 
 ### Task 3: Add A Frontend Research Runs API Client
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Create: `apps/tldw-frontend/lib/api/researchRuns.ts`
@@ -215,7 +215,7 @@ git commit -m "feat(frontend): add research run client"
 
 ### Task 4: Add A Minimal Frontend Page Test Harness
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Create: `apps/tldw-frontend/__tests__/testUtils/renderWithProviders.tsx`
@@ -258,10 +258,10 @@ git commit -m "test(frontend): add research page test harness"
 
 ### Task 5: Build The `/research` Run Console Page
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
-- Create: `apps/tldw-frontend/pages/research/index.tsx`
+- Create: `apps/tldw-frontend/pages/research.tsx`
 - Create: `apps/tldw-frontend/__tests__/pages/research-run-console.test.tsx`
 
 **Step 1: Write the failing tests**
@@ -326,34 +326,34 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-git add apps/tldw-frontend/pages/research/index.tsx apps/tldw-frontend/__tests__/pages/research-run-console.test.tsx
-git commit -m "feat(frontend): add research run console"
+git add apps/tldw-frontend/pages/research.tsx apps/tldw-frontend/__tests__/pages/research-run-console.test.tsx
+git commit -m "feat(frontend): add research run console page"
 ```
 
 ### Task 6: Verify The Run Console Slice
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-07-deep-research-run-console-implementation-plan.md`
 
 **Step 1: Run the focused backend research tests**
 
-Run: `source ../../.venv/bin/activate && python -m pytest tldw_Server_API/tests/Research/test_research_sessions_db.py tldw_Server_API/tests/Research/test_research_jobs_service.py tldw_Server_API/tests/Research/test_research_runs_endpoint.py -v`
+Run: `source ../../.venv/bin/activate && python -m pytest tldw_Server_API/tests/Research/test_research_runs_endpoint.py tldw_Server_API/tests/e2e/test_deep_research_runs.py -v`
 
-Expected: PASS
+Result: PASS (`14/14`)
 
 **Step 2: Run the focused frontend tests**
 
-Run: `cd apps/tldw-frontend && bunx vitest run lib/__tests__/sse.test.ts lib/__tests__/researchRuns.test.ts __tests__/pages/research-run-console.test.tsx`
+Run: `cd apps/tldw-frontend && bunx vitest run lib/__tests__/sse.test.ts lib/__tests__/researchRuns.test.ts __tests__/pages/notifications.test.tsx __tests__/pages/research-run-console.test.tsx`
 
-Expected: PASS
+Result: PASS (`10/10`)
 
 **Step 3: Run Bandit on the touched backend scope**
 
-Run: `source ../../.venv/bin/activate && python -m bandit -r tldw_Server_API/app/core/DB_Management/ResearchSessionsDB.py tldw_Server_API/app/core/Research/service.py tldw_Server_API/app/api/v1/endpoints/research_runs.py -f json -o /tmp/bandit_deep_research_run_console.json`
+Run: `source ../../.venv/bin/activate && python -m bandit -r tldw_Server_API/app/core/Research tldw_Server_API/app/api/v1/endpoints/research_runs.py tldw_Server_API/app/api/v1/schemas/research_runs_schemas.py tldw_Server_API/app/core/DB_Management/ResearchSessionsDB.py -f json -o /tmp/bandit_deep_research_run_console.json`
 
-Expected: JSON report written with `0` new findings in the touched backend code.
+Result: JSON report written with `0` findings and `0` errors.
 
 **Step 4: Update the plan status**
 
@@ -363,6 +363,17 @@ Mark every task in this plan complete and note residual risk, especially:
 - checkpoint editing is still approve-only
 - the selected-run detail is SSE-driven while the list remains polling-driven
 - the page is accessible by direct route and does not yet add broader navigation changes
+
+Execution notes:
+
+- Task 1 committed as `e780876cd`
+- Task 2 committed as `30e0b1e33`
+- Task 3 committed as `2fe7187eb`
+- Task 4 committed as `1fa743777`
+- Task 5 committed as `6cf1f44e9`
+- Focused backend verification passed on March 7, 2026
+- Focused frontend verification passed on March 7, 2026
+- Bandit output written to `/tmp/bandit_deep_research_run_console.json`
 
 **Step 5: Commit**
 
