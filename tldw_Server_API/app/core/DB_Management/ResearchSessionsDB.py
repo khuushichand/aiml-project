@@ -37,6 +37,7 @@ class ResearchSessionRow:
     source_policy: str
     autonomy_mode: str
     limits_json: dict[str, Any]
+    provider_overrides_json: dict[str, Any]
     active_job_id: str | None
     latest_checkpoint_id: str | None
     created_at: str
@@ -101,6 +102,7 @@ class ResearchSessionsDB:
                     source_policy TEXT NOT NULL,
                     autonomy_mode TEXT NOT NULL,
                     limits_json TEXT NOT NULL DEFAULT '{}',
+                    provider_overrides_json TEXT NOT NULL DEFAULT '{}',
                     active_job_id TEXT,
                     latest_checkpoint_id TEXT,
                     created_at TEXT NOT NULL,
@@ -144,11 +146,17 @@ class ResearchSessionsDB:
                     ON research_artifacts(session_id, artifact_name, artifact_version DESC);
                 """
             )
+            columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info('research_sessions')").fetchall()}
+            if "provider_overrides_json" not in columns:
+                conn.execute(
+                    "ALTER TABLE research_sessions ADD COLUMN provider_overrides_json TEXT NOT NULL DEFAULT '{}'"
+                )
 
     @staticmethod
     def _session_from_row(row: sqlite3.Row | None) -> ResearchSessionRow | None:
         if row is None:
             return None
+        keys = set(row.keys())
         return ResearchSessionRow(
             id=str(row["id"]),
             owner_user_id=str(row["owner_user_id"]),
@@ -158,6 +166,11 @@ class ResearchSessionsDB:
             source_policy=str(row["source_policy"]),
             autonomy_mode=str(row["autonomy_mode"]),
             limits_json=_parse_json_dict(row["limits_json"]),
+            provider_overrides_json=(
+                _parse_json_dict(row["provider_overrides_json"])
+                if "provider_overrides_json" in keys
+                else {}
+            ),
             active_job_id=str(row["active_job_id"]) if row["active_job_id"] else None,
             latest_checkpoint_id=str(row["latest_checkpoint_id"]) if row["latest_checkpoint_id"] else None,
             created_at=str(row["created_at"]),
@@ -207,19 +220,21 @@ class ResearchSessionsDB:
         source_policy: str,
         autonomy_mode: str,
         limits_json: dict[str, Any],
+        provider_overrides_json: dict[str, Any] | None = None,
         status: str = "queued",
         phase: str = "drafting_plan",
     ) -> ResearchSessionRow:
         session_id = f"rs_{uuid.uuid4().hex[:12]}"
         now = _utc_now()
         payload = json.dumps(limits_json or {}, sort_keys=True)
+        provider_payload = json.dumps(provider_overrides_json or {}, sort_keys=True)
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO research_sessions (
                     id, owner_user_id, status, phase, query, source_policy,
-                    autonomy_mode, limits_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    autonomy_mode, limits_json, provider_overrides_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -230,6 +245,7 @@ class ResearchSessionsDB:
                     source_policy,
                     autonomy_mode,
                     payload,
+                    provider_payload,
                     now,
                     now,
                 ),

@@ -33,6 +33,7 @@ async def create_research_run(
         source_policy=payload.source_policy,
         autonomy_mode=payload.autonomy_mode,
         limits_json=payload.limits_json,
+        provider_overrides=payload.provider_overrides,
     )
     return ResearchRunResponse.model_validate(session)
 

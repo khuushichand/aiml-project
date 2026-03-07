@@ -26,6 +26,7 @@ class ResearchService:
     _ALLOWED_ARTIFACT_NAMES = {
         "plan.json",
         "approved_plan.json",
+        "provider_config.json",
         "source_registry.json",
         "evidence_notes.jsonl",
         "collection_summary.json",
@@ -88,6 +89,7 @@ class ResearchService:
         source_policy: str,
         autonomy_mode: str,
         limits_json: dict[str, Any] | None = None,
+        provider_overrides: dict[str, Any] | None = None,
     ) -> ResearchSessionRow:
         """Create a research session and enqueue the planning phase."""
         db = self._db_for_user(owner_user_id)
@@ -97,6 +99,7 @@ class ResearchService:
             source_policy=source_policy,
             autonomy_mode=autonomy_mode,
             limits_json=limits_json or {},
+            provider_overrides_json=provider_overrides or {},
         )
 
         job = enqueue_research_phase_job(

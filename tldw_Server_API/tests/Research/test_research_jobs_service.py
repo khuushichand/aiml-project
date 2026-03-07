@@ -246,6 +246,91 @@ def test_get_session_bundle_and_allowlisted_artifacts(tmp_path):
     assert report["content_type"] == "text/markdown"
 
 
+@pytest.mark.asyncio
+async def test_create_session_persists_provider_overrides_and_planning_writes_provider_config(tmp_path):
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            return {"id": 21, "uuid": "job-21", "status": "queued", **kwargs}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=DummyJobs(),
+    )
+
+    session = service.create_session(
+        owner_user_id="1",
+        query="Hybrid provider config test",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        provider_overrides={
+            "local": {"top_k": 4, "sources": ["media_db"]},
+            "web": {"engine": "duckduckgo", "result_count": 3},
+        },
+    )
+
+    await handle_research_phase_job(
+        {
+            "id": 21,
+            "payload": {
+                "session_id": session.id,
+                "phase": "drafting_plan",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+    )
+
+    provider_config = service.get_artifact(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="provider_config.json",
+    )
+
+    assert provider_config["content"]["web"]["engine"] == "duckduckgo"
+    assert provider_config["content"]["local"]["top_k"] == 4
+
+
+def test_research_sessions_db_migrates_provider_overrides_column(tmp_path):
+    import sqlite3
+
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+
+    db_path = tmp_path / "research.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_sessions (
+                id TEXT PRIMARY KEY,
+                owner_user_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                query TEXT NOT NULL,
+                source_policy TEXT NOT NULL,
+                autonomy_mode TEXT NOT NULL,
+                limits_json TEXT NOT NULL DEFAULT '{}',
+                active_job_id TEXT,
+                latest_checkpoint_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT
+            );
+            """
+        )
+
+    ResearchSessionsDB(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info('research_sessions')").fetchall()}
+
+    assert "provider_overrides_json" in cols
+
+
 def test_get_artifact_rejects_disallowed_name(tmp_path):
     from tldw_Server_API.app.core.Research.service import ResearchService
 

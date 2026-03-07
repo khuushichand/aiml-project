@@ -54,6 +54,42 @@ def test_create_and_approve_research_run():
         assert approve_resp.json()["phase"] == "collecting"
 
 
+def test_create_research_run_passes_provider_overrides():
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    class StubService:
+        def create_session(self, **kwargs):
+            assert kwargs["provider_overrides"]["web"]["engine"] == "duckduckgo"
+            assert kwargs["provider_overrides"]["local"]["top_k"] == 4
+            return {
+                "id": "rs_2",
+                "status": "queued",
+                "phase": "drafting_plan",
+                "active_job_id": "11",
+                "latest_checkpoint_id": None,
+            }
+
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/api/v1/research/runs",
+            json={
+                "query": "Provider override test",
+                "provider_overrides": {
+                    "local": {"top_k": 4, "sources": ["media_db"]},
+                    "web": {"engine": "duckduckgo", "result_count": 3},
+                },
+            },
+        )
+        assert create_resp.status_code == 200
+        assert create_resp.json()["id"] == "rs_2"
+
+
 def test_read_research_run_bundle_and_artifact():
     from tldw_Server_API.app.api.v1.endpoints import research_runs
 

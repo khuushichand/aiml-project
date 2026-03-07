@@ -23,9 +23,29 @@ RESEARCH_DOMAIN = "research"
 RESEARCH_JOB_TYPE = "research_phase"
 RESEARCH_QUEUE = "default"
 
+_DEFAULT_PROVIDER_CONFIG = {
+    "local": {"top_k": 5, "sources": ["media_db"]},
+    "web": {"engine": "duckduckgo", "result_count": 5},
+    "academic": {"providers": ["arxiv", "pubmed", "crossref"], "max_results": 5},
+    "synthesis": {"provider": None, "model": None, "temperature": 0.2},
+}
+
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _resolve_provider_config(raw_overrides: dict[str, Any] | None) -> dict[str, Any]:
+    resolved = {section: dict(values) for section, values in _DEFAULT_PROVIDER_CONFIG.items()}
+    overrides = raw_overrides if isinstance(raw_overrides, dict) else {}
+    for section, values in overrides.items():
+        if section not in resolved or not isinstance(values, dict):
+            continue
+        for key, value in values.items():
+            if key not in resolved[section]:
+                continue
+            resolved[section][key] = value
+    return resolved
 
 
 def enqueue_research_phase_job(
@@ -137,6 +157,14 @@ async def _handle_planning_phase(
         phase=session.phase,
         job_id=job_id,
     )
+    artifact_store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="provider_config.json",
+        payload=_resolve_provider_config(session.provider_overrides_json),
+        phase=session.phase,
+        job_id=job_id,
+    )
 
     next_phase = "collecting"
     next_status = "queued"
@@ -157,7 +185,7 @@ async def _handle_planning_phase(
         "session_id": session.id,
         "phase": next_phase,
         "checkpoint_id": checkpoint_id,
-        "artifacts_written": 1,
+        "artifacts_written": 2,
     }
 
 

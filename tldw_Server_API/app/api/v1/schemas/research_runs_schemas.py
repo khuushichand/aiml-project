@@ -14,6 +14,7 @@ class ResearchRunCreateRequest(BaseModel):
     source_policy: str = Field(default="balanced", min_length=1, max_length=64)
     autonomy_mode: str = Field(default="checkpointed", min_length=1, max_length=64)
     limits_json: dict[str, Any] | None = None
+    provider_overrides: dict[str, Any] | None = None
 
 
 class ResearchCheckpointPatchApproveRequest(BaseModel):
