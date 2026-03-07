@@ -1277,6 +1277,7 @@ def _build_adapter_request_from_chat_args(chat_args: dict[str, Any]) -> tuple[st
         "principal",
         "auth_user",
         "trusted_base_url_override",
+        "_structured_requested_response_format",
         "stream",
         "streaming",
         "history_message_limit",
@@ -1403,7 +1404,9 @@ def build_call_params_from_request(
 
     Mirrors the transformation previously in the endpoint: renames OpenAI-style
     params to the generic names expected by chat_api_call and attaches
-    provider/model/messages/system/stream flags.
+    provider/model/messages/system/stream flags. Structured `response_format`
+    requests are negotiated here so every caller gets the downgraded outbound
+    payload before the provider call is wrapped.
     """
     call_params = request_data.model_dump(
         exclude_none=True,
@@ -1433,6 +1436,16 @@ def build_call_params_from_request(
         call_params["topp"] = top_p_value
     if "user" in call_params:
         call_params["user_identifier"] = call_params.pop("user")
+    response_format = call_params.get("response_format")
+    if isinstance(response_format, dict):
+        requested_type = str(response_format.get("type") or "").strip().lower()
+        if requested_type == "json_schema":
+            decision = negotiate_structured_response_mode(
+                provider=target_api_provider,
+                requested=response_format,
+            )
+            call_params["_structured_requested_response_format"] = dict(response_format)
+            call_params["response_format"] = decision.response_format
 
     call_params.update(
         {
@@ -1635,22 +1648,26 @@ def prepare_structured_response_request(
     *,
     provider: str,
     response_format: Any,
+    requested_response_format: Any | None = None,
 ) -> StructuredResponseRequestContext | None:
     """Resolve structured-output negotiation for the original request payload."""
 
-    if not isinstance(response_format, dict):
+    candidate_response_format = requested_response_format
+    if not isinstance(candidate_response_format, dict):
+        candidate_response_format = response_format
+    if not isinstance(candidate_response_format, dict):
         return None
 
-    validation_schema = _extract_structured_schema_from_response_format(response_format)
+    validation_schema = _extract_structured_schema_from_response_format(candidate_response_format)
     if validation_schema is None:
         return None
 
     decision = negotiate_structured_response_mode(
         provider=provider,
-        requested=response_format,
+        requested=candidate_response_format,
     )
     return StructuredResponseRequestContext(
-        requested_response_format=dict(response_format),
+        requested_response_format=dict(candidate_response_format),
         validation_schema=validation_schema,
         decision=decision,
     )
@@ -2665,6 +2682,7 @@ async def execute_streaming_call(
                 structured_request_context = prepare_structured_response_request(
                     provider=selected_provider,
                     response_format=cleaned_args.get("response_format"),
+                    requested_response_format=cleaned_args.get("_structured_requested_response_format"),
                 )
             apply_structured_response_request(
                 cleaned_args=cleaned_args,
@@ -2750,9 +2768,12 @@ async def execute_streaming_call(
                                         structured_request_context = prepare_structured_response_request(
                                             provider=fallback_provider,
                                             response_format=(
+                                                refreshed_args.get("response_format")
+                                            ),
+                                            requested_response_format=(
                                                 structured_request_context.requested_response_format
                                                 if structured_request_context is not None
-                                                else refreshed_args.get("response_format")
+                                                else refreshed_args.get("_structured_requested_response_format")
                                             ),
                                         )
                                     except (
@@ -2966,10 +2987,11 @@ async def execute_streaming_call(
                         try:
                             structured_request_context = prepare_structured_response_request(
                                 provider=fallback_provider,
-                                response_format=(
+                                response_format=refreshed_args.get("response_format"),
+                                requested_response_format=(
                                     structured_request_context.requested_response_format
                                     if structured_request_context is not None
-                                    else refreshed_args.get("response_format")
+                                    else refreshed_args.get("_structured_requested_response_format")
                                 ),
                             )
                         except (
@@ -3829,6 +3851,7 @@ async def execute_non_stream_call(
                 structured_request_context = prepare_structured_response_request(
                     provider=selected_provider,
                     response_format=cleaned_args.get("response_format"),
+                    requested_response_format=cleaned_args.get("_structured_requested_response_format"),
                 )
             apply_structured_response_request(
                 cleaned_args=cleaned_args,
@@ -3970,10 +3993,11 @@ async def execute_non_stream_call(
                         try:
                             structured_request_context = prepare_structured_response_request(
                                 provider=fallback_provider,
-                                response_format=(
+                                response_format=refreshed_args.get("response_format"),
+                                requested_response_format=(
                                     structured_request_context.requested_response_format
                                     if structured_request_context is not None
-                                    else refreshed_args.get("response_format")
+                                    else refreshed_args.get("_structured_requested_response_format")
                                 ),
                             )
                         except (

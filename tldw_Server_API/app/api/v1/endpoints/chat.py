@@ -141,7 +141,6 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
 )
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 from tldw_Server_API.app.core.Chat.chat_service import (
-    apply_structured_response_request,
     apply_prompt_templating,
     build_structured_http_exception,
     build_call_params_from_request,
@@ -2812,10 +2811,7 @@ async def create_chat_completion(
                 structured_request_context = prepare_structured_response_request(
                     provider=target_api_provider,
                     response_format=cleaned_args.get("response_format"),
-                )
-                apply_structured_response_request(
-                    cleaned_args=cleaned_args,
-                    structured_request_context=structured_request_context,
+                    requested_response_format=cleaned_args.get("_structured_requested_response_format"),
                 )
             except (
                 StructuredGenerationCapabilityError,
@@ -3235,7 +3231,12 @@ async def create_chat_completion(
                                 try:
                                     refreshed_structured_request_context = prepare_structured_response_request(
                                         provider=target_api_provider,
-                                        response_format=structured_request_context.requested_response_format,
+                                        response_format=refreshed_args.get("response_format"),
+                                        requested_response_format=(
+                                            structured_request_context.requested_response_format
+                                            if structured_request_context is not None
+                                            else refreshed_args.get("_structured_requested_response_format")
+                                        ),
                                     )
                                 except (
                                     StructuredGenerationCapabilityError,
@@ -3243,10 +3244,6 @@ async def create_chat_completion(
                                     StructuredGenerationSchemaError,
                                 ) as structured_exc:
                                     raise build_structured_http_exception(structured_exc) from structured_exc
-                                apply_structured_response_request(
-                                    cleaned_args=refreshed_args,
-                                    structured_request_context=refreshed_structured_request_context,
-                                )
                             refreshed_response = perform_chat_api_call(**refreshed_args)
                             _record_openai_oauth_retry("success")
                             return refreshed_response
