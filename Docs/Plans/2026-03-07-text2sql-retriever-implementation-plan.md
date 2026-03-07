@@ -10,6 +10,25 @@
 
 ---
 
+### Task 0: Environment sync for new dependency
+
+**Files:**
+- Modify: none
+
+**Step 1: Install updated project dependencies**
+
+Run: `source .venv/bin/activate && pip install -e .`
+Expected: dependency set installed, including `sqlglot`.
+
+**Step 2: Verify parser dependency import**
+
+Run: `source .venv/bin/activate && python -c "import sqlglot; print(sqlglot.__version__)"`
+Expected: prints a version string.
+
+**Step 3: Commit**
+
+No commit required for this task (environment-only).
+
 ### Task 1: Add Text2SQL module scaffolding and parser dependency
 
 **Files:**
@@ -99,24 +118,36 @@ ALIAS_MAP = {
     "chats": "chats",
     "kanban": "kanban",
     "kanban_db": "kanban",
+    "prompts": "prompts",
+    "claims": "claims",
     "sql": "sql",
 }
 
-ALLOWED_SOURCES = frozenset({"media_db", "notes", "characters", "chats", "kanban", "sql"})
+PUBLIC_SOURCES = frozenset({"media_db", "notes", "characters", "chats", "kanban", "sql"})
+INTERNAL_SOURCES = frozenset(set(PUBLIC_SOURCES) | {"prompts", "claims"})
 
 
-def normalize_source(value: str) -> str:
+def normalize_source(value: str, *, allow_internal: bool = False) -> str:
     key = str(value).strip().lower()
     normalized = ALIAS_MAP.get(key, key)
-    if normalized not in ALLOWED_SOURCES:
-        raise ValueError(f"Invalid source '{value}'. Allowed: {sorted(ALLOWED_SOURCES)}")
+    allowed = INTERNAL_SOURCES if allow_internal else PUBLIC_SOURCES
+    if normalized not in allowed:
+        raise ValueError(f"Invalid source '{value}'. Allowed: {sorted(allowed)}")
     return normalized
 
 
-def normalize_sources(values: list[str] | None) -> list[str]:
+def normalize_sources(values: list[str] | None, *, allow_internal: bool = False) -> list[str]:
     if values is None:
         return ["media_db"]
-    return [normalize_source(v) for v in values]
+    return [normalize_source(v, allow_internal=allow_internal) for v in values]
+
+
+def normalize_sources_public(values: list[str] | None) -> list[str]:
+    return normalize_sources(values, allow_internal=False)
+
+
+def normalize_sources_internal(values: list[str] | None) -> list[str]:
+    return normalize_sources(values, allow_internal=True)
 ```
 
 **Step 4: Run test to verify it passes**
@@ -172,10 +203,10 @@ class DataSource(Enum):
 
 ```python
 # rag_schemas_unified.py (inside sources validator)
-from tldw_Server_API.app.core.Text2SQL.source_registry import normalize_sources
+from tldw_Server_API.app.core.Text2SQL.source_registry import normalize_sources_public
 
 ...
-return normalize_sources(v)
+return normalize_sources_public(v)
 ```
 
 **Step 4: Run test to verify it passes**
@@ -253,11 +284,12 @@ class SqlGuard:
         self.max_limit = max_limit
 
     def validate_and_rewrite(self, sql: str) -> GuardedSql:
-        tree = sqlglot.parse_one(sql)
-        if not isinstance(tree, (exp.Select, exp.With)):
-            raise SqlPolicyViolation("Only SELECT/WITH queries are allowed")
-        if ";" in sql.strip().rstrip(";"):
+        statements = sqlglot.parse(sql)
+        if len(statements) != 1:
             raise SqlPolicyViolation("Multiple statements are not allowed")
+        tree = statements[0]
+        if not isinstance(tree, exp.Select):
+            raise SqlPolicyViolation("Only SELECT/WITH queries are allowed")
         limit = tree.args.get("limit")
         injected = False
         clamped = False
@@ -265,7 +297,10 @@ class SqlGuard:
             tree = tree.limit(self.default_limit)
             injected = True
         else:
-            lit = int(limit.expression.this)
+            try:
+                lit = int(str(limit.expression.this))
+            except (TypeError, ValueError):
+                raise SqlPolicyViolation("LIMIT must be a numeric literal")
             if lit > self.max_limit:
                 tree = tree.limit(self.max_limit)
                 clamped = True
@@ -477,7 +512,7 @@ class Text2SQLResponse(BaseModel):
 
 ```python
 # text2sql.py
-router = APIRouter(prefix="/api/v1/text2sql", tags=["text2sql"])
+router = APIRouter(prefix="/text2sql", tags=["text2sql"])
 
 @router.post("/query", response_model=Text2SQLResponse)
 async def query_text2sql(...):
@@ -487,7 +522,7 @@ async def query_text2sql(...):
 ```python
 # main.py include router
 from tldw_Server_API.app.api.v1.endpoints.text2sql import router as text2sql_router
-app.include_router(text2sql_router, tags=["text2sql"])
+_include_if_enabled("text2sql", text2sql_router, prefix=f"{API_V1_PREFIX}", tags=["text2sql"])
 ```
 
 **Step 4: Run test to verify it passes**
@@ -507,6 +542,7 @@ git commit -m "feat(api): add text2sql query endpoint"
 **Files:**
 - Modify: `tldw_Server_API/app/core/RAG/rag_service/database_retrievers.py`
 - Modify: `tldw_Server_API/app/core/RAG/rag_service/unified_pipeline.py`
+- Modify: `tldw_Server_API/app/api/v1/schemas/rag_schemas_unified.py`
 - Create: `tldw_Server_API/tests/RAG/test_sql_retriever_integration.py`
 
 **Step 1: Write the failing test**
@@ -519,7 +555,12 @@ from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_ra
 
 @pytest.mark.asyncio
 async def test_unified_rag_accepts_sql_source(monkeypatch):
-    result = await unified_rag_pipeline(query="sql question", sources=["sql"], enable_generation=False)
+    result = await unified_rag_pipeline(
+        query="sql question",
+        sources=["sql"],
+        sql_target_id="media_db",
+        enable_generation=False,
+    )
     assert result is not None
 ```
 
@@ -540,8 +581,8 @@ class SQLRetriever(BaseRetriever):
 
 Update `MultiDatabaseRetriever.__init__`:
 ```python
-if "sql" in db_paths:
-    self.retrievers[DataSource.SQL] = SQLRetriever(...)
+if sql_retriever is not None:
+    self.retrievers[DataSource.SQL] = sql_retriever
 ```
 
 Update source mapping in `unified_pipeline.py` to use canonical registry and explicit SQL mapping:
@@ -617,6 +658,7 @@ git commit -m "feat(text2sql): enforce tabular result budgets and sql fusion wei
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/AuthNZ/permissions.py`
+- Modify: `tldw_Server_API/app/core/DB_Management/UserDatabase_v2.py`
 - Modify: `tldw_Server_API/app/api/v1/endpoints/text2sql.py`
 - Create: `tldw_Server_API/tests/Security/test_text2sql_rbac_and_acl.py`
 
@@ -641,6 +683,12 @@ SQL_READ = "sql.read"
 ```
 
 ```python
+# UserDatabase_v2.py _seed_default_data()
+default_perms.append(("sql.read", "Run read-only SQL retrieval", "sql"))
+# grant sql.read to user/admin defaults as appropriate
+```
+
+```python
 # text2sql.py dependencies
 dependencies=[Depends(check_rate_limit), Depends(require_permissions(SQL_READ))]
 ```
@@ -659,7 +707,7 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/core/AuthNZ/permissions.py tldw_Server_API/app/api/v1/endpoints/text2sql.py tldw_Server_API/tests/Security/test_text2sql_rbac_and_acl.py
+git add tldw_Server_API/app/core/AuthNZ/permissions.py tldw_Server_API/app/core/DB_Management/UserDatabase_v2.py tldw_Server_API/app/api/v1/endpoints/text2sql.py tldw_Server_API/tests/Security/test_text2sql_rbac_and_acl.py
 git commit -m "feat(security): add sql.read permission and connector ACL checks"
 ```
 
@@ -702,7 +750,6 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add Docs/API-related/RAG_API_Documentation.md Docs/API-related/API_README.md CHANGELOG.md /tmp/bandit_text2sql.json
+git add Docs/API-related/RAG_API_Documentation.md Docs/API-related/API_README.md CHANGELOG.md
 git commit -m "docs(text2sql): document endpoint, rag source, and verification artifacts"
 ```
-

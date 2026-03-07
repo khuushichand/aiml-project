@@ -46,6 +46,9 @@ Cons: policy and behavior drift risk; duplicated tests and security logic.
   - source string -> enum mapping,
   - retriever registration/dispatch.
 - Unknown sources must raise validation errors, never default to `media_db`.
+- Provide separate public and internal source profiles so internal-only sources
+  (for example `prompts`, `claims`) are not accidentally removed by API-facing
+  normalization.
 
 3. `SchemaCatalog`
 - Builds compact schema context (tables, columns, keys, semantic hints) per target.
@@ -156,6 +159,8 @@ Authorization requirements:
 - caller has `sql.read`.
 - caller has access to `target_id` within tenant/org scope.
 - connector resolution is registry-backed only (no raw DSN/credentials in request).
+- `sql.read` must be seeded/backfilled in RBAC defaults and migration paths so
+  existing deployments do not fail unexpectedly after rollout.
 
 ## 10) Performance and Budget Controls
 - `max_rows` hard cap.
