@@ -12,6 +12,7 @@ import {
 
 type ResearchRunStatusStackProps = {
   runs: ChatLinkedResearchRun[]
+  onUseInChat?: (run: ChatLinkedResearchRun) => void
 }
 
 const STATUS_BADGE_CLASSNAME: Record<string, string> = {
@@ -24,7 +25,8 @@ const STATUS_BADGE_CLASSNAME: Record<string, string> = {
 }
 
 export const ResearchRunStatusStack: React.FC<ResearchRunStatusStackProps> = ({
-  runs
+  runs,
+  onUseInChat
 }) => {
   const [showAllTerminal, setShowAllTerminal] = React.useState(false)
   const orderedRuns = React.useMemo(() => orderChatLinkedResearchRuns(runs), [runs])
@@ -74,12 +76,23 @@ export const ResearchRunStatusStack: React.FC<ResearchRunStatusStackProps> = ({
                     <span className="truncate">{run.run_id}</span>
                   </div>
                 </div>
-                <a
-                  href={buildChatLinkedResearchPath(run.run_id)}
-                  className="shrink-0 text-sm font-medium text-primary hover:underline"
-                >
-                  Open in Research
-                </a>
+                <div className="flex shrink-0 items-center gap-3">
+                  {run.status === "completed" && (
+                    <button
+                      type="button"
+                      className="text-sm font-medium text-text hover:text-primary"
+                      onClick={() => onUseInChat?.(run)}
+                    >
+                      Use in Chat
+                    </button>
+                  )}
+                  <a
+                    href={buildChatLinkedResearchPath(run.run_id)}
+                    className="text-sm font-medium text-primary hover:underline"
+                  >
+                    Open in Research
+                  </a>
+                </div>
               </div>
             )
           })}

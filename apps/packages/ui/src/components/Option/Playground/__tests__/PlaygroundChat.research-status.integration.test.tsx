@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { PlaygroundChat } from "../PlaygroundChat"
@@ -241,6 +241,36 @@ describe("PlaygroundChat linked research status integration", () => {
     expect(screen.getByText("Running")).toBeInTheDocument()
     expect(screen.getByText("Completed")).toBeInTheDocument()
     expect(screen.getByText("Failed")).toBeInTheDocument()
+  })
+
+  it("shows Use in Chat only for completed linked runs", () => {
+    setLinkedRuns([
+      {
+        run_id: "rs_running",
+        query: "Running query",
+        status: "running",
+        phase: "collecting",
+        control_state: "running",
+        latest_checkpoint_id: null,
+        updated_at: "2026-03-08T20:03:00+00:00"
+      },
+      {
+        run_id: "rs_completed",
+        query: "Completed query",
+        status: "completed",
+        phase: "completed",
+        control_state: "running",
+        latest_checkpoint_id: null,
+        updated_at: "2026-03-08T20:02:00+00:00"
+      }
+    ])
+
+    renderChat()
+
+    const rows = screen.getAllByTestId("research-run-status-row")
+    expect(rows).toHaveLength(2)
+    expect(within(rows[0]).queryByRole("button", { name: "Use in Chat" })).not.toBeInTheDocument()
+    expect(within(rows[1]).getByRole("button", { name: "Use in Chat" })).toBeInTheDocument()
   })
 
   it("does not render the status block for temporary chats or chats without a server id", () => {
