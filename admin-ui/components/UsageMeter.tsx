@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils';
+import { formatCents } from '@/lib/formatters';
 
 interface UsageMeterProps {
   used: number;

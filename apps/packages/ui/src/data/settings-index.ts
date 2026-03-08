@@ -405,6 +405,16 @@ export const SETTINGS_INDEX: SettingDefinition[] = [
     controlType: "button",
   },
   {
+    id: "setting-persona-garden",
+    labelKey: "settings:personaGardenNav",
+    defaultLabel: "Persona Garden",
+    defaultDescription: "Configure advanced personas and live persona sessions",
+    route: "/persona",
+    section: "Knowledge",
+    keywords: ["persona", "garden", "memory", "state", "assistant"],
+    controlType: "button",
+  },
+  {
     id: "setting-media",
     labelKey: "settings:mediaNav",
     defaultLabel: "Media Library",
