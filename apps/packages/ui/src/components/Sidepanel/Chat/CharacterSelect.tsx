@@ -22,6 +22,7 @@ import {
   MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
   normalizeMessageSteeringPrompts
 } from "@/utils/message-steering"
+import { MyChatIdentityMenu } from "@/components/Common/MyChatIdentityMenu"
 import { IconButton } from "@/components/Common/IconButton"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useAntdModal } from "@/hooks/useAntdModal"
@@ -308,6 +309,32 @@ export const CharacterSelect: React.FC<Props> = ({
     )
   }, [userPersonaImage])
   const trimmedDisplayName = userDisplayName.trim()
+  const displayNameActionLabel = trimmedDisplayName
+    ? (t("sidepanel:characterSelect.displayNameCurrent", {
+        defaultValue: "Your name: {{name}}",
+        name: trimmedDisplayName
+      }) as string)
+    : (t("sidepanel:characterSelect.displayNameAction", {
+        defaultValue: "Set your name"
+      }) as string)
+  const imageActionLabel = hasUserPersonaImage
+    ? (t("sidepanel:characterSelect.identityImageReplace", {
+        defaultValue: "Replace your image"
+      }) as string)
+    : (t("sidepanel:characterSelect.identityImageUpload", {
+        defaultValue: "Upload your image"
+      }) as string)
+  const clearImageActionLabel = hasUserPersonaImage
+    ? (t("sidepanel:characterSelect.identityImageClear", {
+        defaultValue: "Remove your image"
+      }) as string)
+    : undefined
+  const promptTemplatesActionLabel = t(
+    "sidepanel:characterSelect.promptTemplatesAction",
+    {
+      defaultValue: "Prompt style templates"
+    }
+  ) as string
   const displayNameInputRef = useRef(trimmedDisplayName)
   const steeringPromptDraftRef = useRef<MessageSteeringPromptTemplates>(
     normalizeMessageSteeringPrompts(messageSteeringPrompts)
@@ -415,7 +442,7 @@ export const CharacterSelect: React.FC<Props> = ({
     React.startTransition(() => {
       modal.confirm({
         title: t("sidepanel:characterSelect.editPromptsTitle", {
-          defaultValue: "Edit generation prompts"
+          defaultValue: "Prompt style templates"
         }),
         width: 720,
         centered: true,
@@ -496,7 +523,7 @@ export const CharacterSelect: React.FC<Props> = ({
           })
           notification.success({
             message: t("sidepanel:characterSelect.editPromptsSaved", {
-              defaultValue: "Generation prompts saved"
+              defaultValue: "Prompt style templates saved"
             })
           })
         }
@@ -594,6 +621,16 @@ export const CharacterSelect: React.FC<Props> = ({
     })
     setDropdownOpen(false)
   }, [notification, setDropdownOpen, setUserPersonaImage, t])
+
+  const openDisplayNameFromIdentityMenu = React.useCallback(() => {
+    setDropdownOpen(false)
+    openDisplayNameModal()
+  }, [openDisplayNameModal, setDropdownOpen])
+
+  const openPromptTemplatesFromIdentityMenu = React.useCallback(() => {
+    setDropdownOpen(false)
+    openGenerationPromptsModal()
+  }, [openGenerationPromptsModal, setDropdownOpen])
 
   const handleMoodImageUploadClick = React.useCallback(
     (mood: CharacterMoodLabel) => {
@@ -1291,73 +1328,6 @@ export const CharacterSelect: React.FC<Props> = ({
     })
 
     items.push({
-      key: "display-name",
-      label: (
-        <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
-          <span>
-            {trimmedDisplayName
-              ? t("sidepanel:characterSelect.displayNameCurrent", {
-                  defaultValue: "Your name: {{name}}",
-                  name: trimmedDisplayName
-                })
-              : t("sidepanel:characterSelect.displayNameAction", {
-                  defaultValue: "Set your name"
-                })}
-          </span>
-        </div>
-      ),
-      onClick: openDisplayNameModal
-    })
-
-    items.push({
-      key: "edit-generation-prompts",
-      label: (
-        <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
-          <span>
-            {t("sidepanel:characterSelect.editPrompts", {
-              defaultValue: "Edit generation prompts"
-            })}
-          </span>
-        </div>
-      ),
-      onClick: openGenerationPromptsModal
-    })
-
-    items.push({
-      key: "persona-image-upload",
-      label: (
-        <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
-          <span>
-            {hasUserPersonaImage
-              ? t("sidepanel:characterSelect.personaImageReplace", {
-                  defaultValue: "Replace your persona image"
-                })
-              : t("sidepanel:characterSelect.personaImageUpload", {
-                  defaultValue: "Upload your persona image"
-                })}
-          </span>
-        </div>
-      ),
-      onClick: handlePersonaImageUploadClick
-    })
-
-    if (hasUserPersonaImage) {
-      items.push({
-        key: "persona-image-clear",
-        label: (
-          <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
-            <span>
-              {t("sidepanel:characterSelect.personaImageClear", {
-                defaultValue: "Remove your persona image"
-              })}
-            </span>
-          </div>
-        ),
-        onClick: clearPersonaImage
-      })
-    }
-
-    items.push({
       key: "persona-portrait-toggle",
       label: (
         <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
@@ -1457,11 +1427,6 @@ export const CharacterSelect: React.FC<Props> = ({
     handleImportClick,
     handleSelect,
     isLoading,
-    openDisplayNameModal,
-    openGenerationPromptsModal,
-    hasUserPersonaImage,
-    handlePersonaImageUploadClick,
-    clearPersonaImage,
     clearMoodImage,
     handleMoodImageUploadClick,
     openCharactersWorkspace,
@@ -1473,8 +1438,7 @@ export const CharacterSelect: React.FC<Props> = ({
     setDropdownOpen,
     sortedCharacters,
     sortMode,
-    t,
-    trimmedDisplayName
+    t
   ])
 
   // Focus search input when dropdown opens
@@ -1586,6 +1550,17 @@ export const CharacterSelect: React.FC<Props> = ({
                 onKeyDown={(event) => event.stopPropagation()}
               />
             </div>
+            <MyChatIdentityMenu
+              className="border-b border-border"
+              displayNameLabel={displayNameActionLabel}
+              imageLabel={imageActionLabel}
+              clearImageLabel={clearImageActionLabel}
+              promptTemplatesLabel={promptTemplatesActionLabel}
+              onDisplayName={openDisplayNameFromIdentityMenu}
+              onImage={handlePersonaImageUploadClick}
+              onPromptTemplates={openPromptTemplatesFromIdentityMenu}
+              onClearImage={clearImageActionLabel ? clearPersonaImage : undefined}
+            />
             {menu}
           </div>
         )}
