@@ -23,6 +23,7 @@ import { buildMessageSteeringSnippet } from "@/utils/message-steering"
 import { useStoreMessageOption } from "@/store/option"
 import type { ChatHistory, Message, ToolChoice } from "~/store/option"
 import type { ToolCall } from "@/types/tool-calls"
+import type { ChatResearchContext } from "@/services/tldw/TldwApiClient"
 import type {
   MessageSteeringFlags,
   MessageSteeringPromptTemplates
@@ -65,6 +66,7 @@ export type ChatModeParamsBase = {
   messageSteering?: MessageSteeringFlags
   messageSteeringPrompts?: MessageSteeringPromptTemplates
   imageEventSyncPolicy?: ImageGenerationEventSyncPolicy
+  researchContext?: ChatResearchContext
 }
 
 export type ChatModeContext<TParams extends ChatModeParamsBase> = TParams & {
@@ -491,7 +493,8 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
 
     const modelClient = await pageAssistModel({
       model: selectedModel,
-      toolChoice
+      toolChoice,
+      researchContext: context.researchContext
     })
 
     let generationInfo: unknown = undefined

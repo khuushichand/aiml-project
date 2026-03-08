@@ -74,7 +74,11 @@ import {
   selectedCharacterSyncStorage,
   parseSelectedCharacterValue
 } from "@/utils/selected-character-storage"
-import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
+import {
+  tldwClient,
+  type ChatResearchContext,
+  type ConversationState
+} from "@/services/tldw/TldwApiClient"
 import { getServerCapabilities } from "@/services/tldw/server-capabilities"
 import { generateTitle } from "@/services/title"
 import { trackCompareMetric } from "@/utils/compare-metrics"
@@ -118,6 +122,7 @@ type ChatModeOverrides = {
   serverChatId?: string | null
   selectedModel?: string | null
   imageEventSyncPolicy?: ImageGenerationEventSyncPolicy
+  researchContext?: ChatResearchContext
 } & Record<string, unknown>
 
 const loadActorSettings = () => import("@/services/actor-settings")
@@ -1861,7 +1866,8 @@ export const useChatActions = ({
     imageEventSyncPolicy,
     messageSteeringOverride,
     continueOutputTarget = "chat",
-    serverChatIdOverride
+    serverChatIdOverride,
+    researchContext
   }: {
     message: string
     image: string
@@ -1883,6 +1889,7 @@ export const useChatActions = ({
     messageSteeringOverride?: Partial<MessageSteeringState> | null
     continueOutputTarget?: "chat" | "composer_input"
     serverChatIdOverride?: string | null
+    researchContext?: ChatResearchContext
   }) => {
     const effectiveSelectedModel = getEffectiveSelectedModel()
     setStreaming(true)
@@ -1935,7 +1942,8 @@ export const useChatActions = ({
       imageGenerationRefine,
       imageGenerationPromptMode,
       imageGenerationSource,
-      imageEventSyncPolicy
+      imageEventSyncPolicy,
+      researchContext
     })
     const baseMessages = chatHistory || messages
     const baseHistory = memory || history

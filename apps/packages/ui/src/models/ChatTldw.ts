@@ -8,7 +8,8 @@ import {
 import {
   tldwChat,
   ChatMessage,
-  type ChatCompletionContentPart
+  type ChatCompletionContentPart,
+  type ChatResearchContext
 } from "@/services/tldw"
 import type { ToolCall } from "@/types/tool-calls"
 import { publishChatLoopEvent } from "@/services/chat-loop/bridge"
@@ -35,6 +36,7 @@ export interface ChatTldwOptions {
   apiProvider?: string
   extraHeaders?: Record<string, unknown>
   extraBody?: Record<string, unknown>
+  researchContext?: ChatResearchContext
 }
 
 export class ChatTldw {
@@ -58,6 +60,7 @@ export class ChatTldw {
   apiProvider?: string
   extraHeaders?: Record<string, unknown>
   extraBody?: Record<string, unknown>
+  researchContext?: ChatResearchContext
 
   constructor(options: ChatTldwOptions) {
     // Normalize model id: drop internal prefix like "tldw:" so server receives provider/model
@@ -81,6 +84,7 @@ export class ChatTldw {
     this.apiProvider = options.apiProvider
     this.extraHeaders = options.extraHeaders
     this.extraBody = options.extraBody
+    this.researchContext = options.researchContext
   }
 
   /**
@@ -169,7 +173,8 @@ export class ChatTldw {
         slashCommandInjectionMode: this.slashCommandInjectionMode,
         apiProvider: this.apiProvider,
         extraHeaders: this.extraHeaders,
-        extraBody: this.extraBody
+        extraBody: this.extraBody,
+        researchContext: this.researchContext
       },
       handleChunk
     )
@@ -236,7 +241,8 @@ export class ChatTldw {
       slashCommandInjectionMode: this.slashCommandInjectionMode,
       apiProvider: this.apiProvider,
       extraHeaders: this.extraHeaders,
-      extraBody: this.extraBody
+      extraBody: this.extraBody,
+      researchContext: this.researchContext
     })
 
     return {

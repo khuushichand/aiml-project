@@ -212,6 +212,34 @@ export type ChatMessage =
       name?: string | null
     }
 
+export interface ChatResearchContextOutlineSection {
+  title: string
+}
+
+export interface ChatResearchContextClaim {
+  text: string
+}
+
+export interface ChatResearchContextVerificationSummary {
+  unsupported_claim_count?: number
+}
+
+export interface ChatResearchContextSourceTrustSummary {
+  high_trust_count?: number
+}
+
+export interface ChatResearchContext {
+  run_id: string
+  query: string
+  question: string
+  outline: ChatResearchContextOutlineSection[]
+  key_claims: ChatResearchContextClaim[]
+  unresolved_questions: string[]
+  verification_summary?: ChatResearchContextVerificationSummary
+  source_trust_summary?: ChatResearchContextSourceTrustSummary
+  research_url: string
+}
+
 export interface ChatCompletionRequest {
   messages: ChatMessage[]
   model: string
@@ -235,6 +263,7 @@ export interface ChatCompletionRequest {
   extra_headers?: Record<string, unknown>
   extra_body?: Record<string, unknown>
   response_format?: { type: "json_object" | "text" }
+  research_context?: ChatResearchContext
 }
 
 export interface ServerChatSummary {

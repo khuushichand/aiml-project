@@ -1,3 +1,4 @@
+import type { ChatResearchContext } from "@/services/tldw/TldwApiClient"
 import { buildChatLinkedResearchPath } from "./research-run-status"
 
 const MAX_ATTACHED_RESEARCH_CLAIMS = 5
@@ -5,33 +6,8 @@ const MAX_ATTACHED_RESEARCH_UNRESOLVED_QUESTIONS = 5
 
 type RecordLike = Record<string, unknown>
 
-type AttachedResearchOutlineSection = {
-  title: string
-}
-
-type AttachedResearchClaim = {
-  text: string
-}
-
-type AttachedResearchVerificationSummary = {
-  unsupported_claim_count?: number
-}
-
-type AttachedResearchSourceTrustSummary = {
-  high_trust_count?: number
-}
-
-export type AttachedResearchContext = {
+export type AttachedResearchContext = ChatResearchContext & {
   attached_at: string
-  run_id: string
-  query: string
-  question: string
-  outline: AttachedResearchOutlineSection[]
-  key_claims: AttachedResearchClaim[]
-  unresolved_questions: string[]
-  verification_summary?: AttachedResearchVerificationSummary
-  source_trust_summary?: AttachedResearchSourceTrustSummary
-  research_url: string
 }
 
 export type DeepResearchCompletionMetadata = {
@@ -147,4 +123,11 @@ export const isDeepResearchCompletionMetadata = (
     asNonEmptyString(value.query) !== null &&
     value.kind === "completion_handoff"
   )
+}
+
+export const toChatResearchContext = (
+  value: AttachedResearchContext
+): ChatResearchContext => {
+  const { attached_at: _attachedAt, ...researchContext } = value
+  return researchContext
 }

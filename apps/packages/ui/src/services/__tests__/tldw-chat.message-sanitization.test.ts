@@ -174,4 +174,64 @@ describe("TldwChatService message sanitization", () => {
       { role: "user", content: "stream hello" }
     ])
   })
+
+  it("includes bounded research context in non-stream requests", async () => {
+    const service = new TldwChatService()
+
+    await service.sendMessage([{ role: "user", content: "hello there" }], {
+      model: "gpt-test",
+      researchContext: {
+        run_id: "run_123",
+        query: "Battery recycling supply chain",
+        question: "What changed in the battery recycling market?",
+        outline: [{ title: "Overview" }],
+        key_claims: [{ text: "Claim one" }],
+        unresolved_questions: ["What changed in Europe?"],
+        verification_summary: { unsupported_claim_count: 0 },
+        source_trust_summary: { high_trust_count: 3 },
+        research_url: "/research?run=run_123"
+      }
+    } as any)
+
+    const request = mocks.createChatCompletion.mock.calls[0][0] as {
+      research_context?: Record<string, unknown>
+    }
+    expect(request.research_context).toMatchObject({
+      run_id: "run_123",
+      question: "What changed in the battery recycling market?",
+      research_url: "/research?run=run_123"
+    })
+  })
+
+  it("includes bounded research context in stream requests", async () => {
+    const service = new TldwChatService()
+
+    for await (const _ of service.streamMessage(
+      [{ role: "user", content: "stream hello" }],
+      {
+        model: "gpt-test",
+        researchContext: {
+          run_id: "run_456",
+          query: "Grid-scale recycling economics",
+          question: "What is changing in the grid-scale recycling market?",
+          outline: [{ title: "Market overview" }],
+          key_claims: [{ text: "Claim one" }],
+          unresolved_questions: ["What changed in the EU?"],
+          verification_summary: { unsupported_claim_count: 0 },
+          source_trust_summary: { high_trust_count: 2 },
+          research_url: "/research?run=run_456"
+        }
+      } as any
+    )) {
+      break
+    }
+
+    const request = mocks.streamChatCompletion.mock.calls[0][0] as {
+      research_context?: Record<string, unknown>
+    }
+    expect(request.research_context).toMatchObject({
+      run_id: "run_456",
+      research_url: "/research?run=run_456"
+    })
+  })
 })

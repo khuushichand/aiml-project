@@ -35,6 +35,7 @@ import {
   type TimelineActionDetail
 } from "@/utils/timeline-actions"
 import { useCharacterGreeting } from "@/hooks/useCharacterGreeting"
+import type { AttachedResearchContext } from "./research-chat-context"
 import {
   collectThreadSearchMatches,
   getWrappedMatchIndex
@@ -50,6 +51,8 @@ export const Playground = () => {
   const shortcutsTriggerRef = React.useRef<HTMLButtonElement>(null)
   const shortcutsCloseRef = React.useRef<HTMLButtonElement>(null)
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([])
+  const [attachedResearchContext, setAttachedResearchContext] =
+    React.useState<AttachedResearchContext | null>(null)
   const { t } = useTranslation(["playground", "common"])
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const [stickyChatInput] = useStorage(
@@ -99,6 +102,7 @@ export const Playground = () => {
     ReturnType<typeof setTimeout> | null
   >(null)
   const initializePlaygroundRef = React.useRef(false)
+  const previousThreadRef = React.useRef<string | null>(null)
 
   const showDropFeedback = React.useCallback(
     (feedback: { type: "info" | "error" | "warning"; message: string }) => {
@@ -227,6 +231,17 @@ export const Playground = () => {
       }
     }
   }, [])
+
+  React.useEffect(() => {
+    const currentThreadKey = `${serverChatId ?? ""}::${historyId ?? ""}`
+    if (
+      previousThreadRef.current !== null &&
+      previousThreadRef.current !== currentThreadKey
+    ) {
+      setAttachedResearchContext(null)
+    }
+    previousThreadRef.current = currentThreadKey
+  }, [historyId, serverChatId])
 
   // Session persistence for draft restoration
   const {
@@ -1156,6 +1171,7 @@ export const Playground = () => {
                 searchQuery={threadSearchQuery.trim()}
                 matchedMessageIndices={threadSearchMatchSet}
                 activeSearchMessageIndex={threadSearchActiveMessageIndex}
+                onAttachResearchContext={setAttachedResearchContext}
               />
             </div>
           </div>
@@ -1182,7 +1198,13 @@ export const Playground = () => {
                 </button>
               </div>
             )}
-            <PlaygroundForm droppedFiles={droppedFiles} />
+            <PlaygroundForm
+              droppedFiles={droppedFiles}
+              attachedResearchContext={attachedResearchContext}
+              onRemoveAttachedResearchContext={() =>
+                setAttachedResearchContext(null)
+              }
+            />
           </div>
         </div>
         {artifactsOpen && (

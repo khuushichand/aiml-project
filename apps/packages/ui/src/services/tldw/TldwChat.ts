@@ -2,7 +2,8 @@ import {
   tldwClient,
   ChatMessage,
   ChatCompletionRequest,
-  type ChatCompletionContentPart
+  type ChatCompletionContentPart,
+  type ChatResearchContext
 } from "./TldwApiClient"
 import { extractTokenFromChunk } from "@/utils/extract-token-from-chunk"
 import {
@@ -253,6 +254,7 @@ export interface TldwChatOptions {
   extraHeaders?: Record<string, unknown>
   extraBody?: Record<string, unknown>
   jsonMode?: boolean
+  researchContext?: ChatResearchContext
 }
 export { getLastChatCompletionDebugSnapshot }
 export type { ChatCompletionDebugSnapshot }
@@ -341,7 +343,8 @@ export class TldwChatService {
         api_provider: options.apiProvider,
         extra_headers: options.extraHeaders,
         extra_body: options.extraBody,
-        response_format: options.jsonMode ? { type: "json_object" } : undefined
+        response_format: options.jsonMode ? { type: "json_object" } : undefined,
+        research_context: options.researchContext
       }
       captureChatRequestDebugSnapshot({
         endpoint: "/api/v1/chat/completions",
@@ -416,7 +419,8 @@ export class TldwChatService {
         api_provider: options.apiProvider,
         extra_headers: options.extraHeaders,
         extra_body: options.extraBody,
-        response_format: options.jsonMode ? { type: "json_object" } : undefined
+        response_format: options.jsonMode ? { type: "json_object" } : undefined,
+        research_context: options.researchContext
       }
       captureChatRequestDebugSnapshot({
         endpoint: "/api/v1/chat/completions",

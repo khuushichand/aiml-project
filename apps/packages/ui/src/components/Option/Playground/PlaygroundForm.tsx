@@ -70,6 +70,7 @@ import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
 import { useVoiceChatStream } from "@/hooks/useVoiceChatStream"
 import { useVoiceChatMessages } from "@/hooks/useVoiceChatMessages"
 import { MentionsDropdown } from "./MentionsDropdown"
+import { AttachedResearchContextChip } from "./AttachedResearchContextChip"
 import { ComposerTextarea } from "./ComposerTextarea"
 import { ComposerToolbar, type ComposerContextItem } from "./ComposerToolbar"
 import { ContextFootprintPanel } from "./ContextFootprintPanel"
@@ -231,9 +232,15 @@ import {
 import { createComposerPerfTracker } from "@/utils/perf/composer-perf"
 import { createRenderPerfTracker } from "@/utils/perf/render-profiler"
 import { buildResearchLaunchPath } from "@/routes/route-paths"
+import {
+  toChatResearchContext,
+  type AttachedResearchContext
+} from "./research-chat-context"
 
 type Props = {
   droppedFiles: File[]
+  attachedResearchContext?: AttachedResearchContext | null
+  onRemoveAttachedResearchContext?: () => void
 }
 
 type DefaultCharacterPreferenceQueryResult = {
@@ -272,7 +279,11 @@ const collectStringSegments = (
   }
 }
 
-export const PlaygroundForm = ({ droppedFiles }: Props) => {
+export const PlaygroundForm = ({
+  droppedFiles,
+  attachedResearchContext = null,
+  onRemoveAttachedResearchContext
+}: Props) => {
   const { t } = useTranslation(["playground", "common", "option"])
   const notificationApi = useAntdNotification()
   const inputRef = React.useRef<HTMLInputElement>(null)
@@ -3273,6 +3284,21 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     [availableChatModelIds, form, t]
   )
 
+  const resolveAttachedResearchRequestContext = React.useCallback(
+    (options?: {
+      isImageCommand?: boolean
+      compareModeActive?: boolean
+      imageGenerationSource?: "slash-command" | "generate-modal" | "message-regen"
+    }) => {
+      if (!attachedResearchContext) return undefined
+      if (options?.isImageCommand) return undefined
+      if (options?.compareModeActive) return undefined
+      if (options?.imageGenerationSource) return undefined
+      return toChatResearchContext(attachedResearchContext)
+    },
+    [attachedResearchContext]
+  )
+
   const submitForm = (options?: { ignorePinnedResults?: boolean }) => {
     form.onSubmit(async (value) => {
       const intent = resolveSubmissionIntent(value.message)
@@ -3426,7 +3452,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           : undefined,
         imageGenerationSource: intent.isImageCommand
           ? "slash-command"
-          : undefined
+          : undefined,
+        researchContext: resolveAttachedResearchRequestContext({
+          isImageCommand: intent.isImageCommand,
+          compareModeActive
+        })
       })
     })()
   }
@@ -3576,7 +3606,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           : undefined,
         imageGenerationSource: intent.isImageCommand
           ? "slash-command"
-          : undefined
+          : undefined,
+        researchContext: resolveAttachedResearchRequestContext({
+          isImageCommand: intent.isImageCommand,
+          compareModeActive
+        })
       })
     })()
   }
@@ -4800,7 +4834,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         imageGenerationRefine: imageGenerateRefineMetadata,
         imageGenerationPromptMode: imageGeneratePromptMode,
         imageGenerationSource: "generate-modal",
-        imageEventSyncPolicy: imageGenerateSyncPolicy
+        imageEventSyncPolicy: imageGenerateSyncPolicy,
+        researchContext: resolveAttachedResearchRequestContext({
+          imageGenerationSource: "generate-modal"
+        })
       })
       setImageGenerateModalOpen(false)
       textAreaFocus()
@@ -7382,7 +7419,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         : undefined,
                       imageGenerationSource: intent.isImageCommand
                         ? "slash-command"
-                        : undefined
+                        : undefined,
+                      researchContext: resolveAttachedResearchRequestContext({
+                        isImageCommand: intent.isImageCommand,
+                        compareModeActive
+                      })
                     })
                   })}
                   className="flex w-full min-w-0 flex-col items-center">
@@ -7419,6 +7460,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         ? "rounded-md border border-dashed border-border bg-surface2"
                         : ""
                     }`}>
+                    {attachedResearchContext && (
+                      <AttachedResearchContextChip
+                        context={attachedResearchContext}
+                        onRemove={() => onRemoveAttachedResearchContext?.()}
+                      />
+                    )}
                     <div
                       className={contextToolsOpen ? "mb-2" : "hidden"}
                       aria-hidden={!contextToolsOpen}

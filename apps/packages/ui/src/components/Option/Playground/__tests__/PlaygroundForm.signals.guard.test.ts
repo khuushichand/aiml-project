@@ -72,6 +72,10 @@ describe("PlaygroundForm signal surface guard", () => {
     expect(formSource).toContain("buildSessionInsights")
     expect(formSource).toContain("buildModelRecommendations")
     expect(formSource).toContain("buildCompareInteroperabilityNotices")
+    expect(formSource).toContain("AttachedResearchContextChip")
+    expect(formSource).toContain("attachedResearchContext")
+    expect(formSource).toContain("onRemoveAttachedResearchContext")
+    expect(formSource).toContain("researchContext:")
     expect(formSource).toContain("playground:insights.modalTitle")
     expect(formSource).toContain("startup-template-preview-modal")
     expect(formSource).toContain(
