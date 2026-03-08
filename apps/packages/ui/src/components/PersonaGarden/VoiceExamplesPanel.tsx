@@ -5,6 +5,7 @@ import {
   type PersonaExemplar,
   tldwClient
 } from "@/services/tldw/TldwApiClient"
+import { ExemplarImportPanel } from "./ExemplarImportPanel"
 
 type VoiceExamplesPanelProps = {
   selectedPersonaId: string
@@ -74,6 +75,16 @@ export const VoiceExamplesPanel: React.FC<VoiceExamplesPanelProps> = ({
   )
   const [saving, setSaving] = React.useState(false)
 
+  const mergeExemplars = React.useCallback((incoming: PersonaExemplar[]) => {
+    setExemplars((current) => {
+      const byId = new Map(current.map((item) => [item.id, item]))
+      for (const exemplar of incoming) {
+        byId.set(exemplar.id, exemplar)
+      }
+      return Array.from(byId.values())
+    })
+  }, [])
+
   React.useEffect(() => {
     let cancelled = false
 
@@ -87,7 +98,9 @@ export const VoiceExamplesPanel: React.FC<VoiceExamplesPanelProps> = ({
       setLoading(true)
       setError(null)
       try {
-        const rows = await tldwClient.listPersonaExemplars(selectedPersonaId)
+        const rows = await tldwClient.listPersonaExemplars(selectedPersonaId, {
+          includeDisabled: true
+        })
         if (!cancelled) {
           setExemplars(rows)
         }
@@ -184,15 +197,13 @@ export const VoiceExamplesPanel: React.FC<VoiceExamplesPanelProps> = ({
           formState.exemplarId,
           payload
         )
-        setExemplars((current) =>
-          current.map((item) => (item.id === updated.id ? updated : item))
-        )
+        mergeExemplars([updated])
       } else {
         const created = await tldwClient.createPersonaExemplar(
           selectedPersonaId,
           payload
         )
-        setExemplars((current) => [...current, created])
+        mergeExemplars([created])
       }
       handleReset()
     } catch (saveError) {
@@ -236,6 +247,14 @@ export const VoiceExamplesPanel: React.FC<VoiceExamplesPanelProps> = ({
 
         {selectedPersonaId ? (
           <>
+            <ExemplarImportPanel
+              selectedPersonaId={selectedPersonaId}
+              selectedPersonaName={selectedPersonaName}
+              candidates={exemplars}
+              onCandidatesImported={mergeExemplars}
+              onCandidateReviewed={(candidate) => mergeExemplars([candidate])}
+            />
+
             <div className="grid gap-2 md:grid-cols-2">
               <label className="text-xs text-text-muted">
                 {t("sidepanel:personaGarden.voiceExamples.filterKind", {

@@ -24,6 +24,8 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaDeleteResponse,
     PersonaExemplarCreate,
     PersonaExemplarDeleteResponse,
+    PersonaExemplarImportRequest,
+    PersonaExemplarReviewRequest,
     PersonaExemplarResponse,
     PersonaExemplarUpdate,
     PersonaInfo,
@@ -70,6 +72,10 @@ from tldw_Server_API.app.core.Persona.memory_integration import (
     persist_persona_turn,
     persist_tool_outcome,
     retrieve_top_memories,
+)
+from tldw_Server_API.app.core.Persona.exemplar_ingestion import (
+    append_exemplar_review_note,
+    build_transcript_exemplar_candidates,
 )
 from tldw_Server_API.app.core.Persona.policy_evaluator import (
     default_allow_rules,
@@ -1709,6 +1715,54 @@ async def create_persona_exemplar(
         raise _to_http_exception(exc, action="create persona exemplar") from exc
 
 
+@router.post(
+    "/profiles/{persona_id}/exemplars/import",
+    response_model=list[PersonaExemplarResponse],
+    tags=["persona"],
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_persona_exemplars(
+    persona_id: str,
+    payload: PersonaExemplarImportRequest = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> list[PersonaExemplarResponse]:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        candidate_rows = build_transcript_exemplar_candidates(
+            transcript=payload.transcript,
+            source_ref=payload.source_ref,
+            notes=payload.notes,
+            max_candidates=payload.max_candidates,
+        )
+        created: list[PersonaExemplarResponse] = []
+        for candidate in candidate_rows:
+            create_data = dict(candidate)
+            create_data["persona_id"] = persona_id
+            create_data["user_id"] = user_id
+            exemplar_id = db.create_persona_exemplar(create_data)
+            exemplar = db.get_persona_exemplar(
+                exemplar_id=exemplar_id,
+                persona_id=persona_id,
+                user_id=user_id,
+                include_disabled=True,
+                include_deleted=False,
+            )
+            if exemplar is None:
+                raise HTTPException(status_code=500, detail="Failed to load imported persona exemplar")
+            created.append(_persona_exemplar_to_response(exemplar))
+        return created
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError, ValueError) as exc:
+        raise _to_http_exception(exc, action="import persona exemplars") from exc
+
+
 @router.get(
     "/profiles/{persona_id}/exemplars/{exemplar_id}",
     response_model=PersonaExemplarResponse,
@@ -1793,6 +1847,68 @@ async def update_persona_exemplar(
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         raise _to_http_exception(exc, action="update persona exemplar") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/exemplars/{exemplar_id}/review",
+    response_model=PersonaExemplarResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def review_persona_exemplar(
+    persona_id: str,
+    exemplar_id: str,
+    payload: PersonaExemplarReviewRequest = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaExemplarResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        exemplar = db.get_persona_exemplar(
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_disabled=True,
+            include_deleted=False,
+        )
+        if exemplar is None:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        if str(exemplar.get("source_type") or "") != "generated_candidate":
+            raise HTTPException(status_code=400, detail="Only generated candidates can be reviewed")
+        ok = db.update_persona_exemplar(
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            update_data={
+                "enabled": payload.action == "approve",
+                "notes": append_exemplar_review_note(
+                    existing_notes=exemplar.get("notes"),
+                    action=payload.action,
+                    review_note=payload.notes,
+                ),
+            },
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        updated = db.get_persona_exemplar(
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_disabled=True,
+            include_deleted=False,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        return _persona_exemplar_to_response(updated)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError, ValueError) as exc:
+        raise _to_http_exception(exc, action="review persona exemplar") from exc
 
 
 @router.delete(

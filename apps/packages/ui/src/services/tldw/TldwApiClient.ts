@@ -304,6 +304,24 @@ export type PersonaExemplarInput = {
   notes?: string | null
 }
 
+export type PersonaExemplarListOptions = {
+  includeDisabled?: boolean
+  includeDeleted?: boolean
+  includeDeletedPersonas?: boolean
+}
+
+export type PersonaExemplarImportInput = {
+  transcript: string
+  source_ref?: string | null
+  notes?: string | null
+  max_candidates?: number
+}
+
+export type PersonaExemplarReviewInput = {
+  action: "approve" | "reject"
+  notes?: string | null
+}
+
 export type ConversationSharePermission = "view"
 
 export interface ConversationShareLinkSummary {
@@ -3761,11 +3779,21 @@ export class TldwApiClient {
   }
 
   async listPersonaExemplars(
-    personaId: string | number
+    personaId: string | number,
+    options?: PersonaExemplarListOptions
   ): Promise<PersonaExemplar[]> {
     const encodedPersonaId = encodeURIComponent(String(personaId))
+    const query = new URLSearchParams()
+    if (options?.includeDisabled) query.set("include_disabled", "true")
+    if (options?.includeDeleted) query.set("include_deleted", "true")
+    if (options?.includeDeletedPersonas) {
+      query.set("include_deleted_personas", "true")
+    }
     const payload = await this.request<any>({
-      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars`,
+      path: appendPathQuery(
+        `/api/v1/persona/profiles/${encodedPersonaId}/exemplars`,
+        query.toString() ? `?${query.toString()}` : ""
+      ),
       method: "GET"
     })
     const list = Array.isArray(payload)
@@ -3791,6 +3819,26 @@ export class TldwApiClient {
     return normalizePersonaExemplar(response as Record<string, unknown>)
   }
 
+  async importPersonaExemplars(
+    personaId: string | number,
+    payload: PersonaExemplarImportInput
+  ): Promise<PersonaExemplar[]> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const response = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/import`,
+      method: "POST",
+      body: payload
+    })
+    const list = Array.isArray(response)
+      ? response
+      : Array.isArray(response?.items)
+        ? response.items
+        : []
+    return list.map((item) =>
+      normalizePersonaExemplar(item as Record<string, unknown>)
+    )
+  }
+
   async updatePersonaExemplar(
     personaId: string | number,
     exemplarId: string | number,
@@ -3801,6 +3849,21 @@ export class TldwApiClient {
     const response = await this.request<any>({
       path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/${encodedExemplarId}`,
       method: "PATCH",
+      body: payload
+    })
+    return normalizePersonaExemplar(response as Record<string, unknown>)
+  }
+
+  async reviewPersonaExemplar(
+    personaId: string | number,
+    exemplarId: string | number,
+    payload: PersonaExemplarReviewInput
+  ): Promise<PersonaExemplar> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const encodedExemplarId = encodeURIComponent(String(exemplarId))
+    const response = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/${encodedExemplarId}/review`,
+      method: "POST",
       body: payload
     })
     return normalizePersonaExemplar(response as Record<string, unknown>)

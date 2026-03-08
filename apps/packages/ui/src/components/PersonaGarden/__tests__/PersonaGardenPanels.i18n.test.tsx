@@ -12,7 +12,9 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     listPersonaExemplars: () => Promise.resolve([]),
     createPersonaExemplar: () => Promise.resolve({}),
-    updatePersonaExemplar: () => Promise.resolve({})
+    updatePersonaExemplar: () => Promise.resolve({}),
+    importPersonaExemplars: () => Promise.resolve([]),
+    reviewPersonaExemplar: () => Promise.resolve({})
   }
 }))
 

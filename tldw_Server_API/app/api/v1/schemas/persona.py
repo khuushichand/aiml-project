@@ -16,6 +16,7 @@ PersonaPolicyRuleKind = Literal["mcp_tool", "skill"]
 PersonaSessionStatus = Literal["active", "paused", "closed", "archived"]
 PersonaExemplarKind = Literal["style", "catchphrase", "boundary", "scenario_demo", "tool_behavior"]
 PersonaExemplarSourceType = Literal["manual", "transcript_import", "character_seed", "generated_candidate"]
+PersonaExemplarReviewAction = Literal["approve", "reject"]
 
 
 class PersonaInfo(BaseModel):
@@ -181,6 +182,18 @@ class PersonaExemplarResponse(BaseModel):
     last_modified: str
     deleted: bool = False
     version: int = 1
+
+
+class PersonaExemplarImportRequest(BaseModel):
+    transcript: str = Field(..., min_length=1, max_length=100_000)
+    source_ref: str | None = Field(default=None, max_length=2048)
+    notes: str | None = Field(default=None, max_length=10_000)
+    max_candidates: int = Field(default=5, ge=1, le=10)
+
+
+class PersonaExemplarReviewRequest(BaseModel):
+    action: PersonaExemplarReviewAction
+    notes: str | None = Field(default=None, max_length=10_000)
 
 
 class PersonaExemplarDeleteResponse(BaseModel):
