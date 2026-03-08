@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import tarfile
 import zipfile
 
 import pytest
@@ -74,3 +75,48 @@ def test_archive_media_snapshot_supports_pdf_and_epub_with_collected_failures(mo
     assert items["report.pdf"]["source_format"] == "pdf"
     assert items["book.epub"]["source_format"] == "epub"
     assert failures["bad.pdf"]["error"] == "pdf parse failed"
+
+
+@pytest.mark.unit
+def test_archive_snapshot_supports_tar_gz_members_for_notes():
+    from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import (
+        build_archive_snapshot_from_bytes_with_failures,
+    )
+
+    archive_buffer = io.BytesIO()
+    with tarfile.open(fileobj=archive_buffer, mode="w:gz") as archive:
+        payload = b"# Alpha\n\nfrom tar archive\n"
+        member = tarfile.TarInfo("export/alpha.md")
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+
+    items, failures = build_archive_snapshot_from_bytes_with_failures(
+        archive_bytes=archive_buffer.getvalue(),
+        filename="notes.tar.gz",
+        sink_type="notes",
+    )
+
+    assert failures == {}
+    assert set(items) == {"alpha.md"}
+    assert items["alpha.md"]["source_format"] == "md"
+    assert "from tar archive" in items["alpha.md"]["text"]
+
+
+@pytest.mark.unit
+def test_validate_archive_members_rejects_tar_symlink():
+    from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import (
+        validate_archive_members,
+    )
+
+    archive_buffer = io.BytesIO()
+    with tarfile.open(fileobj=archive_buffer, mode="w:gz") as archive:
+        member = tarfile.TarInfo("export/link.md")
+        member.type = tarfile.SYMTYPE
+        member.linkname = "target.md"
+        archive.addfile(member)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        validate_archive_members(
+            archive_buffer.getvalue(),
+            filename="unsafe.tar.gz",
+        )

@@ -5,8 +5,10 @@ import hashlib
 import io
 import os
 import stat
+import tarfile
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -36,6 +38,25 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Fil
 SUPPORTED_ARCHIVE_SUFFIXES: frozenset[str] = frozenset(
     NOTES_SUPPORTED_SUFFIXES | MEDIA_SUPPORTED_SUFFIXES
 )
+_ZIP_ARCHIVE_SUFFIXES: tuple[str, ...] = (".zip",)
+_TAR_ARCHIVE_SUFFIXES: tuple[str, ...] = (
+    ".tar",
+    ".tar.gz",
+    ".tgz",
+    ".tar.bz2",
+    ".tbz2",
+    ".tar.xz",
+    ".txz",
+)
+
+
+@dataclass(frozen=True)
+class _ArchiveMember:
+    filename: str
+
+
+class _ArchiveFormatError(ValueError):
+    """Raised when archive bytes do not match the requested container format."""
 
 
 def process_pdf(file_input, *, filename: str, **kwargs):
@@ -66,6 +87,15 @@ def _is_safe_archive_member_name(member_name: str) -> bool:
     return True
 
 
+def _archive_kind_from_filename(filename: str) -> str | None:
+    normalized = str(filename or "").strip().lower()
+    if normalized.endswith(_ZIP_ARCHIVE_SUFFIXES):
+        return "zip"
+    if normalized.endswith(_TAR_ARCHIVE_SUFFIXES):
+        return "tar"
+    return None
+
+
 async def stage_archive_candidate(
     *,
     source_id: int,
@@ -90,10 +120,27 @@ def validate_archive_members(
     archive_bytes: bytes,
     *,
     filename: str,
-) -> list[tuple[zipfile.ZipInfo, bytes]]:
+) -> list[tuple[_ArchiveMember, bytes]]:
+    archive_kind = _archive_kind_from_filename(filename)
+    if archive_kind == "zip":
+        return _validate_zip_archive_members(archive_bytes, filename=filename)
+    if archive_kind == "tar":
+        return _validate_tar_archive_members(archive_bytes, filename=filename)
+
+    try:
+        return _validate_zip_archive_members(archive_bytes, filename=filename)
+    except _ArchiveFormatError:
+        return _validate_tar_archive_members(archive_bytes, filename=filename)
+
+
+def _validate_zip_archive_members(
+    archive_bytes: bytes,
+    *,
+    filename: str,
+) -> list[tuple[_ArchiveMember, bytes]]:
     try:
         with zipfile.ZipFile(io.BytesIO(archive_bytes), "r") as archive:
-            members: list[tuple[zipfile.ZipInfo, bytes]] = []
+            members: list[tuple[_ArchiveMember, bytes]] = []
             for member in archive.infolist():
                 if member.is_dir():
                     continue
@@ -105,14 +152,41 @@ def validate_archive_members(
                 if external_type and stat.S_ISLNK(external_type):
                     raise ValueError(f"Archive contains symbolic link: {member.filename}")
                 with archive.open(member, "r") as handle:
-                    members.append((member, handle.read()))
+                    members.append((_ArchiveMember(member.filename), handle.read()))
             return members
     except zipfile.BadZipFile as exc:
-        raise ValueError(f"Invalid ZIP archive: {filename}") from exc
+        raise _ArchiveFormatError(f"Invalid ZIP archive: {filename}") from exc
+
+
+def _validate_tar_archive_members(
+    archive_bytes: bytes,
+    *,
+    filename: str,
+) -> list[tuple[_ArchiveMember, bytes]]:
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:*") as archive:
+            members: list[tuple[_ArchiveMember, bytes]] = []
+            for member in archive.getmembers():
+                if member.isdir():
+                    continue
+                if not _is_safe_archive_member_name(member.name):
+                    raise ValueError(f"Archive contains unsafe path: {member.name}")
+                if member.issym() or member.islnk():
+                    raise ValueError(f"Archive contains symbolic link: {member.name}")
+                if not member.isfile():
+                    raise ValueError(f"Archive contains unsupported member type: {member.name}")
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise ValueError(f"Archive member could not be read: {member.name}")
+                with extracted:
+                    members.append((_ArchiveMember(member.name), extracted.read()))
+            return members
+    except (tarfile.CompressionError, tarfile.ReadError, EOFError) as exc:
+        raise _ArchiveFormatError(f"Invalid TAR archive: {filename}") from exc
 
 
 def build_archive_snapshot(
-    members: list[tuple[zipfile.ZipInfo, bytes]],
+    members: list[tuple[_ArchiveMember, bytes]],
 ) -> dict[str, dict[str, Any]]:
     items, failures = build_archive_snapshot_with_failures(members, sink_type="notes")
     if failures:
@@ -197,7 +271,7 @@ def _media_member_content_to_text(
 
 
 def build_archive_snapshot_with_failures(
-    members: list[tuple[zipfile.ZipInfo, bytes]],
+    members: list[tuple[_ArchiveMember, bytes]],
     *,
     sink_type: str,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:

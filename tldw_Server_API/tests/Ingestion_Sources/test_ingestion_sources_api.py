@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import tarfile
 import zipfile
 
 import pytest
@@ -206,6 +207,108 @@ def test_archive_upload_endpoint_stages_snapshot_and_enqueues_job(tmp_path, inge
             assert os.path.exists(artifact_path)
             with open(artifact_path, "rb") as stored_handle:
                 assert stored_handle.read() == archive_bytes
+            assert queued_jobs[0]["source_id"] == int(source["id"])
+
+    import asyncio
+
+    asyncio.run(_run_test())
+
+
+@pytest.mark.integration
+def test_archive_upload_endpoint_accepts_tar_gz(tmp_path, ingestion_sources_client, monkeypatch):
+    client, auth_headers = ingestion_sources_client
+    os.environ["USER_DB_BASE_DIR"] = str(tmp_path / "user_dbs")
+    os.environ["TEST_MODE"] = "true"
+
+    import aiosqlite
+    import tldw_Server_API.app.api.v1.endpoints.ingestion_sources as ep
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        ensure_ingestion_sources_schema,
+    )
+
+    queued_jobs: list[dict[str, object]] = []
+
+    class _FakePool:
+        def __init__(self, db):
+            self._db = db
+
+        class _Tx:
+            def __init__(self, db):
+                self._db = db
+
+            async def __aenter__(self):
+                return self._db
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        def transaction(self):
+            return self._Tx(self._db)
+
+    async def _run_test() -> None:
+        meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+        async with aiosqlite.connect(str(meta_db_path)) as db:
+            db.row_factory = aiosqlite.Row
+            await ensure_ingestion_sources_schema(db)
+            source = await create_source(
+                db,
+                user_id=1,
+                payload={
+                    "source_type": "archive_snapshot",
+                    "sink_type": "notes",
+                    "policy": "canonical",
+                    "config": {},
+                },
+            )
+
+            async def _fake_get_db_pool():
+                return _FakePool(db)
+
+            def _fake_enqueue_ingestion_source_job(*, user_id, source_id, job_type="sync", idempotency_key=None, payload=None):
+                queued_jobs.append(
+                    {
+                        "user_id": user_id,
+                        "source_id": source_id,
+                        "job_type": job_type,
+                        "idempotency_key": idempotency_key,
+                    }
+                )
+                return {"id": "job-41", "status": "queued"}
+
+            monkeypatch.setattr(ep, "get_db_pool", _fake_get_db_pool)
+            monkeypatch.setattr(ep, "enqueue_ingestion_source_job", _fake_enqueue_ingestion_source_job)
+
+            archive_buffer = io.BytesIO()
+            with tarfile.open(fileobj=archive_buffer, mode="w:gz") as archive:
+                payload = b"# Alpha\n\nfrom tar upload\n"
+                member = tarfile.TarInfo("export/alpha.md")
+                member.size = len(payload)
+                archive.addfile(member, io.BytesIO(payload))
+            archive_bytes = archive_buffer.getvalue()
+
+            response = client.post(
+                f"/api/v1/ingestion-sources/{int(source['id'])}/archive",
+                headers={"X-API-KEY": auth_headers["X-API-KEY"]},
+                files={"archive": ("notes.tar.gz", archive_bytes, "application/gzip")},
+            )
+
+            assert response.status_code == 202, response.text
+            payload = response.json()
+            assert payload["status"] == "queued"
+            assert payload["source_id"] == int(source["id"])
+            assert payload["job_id"] == "job-41"
+            assert payload["snapshot_status"] == "staged"
+
+            snapshot_cur = await db.execute(
+                "SELECT id, status, summary_json FROM ingestion_source_snapshots WHERE source_id = ?",
+                (int(source["id"]),),
+            )
+            snapshot_row = await snapshot_cur.fetchone()
+            snapshot_summary = json.loads(snapshot_row["summary_json"])
+            assert snapshot_row["status"] == "staged"
+            assert snapshot_summary["filename"] == "notes.tar.gz"
+            assert snapshot_summary["item_count"] == 1
             assert queued_jobs[0]["source_id"] == int(source["id"])
 
     import asyncio
