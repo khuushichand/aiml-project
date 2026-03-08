@@ -47,6 +47,8 @@ type ResearchLaunchParams = {
   autonomyMode: string | null;
   autorun: boolean;
   runId: string | null;
+  chatId: string | null;
+  launchMessageId: string | null;
 };
 
 type ConsoleState = {
@@ -396,12 +398,16 @@ function parseResearchLaunchParams(search: string): ResearchLaunchParams {
   const sourcePolicy = params.get('source_policy')?.trim() || null;
   const autonomyMode = params.get('autonomy_mode')?.trim() || null;
   const runId = params.get('run')?.trim() || null;
+  const chatId = params.get('chat_id')?.trim() || null;
+  const launchMessageId = params.get('launch_message_id')?.trim() || null;
   return {
     query,
     sourcePolicy,
     autonomyMode,
     autorun: params.get('autorun') === '1',
     runId,
+    chatId,
+    launchMessageId,
   };
 }
 
@@ -415,6 +421,8 @@ function replaceResearchLaunchUrl(runId: string | null) {
   nextUrl.searchParams.delete('autonomy_mode');
   nextUrl.searchParams.delete('autorun');
   nextUrl.searchParams.delete('from');
+  nextUrl.searchParams.delete('chat_id');
+  nextUrl.searchParams.delete('launch_message_id');
   if (runId) {
     nextUrl.searchParams.set('run', runId);
   } else {
@@ -829,6 +837,16 @@ export default function ResearchRunsPage() {
           query: launchParams.query!,
           source_policy: launchParams.sourcePolicy ?? 'balanced',
           autonomy_mode: launchParams.autonomyMode ?? 'checkpointed',
+          ...(launchParams.chatId
+            ? {
+                chat_handoff: {
+                  chat_id: launchParams.chatId,
+                  ...(launchParams.launchMessageId
+                    ? { launch_message_id: launchParams.launchMessageId }
+                    : {}),
+                },
+              }
+            : {}),
         });
         if (cancelled) {
           return;
@@ -847,6 +865,8 @@ export default function ResearchRunsPage() {
                 autorun: false,
                 query: null,
                 runId: createdRun.id,
+                chatId: null,
+                launchMessageId: null,
               }
             : current
         );

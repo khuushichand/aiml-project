@@ -30,6 +30,8 @@ type BuildResearchLaunchPathOptions = {
   autorun?: boolean
   from?: string | null
   run?: string | null
+  chatId?: string | null
+  launchMessageId?: string | null
 }
 
 const setTrimmedSearchParam = (
@@ -52,6 +54,8 @@ export const buildResearchLaunchPath = (
   setTrimmedSearchParam(params, "autonomy_mode", options.autonomyMode)
   setTrimmedSearchParam(params, "from", options.from)
   setTrimmedSearchParam(params, "run", options.run)
+  setTrimmedSearchParam(params, "chat_id", options.chatId)
+  setTrimmedSearchParam(params, "launch_message_id", options.launchMessageId)
   if (options.autorun) {
     params.set("autorun", "1")
   }

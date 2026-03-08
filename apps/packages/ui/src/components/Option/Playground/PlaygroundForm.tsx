@@ -7148,12 +7148,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               sourcePolicy: "balanced",
               autonomyMode: "checkpointed",
               autorun: true,
-              from: "chat"
+              from: "chat",
+              chatId: serverChatId ?? null
             }
-          : { from: "chat" }
+          : { from: "chat", chatId: serverChatId ?? null }
       )
     )
-  }, [form.values.message, navigate])
+  }, [form.values.message, navigate, serverChatId])
 
   const researchLaunchButton = (
     <TldwButton

@@ -7,6 +7,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class ResearchChatHandoffCreateRequest(BaseModel):
+    """Optional originating chat linkage for research runs launched from chat."""
+
+    chat_id: str = Field(..., min_length=1, max_length=255)
+    launch_message_id: str | None = Field(default=None, min_length=1, max_length=255)
+
+
 class ResearchRunCreateRequest(BaseModel):
     """Request body for creating a deep research session."""
 
@@ -15,6 +22,7 @@ class ResearchRunCreateRequest(BaseModel):
     autonomy_mode: str = Field(default="checkpointed", min_length=1, max_length=64)
     limits_json: dict[str, Any] | None = None
     provider_overrides: dict[str, Any] | None = None
+    chat_handoff: ResearchChatHandoffCreateRequest | None = None
 
 
 class ResearchCheckpointPatchApproveRequest(BaseModel):

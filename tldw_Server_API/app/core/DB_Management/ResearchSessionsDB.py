@@ -90,6 +90,21 @@ class ResearchRunEventRow:
     created_at: str
 
 
+@dataclass(frozen=True)
+class ResearchChatHandoffRow:
+    session_id: str
+    owner_user_id: str
+    chat_id: str
+    launch_message_id: str | None
+    handoff_status: str
+    delivered_chat_message_id: str | None
+    delivered_notification_id: int | None
+    last_error: str | None
+    created_at: str
+    updated_at: str
+    delivered_at: str | None
+
+
 class ResearchSessionsDB:
     """SQLite-backed storage for research sessions and related metadata."""
 
@@ -170,6 +185,21 @@ class ResearchSessionsDB:
                     FOREIGN KEY(session_id) REFERENCES research_sessions(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS research_chat_handoffs (
+                    session_id TEXT PRIMARY KEY,
+                    owner_user_id TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    launch_message_id TEXT,
+                    handoff_status TEXT NOT NULL,
+                    delivered_chat_message_id TEXT,
+                    delivered_notification_id INTEGER,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    delivered_at TEXT,
+                    FOREIGN KEY(session_id) REFERENCES research_sessions(id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_research_sessions_owner
                     ON research_sessions(owner_user_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_research_checkpoints_session
@@ -178,6 +208,8 @@ class ResearchSessionsDB:
                     ON research_artifacts(session_id, artifact_name, artifact_version DESC);
                 CREATE INDEX IF NOT EXISTS idx_research_run_events_owner_session
                     ON research_run_events(owner_user_id, session_id, id ASC);
+                CREATE INDEX IF NOT EXISTS idx_research_chat_handoffs_owner_chat
+                    ON research_chat_handoffs(owner_user_id, chat_id, handoff_status);
                 """
             )
             columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info('research_sessions')").fetchall()}
@@ -284,6 +316,30 @@ class ResearchSessionsDB:
             created_at=str(row["created_at"]),
         )
 
+    @staticmethod
+    def _chat_handoff_from_row(row: sqlite3.Row | None) -> ResearchChatHandoffRow | None:
+        if row is None:
+            return None
+        return ResearchChatHandoffRow(
+            session_id=str(row["session_id"]),
+            owner_user_id=str(row["owner_user_id"]),
+            chat_id=str(row["chat_id"]),
+            launch_message_id=str(row["launch_message_id"]) if row["launch_message_id"] else None,
+            handoff_status=str(row["handoff_status"]),
+            delivered_chat_message_id=(
+                str(row["delivered_chat_message_id"]) if row["delivered_chat_message_id"] else None
+            ),
+            delivered_notification_id=(
+                int(row["delivered_notification_id"])
+                if row["delivered_notification_id"] is not None
+                else None
+            ),
+            last_error=str(row["last_error"]) if row["last_error"] else None,
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+            delivered_at=str(row["delivered_at"]) if row["delivered_at"] else None,
+        )
+
     def create_session(
         self,
         *,
@@ -328,6 +384,128 @@ class ResearchSessionsDB:
         if session is None:
             raise RuntimeError("failed_to_create_research_session")
         return session
+
+    def create_chat_handoff(
+        self,
+        *,
+        session_id: str,
+        owner_user_id: str,
+        chat_id: str,
+        launch_message_id: str | None = None,
+    ) -> ResearchChatHandoffRow:
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO research_chat_handoffs (
+                    session_id, owner_user_id, chat_id, launch_message_id,
+                    handoff_status, delivered_chat_message_id, delivered_notification_id,
+                    last_error, created_at, updated_at, delivered_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    str(owner_user_id),
+                    chat_id,
+                    launch_message_id,
+                    "pending",
+                    None,
+                    None,
+                    None,
+                    now,
+                    now,
+                    None,
+                ),
+            )
+        handoff = self.get_chat_handoff(session_id)
+        if handoff is None:
+            raise RuntimeError("failed_to_create_research_chat_handoff")
+        return handoff
+
+    def get_chat_handoff(self, session_id: str) -> ResearchChatHandoffRow | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM research_chat_handoffs WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return self._chat_handoff_from_row(row)
+
+    def mark_chat_handoff_chat_inserted(
+        self,
+        session_id: str,
+        *,
+        delivered_chat_message_id: str,
+    ) -> ResearchChatHandoffRow:
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE research_chat_handoffs
+                SET handoff_status = ?, delivered_chat_message_id = ?, last_error = NULL,
+                    updated_at = ?, delivered_at = ?
+                WHERE session_id = ?
+                """,
+                (
+                    "chat_inserted",
+                    str(delivered_chat_message_id),
+                    now,
+                    now,
+                    session_id,
+                ),
+            )
+        handoff = self.get_chat_handoff(session_id)
+        if handoff is None:
+            raise KeyError(session_id)
+        return handoff
+
+    def mark_chat_handoff_notification_only(
+        self,
+        session_id: str,
+        *,
+        delivered_notification_id: int,
+    ) -> ResearchChatHandoffRow:
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE research_chat_handoffs
+                SET handoff_status = ?, delivered_notification_id = ?, last_error = NULL,
+                    updated_at = ?, delivered_at = ?
+                WHERE session_id = ?
+                """,
+                (
+                    "notification_only",
+                    int(delivered_notification_id),
+                    now,
+                    now,
+                    session_id,
+                ),
+            )
+        handoff = self.get_chat_handoff(session_id)
+        if handoff is None:
+            raise KeyError(session_id)
+        return handoff
+
+    def mark_chat_handoff_failed(self, session_id: str, *, last_error: str) -> ResearchChatHandoffRow:
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE research_chat_handoffs
+                SET handoff_status = ?, last_error = ?, updated_at = ?
+                WHERE session_id = ?
+                """,
+                (
+                    "failed",
+                    str(last_error),
+                    now,
+                    session_id,
+                ),
+            )
+        handoff = self.get_chat_handoff(session_id)
+        if handoff is None:
+            raise KeyError(session_id)
+        return handoff
 
     def get_session(self, session_id: str) -> ResearchSessionRow | None:
         with self._connect() as conn:

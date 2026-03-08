@@ -56,6 +56,70 @@ def test_create_session_enqueues_planning_job(tmp_path):
     assert captured["payload"]["session_id"] == session.id
 
 
+def test_create_session_persists_chat_handoff_linkage(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            return {"id": 13, "uuid": "job-13", "status": "queued"}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=DummyJobs(),
+    )
+
+    session = service.create_session(
+        owner_user_id="1",
+        query="Investigate regulatory timeline",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        chat_handoff={
+            "chat_id": "chat_123",
+            "launch_message_id": "msg_456",
+        },
+    )
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    handoff = db.get_chat_handoff(session.id)
+
+    assert handoff is not None
+    assert handoff.session_id == session.id
+    assert handoff.owner_user_id == "1"
+    assert handoff.chat_id == "chat_123"
+    assert handoff.launch_message_id == "msg_456"
+    assert handoff.handoff_status == "pending"
+    assert handoff.delivered_chat_message_id is None
+    assert handoff.delivered_notification_id is None
+
+
+def test_create_session_without_chat_handoff_has_no_linkage(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            return {"id": 14, "uuid": "job-14", "status": "queued"}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=DummyJobs(),
+    )
+
+    session = service.create_session(
+        owner_user_id="1",
+        query="Investigate regulatory timeline",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+    )
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+
+    assert db.get_chat_handoff(session.id) is None
+
+
 def test_approve_plan_review_enqueues_collecting_job(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
     from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore

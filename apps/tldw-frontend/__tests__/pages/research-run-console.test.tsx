@@ -353,7 +353,7 @@ describe('ResearchRunsPage', () => {
     window.history.replaceState(
       {},
       '',
-      '/research?query=Trace%20the%20policy%20timeline&source_policy=local_first&autonomy_mode=autonomous&autorun=1&from=chat'
+      '/research?query=Trace%20the%20policy%20timeline&source_policy=local_first&autonomy_mode=autonomous&autorun=1&from=chat&chat_id=chat_123'
     );
 
     renderWithProviders(<ResearchRunsPage />);
@@ -363,11 +363,15 @@ describe('ResearchRunsPage', () => {
         query: 'Trace the policy timeline',
         source_policy: 'local_first',
         autonomy_mode: 'autonomous',
+        chat_handoff: {
+          chat_id: 'chat_123',
+        },
       });
     });
     await waitFor(() => {
       expect(window.location.search).not.toContain('autorun=1');
       expect(window.location.search).not.toContain('query=');
+      expect(window.location.search).not.toContain('chat_id=');
     });
   });
 

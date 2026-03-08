@@ -201,6 +201,7 @@ class ResearchService:
         autonomy_mode: str,
         limits_json: dict[str, Any] | None = None,
         provider_overrides: dict[str, Any] | None = None,
+        chat_handoff: dict[str, Any] | None = None,
     ) -> ResearchSessionRow:
         """Create a research session and enqueue the planning phase."""
         db = self._db_for_user(owner_user_id)
@@ -212,6 +213,21 @@ class ResearchService:
             limits_json=limits_json or {},
             provider_overrides_json=provider_overrides or {},
         )
+        if chat_handoff:
+            chat_id = str(chat_handoff.get("chat_id") or "").strip()
+            if not chat_id:
+                raise ValueError("chat_handoff.chat_id is required")
+            launch_message_id = chat_handoff.get("launch_message_id")
+            db.create_chat_handoff(
+                session_id=session.id,
+                owner_user_id=owner_user_id,
+                chat_id=chat_id,
+                launch_message_id=(
+                    str(launch_message_id).strip()
+                    if isinstance(launch_message_id, str) and launch_message_id.strip()
+                    else None
+                ),
+            )
 
         job = enqueue_research_phase_job(
             jm=self._job_manager_for_session(),

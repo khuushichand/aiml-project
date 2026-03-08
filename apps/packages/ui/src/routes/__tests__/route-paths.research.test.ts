@@ -12,7 +12,8 @@ describe("route-paths deep research launch", () => {
       sourcePolicy: "balanced",
       autonomyMode: "checkpointed",
       autorun: true,
-      from: "chat"
+      from: "chat",
+      chatId: "chat_123"
     })
     const parsed = new URL(href, "https://example.local")
 
@@ -24,6 +25,7 @@ describe("route-paths deep research launch", () => {
     expect(parsed.searchParams.get("autonomy_mode")).toBe("checkpointed")
     expect(parsed.searchParams.get("autorun")).toBe("1")
     expect(parsed.searchParams.get("from")).toBe("chat")
+    expect(parsed.searchParams.get("chat_id")).toBe("chat_123")
   })
 
   it("omits empty launch fields", () => {

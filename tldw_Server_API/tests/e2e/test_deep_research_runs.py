@@ -357,6 +357,53 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
     assert (outputs_dir / "research" / session_id / "bundle.json").exists()
 
 
+def test_deep_research_run_creation_persists_chat_handoff(tmp_path):
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            return {"id": 21, "uuid": "job-21", "status": "queued", **kwargs}
+
+    research_db_path = tmp_path / "research.db"
+    outputs_dir = tmp_path / "outputs"
+    service = ResearchService(
+        research_db_path=research_db_path,
+        outputs_dir=outputs_dir,
+        job_manager=DummyJobs(),
+    )
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+    app.dependency_overrides[research_runs.get_research_service] = lambda: service
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/api/v1/research/runs",
+            json={
+                "query": "Trace the policy timeline",
+                "chat_handoff": {
+                    "chat_id": "chat_123",
+                    "launch_message_id": "msg_456",
+                },
+            },
+        )
+
+    assert create_resp.status_code == 200
+    session_id = create_resp.json()["id"]
+    db = ResearchSessionsDB(research_db_path)
+    handoff = db.get_chat_handoff(session_id)
+
+    assert handoff is not None
+    assert handoff.session_id == session_id
+    assert handoff.owner_user_id == "1"
+    assert handoff.chat_id == "chat_123"
+    assert handoff.launch_message_id == "msg_456"
+    assert handoff.handoff_status == "pending"
+
+
 def test_deep_research_run_supports_recollection_loop_and_outline_resynthesis(tmp_path):
     from tldw_Server_API.app.api.v1.endpoints import research_runs
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB

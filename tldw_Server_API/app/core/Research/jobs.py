@@ -10,6 +10,7 @@ from typing import Any
 from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
 from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
 from tldw_Server_API.app.core.Research.broker import ResearchBroker
+from tldw_Server_API.app.core.Research.chat_handoff import deliver_research_chat_handoff
 from tldw_Server_API.app.core.Research.exporter import build_final_package
 from tldw_Server_API.app.core.Research.models import (
     ResearchEvidenceNote,
@@ -785,7 +786,7 @@ async def _handle_packaging_phase(
         event_phase="packaging",
         event_job_id=job_id,
     )
-    return _finalize_phase_transition(
+    transition = _finalize_phase_transition(
         db=db,
         session_id=session.id,
         next_phase="completed",
@@ -794,6 +795,18 @@ async def _handle_packaging_phase(
         artifacts_written=1,
         completed_at=_utc_now(),
     )
+    if transition.get("phase") == "completed":
+        try:
+            deliver_research_chat_handoff(
+                db=db,
+                artifact_store=artifact_store,
+                session_id=session.id,
+            )
+        except Exception as exc:
+            handoff = db.get_chat_handoff(session.id)
+            if handoff is not None and handoff.handoff_status == "pending":
+                db.mark_chat_handoff_failed(session.id, last_error=str(exc))
+    return transition
 
 
 def _set_phase_progress(*, db: ResearchSessionsDB, session: Any, phase: str, job_id: str | None) -> None:

@@ -53,6 +53,212 @@ class _SynthesisProviderStub:
         return self._response
 
 
+def _seed_packaging_artifacts(*, store, session) -> None:
+    store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="plan.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["evidence alignment"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="outline_v1.json",
+        payload={
+            "query": session.query,
+            "sections": [
+                {
+                    "title": "Evidence Alignment",
+                    "focus_area": "evidence alignment",
+                    "source_ids": ["src_1"],
+                    "note_ids": ["note_1"],
+                }
+            ],
+            "unresolved_questions": [],
+        },
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="claims.json",
+        payload={
+            "claims": [
+                {
+                    "claim_id": "clm_1",
+                    "text": "Evidence is aligned.",
+                    "focus_area": "evidence alignment",
+                    "source_ids": ["src_1"],
+                    "citations": [{"source_id": "src_1"}],
+                    "confidence": 0.8,
+                }
+            ]
+        },
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_text(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="report_v1.md",
+        content="# Research Report\n\n## Evidence Alignment\n\n- Evidence is aligned. [Sources: src_1]",
+        phase="packaging",
+        job_id=None,
+        content_type="text/markdown",
+    )
+    store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="source_registry.json",
+        payload={
+            "sources": [
+                {
+                    "source_id": "src_1",
+                    "focus_area": "evidence alignment",
+                    "source_type": "local_document",
+                    "provider": "local_corpus",
+                    "title": "Internal source",
+                    "url": None,
+                    "snippet": "Internal note summary",
+                    "published_at": None,
+                    "retrieved_at": "2026-03-07T00:00:00+00:00",
+                    "fingerprint": "fp_1",
+                    "trust_tier": "internal",
+                    "metadata": {},
+                }
+            ]
+        },
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="synthesis_summary.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["evidence alignment"],
+            "section_count": 1,
+            "claim_count": 1,
+            "source_count": 1,
+            "unresolved_questions": [],
+            "coverage": {"covered_focus_areas": ["evidence alignment"], "missing_focus_areas": []},
+        },
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="verification_summary.json",
+        payload={
+            "supported_claim_count": 1,
+            "unsupported_claim_count": 0,
+            "contradiction_count": 0,
+        },
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="unsupported_claims.json",
+        payload={"claims": []},
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="contradictions.json",
+        payload={"contradictions": []},
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="source_trust.json",
+        payload={
+            "sources": [
+                {
+                    "source_id": "src_1",
+                    "snapshot_policy": "full_artifact",
+                    "trust_label": "local_corpus",
+                }
+            ]
+        },
+        phase="packaging",
+        job_id=None,
+    )
+
+
+def _set_user_db_base(monkeypatch: pytest.MonkeyPatch, base_dir) -> str | None:
+    from tldw_Server_API.app.core.config import settings
+
+    previous = settings.get("USER_DB_BASE_DIR")
+    settings.USER_DB_BASE_DIR = str(base_dir)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    return previous
+
+
+def _restore_user_db_base(previous: str | None) -> None:
+    from tldw_Server_API.app.core.config import settings
+
+    if previous is not None:
+        settings.USER_DB_BASE_DIR = previous
+        return
+    try:
+        del settings.USER_DB_BASE_DIR
+    except AttributeError:
+        pass
+
+
+def _seed_chat_thread(*, owner_user_id: str, chat_db_path) -> tuple[str, str]:
+    from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    chat_db = CharactersRAGDB(str(chat_db_path), client_id=owner_user_id)
+    character_id = chat_db.add_character_card(
+        {
+            "name": DEFAULT_CHARACTER_NAME,
+            "description": "Research thread helper",
+            "personality": "Helpful",
+            "scenario": "Research completion testing",
+            "system_prompt": "You are a research assistant.",
+            "first_message": "Hello",
+            "creator_notes": "Created by deep research tests",
+        }
+    )
+    chat_id = chat_db.add_conversation(
+        {
+            "character_id": character_id,
+            "title": "Deep Research Chat",
+            "client_id": owner_user_id,
+        }
+    )
+    launch_message_id = chat_db.add_message(
+        {
+            "conversation_id": chat_id,
+            "sender": "user",
+            "content": "Please run deep research on this topic.",
+            "client_id": owner_user_id,
+        }
+    )
+    assert chat_id is not None
+    assert launch_message_id is not None
+    return chat_id, launch_message_id
+
+
 @pytest.mark.asyncio
 async def test_planning_job_writes_plan_and_opens_checkpoint(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
@@ -1746,6 +1952,222 @@ async def test_packaging_job_writes_bundle_and_completes_session(tmp_path):
     assert bundle["unsupported_claims"] == []
     assert bundle["contradictions"] == []
     assert bundle["source_trust"][0]["snapshot_policy"] == "full_artifact"
+
+
+@pytest.mark.asyncio
+async def test_packaging_job_inserts_completion_message_into_linked_chat(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+
+    previous_user_db_base = _set_user_db_base(monkeypatch, tmp_path / "user_databases")
+    try:
+        owner_user_id = "1"
+        chat_db_path = DatabasePaths.get_chacha_db_path(int(owner_user_id))
+        chat_id, launch_message_id = _seed_chat_thread(
+            owner_user_id=owner_user_id,
+            chat_db_path=chat_db_path,
+        )
+
+        db = ResearchSessionsDB(tmp_path / "research.db")
+        session = db.create_session(
+            owner_user_id=owner_user_id,
+            query="Test packaging",
+            source_policy="balanced",
+            autonomy_mode="autonomous",
+            limits_json={},
+            phase="packaging",
+            status="queued",
+        )
+        db.create_chat_handoff(
+            session_id=session.id,
+            owner_user_id=owner_user_id,
+            chat_id=chat_id,
+            launch_message_id=launch_message_id,
+        )
+        store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+        _seed_packaging_artifacts(store=store, session=session)
+
+        await handle_research_phase_job(
+            {
+                "id": 1010,
+                "payload": {
+                    "session_id": session.id,
+                    "phase": "packaging",
+                    "checkpoint_id": None,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=tmp_path / "research.db",
+            outputs_dir=tmp_path / "outputs",
+        )
+        await handle_research_phase_job(
+            {
+                "id": 1011,
+                "payload": {
+                    "session_id": session.id,
+                    "phase": "packaging",
+                    "checkpoint_id": None,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=tmp_path / "research.db",
+            outputs_dir=tmp_path / "outputs",
+        )
+
+        chat_db = CharactersRAGDB(str(chat_db_path), client_id=owner_user_id)
+        messages = chat_db.get_messages_for_conversation(chat_id, order_by_timestamp="ASC")
+        handoff = db.get_chat_handoff(session.id)
+
+        assistant_messages = [message for message in messages if message.get("sender") == "assistant"]
+        assert len(assistant_messages) == 1
+        assert session.query in str(assistant_messages[0].get("content") or "")
+        assert f"/research?run={session.id}" in str(assistant_messages[0].get("content") or "")
+        assert handoff is not None
+        assert handoff.handoff_status == "chat_inserted"
+        assert handoff.delivered_chat_message_id == assistant_messages[0]["id"]
+        assert handoff.delivered_notification_id is None
+    finally:
+        _restore_user_db_base(previous_user_db_base)
+
+
+@pytest.mark.asyncio
+async def test_packaging_job_falls_back_to_deduped_notification_when_chat_missing(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+
+    previous_user_db_base = _set_user_db_base(monkeypatch, tmp_path / "user_databases")
+    try:
+        owner_user_id = "1"
+        db = ResearchSessionsDB(tmp_path / "research.db")
+        session = db.create_session(
+            owner_user_id=owner_user_id,
+            query="Test packaging fallback",
+            source_policy="balanced",
+            autonomy_mode="autonomous",
+            limits_json={},
+            phase="packaging",
+            status="queued",
+        )
+        db.create_chat_handoff(
+            session_id=session.id,
+            owner_user_id=owner_user_id,
+            chat_id="missing-chat",
+            launch_message_id="missing-message",
+        )
+        store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+        _seed_packaging_artifacts(store=store, session=session)
+
+        await handle_research_phase_job(
+            {
+                "id": 1020,
+                "payload": {
+                    "session_id": session.id,
+                    "phase": "packaging",
+                    "checkpoint_id": None,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=tmp_path / "research.db",
+            outputs_dir=tmp_path / "outputs",
+        )
+        await handle_research_phase_job(
+            {
+                "id": 1021,
+                "payload": {
+                    "session_id": session.id,
+                    "phase": "packaging",
+                    "checkpoint_id": None,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=tmp_path / "research.db",
+            outputs_dir=tmp_path / "outputs",
+        )
+
+        notifications_db = CollectionsDatabase.for_user(user_id=int(owner_user_id))
+        notifications = notifications_db.list_user_notifications(limit=10, offset=0)
+        handoff = db.get_chat_handoff(session.id)
+
+        assert len(notifications) == 1
+        assert notifications[0].kind == "deep_research_completed"
+        assert notifications[0].dedupe_key == f"deep_research_completed:{session.id}"
+        assert notifications[0].link_url == f"/research?run={session.id}"
+        assert handoff is not None
+        assert handoff.handoff_status == "notification_only"
+        assert handoff.delivered_notification_id == notifications[0].id
+        assert handoff.delivered_chat_message_id is None
+    finally:
+        _restore_user_db_base(previous_user_db_base)
+
+
+@pytest.mark.asyncio
+async def test_packaging_job_bridge_failure_does_not_fail_completed_run(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research import jobs as research_jobs
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+
+    previous_user_db_base = _set_user_db_base(monkeypatch, tmp_path / "user_databases")
+    try:
+        calls: list[str] = []
+
+        def _boom(*, session_id: str, **kwargs):
+            _ = kwargs
+            calls.append(session_id)
+            raise RuntimeError("handoff bridge exploded")
+
+        monkeypatch.setattr(research_jobs, "deliver_research_chat_handoff", _boom, raising=False)
+
+        db = ResearchSessionsDB(tmp_path / "research.db")
+        session = db.create_session(
+            owner_user_id="1",
+            query="Test packaging bridge failure",
+            source_policy="balanced",
+            autonomy_mode="autonomous",
+            limits_json={},
+            phase="packaging",
+            status="queued",
+        )
+        db.create_chat_handoff(
+            session_id=session.id,
+            owner_user_id="1",
+            chat_id="chat_123",
+            launch_message_id="msg_456",
+        )
+        store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+        _seed_packaging_artifacts(store=store, session=session)
+
+        result = await handle_research_phase_job(
+            {
+                "id": 1030,
+                "payload": {
+                    "session_id": session.id,
+                    "phase": "packaging",
+                    "checkpoint_id": None,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=tmp_path / "research.db",
+            outputs_dir=tmp_path / "outputs",
+        )
+
+        updated = db.get_session(session.id)
+        handoff = db.get_chat_handoff(session.id)
+
+        assert calls == [session.id]
+        assert updated is not None
+        assert updated.status == "completed"
+        assert result["phase"] == "completed"
+        assert handoff is not None
+        assert handoff.handoff_status == "failed"
+        assert "handoff bridge exploded" in str(handoff.last_error or "")
+    finally:
+        _restore_user_db_base(previous_user_db_base)
 
 
 @pytest.mark.asyncio

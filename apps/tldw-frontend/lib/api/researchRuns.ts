@@ -7,6 +7,10 @@ export interface ResearchRunCreateRequest {
   autonomy_mode?: string;
   limits_json?: Record<string, unknown> | null;
   provider_overrides?: Record<string, unknown> | null;
+  chat_handoff?: {
+    chat_id: string;
+    launch_message_id?: string | null;
+  } | null;
 }
 
 export interface ResearchRun {
