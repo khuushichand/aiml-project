@@ -178,7 +178,8 @@ def _acp_record_audit_event(
             session_id=session_id,
             metadata=metadata,
         )
-        audit_db.flush()
+        # Flush when buffer reaches threshold to balance durability vs performance
+        audit_db.flush_if_needed(threshold=10)
     except Exception as exc:
         logger.warning("ACP audit persistence failed: {}", exc)
     logger.info(
@@ -1549,7 +1550,7 @@ async def acp_session_new(
     # Quota check: max concurrent sessions per user
     try:
         store = await get_acp_session_store()
-        quota_error = await store.check_session_quota(user.id)
+        quota_error = await store.check_session_quota(int(user.id))
         if quota_error:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,

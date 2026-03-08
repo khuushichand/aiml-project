@@ -305,7 +305,7 @@ async def dispatch_run(
 
         # Quota check
         store = await get_acp_session_store()
-        quota_error = await store.check_session_quota(user.id)
+        quota_error = await store.check_session_quota(int(user.id))
         if quota_error:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -382,11 +382,13 @@ async def dispatch_run(
             detail=f"ACP prompt failed: {exc}",
         ) from exc
 
+    # Refetch task to get post-transition status
+    updated_task = await svc.get_task(task_id)
     return {
         "task_id": task_id,
         "run_id": run.id,
         "session_id": session_id,
-        "status": task.status.value,
+        "status": updated_task.status.value if updated_task else "unknown",
     }
 
 

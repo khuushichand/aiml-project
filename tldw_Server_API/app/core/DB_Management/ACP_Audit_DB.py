@@ -99,6 +99,13 @@ class ACPAuditDB:
             self._write_buffer.append(event)
         return event
 
+    def flush_if_needed(self, threshold: int = 10) -> int:
+        """Flush if buffer has reached threshold. Returns count written or 0."""
+        with self._buffer_lock:
+            if len(self._write_buffer) < threshold:
+                return 0
+        return self.flush()
+
     def flush(self) -> int:
         """Flush buffered events to SQLite. Returns count written."""
         with self._buffer_lock:

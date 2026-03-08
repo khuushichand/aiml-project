@@ -417,21 +417,6 @@ class ACPPermissionPolicyListResponse(BaseModel):
 # -----------------------------------------------------------------------------
 
 
-class ACPHealthAgentStatus(BaseModel):
-    """Status of a single downstream agent."""
-    agent_type: str = Field(..., description="Agent type identifier")
-    status: str = Field(..., description="available | unavailable | requires_setup")
-    reason: str | None = Field(default=None, description="Explanation when not available")
-    missing_keys: list[str] = Field(default_factory=list, description="Missing environment variables")
-
-
-class ACPHealthRunnerProbe(BaseModel):
-    """Result of probing the runner process."""
-    status: str = Field(..., description="ok | not_running | skipped | error")
-    detail: str | None = Field(default=None)
-    agent_capabilities: dict[str, Any] | None = Field(default=None)
-
-
 class ACPHealthResponse(BaseModel):
     """ACP dependency chain health check response."""
     timestamp: str = Field(..., description="ISO 8601 timestamp")
