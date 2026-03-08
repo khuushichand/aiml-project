@@ -27,7 +27,7 @@ def _make_principal() -> AuthPrincipal:
     )
 
 
-def _build_app(stub) -> FastAPI:
+def _build_app(stub: _StubModerationService) -> FastAPI:
     app = FastAPI()
     app.include_router(moderation_mod.router, prefix="/api/v1")
 
