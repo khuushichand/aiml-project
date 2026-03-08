@@ -91,6 +91,24 @@ export const filterServerChatHistoryItems = (
   })
 }
 
+export const deriveServerChatHistoryViewState = ({
+  previousData,
+  error
+}: {
+  previousData: ServerChatHistoryItem[]
+  error: unknown
+}): {
+  data: ServerChatHistoryItem[]
+  sidebarRefreshState: "recoverable-error"
+  hasUsableData: boolean
+  isShowingStaleData: boolean
+} => ({
+  data: previousData,
+  sidebarRefreshState: "recoverable-error",
+  hasUsableData: previousData.length > 0,
+  isShowingStaleData: previousData.length > 0
+})
+
 export const fetchAllServerChatPages = async (
   fetchPage: FetchServerChatsPage,
   options?: {
@@ -191,7 +209,7 @@ export const useServerChatHistory = (
         if (isRecoverableServerChatHistoryError(e)) {
           // Keep sidebar/chat shell usable while connection state catches up.
           void checkConnection().catch(() => null)
-          return []
+          throw e
         }
         // eslint-disable-next-line no-console
         console.error(
@@ -213,8 +231,45 @@ export const useServerChatHistory = (
     [query.data, normalizedQuery]
   )
 
+  const sidebarState = useMemo(() => {
+    if (query.status === "success") {
+      return {
+        data: filteredData,
+        sidebarRefreshState: "ready" as const,
+        hasUsableData: filteredData.length > 0,
+        isShowingStaleData: false
+      }
+    }
+
+    if (query.status === "error") {
+      if (isRecoverableServerChatHistoryError(query.error)) {
+        return deriveServerChatHistoryViewState({
+          previousData: filteredData,
+          error: query.error
+        })
+      }
+
+      return {
+        data: filteredData,
+        sidebarRefreshState: "hard-error" as const,
+        hasUsableData: filteredData.length > 0,
+        isShowingStaleData: false
+      }
+    }
+
+    return {
+      data: filteredData,
+      sidebarRefreshState: "idle" as const,
+      hasUsableData: filteredData.length > 0,
+      isShowingStaleData: false
+    }
+  }, [filteredData, query.error, query.status])
+
   return {
     ...query,
-    data: filteredData
+    data: sidebarState.data,
+    sidebarRefreshState: sidebarState.sidebarRefreshState,
+    hasUsableData: sidebarState.hasUsableData,
+    isShowingStaleData: sidebarState.isShowingStaleData
   }
 }

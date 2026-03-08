@@ -1,12 +1,39 @@
-import { describe, expect, it, vi } from "vitest"
+import React from "react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { renderHook, waitFor } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
+  deriveServerChatHistoryViewState,
   fetchAllServerChatPages,
   filterServerChatHistoryItems,
   isRecoverableServerChatHistoryError,
-  mapServerChatHistoryItems
+  mapServerChatHistoryItems,
+  useServerChatHistory
 } from "@/hooks/useServerChatHistory"
 import type { ServerChatSummary } from "@/services/tldw/TldwApiClient"
+
+const { initializeMock, listChatsWithMetaMock, checkOnceMock } = vi.hoisted(() => ({
+  initializeMock: vi.fn(async () => undefined),
+  listChatsWithMetaMock: vi.fn(),
+  checkOnceMock: vi.fn(async () => undefined)
+}))
+
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionState: () => ({ isConnected: true })
+}))
+
+vi.mock("@/store/connection", () => ({
+  useConnectionStore: (selector: (state: { checkOnce: typeof checkOnceMock }) => unknown) =>
+    selector({ checkOnce: checkOnceMock })
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    initialize: (...args: unknown[]) => initializeMock(...args),
+    listChatsWithMeta: (...args: unknown[]) => listChatsWithMetaMock(...args)
+  }
+}))
 
 const createChat = (
   id: number,
@@ -17,6 +44,27 @@ const createChat = (
   created_at: `2026-01-${String(id).padStart(2, "0")}T00:00:00Z`,
   updated_at: `2026-01-${String(id).padStart(2, "0")}T01:00:00Z`,
   ...overrides
+})
+
+const createWrapper = () => {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        gcTime: 0
+      }
+    }
+  })
+
+  return {
+    queryClient,
+    wrapper: ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children)
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
 })
 
 describe("fetchAllServerChatPages", () => {
@@ -75,6 +123,66 @@ describe("fetchAllServerChatPages", () => {
 
     expect(result.map((chat) => chat.id)).toEqual(["chat-1", "chat-2"])
     expect(fetchPage).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe("deriveServerChatHistoryViewState", () => {
+  it("derives recoverable-error state when prior chat data is still usable", () => {
+    const previous = mapServerChatHistoryItems([createChat(1), createChat(2)])
+
+    const result = deriveServerChatHistoryViewState({
+      previousData: previous,
+      error: Object.assign(new Error("rate_limited"), { status: 429 })
+    })
+
+    expect(result.data).toEqual(previous)
+    expect(result.sidebarRefreshState).toBe("recoverable-error")
+    expect(result.hasUsableData).toBe(true)
+    expect(result.isShowingStaleData).toBe(true)
+  })
+
+  it("returns unavailable recoverable state when no data was previously loaded", () => {
+    const result = deriveServerChatHistoryViewState({
+      previousData: [],
+      error: new Error("The operation was aborted.")
+    })
+
+    expect(result.data).toEqual([])
+    expect(result.sidebarRefreshState).toBe("recoverable-error")
+    expect(result.hasUsableData).toBe(false)
+    expect(result.isShowingStaleData).toBe(false)
+  })
+})
+
+describe("useServerChatHistory", () => {
+  it("keeps previously rendered chat rows visible after a recoverable refresh failure", async () => {
+    listChatsWithMetaMock
+      .mockResolvedValueOnce({
+        chats: [createChat(1), createChat(2)],
+        total: 2
+      })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("rate_limited (GET /api/v1/chats/)"), { status: 429 })
+      )
+
+    const { queryClient, wrapper } = createWrapper()
+    const { result } = renderHook(() => useServerChatHistory(""), { wrapper })
+
+    await waitFor(() => expect(result.current.data.map((chat) => chat.id)).toEqual(["chat-1", "chat-2"]))
+    expect(result.current.sidebarRefreshState).toBe("ready")
+    expect(result.current.hasUsableData).toBe(true)
+    expect(result.current.isShowingStaleData).toBe(false)
+
+    await result.current.refetch()
+
+    await waitFor(() => {
+      expect(result.current.data.map((chat) => chat.id)).toEqual(["chat-1", "chat-2"])
+      expect(result.current.sidebarRefreshState).toBe("recoverable-error")
+      expect(result.current.hasUsableData).toBe(true)
+      expect(result.current.isShowingStaleData).toBe(true)
+    })
+
+    queryClient.clear()
   })
 })
 
