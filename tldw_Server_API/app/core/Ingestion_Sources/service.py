@@ -16,6 +16,22 @@ def _utc_now_text() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value if value is not None else {}, sort_keys=True)
+
+
+def _json_loads(value: Any, default: Any) -> Any:
+    raw = value
+    if raw is None or raw == "":
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    try:
+        return json.loads(str(raw))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return default
+
+
 def _normalize_choice(value: Any, *, field_name: str, allowed: frozenset[str], default: str | None = None) -> str:
     raw = str(value if value is not None else default or "").strip().lower()
     if raw not in allowed:
@@ -103,6 +119,7 @@ async def ensure_ingestion_sources_schema(db) -> None:
             content_hash TEXT,
             sync_status TEXT NOT NULL DEFAULT 'pending',
             binding_json TEXT NOT NULL DEFAULT '{}',
+            present_in_source INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(source_id, normalized_relative_path),
@@ -133,7 +150,12 @@ async def ensure_ingestion_sources_schema(db) -> None:
         );
         """
     )
-    await db.commit()
+    await _ensure_sqlite_column(
+        db,
+        table_name="ingestion_source_items",
+        column_name="present_in_source",
+        column_sql="INTEGER NOT NULL DEFAULT 1",
+    )
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -145,11 +167,30 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     return dict(row)
 
 
+async def _ensure_sqlite_column(
+    db,
+    *,
+    table_name: str,
+    column_name: str,
+    column_sql: str,
+) -> None:
+    try:
+        pragma_cur = await db.execute(f"PRAGMA table_info({table_name})")
+        columns = {row["name"] for row in await pragma_cur.fetchall()}
+    except (AttributeError, LookupError, OSError, RuntimeError, TypeError, ValueError):
+        return
+    if column_name in columns:
+        return
+    await db.execute(
+        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}"
+    )
+
+
 async def create_source(db, *, user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_source_payload(payload)
     now = _utc_now_text()
-    config_json = json.dumps(payload.get("config") or {}, sort_keys=True)
-    schedule_config_json = json.dumps(normalized.get("schedule_config") or {}, sort_keys=True)
+    config_json = _json_dumps(payload.get("config") or {})
+    schedule_config_json = _json_dumps(normalized.get("schedule_config") or {})
 
     cursor = await db.execute(
         """
@@ -194,7 +235,6 @@ async def create_source(db, *, user_id: int, payload: dict[str, Any]) -> dict[st
         """,
         (source_id,),
     )
-    await db.commit()
 
     row_cur = await db.execute(
         """
@@ -218,9 +258,9 @@ async def create_source(db, *, user_id: int, payload: dict[str, Any]) -> dict[st
     row = await row_cur.fetchone()
     result = _row_to_dict(row)
     if "config_json" in result:
-        result["config"] = json.loads(result.pop("config_json") or "{}")
+        result["config"] = _json_loads(result.pop("config_json"), {})
     if "schedule_config_json" in result:
-        result["schedule_config"] = json.loads(result.pop("schedule_config_json") or "{}")
+        result["schedule_config"] = _json_loads(result.pop("schedule_config_json"), {})
     if "enabled" in result:
         result["enabled"] = bool(result["enabled"])
     if "schedule_enabled" in result:
@@ -233,13 +273,23 @@ def _deserialize_source_row(row: Any) -> dict[str, Any]:
     if not result:
         return result
     if "config_json" in result:
-        result["config"] = json.loads(result.pop("config_json") or "{}")
+        result["config"] = _json_loads(result.pop("config_json"), {})
     if "schedule_config_json" in result:
-        result["schedule_config"] = json.loads(result.pop("schedule_config_json") or "{}")
+        result["schedule_config"] = _json_loads(result.pop("schedule_config_json"), {})
     if "enabled" in result:
         result["enabled"] = bool(result["enabled"])
     if "schedule_enabled" in result:
         result["schedule_enabled"] = bool(result["schedule_enabled"])
+    return result
+
+
+def _deserialize_source_item_row(row: Any) -> dict[str, Any]:
+    result = _row_to_dict(row)
+    if not result:
+        return result
+    result["binding"] = _json_loads(result.pop("binding_json", None), {})
+    if "present_in_source" in result:
+        result["present_in_source"] = bool(result["present_in_source"])
     return result
 
 
@@ -336,6 +386,271 @@ async def list_sources_by_user(db, *, user_id: int) -> list[dict[str, Any]]:
     )
     rows = await cursor.fetchall()
     return [_deserialize_source_row(row) for row in rows]
+
+
+async def create_source_snapshot(
+    db,
+    *,
+    source_id: int,
+    snapshot_kind: str,
+    status: str,
+    summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    now = _utc_now_text()
+    cursor = await db.execute(
+        """
+        INSERT INTO ingestion_source_snapshots (
+            source_id,
+            snapshot_kind,
+            status,
+            summary_json,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            int(source_id),
+            str(snapshot_kind),
+            str(status),
+            _json_dumps(summary or {}),
+            now,
+        ),
+    )
+    snapshot_id = int(cursor.lastrowid)
+    row_cur = await db.execute(
+        """
+        SELECT id, source_id, snapshot_kind, status, summary_json, created_at
+        FROM ingestion_source_snapshots
+        WHERE id = ?
+        """,
+        (snapshot_id,),
+    )
+    row = _row_to_dict(await row_cur.fetchone())
+    row["summary"] = _json_loads(row.pop("summary_json", None), {})
+    return row
+
+
+async def get_source_snapshot_by_id(
+    db,
+    *,
+    snapshot_id: int,
+) -> dict[str, Any] | None:
+    cursor = await db.execute(
+        """
+        SELECT id, source_id, snapshot_kind, status, summary_json, created_at
+        FROM ingestion_source_snapshots
+        WHERE id = ?
+        """,
+        (int(snapshot_id),),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    result = _row_to_dict(row)
+    result["summary"] = _json_loads(result.pop("summary_json", None), {})
+    return result
+
+
+async def get_latest_source_snapshot(
+    db,
+    *,
+    source_id: int,
+    status: str | None = None,
+) -> dict[str, Any] | None:
+    query = """
+        SELECT id, source_id, snapshot_kind, status, summary_json, created_at
+        FROM ingestion_source_snapshots
+        WHERE source_id = ?
+    """
+    params: list[Any] = [int(source_id)]
+    if status is not None:
+        query += " AND status = ?"
+        params.append(str(status))
+    query += " ORDER BY id DESC LIMIT 1"
+    cursor = await db.execute(query, tuple(params))
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    result = _row_to_dict(row)
+    result["summary"] = _json_loads(result.pop("summary_json", None), {})
+    return result
+
+
+async def update_source_snapshot(
+    db,
+    *,
+    snapshot_id: int,
+    status: str | None = None,
+    summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    existing = await get_source_snapshot_by_id(db, snapshot_id=snapshot_id)
+    if not existing:
+        raise ValueError(f"Snapshot not found: {snapshot_id}")
+    merged_summary = dict(existing.get("summary") or {})
+    if summary is not None:
+        merged_summary.update(summary)
+    await db.execute(
+        """
+        UPDATE ingestion_source_snapshots
+        SET status = ?,
+            summary_json = ?
+        WHERE id = ?
+        """,
+        (
+            str(status or existing.get("status") or "pending"),
+            _json_dumps(merged_summary),
+            int(snapshot_id),
+        ),
+    )
+    updated = await get_source_snapshot_by_id(db, snapshot_id=snapshot_id)
+    return updated or {}
+
+
+async def list_source_items(
+    db,
+    *,
+    source_id: int,
+    include_absent: bool = True,
+) -> list[dict[str, Any]]:
+    query = """
+        SELECT
+            id,
+            source_id,
+            normalized_relative_path,
+            content_hash,
+            sync_status,
+            binding_json,
+            present_in_source,
+            created_at,
+            updated_at
+        FROM ingestion_source_items
+        WHERE source_id = ?
+    """
+    params: list[Any] = [int(source_id)]
+    if not include_absent:
+        query += " AND present_in_source = 1"
+    query += " ORDER BY normalized_relative_path ASC"
+    cursor = await db.execute(query, tuple(params))
+    rows = await cursor.fetchall()
+    return [_deserialize_source_item_row(row) for row in rows]
+
+
+async def get_source_item(
+    db,
+    *,
+    source_id: int,
+    normalized_relative_path: str,
+) -> dict[str, Any] | None:
+    cursor = await db.execute(
+        """
+        SELECT
+            id,
+            source_id,
+            normalized_relative_path,
+            content_hash,
+            sync_status,
+            binding_json,
+            present_in_source,
+            created_at,
+            updated_at
+        FROM ingestion_source_items
+        WHERE source_id = ?
+          AND normalized_relative_path = ?
+        """,
+        (int(source_id), str(normalized_relative_path)),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return _deserialize_source_item_row(row)
+
+
+async def upsert_source_item(
+    db,
+    *,
+    source_id: int,
+    normalized_relative_path: str,
+    content_hash: str | None,
+    sync_status: str,
+    binding: dict[str, Any] | None = None,
+    present_in_source: bool,
+) -> dict[str, Any]:
+    now = _utc_now_text()
+    await db.execute(
+        """
+        INSERT INTO ingestion_source_items (
+            source_id,
+            normalized_relative_path,
+            content_hash,
+            sync_status,
+            binding_json,
+            present_in_source,
+            created_at,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_id, normalized_relative_path) DO UPDATE SET
+            content_hash = excluded.content_hash,
+            sync_status = excluded.sync_status,
+            binding_json = excluded.binding_json,
+            present_in_source = excluded.present_in_source,
+            updated_at = excluded.updated_at
+        """,
+        (
+            int(source_id),
+            str(normalized_relative_path),
+            content_hash,
+            str(sync_status),
+            _json_dumps(binding or {}),
+            1 if present_in_source else 0,
+            now,
+            now,
+        ),
+    )
+    item = await get_source_item(
+        db,
+        source_id=source_id,
+        normalized_relative_path=normalized_relative_path,
+    )
+    return item or {}
+
+
+async def record_ingestion_item_event(
+    db,
+    *,
+    source_id: int,
+    item_path: str,
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    now = _utc_now_text()
+    cursor = await db.execute(
+        """
+        INSERT INTO ingestion_item_events (
+            source_id,
+            item_path,
+            event_type,
+            payload_json,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            int(source_id),
+            str(item_path),
+            str(event_type),
+            _json_dumps(payload or {}),
+            now,
+        ),
+    )
+    row_cur = await db.execute(
+        """
+        SELECT id, source_id, item_path, event_type, payload_json, created_at
+        FROM ingestion_item_events
+        WHERE id = ?
+        """,
+        (int(cursor.lastrowid),),
+    )
+    row = _row_to_dict(await row_cur.fetchone())
+    row["payload"] = _json_loads(row.pop("payload_json", None), {})
+    return row
 
 
 async def start_source_sync_job(db, *, source_id: int, job_id: str) -> dict[str, Any]:

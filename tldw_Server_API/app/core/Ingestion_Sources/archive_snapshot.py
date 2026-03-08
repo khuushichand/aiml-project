@@ -1,14 +1,28 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import stat
+import tempfile
 import zipfile
+from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any
 from uuid import uuid4
 
 from tldw_Server_API.app.core.Ingestion_Sources.diffing import normalize_archive_members
+from tldw_Server_API.app.core.Ingestion_Sources.local_directory import (
+    MEDIA_SUPPORTED_SUFFIXES,
+    NOTES_SUPPORTED_SUFFIXES,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files import (
+    convert_document_to_text,
+)
+
+SUPPORTED_ARCHIVE_SUFFIXES: frozenset[str] = frozenset(
+    NOTES_SUPPORTED_SUFFIXES | MEDIA_SUPPORTED_SUFFIXES
+)
 
 
 def _is_safe_archive_member_name(member_name: str) -> bool:
@@ -70,13 +84,69 @@ def validate_archive_members(
 
 def build_archive_snapshot(
     members: list[tuple[zipfile.ZipInfo, bytes]],
-) -> dict[str, dict[str, str | None]]:
+) -> dict[str, dict[str, Any]]:
     hashes: dict[str, str] = {}
     member_names: list[str] = []
+    raw_contents: dict[str, bytes] = {}
     for member, content in members:
+        suffix = PurePosixPath(member.filename).suffix.lower()
+        if suffix not in SUPPORTED_ARCHIVE_SUFFIXES:
+            continue
         member_names.append(member.filename)
+        raw_contents[member.filename] = content
         hashes[member.filename] = hashlib.sha256(content).hexdigest()
-    return normalize_archive_members(member_names, hashes)
+
+    items = normalize_archive_members(member_names, hashes)
+    for member_name in member_names:
+        relative_path = str(items[_normalized_relative_path(items, member_name)]["relative_path"])
+        text_content, source_format, raw_metadata = _member_content_to_text(
+            member_name=member_name,
+            content=raw_contents[member_name],
+        )
+        items[relative_path].update(
+            {
+                "text": text_content,
+                "source_format": source_format,
+                "raw_metadata": raw_metadata,
+                "size": len(raw_contents[member_name]),
+                "content_hash": hashlib.sha256(text_content.encode("utf-8")).hexdigest(),
+            }
+        )
+    return items
+
+
+def _normalized_relative_path(items: dict[str, dict[str, Any]], member_name: str) -> str:
+    for relative_path, item in items.items():
+        if item.get("relative_path") == relative_path:
+            normalized_member = member_name.replace("\\", "/").strip().strip("/")
+            if normalized_member.endswith(relative_path):
+                return relative_path
+    raise KeyError(member_name)
+
+
+def _member_content_to_text(
+    *,
+    member_name: str,
+    content: bytes,
+) -> tuple[str, str, dict[str, Any]]:
+    suffix = PurePosixPath(member_name).suffix.lower()
+    if suffix == ".markdown":
+        try:
+            text_content = content.decode("utf-8")
+        except UnicodeDecodeError:
+            text_content = content.decode("latin-1")
+        return text_content, "markdown", {}
+
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
+            handle.write(content)
+            temp_path = Path(handle.name)
+        return convert_document_to_text(temp_path)
+    finally:
+        if temp_path is not None:
+            with contextlib.suppress(FileNotFoundError, OSError):
+                temp_path.unlink()
 
 
 async def apply_archive_candidate(

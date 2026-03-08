@@ -41,3 +41,4 @@ class IngestionSourceSyncTriggerResponse(BaseModel):
     status: str
     source_id: int
     job_id: int | str | None = None
+    snapshot_status: str | None = None
