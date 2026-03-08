@@ -140,7 +140,7 @@ export default function ResearchersPage() {
               "Priority support",
               "Citation export",
             ],
-            cta: { text: "Start Trial", href: "/signup" },
+            cta: { text: "Start Trial", href: "/research" },
             highlighted: true,
           },
           {
