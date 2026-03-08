@@ -12,7 +12,7 @@
 
 ### Task 1: Add Red Backend Tests For The New Workflow Step
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/tests/Workflows/adapters/test_research_adapters.py`
@@ -53,7 +53,7 @@ Expected: FAIL for missing `deep_research` adapter registration, missing schema 
 
 ### Task 2: Implement The Backend Adapter And Config Model
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/Workflows/adapters/research/_config.py`
@@ -125,7 +125,7 @@ Expected: PASS for the new adapter-specific tests.
 
 ### Task 3: Register The Step Type And Expose The JSON Schema
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/Workflows/registry.py`
@@ -169,7 +169,7 @@ Expected: PASS
 
 ### Task 4: Add Red Frontend Workflow Editor Tests
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/WorkflowEditor/__tests__/step-registry.test.ts`
@@ -209,7 +209,7 @@ Expected: FAIL for missing frontend registry metadata and config fields.
 
 ### Task 5: Implement The Workflow Editor Metadata
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/WorkflowEditor/step-registry.ts`
@@ -252,7 +252,7 @@ Expected: PASS
 
 ### Task 6: Add A Workflow Runtime Integration Test
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/tests/Workflows/test_workflows_api.py`
@@ -287,7 +287,7 @@ Expected: PASS
 
 ### Task 7: Focused Verification, Security Check, And Commits
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-07-deep-research-workflow-launch-implementation-plan.md`
@@ -337,6 +337,79 @@ Expected: `0` new findings in touched code.
 **Step 4: Record results in this plan**
 
 Update task statuses and append the actual verification commands/results.
+
+**Actual verification**
+
+- Focused backend adapter verification:
+
+```bash
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate
+python -m pytest \
+  /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/Workflows/adapters/test_research_adapters.py \
+  -q -k deep_research_adapter
+```
+
+Result: `2 passed, 58 deselected`
+
+- Focused backend step-types verification:
+
+```bash
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate
+python -m pytest \
+  /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/Workflows/test_engine_step_types.py \
+  -q -k deep_research
+```
+
+Result: `1 passed, 4 deselected`
+
+- Focused backend workflow API verification:
+
+```bash
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate
+python -m pytest \
+  /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/Workflows/test_workflows_api.py \
+  -q -k "deep_research or step_types_and_runs_listing"
+```
+
+Result: `2 passed, 13 deselected`
+
+- Focused backend runtime integration verification:
+
+```bash
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate
+python -m pytest \
+  /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/Workflows/test_workflows_api.py \
+  -q -k run_workflow_launches_deep_research_session
+```
+
+Result: `1 passed, 15 deselected`
+
+- Focused frontend workflow editor verification:
+
+```bash
+cd /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui
+bunx vitest run \
+  /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/WorkflowEditor/__tests__/step-registry.test.ts \
+  /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/WorkflowEditor/__tests__/NodeConfigPanel.test.tsx
+```
+
+Result: `18/18` tests passed
+
+- Bandit:
+
+```bash
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate
+python -m bandit -r \
+  /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/core/Workflows/adapters/research/launch.py \
+  /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/core/Workflows/adapters/research/_config.py \
+  /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/core/Workflows/registry.py \
+  /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/api/v1/endpoints/workflows.py \
+  -f json -o /tmp/bandit_deep_research_workflow_launch.json
+```
+
+Result: `0` findings, `0` errors
+
+**Note:** a broader combined run of the full `test_workflows_api.py` file intermittently hit the pre-existing SQLite transaction issue in `test_artifact_download_per_run_non_block`. That test passes in isolation and is unrelated to the `deep_research` workflow-launch slice.
 
 **Step 5: Commit the implementation work**
 
