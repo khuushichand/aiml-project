@@ -722,5 +722,19 @@ async def get_acp_session_store() -> ACPSessionStore:
     if _store is None:
         async with _store_lock:
             if _store is None:
-                _store = ACPSessionStore()
+                store = ACPSessionStore()
+                # Initialize quotas from ACP config
+                try:
+                    from tldw_Server_API.app.core.Agent_Client_Protocol.config import load_acp_sandbox_config
+                    cfg = load_acp_sandbox_config()
+                    store.configure_quotas(
+                        session_ttl_seconds=cfg.session_ttl_seconds,
+                        max_concurrent_per_user=cfg.max_concurrent_sessions_per_user,
+                        max_tokens_per_session=cfg.max_tokens_per_session,
+                        max_session_duration_seconds=cfg.max_session_duration_seconds,
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to load ACP quota config, using defaults: {}", exc)
+                store.start_cleanup_task()
+                _store = store
     return _store

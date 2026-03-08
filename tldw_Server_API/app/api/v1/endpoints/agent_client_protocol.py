@@ -21,6 +21,7 @@ from tldw_Server_API.app.api.v1.endpoints._in_memory_limits import SlidingWindow
 from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentInfo,
     ACPAgentListResponse,
+    ACPHealthResponse,
     ACPSessionCancelRequest,
     ACPSessionCloseRequest,
     ACPSessionDetailResponse,
@@ -177,8 +178,9 @@ def _acp_record_audit_event(
             session_id=session_id,
             metadata=metadata,
         )
-    except Exception:
-        pass  # Audit persistence failure should not block operations
+        audit_db.flush()
+    except Exception as exc:
+        logger.warning("ACP audit persistence failed: {}", exc)
     logger.info(
         "ACP audit event action={} user_id={} session_id={}",
         event["action"],
@@ -1250,6 +1252,7 @@ def _check_agent_availability(agent_type: str) -> dict[str, Any]:
 
 @router.get(
     "/health",
+    response_model=ACPHealthResponse,
     dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.health"))],
 )
 async def acp_health(
@@ -1554,8 +1557,8 @@ async def acp_session_new(
             )
     except HTTPException:
         raise
-    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-        pass  # Quota check failure shouldn't block session creation
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Session quota check failed (non-blocking): {}", exc)
 
     # Generate session name if not provided
     session_name = payload.name or _generate_session_name(payload.cwd)
@@ -1686,8 +1689,8 @@ async def acp_session_prompt(
             )
     except HTTPException:
         raise
-    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-        pass
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Token quota check failed (non-blocking): {}", exc)
     try:
         client = await get_runner_client()
         result, turn_usage = await _execute_acp_prompt(

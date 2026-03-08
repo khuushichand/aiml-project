@@ -296,21 +296,47 @@ async def dispatch_run(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Create ACP session
+    # Create ACP session with quota check, session-store registration, and audit
     session_id: str | None = None
+    agent_type = payload.agent_type or task.agent_type
     try:
         from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import get_runner_client
+        from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
+
+        # Quota check
+        store = await get_acp_session_store()
+        quota_error = await store.check_session_quota(user.id)
+        if quota_error:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=quota_error,
+            )
+
         client = await get_runner_client()
-        agent_type = payload.agent_type or task.agent_type
         session_id = await client.create_session(
             payload.cwd,
             agent_type=agent_type,
             user_id=user.id,
         )
+
+        # Register in session store
+        try:
+            await store.register_session(
+                session_id=session_id,
+                user_id=int(user.id),
+                agent_type=agent_type or "custom",
+                name=f"orchestration-task-{task_id}",
+                cwd=payload.cwd,
+            )
+        except Exception as reg_exc:
+            logger.warning("Failed to register orchestration ACP session {}: {}", session_id, reg_exc)
+
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("Failed to create ACP session for task {}: {}", task_id, exc)
         # Create a failed run record
-        run = await svc.create_run(task_id, agent_type=payload.agent_type or task.agent_type)
+        run = await svc.create_run(task_id, agent_type=agent_type)
         await svc.fail_run(run.id, error=str(exc))
         await svc.transition_task(task_id, TaskStatus.TRIAGE)
         raise HTTPException(
@@ -341,11 +367,11 @@ async def dispatch_run(
             result_summary=stop_reason,
             token_usage=result.get("usage", {}),
         )
-        # Transition to review if reviewer is configured
+        # Transition to review if reviewer is configured, else complete
         if task.reviewer_agent_type:
             await svc.transition_task(task_id, TaskStatus.REVIEW)
         else:
-            await svc.transition_task(task_id, TaskStatus.REVIEW)
+            await svc.transition_task(task_id, TaskStatus.COMPLETE)
 
     except Exception as exc:
         logger.error("ACP prompt failed for task {}: {}", task_id, exc)
