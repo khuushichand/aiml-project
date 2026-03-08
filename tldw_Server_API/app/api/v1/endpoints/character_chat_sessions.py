@@ -108,6 +108,9 @@ from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
     sanitize_sender_name,
 )
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
+from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import (
+    assemble_persona_exemplar_prompt,
+)
 
 # Chat helpers and utilities
 # For chat completions
@@ -2859,6 +2862,32 @@ _CONTRADICTORY_DIRECTIVE_PAIRS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+def _build_persona_preview_sections(
+    *,
+    conversation: dict[str, Any],
+    exemplars: list[dict[str, Any]],
+    requested_scenario_tags: list[str] | None = None,
+    requested_tone: str | None = None,
+    conflicting_capability_tags: list[str] | None = None,
+) -> list[tuple[str, str, int]]:
+    """Build persona exemplar preview sections using the shared assembly helper."""
+    if conversation.get("assistant_kind") != "persona":
+        return []
+
+    persona_id = str(conversation.get("assistant_id") or "").strip()
+    if not persona_id:
+        return []
+
+    assembly = assemble_persona_exemplar_prompt(
+        persona_id=persona_id,
+        exemplars=exemplars,
+        requested_scenario_tags=requested_scenario_tags,
+        requested_tone=requested_tone,
+        conflicting_capability_tags=conflicting_capability_tags,
+    )
+    return assembly.sections
+
+
 def _estimate_tokens(text: str) -> int:
     """Rough token estimate: ~4 chars per token for English text."""
     if not text:
@@ -3108,6 +3137,20 @@ async def prompt_assembly_preview(
         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             pass
 
+        persona_preview_sections: list[tuple[str, str, int]] = []
+        if conversation.get("assistant_kind") == "persona" and conversation.get("assistant_id"):
+            persona_preview_sections = _build_persona_preview_sections(
+                conversation=conversation,
+                exemplars=db.list_persona_exemplars(
+                    user_id=str(current_user.id),
+                    persona_id=str(conversation.get("assistant_id")),
+                    include_disabled=False,
+                    include_deleted=False,
+                    limit=50,
+                    offset=0,
+                ),
+            )
+
         sections_raw: list[tuple[str, str, int]] = [
             ("preset", sys_text, _TOKEN_BUDGET_PRESET),
             ("author_note", author_note_text, _TOKEN_BUDGET_AUTHOR_NOTE),
@@ -3115,6 +3158,7 @@ async def prompt_assembly_preview(
             ("greeting", greeting_text, _TOKEN_BUDGET_GREETING),
             ("lorebook", lorebook_text, _TOKEN_BUDGET_LOREBOOK),
         ]
+        sections_raw.extend(persona_preview_sections)
         sections: list[dict[str, Any]] = []
         total_supplemental_tokens = 0
         total_supplemental_effective_tokens = 0

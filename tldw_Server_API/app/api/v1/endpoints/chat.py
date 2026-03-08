@@ -221,6 +221,9 @@ from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import (
+    assemble_persona_exemplar_prompt,
+)
 from tldw_Server_API.app.core.Persona.memory_integration import persist_persona_turn
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
@@ -681,6 +684,70 @@ def _format_persona_exemplar_guidance(
         )
 
     return "\n".join(lines).strip()
+
+
+def _assemble_persona_runtime_guidance(
+    *,
+    system_message: str,
+    assistant_context: dict[str, Any] | None,
+    exemplars: list[dict[str, Any]],
+    requested_scenario_tags: list[str] | None = None,
+    requested_tone: str | None = None,
+    conflicting_capability_tags: list[str] | None = None,
+) -> dict[str, Any]:
+    """Append shared persona exemplar guidance for persona-backed ordinary chat."""
+    if not isinstance(assistant_context, dict):
+        return {
+            "applied": False,
+            "system_message": system_message,
+            "sections": [],
+            "selected_exemplars": [],
+            "rejected_exemplars": [],
+        }
+
+    if assistant_context.get("assistant_kind") != "persona":
+        return {
+            "applied": False,
+            "system_message": system_message,
+            "sections": [],
+            "selected_exemplars": [],
+            "rejected_exemplars": [],
+        }
+
+    persona_id = str(assistant_context.get("assistant_id") or "").strip()
+    if not persona_id:
+        return {
+            "applied": False,
+            "system_message": system_message,
+            "sections": [],
+            "selected_exemplars": [],
+            "rejected_exemplars": [],
+        }
+
+    assembly = assemble_persona_exemplar_prompt(
+        persona_id=persona_id,
+        exemplars=exemplars,
+        requested_scenario_tags=requested_scenario_tags,
+        requested_tone=requested_tone,
+        conflicting_capability_tags=conflicting_capability_tags,
+    )
+
+    updated_system_message = str(system_message or "")
+    for _, content, _ in assembly.sections:
+        if not str(content or "").strip():
+            continue
+        if updated_system_message.strip():
+            updated_system_message = f"{updated_system_message.rstrip()}\n\n{content}"
+        else:
+            updated_system_message = str(content).strip()
+
+    return {
+        "applied": bool(assembly.sections),
+        "system_message": updated_system_message,
+        "sections": assembly.sections,
+        "selected_exemplars": assembly.selected_exemplars,
+        "rejected_exemplars": assembly.rejected_exemplars,
+    }
 
 
 def _resolve_persona_strategy(raw_strategy: str | None) -> str:
@@ -2754,7 +2821,74 @@ async def create_chat_completion(
                     "reason": "not_run",
                 }
 
-            if persona_strategy != "off" and character_db_id_for_context is not None:
+            persona_assistant_id = (
+                str(assistant_context.get("assistant_id") or "").strip()
+                if isinstance(assistant_context, dict)
+                else ""
+            )
+            is_persona_backed_chat = (
+                isinstance(assistant_context, dict)
+                and assistant_context.get("assistant_kind") == "persona"
+                and bool(persona_assistant_id)
+            )
+
+            if persona_strategy != "off" and is_persona_backed_chat:
+                persona_exemplars = chat_db.list_persona_exemplars(
+                    user_id=str(user_id),
+                    persona_id=persona_assistant_id,
+                    include_disabled=False,
+                    include_deleted=False,
+                    limit=50,
+                    offset=0,
+                )
+                runtime_guidance = _assemble_persona_runtime_guidance(
+                    system_message=final_system_message,
+                    assistant_context=assistant_context,
+                    exemplars=persona_exemplars,
+                )
+                final_system_message = runtime_guidance["system_message"]
+                persona_selected_exemplars = list(runtime_guidance["selected_exemplars"])
+
+                if persona_debug_meta is not None:
+                    persona_debug_meta["source"] = "persona_profile"
+                    persona_debug_meta["applied"] = bool(runtime_guidance["applied"])
+                    persona_debug_meta["reason"] = (
+                        "selected"
+                        if runtime_guidance["applied"]
+                        else ("no_exemplars_selected" if persona_exemplars else "no_enabled_exemplars")
+                    )
+                    persona_debug_meta["selection"] = {
+                        "selected_count": len(runtime_guidance["selected_exemplars"]),
+                        "selected_exemplar_ids": [
+                            str(item.get("id"))
+                            for item in runtime_guidance["selected_exemplars"]
+                            if item.get("id")
+                        ],
+                        "budget_tokens_used": sum(int(section[2]) for section in runtime_guidance["sections"]),
+                        "coverage": {
+                            "boundary": sum(
+                                1
+                                for item in runtime_guidance["selected_exemplars"]
+                                if str(item.get("kind") or "") == "boundary"
+                            ),
+                            "style_like": sum(
+                                1
+                                for item in runtime_guidance["selected_exemplars"]
+                                if str(item.get("kind") or "") != "boundary"
+                            ),
+                        },
+                    }
+                    persona_debug_meta["assembly_sections"] = [
+                        str(name) for name, _, _ in runtime_guidance["sections"]
+                    ]
+                    persona_debug_meta["rejected_exemplars"] = [
+                        {
+                            "id": str(item.get("id") or ""),
+                            "reason": str(item.get("reason") or ""),
+                        }
+                        for item in runtime_guidance["rejected_exemplars"]
+                    ]
+            elif persona_strategy != "off" and character_db_id_for_context is not None:
                 user_turn_text = _extract_latest_user_turn_text(getattr(request_data, "messages", []))
                 if user_turn_text:
                     budget_override = getattr(request_data, "persona_exemplar_budget_tokens", None)
@@ -2828,6 +2962,8 @@ async def create_chat_completion(
             elif persona_debug_meta is not None:
                 if persona_strategy == "off":
                     persona_debug_meta["reason"] = "disabled_by_strategy"
+                elif is_persona_backed_chat:
+                    persona_debug_meta["reason"] = "persona_context_unavailable"
                 elif character_db_id_for_context is None:
                     persona_debug_meta["reason"] = "character_context_unavailable"
 
