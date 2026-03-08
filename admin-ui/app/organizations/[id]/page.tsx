@@ -18,9 +18,13 @@ import {
   ArrowLeft, Building2, Users, UserPlus, Mail, Trash2, Key, Shield, Copy, Plus, Eye, EyeOff, ListChecks, Pencil
 } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { Organization, OrgMember, Team, ProviderSecret, User, WatchlistSettings } from '@/types';
+import { Organization, OrgMember, Team, ProviderSecret, User, WatchlistSettings, Subscription, OrgUsageSummary, Invoice } from '@/types';
 import Link from 'next/link';
 import { UserPicker } from '@/components/users/UserPicker';
+import { PlanBadge } from '@/components/PlanBadge';
+import { UsageMeter } from '@/components/UsageMeter';
+import { InvoiceTable } from '@/components/InvoiceTable';
+import { isBillingEnabled } from '@/lib/billing';
 
 export default function OrganizationDetailPage() {
   const params = useParams();
@@ -56,6 +60,11 @@ export default function OrganizationDetailPage() {
   const [byokApiKey, setByokApiKey] = useState('');
   const [showByokApiKey, setShowByokApiKey] = useState(false);
   const [deletingByokProvider, setDeletingByokProvider] = useState<string | null>(null);
+
+  // Billing / Subscription
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [usageSummary, setUsageSummary] = useState<OrgUsageSummary | null>(null);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
 
   // Watchlist Settings
   const [watchlistLoading, setWatchlistLoading] = useState(false);
@@ -125,6 +134,18 @@ export default function OrganizationDetailPage() {
       setEditWatchlistAlertOnBreach(true);
     } finally {
       setWatchlistLoading(false);
+    }
+
+    // Load billing data when enabled
+    if (isBillingEnabled()) {
+      const [subResult, usageResult, invoiceResult] = await Promise.allSettled([
+        api.getOrgSubscription(Number(orgId)),
+        api.getOrgUsageSummary(Number(orgId)),
+        api.getOrgInvoices(Number(orgId)),
+      ]);
+      if (subResult.status === 'fulfilled') setSubscription(subResult.value);
+      if (usageResult.status === 'fulfilled') setUsageSummary(usageResult.value);
+      if (invoiceResult.status === 'fulfilled') setInvoices(Array.isArray(invoiceResult.value) ? invoiceResult.value : []);
     }
 
     setLoading(false);
@@ -1024,6 +1045,55 @@ export default function OrganizationDetailPage() {
                   )}
                 </CardContent>
               </Card>
+
+              {/* Subscription & Billing */}
+              {isBillingEnabled() && (
+                <Card className="lg:col-span-2">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      Subscription
+                      {subscription?.plan && <PlanBadge tier={subscription.plan.tier} />}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {subscription ? (
+                      <>
+                        <div className="grid grid-cols-2 gap-4 text-sm">
+                          <div>
+                            <p className="text-muted-foreground">Status</p>
+                            <p className="font-medium capitalize">{subscription.status}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground">Current Period</p>
+                            <p className="font-medium">
+                              {new Date(subscription.current_period_start).toLocaleDateString()} —{' '}
+                              {new Date(subscription.current_period_end).toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                        {usageSummary && (
+                          <div>
+                            <p className="text-sm font-medium mb-2">Token Usage</p>
+                            <UsageMeter
+                              used={usageSummary.tokens_used}
+                              included={usageSummary.tokens_included}
+                              overageCostCents={usageSummary.overage_cost_cents}
+                            />
+                          </div>
+                        )}
+                        {invoices.length > 0 && (
+                          <div>
+                            <p className="text-sm font-medium mb-2">Invoices</p>
+                            <InvoiceTable invoices={invoices} />
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-muted-foreground">No active subscription.</p>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
             </div>
           </div>
       </ResponsiveLayout>
