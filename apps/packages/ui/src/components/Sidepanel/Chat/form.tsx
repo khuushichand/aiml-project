@@ -82,7 +82,7 @@ import { ModelParamsPanel } from "@/components/Sidepanel/Chat/ModelParamsPanel"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { ActorPopout } from "@/components/Common/Settings/ActorPopout"
 import { DocumentGeneratorDrawer } from "@/components/Common/Playground/DocumentGeneratorDrawer"
-import QuickIngestModal from "@/components/Common/QuickIngestModal"
+import { QuickIngestWizardModal as QuickIngestModal } from "@/components/Common/QuickIngestWizardModal"
 import {
   useConnectionState,
   useConnectionUxState

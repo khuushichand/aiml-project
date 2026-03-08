@@ -5,8 +5,6 @@
   "type": "object",
   "required": ["job_id", "user_id", "media_id"],
   "properties": {
-<<<<<<< HEAD
-=======
     "msg_version": {
       "type": "integer",
       "minimum": 1
@@ -16,7 +14,8 @@
       "const": "tldw.embeddings.v1"
     },
     "schema_url": {
-      "type": "string"
+      "type": "string",
+      "const": "https://schemas.tldw.ai/embeddings/v1.json"
     },
     "idempotency_key": {
       "type": "string"
@@ -27,7 +26,6 @@
     "operation_id": {
       "type": "string"
     },
->>>>>>> worktree-agent-a71a6d7f
     "job_id": {
       "type": "string"
     },
@@ -37,19 +35,6 @@
     "media_id": {
       "type": "integer"
     },
-<<<<<<< HEAD
-    "msg_schema": {
-      "type": "string",
-      "const": "tldw.embeddings.v1"
-    },
-    "msg_version": {
-      "type": "integer",
-      "const": 1
-    },
-    "schema_url": {
-      "type": "string",
-      "const": "https://schemas.tldw.ai/embeddings/v1.json"
-=======
     "priority": {
       "type": ["integer", "string"]
     },
@@ -72,7 +57,6 @@
     },
     "trace_id": {
       "type": "string"
->>>>>>> worktree-agent-a71a6d7f
     }
   },
   "additionalProperties": true
