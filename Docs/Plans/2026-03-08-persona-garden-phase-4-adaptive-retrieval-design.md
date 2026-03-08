@@ -221,6 +221,8 @@ Recommended scenario labels:
 - `bio_question`
 - `coding_request`
 
+These are recommended normalized labels, not fixed enums. Retrieval and classifier code should normalize to stable lowercase strings, but taxonomy growth should not require schema migrations.
+
 Recommended risk labels:
 
 - `neutral`
@@ -406,6 +408,8 @@ Token-overlap style metrics may be useful as internal diagnostics, but should no
 - add prompt-budget and conflict handling
 - add prompt preview/debug visibility
 - wire the same shared retrieval layer into the live Persona Garden runtime once the backend assembly seam is shared
+
+The live Persona Garden websocket/session path should call the same retrieval and prompt-assembly helpers as ordinary persona chat once that seam exists. Do not fork a second exemplar-selection implementation for live persona mode.
 
 ### Phase 3: Assisted Ingestion
 
