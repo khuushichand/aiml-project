@@ -367,3 +367,158 @@ def test_reattach_item_endpoint_clears_detached_status(tmp_path, ingestion_sourc
     import asyncio
 
     asyncio.run(_run_test())
+
+
+@pytest.mark.integration
+def test_patch_source_endpoint_updates_mutable_fields(tmp_path, ingestion_sources_client, monkeypatch):
+    client, auth_headers = ingestion_sources_client
+
+    import aiosqlite
+    import tldw_Server_API.app.api.v1.endpoints.ingestion_sources as ep
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        ensure_ingestion_sources_schema,
+        get_source_by_id,
+    )
+
+    class _FakePool:
+        def __init__(self, db):
+            self._db = db
+
+        class _Tx:
+            def __init__(self, db):
+                self._db = db
+
+            async def __aenter__(self):
+                return self._db
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        def transaction(self):
+            return self._Tx(self._db)
+
+    async def _run_test() -> None:
+        meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+        async with aiosqlite.connect(str(meta_db_path)) as db:
+            db.row_factory = aiosqlite.Row
+            await ensure_ingestion_sources_schema(db)
+            source = await create_source(
+                db,
+                user_id=1,
+                payload={
+                    "source_type": "local_directory",
+                    "sink_type": "notes",
+                    "policy": "canonical",
+                    "enabled": True,
+                    "schedule_enabled": False,
+                    "schedule": {},
+                    "config": {"path": "/tmp/example"},
+                },
+            )
+
+            async def _fake_get_db_pool():
+                return _FakePool(db)
+
+            monkeypatch.setattr(ep, "get_db_pool", _fake_get_db_pool)
+
+            response = client.patch(
+                f"/api/v1/ingestion-sources/{int(source['id'])}",
+                headers=auth_headers,
+                json={
+                    "enabled": False,
+                    "schedule_enabled": True,
+                    "schedule": {"interval_minutes": 15},
+                    "policy": "import_only",
+                },
+            )
+
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["enabled"] is False
+            assert payload["schedule_enabled"] is True
+            assert payload["schedule_config"] == {"interval_minutes": 15}
+            assert payload["policy"] == "import_only"
+
+            persisted = await get_source_by_id(db, source_id=int(source["id"]), user_id=1)
+            assert persisted is not None
+            assert persisted["enabled"] is False
+            assert persisted["schedule_enabled"] is True
+            assert persisted["schedule_config"] == {"interval_minutes": 15}
+            assert persisted["policy"] == "import_only"
+
+    import asyncio
+
+    asyncio.run(_run_test())
+
+
+@pytest.mark.integration
+def test_patch_source_endpoint_rejects_sink_change_after_first_success(tmp_path, ingestion_sources_client, monkeypatch):
+    client, auth_headers = ingestion_sources_client
+
+    import aiosqlite
+    import tldw_Server_API.app.api.v1.endpoints.ingestion_sources as ep
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        ensure_ingestion_sources_schema,
+        get_source_by_id,
+    )
+
+    class _FakePool:
+        def __init__(self, db):
+            self._db = db
+
+        class _Tx:
+            def __init__(self, db):
+                self._db = db
+
+            async def __aenter__(self):
+                return self._db
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        def transaction(self):
+            return self._Tx(self._db)
+
+    async def _run_test() -> None:
+        meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+        async with aiosqlite.connect(str(meta_db_path)) as db:
+            db.row_factory = aiosqlite.Row
+            await ensure_ingestion_sources_schema(db)
+            source = await create_source(
+                db,
+                user_id=1,
+                payload={
+                    "source_type": "local_directory",
+                    "sink_type": "notes",
+                    "policy": "canonical",
+                    "config": {"path": "/tmp/example"},
+                },
+            )
+            await db.execute(
+                "UPDATE ingestion_source_state SET last_successful_snapshot_id = ? WHERE source_id = ?",
+                (9, int(source["id"])),
+            )
+
+            async def _fake_get_db_pool():
+                return _FakePool(db)
+
+            monkeypatch.setattr(ep, "get_db_pool", _fake_get_db_pool)
+
+            response = client.patch(
+                f"/api/v1/ingestion-sources/{int(source['id'])}",
+                headers=auth_headers,
+                json={"sink_type": "media"},
+            )
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == "Source identity is immutable after the first successful sync"
+
+            persisted = await get_source_by_id(db, source_id=int(source["id"]), user_id=1)
+            assert persisted is not None
+            assert persisted["sink_type"] == "notes"
+
+    import asyncio
+
+    asyncio.run(_run_test())

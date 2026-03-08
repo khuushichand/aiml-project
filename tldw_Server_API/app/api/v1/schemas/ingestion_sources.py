@@ -15,6 +15,18 @@ class IngestionSourceCreateRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class IngestionSourcePatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: Literal["local_directory", "archive_snapshot"] | None = None
+    sink_type: Literal["media", "notes"] | None = None
+    policy: Literal["canonical", "import_only"] | None = None
+    enabled: bool | None = None
+    schedule_enabled: bool | None = None
+    schedule: dict[str, Any] | None = None
+    config: dict[str, Any] | None = None
+
+
 class IngestionSourceResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 

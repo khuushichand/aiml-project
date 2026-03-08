@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from tldw_Server_API.app.api.v1.schemas.ingestion_sources import (
     IngestionSourceCreateRequest,
     IngestionSourceItemResponse,
+    IngestionSourcePatchRequest,
     IngestionSourceResponse,
     IngestionSourceSyncTriggerResponse,
 )
@@ -26,8 +27,10 @@ from tldw_Server_API.app.core.Ingestion_Sources.service import (
     get_source_item_by_id,
     list_sources_by_user,
     list_source_items,
+    update_source,
     update_source_item_state,
 )
+from tldw_Server_API.app.core.exceptions import IngestionSourceValidationError
 
 router = APIRouter(prefix="/ingestion-sources", tags=["ingestion-sources"])
 
@@ -72,6 +75,36 @@ async def get_ingestion_source(source_id: int, current_user: User = Depends(get_
     async with db_pool.transaction() as db:
         await ensure_ingestion_sources_schema(db)
         row = await get_source_by_id(db, source_id=source_id, user_id=int(current_user.id))
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion source not found")
+    return row
+
+
+@router.patch("/{source_id}", response_model=IngestionSourceResponse)
+async def patch_ingestion_source(
+    source_id: int,
+    payload: IngestionSourcePatchRequest,
+    current_user: User = Depends(get_request_user),
+):
+    db_pool = await get_db_pool()
+    patch = payload.model_dump(exclude_unset=True)
+    async with db_pool.transaction() as db:
+        await ensure_ingestion_sources_schema(db)
+        try:
+            row = await update_source(
+                db,
+                source_id=source_id,
+                user_id=int(current_user.id),
+                patch=patch,
+            )
+        except IngestionSourceValidationError as exc:
+            detail = str(exc)
+            status_code = (
+                status.HTTP_409_CONFLICT
+                if detail == "Source identity is immutable after the first successful sync"
+                else status.HTTP_400_BAD_REQUEST
+            )
+            raise HTTPException(status_code=status_code, detail=detail) from exc
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion source not found")
     return row

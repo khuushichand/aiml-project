@@ -326,6 +326,83 @@ async def get_source_by_id(db, *, source_id: int, user_id: int | None = None) ->
     return _deserialize_source_row(row)
 
 
+def _source_identity_patch_changed(existing: dict[str, Any], patch: dict[str, Any]) -> bool:
+    if "source_type" in patch and patch.get("source_type") not in (None, existing.get("source_type")):
+        return True
+    if "sink_type" in patch and patch.get("sink_type") not in (None, existing.get("sink_type")):
+        return True
+    if "config" in patch:
+        patch_config = patch.get("config")
+        if isinstance(patch_config, dict) and patch_config != (existing.get("config") or {}):
+            return True
+    return False
+
+
+async def update_source(
+    db,
+    *,
+    source_id: int,
+    user_id: int,
+    patch: dict[str, Any],
+) -> dict[str, Any]:
+    existing = await get_source_by_id(db, source_id=source_id, user_id=user_id)
+    if not existing:
+        return {}
+    if _source_identity_patch_changed(existing, patch):
+        if existing.get("last_successful_snapshot_id") is not None:
+            raise IngestionSourceValidationError(
+                "Source identity is immutable after the first successful sync"
+            )
+        raise IngestionSourceValidationError("Source identity updates are not supported")
+
+    update_requested = any(
+        key in patch and patch.get(key) is not None
+        for key in ("policy", "enabled", "schedule_enabled", "schedule")
+    )
+    if not update_requested:
+        return existing
+
+    policy_value = existing.get("policy")
+    if "policy" in patch and patch.get("policy") is not None:
+        policy_value = _normalize_choice(
+            patch.get("policy"),
+            field_name="policy",
+            allowed=SOURCE_POLICIES,
+        )
+    enabled_value = existing.get("enabled")
+    if "enabled" in patch and patch.get("enabled") is not None:
+        enabled_value = bool(patch.get("enabled"))
+    schedule_enabled_value = existing.get("schedule_enabled")
+    if "schedule_enabled" in patch and patch.get("schedule_enabled") is not None:
+        schedule_enabled_value = bool(patch.get("schedule_enabled"))
+    schedule_config_value = existing.get("schedule_config") or {}
+    if "schedule" in patch and patch.get("schedule") is not None:
+        schedule_config = patch.get("schedule")
+        schedule_config_value = schedule_config if isinstance(schedule_config, dict) else {}
+
+    await db.execute(
+        """
+        UPDATE ingestion_sources
+        SET policy = ?,
+            enabled = ?,
+            schedule_enabled = ?,
+            schedule_config_json = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            str(policy_value),
+            1 if enabled_value else 0,
+            1 if schedule_enabled_value else 0,
+            _json_dumps(schedule_config_value),
+            _utc_now_text(),
+            int(source_id),
+        ),
+    )
+    updated = await get_source_by_id(db, source_id=source_id, user_id=user_id)
+    return updated or {}
+
+
 async def list_sources_for_scheduler(db) -> list[dict[str, Any]]:
     cursor = await db.execute(
         """
