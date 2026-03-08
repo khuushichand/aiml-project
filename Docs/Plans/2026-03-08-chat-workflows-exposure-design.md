@@ -130,13 +130,15 @@ No backend changes are required. No changes are required to `ChatWorkflowsPage` 
 
 ### Discoverability
 
+- Verify workspace discoverability through shared route metadata that powers workspace navigation:
+  - `apps/packages/ui/src/routes/__tests__/chat-workflows-route.test.tsx`
 - Run or extend the existing Playground launcher coverage:
   - `apps/packages/ui/src/components/Option/Playground/__tests__/Playground.search.integration.test.tsx`
-- Verify workspace nav still exposes the route through shared route metadata after the web-shell page exists.
 
 ## Acceptance Criteria
 
 - Visiting `/chat-workflows` in the web app loads the Chat Workflows page instead of 404.
+- Shared route metadata still marks Chat Workflows as a workspace navigation item.
 - Existing launcher/navigation surfaces intended to open Chat Workflows still target `/chat-workflows`.
 - Regression tests cover the missing-page failure mode.
 - No backend API or permission changes are required for this repair.

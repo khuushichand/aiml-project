@@ -14,12 +14,13 @@
 
 **Files:**
 - Create: `apps/tldw-frontend/pages/chat-workflows.tsx`
+- Create: `apps/tldw-frontend/__tests__/pages/chat-workflows-route.test.tsx`
 - Reference: `apps/tldw-frontend/pages/mcp-hub.tsx`
 - Reference: `apps/tldw-frontend/pages/workflow-editor.tsx`
 
 **Step 1: Write the failing test**
 
-Add or extend a route-parity test that asserts the web shell contains a `chat-workflows.tsx` page file and that it dynamically imports `@/routes/option-chat-workflows`.
+Add `apps/tldw-frontend/__tests__/pages/chat-workflows-route.test.tsx` to assert the web shell contains a `chat-workflows.tsx` page file and that it dynamically imports `@/routes/option-chat-workflows`.
 
 Example assertion shape:
 
@@ -31,7 +32,7 @@ expect(source).toMatch(/ssr:\s*false/)
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd apps/tldw-frontend && bunx vitest run <route-parity-test-file>`
+Run: `cd apps/tldw-frontend && bunx vitest run __tests__/pages/chat-workflows-route.test.tsx`
 
 Expected: FAIL because `apps/tldw-frontend/pages/chat-workflows.tsx` does not exist yet.
 
@@ -51,18 +52,19 @@ export default dynamic(() => import("@/routes/option-chat-workflows"), {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd apps/tldw-frontend && bunx vitest run <route-parity-test-file>`
+Run: `cd apps/tldw-frontend && bunx vitest run __tests__/pages/chat-workflows-route.test.tsx`
 
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add apps/tldw-frontend/pages/chat-workflows.tsx <route-parity-test-file>
+git add apps/tldw-frontend/pages/chat-workflows.tsx \
+  apps/tldw-frontend/__tests__/pages/chat-workflows-route.test.tsx
 git commit -m "fix(web): expose chat workflows route"
 ```
 
-### Task 2: Verify shared route wiring stays aligned
+### Task 2: Verify shared route wiring and workspace-nav metadata stay aligned
 
 **Files:**
 - Test: `apps/packages/ui/src/routes/__tests__/chat-workflows-route.test.tsx`
@@ -71,9 +73,12 @@ git commit -m "fix(web): expose chat workflows route"
 
 **Step 1: Review the existing test**
 
-Confirm the test already asserts:
+Extend the existing test so it asserts:
 - `/chat-workflows` exists in the shared route registry
 - `OptionChatWorkflows` lazy-loads `./option-chat-workflows`
+- the route keeps `group: "workspace"` navigation metadata
+- the route keeps `labelToken: "option:header.chatWorkflows"`
+- the route keeps its explicit navigation order
 
 **Step 2: Run test to establish baseline**
 
@@ -81,12 +86,14 @@ Run: `cd apps/packages/ui && bunx vitest run src/routes/__tests__/chat-workflows
 
 Expected: PASS
 
-**Step 3: Tighten only if coverage is incomplete**
+**Step 3: Add the missing metadata assertions**
 
-If the test misses the route label or nav metadata, add a minimal assertion such as:
+Add minimal assertions such as:
 
 ```ts
+expect(routeRegistrySource).toMatch(/group:\s*"workspace"/)
 expect(routeRegistrySource).toMatch(/labelToken:\s*"option:header.chatWorkflows"/)
+expect(routeRegistrySource).toMatch(/order:\s*10\.5/)
 ```
 
 Do not add broad route-registry snapshot coverage.
@@ -101,7 +108,7 @@ Expected: PASS
 
 ```bash
 git add apps/packages/ui/src/routes/__tests__/chat-workflows-route.test.tsx
-git commit -m "test(ui): lock chat workflows shared route wiring"
+git commit -m "test(ui): lock chat workflows route metadata"
 ```
 
 ### Task 3: Verify launcher/discoverability entry points
@@ -140,62 +147,14 @@ Expected: PASS
 
 **Step 5: Commit**
 
+If no file changes were required because the existing test already covers the launcher path, skip this commit.
+
 ```bash
 git add apps/packages/ui/src/components/Option/Playground/__tests__/Playground.search.integration.test.tsx
 git commit -m "test(ui): verify chat workflows launcher path"
 ```
 
-### Task 4: Verify end-to-end route exposure in the web shell
-
-**Files:**
-- Modify or create: appropriate web-shell route parity test under `apps/tldw-frontend/__tests__/`
-- Reference: `apps/tldw-frontend/pages/chat-workflows.tsx`
-- Reference: `apps/tldw-frontend/pages/mcp-hub.tsx`
-- Reference: `apps/tldw-frontend/pages/workflow-editor.tsx`
-
-**Step 1: Add a focused web-shell parity test**
-
-Prefer a file-system based test that checks the page exists and imports the correct route module. Keep it narrow to the missing-page regression.
-
-Example:
-
-```ts
-import { existsSync, readFileSync } from "node:fs"
-
-it("exposes chat workflows through a Next page shim", () => {
-  expect(existsSync("pages/chat-workflows.tsx")).toBe(true)
-  const source = readFileSync("pages/chat-workflows.tsx", "utf8")
-  expect(source).toContain('import("@/routes/option-chat-workflows")')
-})
-```
-
-**Step 2: Run the targeted web-shell test**
-
-Run: `cd apps/tldw-frontend && bunx vitest run <web-shell-route-test-file>`
-
-Expected: PASS
-
-**Step 3: Check for redundant overlap**
-
-If Task 1’s test already fully covers this regression in the correct package, remove duplication and keep only one authoritative test.
-
-**Step 4: Run the final chosen test set**
-
-Run:
-- `cd apps/tldw-frontend && bunx vitest run <web-shell-route-test-file>`
-- `cd apps/packages/ui && bunx vitest run src/routes/__tests__/chat-workflows-route.test.tsx`
-- `cd apps/packages/ui && bunx vitest run src/components/Option/Playground/__tests__/Playground.search.integration.test.tsx`
-
-Expected: PASS
-
-**Step 5: Commit**
-
-```bash
-git add <web-shell-route-test-file>
-git commit -m "test(web): prevent chat workflows route parity regression"
-```
-
-### Task 5: Verify changed scope and security checks
+### Task 4: Verify changed scope and security checks
 
 **Files:**
 - Verify touched frontend files
@@ -204,7 +163,7 @@ git commit -m "test(web): prevent chat workflows route parity regression"
 **Step 1: Run targeted frontend verification**
 
 Run:
-- `cd apps/tldw-frontend && bunx vitest run <web-shell-route-test-file>`
+- `cd apps/tldw-frontend && bunx vitest run __tests__/pages/chat-workflows-route.test.tsx`
 - `cd apps/packages/ui && bunx vitest run src/routes/__tests__/chat-workflows-route.test.tsx`
 - `cd apps/packages/ui && bunx vitest run src/components/Option/Playground/__tests__/Playground.search.integration.test.tsx`
 
@@ -228,9 +187,9 @@ Expected: only the page shim and focused tests are changed.
 
 ```bash
 git add apps/tldw-frontend/pages/chat-workflows.tsx \
+  apps/tldw-frontend/__tests__/pages/chat-workflows-route.test.tsx \
   apps/packages/ui/src/routes/__tests__/chat-workflows-route.test.tsx \
-  apps/packages/ui/src/components/Option/Playground/__tests__/Playground.search.integration.test.tsx \
-  <web-shell-route-test-file>
+  apps/packages/ui/src/components/Option/Playground/__tests__/Playground.search.integration.test.tsx
 git commit -m "fix(web): restore chat workflows route exposure"
 ```
 
