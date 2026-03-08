@@ -148,8 +148,8 @@ function OrganizationsPageContent() {
             });
           }
           setOrgPlans(planMap);
-        } catch {
-          // Non-critical — org list still works without plan info
+        } catch (err) {
+          console.warn('Failed to load subscription data for organizations:', err);
         }
       }
     } catch (error: unknown) {

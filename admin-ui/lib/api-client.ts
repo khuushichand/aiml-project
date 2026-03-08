@@ -20,6 +20,20 @@ export { ApiError };
 type QueryParamPrimitive = string | number | boolean;
 type QueryParamValue = QueryParamPrimitive | QueryParamPrimitive[] | null | undefined;
 
+type CreatePlanInput = {
+  name: string;
+  tier: string;
+  monthly_price_cents: number;
+  included_token_credits: number;
+  overage_rate_per_1k_tokens_cents: number;
+  stripe_product_id?: string;
+  stripe_price_id?: string;
+  features?: string[];
+  is_default?: boolean;
+};
+
+type UpdatePlanInput = Partial<CreatePlanInput>;
+
 type AddTeamMemberInput =
   | { email: string; role?: string }
   | { userId: string | number; role?: string }
@@ -1070,13 +1084,13 @@ export const api = {
   // ============================================
   getPlans: (params?: Record<string, QueryParamValue>) => {
     const qs = buildQueryString(params);
-    return requestJson<Plan[]>(`/billing/plans${qs}`);
+    return requestJson<Plan[]>(`/billing/plans${qs ? `?${qs}` : ''}`);
   },
   getPlan: (planId: string) =>
     requestJson<Plan>(`/billing/plans/${encodeURIComponent(planId)}`),
-  createPlan: (data: Partial<Plan>) =>
+  createPlan: (data: CreatePlanInput) =>
     requestJson<Plan>('/billing/plans', { method: 'POST', body: JSON.stringify(data) }),
-  updatePlan: (planId: string, data: Partial<Plan>) =>
+  updatePlan: (planId: string, data: UpdatePlanInput) =>
     requestJson<Plan>(`/billing/plans/${encodeURIComponent(planId)}`, { method: 'PUT', body: JSON.stringify(data) }),
   deletePlan: (planId: string) =>
     requestJson(`/billing/plans/${encodeURIComponent(planId)}`, { method: 'DELETE' }),
@@ -1084,7 +1098,7 @@ export const api = {
   // Subscriptions
   getSubscriptions: (params?: Record<string, QueryParamValue>) => {
     const qs = buildQueryString(params);
-    return requestJson<Subscription[]>(`/billing/subscriptions${qs}`);
+    return requestJson<Subscription[]>(`/billing/subscriptions${qs ? `?${qs}` : ''}`);
   },
   getOrgSubscription: (orgId: number) =>
     requestJson<Subscription>(`/billing/orgs/${orgId}/subscription`),
@@ -1098,12 +1112,12 @@ export const api = {
 
   // Usage & Invoices
   getOrgUsageSummary: (orgId: number, params?: { period?: string }) => {
-    const qs = buildQueryString(params as Record<string, QueryParamValue>);
-    return requestJson<OrgUsageSummary>(`/billing/orgs/${orgId}/usage${qs}`);
+    const qs = buildQueryString(params);
+    return requestJson<OrgUsageSummary>(`/billing/orgs/${orgId}/usage${qs ? `?${qs}` : ''}`);
   },
   getOrgInvoices: (orgId: number, params?: Record<string, QueryParamValue>) => {
     const qs = buildQueryString(params);
-    return requestJson<Invoice[]>(`/billing/orgs/${orgId}/invoices${qs}`);
+    return requestJson<Invoice[]>(`/billing/orgs/${orgId}/invoices${qs ? `?${qs}` : ''}`);
   },
 
   // Feature Registry
