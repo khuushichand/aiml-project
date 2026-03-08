@@ -1,6 +1,6 @@
 # Deep Research Design
 
-Date: 2026-03-07  
+Date: 2026-03-07
 Status: Approved
 
 ## Summary

@@ -1,7 +1,7 @@
 # Google Keep Notes Import/Export Design
 
-Date: 2026-03-07  
-Status: Approved  
+Date: 2026-03-07
+Status: Approved
 Scope: User-facing documentation for moving notes between Google Keep and tldw Notes
 
 ## 1. Summary
