@@ -6780,6 +6780,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         exemplar_id: str,
         persona_id: str,
         user_id: str,
+        include_disabled: bool = False,
         include_deleted: bool = False,
         include_deleted_personas: bool = False,
     ) -> dict[str, Any] | None:
@@ -6792,6 +6793,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "pp.user_id = pe.user_id",
         ]
         params: list[Any] = [exemplar_id, persona_id, user_id]
+        if not include_disabled:
+            clauses.append("pe.enabled = 1")
         if not include_deleted:
             clauses.append("pe.deleted = 0")
         if not include_deleted_personas:

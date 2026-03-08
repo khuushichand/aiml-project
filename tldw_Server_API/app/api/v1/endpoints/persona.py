@@ -22,6 +22,10 @@ from starlette.requests import Request as StarletteRequest
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaDeleteResponse,
+    PersonaExemplarCreate,
+    PersonaExemplarDeleteResponse,
+    PersonaExemplarResponse,
+    PersonaExemplarUpdate,
     PersonaInfo,
     PersonaPolicyRulesReplaceRequest,
     PersonaPolicyRulesResponse,
@@ -801,6 +805,28 @@ def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileRespo
         created_at=str(profile.get("created_at") or _utc_now_iso()),
         last_modified=str(profile.get("last_modified") or _utc_now_iso()),
         version=int(profile.get("version") or 1),
+    )
+
+
+def _persona_exemplar_to_response(exemplar: dict[str, Any]) -> PersonaExemplarResponse:
+    return PersonaExemplarResponse(
+        id=str(exemplar.get("id") or ""),
+        persona_id=str(exemplar.get("persona_id") or ""),
+        user_id=str(exemplar.get("user_id") or ""),
+        kind=str(exemplar.get("kind") or "style"),
+        content=str(exemplar.get("content") or ""),
+        tone=None if exemplar.get("tone") is None else str(exemplar.get("tone")),
+        scenario_tags=[str(item) for item in list(exemplar.get("scenario_tags") or [])],
+        capability_tags=[str(item) for item in list(exemplar.get("capability_tags") or [])],
+        priority=int(exemplar.get("priority") or 0),
+        enabled=bool(exemplar.get("enabled", True)),
+        source_type=str(exemplar.get("source_type") or "manual"),
+        source_ref=None if exemplar.get("source_ref") is None else str(exemplar.get("source_ref")),
+        notes=None if exemplar.get("notes") is None else str(exemplar.get("notes")),
+        created_at=str(exemplar.get("created_at") or _utc_now_iso()),
+        last_modified=str(exemplar.get("last_modified") or exemplar.get("created_at") or _utc_now_iso()),
+        deleted=bool(exemplar.get("deleted", False)),
+        version=int(exemplar.get("version") or 1),
     )
 
 
@@ -1603,6 +1629,203 @@ async def delete_persona_profile(
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         raise _to_http_exception(exc, action="delete persona profile") from exc
+
+
+@router.get(
+    "/profiles/{persona_id}/exemplars",
+    response_model=list[PersonaExemplarResponse],
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def list_persona_exemplars(
+    persona_id: str,
+    include_disabled: bool = Query(default=False),
+    include_deleted: bool = Query(default=False),
+    include_deleted_personas: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> list[PersonaExemplarResponse]:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=include_deleted_personas)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        exemplars = db.list_persona_exemplars(
+            user_id=user_id,
+            persona_id=persona_id,
+            include_disabled=include_disabled,
+            include_deleted=include_deleted,
+            include_deleted_personas=include_deleted_personas,
+            limit=limit,
+            offset=offset,
+        )
+        return [_persona_exemplar_to_response(exemplar) for exemplar in exemplars]
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="list persona exemplars") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/exemplars",
+    response_model=PersonaExemplarResponse,
+    tags=["persona"],
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_persona_exemplar(
+    persona_id: str,
+    payload: PersonaExemplarCreate = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaExemplarResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        create_data = payload.model_dump(exclude_none=True)
+        create_data["persona_id"] = persona_id
+        create_data["user_id"] = user_id
+        exemplar_id = db.create_persona_exemplar(create_data)
+        exemplar = db.get_persona_exemplar(
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_disabled=True,
+            include_deleted=False,
+        )
+        if exemplar is None:
+            raise HTTPException(status_code=500, detail="Failed to load created persona exemplar")
+        return _persona_exemplar_to_response(exemplar)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="create persona exemplar") from exc
+
+
+@router.get(
+    "/profiles/{persona_id}/exemplars/{exemplar_id}",
+    response_model=PersonaExemplarResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def get_persona_exemplar(
+    persona_id: str,
+    exemplar_id: str,
+    include_disabled: bool = Query(default=False),
+    include_deleted: bool = Query(default=False),
+    include_deleted_personas: bool = Query(default=False),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaExemplarResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=include_deleted_personas)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        exemplar = db.get_persona_exemplar(
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_disabled=include_disabled,
+            include_deleted=include_deleted,
+            include_deleted_personas=include_deleted_personas,
+        )
+        if exemplar is None:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        return _persona_exemplar_to_response(exemplar)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="get persona exemplar") from exc
+
+
+@router.patch(
+    "/profiles/{persona_id}/exemplars/{exemplar_id}",
+    response_model=PersonaExemplarResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def update_persona_exemplar(
+    persona_id: str,
+    exemplar_id: str,
+    payload: PersonaExemplarUpdate = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaExemplarResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No exemplar fields provided for update")
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        ok = db.update_persona_exemplar(
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            update_data=update_data,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        exemplar = db.get_persona_exemplar(
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_disabled=True,
+            include_deleted=False,
+        )
+        if exemplar is None:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        return _persona_exemplar_to_response(exemplar)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="update persona exemplar") from exc
+
+
+@router.delete(
+    "/profiles/{persona_id}/exemplars/{exemplar_id}",
+    response_model=PersonaExemplarDeleteResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def delete_persona_exemplar(
+    persona_id: str,
+    exemplar_id: str,
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaExemplarDeleteResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        ok = db.soft_delete_persona_exemplar(
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        return PersonaExemplarDeleteResponse(status="deleted", persona_id=persona_id, exemplar_id=exemplar_id)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="delete persona exemplar") from exc
 
 
 @router.get(
