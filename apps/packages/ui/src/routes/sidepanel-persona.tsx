@@ -1009,7 +1009,7 @@ const SidepanelPersona = () => {
         className="flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
       >
         <div className="sticky bg-surface top-0 z-10">
-          <SidepanelHeaderSimple activeTitle="Persona" />
+          <SidepanelHeaderSimple activeTitle={t("sidepanel:persona.title", "Persona Garden")} />
         </div>
         <div className="p-4">
           <FeatureEmptyState
@@ -1033,7 +1033,7 @@ const SidepanelPersona = () => {
         className="flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
       >
         <div className="sticky bg-surface top-0 z-10">
-          <SidepanelHeaderSimple activeTitle="Persona" />
+          <SidepanelHeaderSimple activeTitle={t("sidepanel:persona.title", "Persona Garden")} />
         </div>
         <div className="p-4">
           <FeatureEmptyState
@@ -1056,7 +1056,7 @@ const SidepanelPersona = () => {
       className="flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
     >
       <div className="sticky bg-surface top-0 z-10">
-        <SidepanelHeaderSimple activeTitle={t("sidepanel:persona.title", "Persona")} />
+        <SidepanelHeaderSimple activeTitle={t("sidepanel:persona.title", "Persona Garden")} />
       </div>
 
       <div className="flex flex-1 flex-col gap-3 p-3">

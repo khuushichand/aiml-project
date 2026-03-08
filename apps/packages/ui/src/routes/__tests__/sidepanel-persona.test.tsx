@@ -215,6 +215,7 @@ describe("SidepanelPersona", () => {
     mocks.isOnline = false
     render(<SidepanelPersona />)
 
+    expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Persona Garden")
     expect(screen.getByText("Connect to use Persona")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
     expect(mocks.navigate).toHaveBeenCalledWith("/settings")
@@ -224,7 +225,16 @@ describe("SidepanelPersona", () => {
     mocks.capabilitiesState.capabilities = { hasPersona: false }
     render(<SidepanelPersona />)
 
+    expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Persona Garden")
     expect(screen.getByText("Persona unavailable")).toBeInTheDocument()
+  })
+
+  it("renders Persona Garden framing while keeping live session controls", () => {
+    render(<SidepanelPersona />)
+
+    expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Persona Garden")
+    expect(screen.getByTestId("persona-memory-toggle")).toBeInTheDocument()
+    expect(screen.getByTestId("persona-resume-session-select")).toBeInTheDocument()
   })
 
   it.each([390, 1280])(
