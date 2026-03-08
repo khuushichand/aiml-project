@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
-from tldw_Server_API.app.core.Sandbox.models import RunPhase, RunStatus, RuntimeType, TrustLevel
+from tldw_Server_API.app.core.Sandbox.models import RunPhase, RunStatus, RuntimeType, Session, TrustLevel
 from tldw_Server_API.app.core.Sandbox.orchestrator import SessionActiveRunsConflict
 
 
@@ -169,7 +169,25 @@ def test_session_backed_run_inherits_session_defaults(monkeypatch) -> None:
 
     captured: dict[str, Any] = {}
 
-    def _fake_start_run_scaffold(*, user_id, spec, spec_version, idem_key, raw_body):
+    def _fake_start_run_scaffold(*, user_id, spec, spec_version, idem_key, raw_body, explicit_fields=None):
+        session = sb._service.get_session(spec.session_id) if spec.session_id else None
+        if session is not None and explicit_fields is not None:
+            if "runtime" not in explicit_fields and session.runtime is not None:
+                spec.runtime = session.runtime
+            if "base_image" not in explicit_fields and session.base_image:
+                spec.base_image = session.base_image
+            if "resources.cpu" not in explicit_fields and session.cpu_limit is not None:
+                spec.cpu = session.cpu_limit
+            if "resources.memory_mb" not in explicit_fields and session.memory_mb is not None:
+                spec.memory_mb = session.memory_mb
+            if "timeout_sec" not in explicit_fields and session.timeout_sec is not None:
+                spec.timeout_sec = int(session.timeout_sec)
+            if "network_policy" not in explicit_fields and session.network_policy is not None:
+                spec.network_policy = session.network_policy
+            if "env" not in explicit_fields:
+                spec.env = dict(session.env or {})
+            if "trust_level" not in explicit_fields and session.trust_level is not None:
+                spec.trust_level = session.trust_level
         captured["user_id"] = user_id
         captured["spec"] = spec
         return RunStatus(
@@ -225,6 +243,72 @@ def test_session_backed_run_inherits_session_defaults(monkeypatch) -> None:
     assert spec.trust_level == TrustLevel.trusted
 
 
+def test_session_backed_run_refreshes_session_defaults_after_prelock_work(monkeypatch, tmp_path) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
+
+    old_session = Session(
+        id="sess-refresh",
+        runtime=RuntimeType.docker,
+        base_image="python:3.11-slim",
+        expires_at=None,
+        timeout_sec=30,
+        env={"SESSION_TOKEN": "old"},
+        trust_level=TrustLevel.standard,
+    )
+    new_session = Session(
+        id="sess-refresh",
+        runtime=RuntimeType.docker,
+        base_image="python:3.12-slim",
+        expires_at=None,
+        timeout_sec=77,
+        env={"SESSION_TOKEN": "new"},
+        trust_level=TrustLevel.trusted,
+    )
+    state = {"session": old_session}
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(sb, "_require_session_owner", lambda session_id, current_user: "1")
+    monkeypatch.setattr(sb._service, "get_session", lambda session_id: state["session"])
+    monkeypatch.setattr(sb._service._orch, "get_session", lambda session_id, **kwargs: state["session"])
+    monkeypatch.setattr(sb._service._orch, "get_session_workspace_path", lambda session_id, **kwargs: str(tmp_path))
+
+    def _switch_session_and_parse(files):
+        state["session"] = new_session
+        return []
+
+    def _capture_enqueue(*, user_id, spec, spec_version, idem_key, body):
+        captured["spec"] = spec
+        return RunStatus(
+            id="run-refresh",
+            phase=RunPhase.queued,
+            spec_version=spec_version,
+            runtime=spec.runtime or RuntimeType.docker,
+            base_image=spec.base_image,
+            session_id=spec.session_id,
+            started_at=datetime.now(timezone.utc),
+        )
+
+    monkeypatch.setattr(sb._service, "parse_inline_files", _switch_session_and_parse)
+    monkeypatch.setattr(sb._service._orch, "enqueue_run", _capture_enqueue)
+
+    with _client(monkeypatch) as client:
+        run_resp = client.post(
+            "/api/v1/sandbox/runs",
+            json={
+                "spec_version": "1.0",
+                "session_id": "sess-refresh",
+                "command": ["python", "-c", "print('hello')"],
+            },
+        )
+        assert run_resp.status_code == 200
+
+    spec = captured["spec"]
+    assert spec.base_image == "python:3.12-slim"
+    assert spec.timeout_sec == 77
+    assert spec.env == {"SESSION_TOKEN": "new"}
+    assert spec.trust_level == TrustLevel.trusted
+
+
 def test_session_backed_run_returns_not_found_if_session_disappears_during_start(monkeypatch) -> None:
     from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
 
@@ -248,7 +332,7 @@ def test_session_backed_run_returns_not_found_if_session_disappears_during_start
         ),
     )
 
-    def _raise_session_not_found(*, user_id, spec, spec_version, idem_key, raw_body):
+    def _raise_session_not_found(*, user_id, spec, spec_version, idem_key, raw_body, explicit_fields=None):
         raise ValueError("session_not_found")
 
     monkeypatch.setattr(sb._service, "start_run_scaffold", _raise_session_not_found)

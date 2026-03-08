@@ -969,33 +969,150 @@ class SandboxService:
                 raise ValueError(f"invalid inline file at index {index}") from e
         return results
 
-    def start_run_scaffold(self, user_id: str | int, spec: RunSpec, spec_version: str, idem_key: str | None, raw_body: dict) -> RunStatus:
+    def _run_field_explicit(self, explicit_fields: set[str] | None, *field_names: str) -> bool:
+        if explicit_fields is None:
+            return True
+        for field_name in field_names:
+            normalized = str(field_name or "").strip()
+            if not normalized:
+                continue
+            if normalized in explicit_fields:
+                return True
+            if "." not in normalized and f"resources.{normalized}" in explicit_fields:
+                return True
+        return False
+
+    def _resolve_session_backed_run_spec(
+        self,
+        spec: RunSpec,
+        *,
+        session: Session,
+        explicit_fields: set[str] | None,
+    ) -> RunSpec:
+        runtime = spec.runtime
+        if not self._run_field_explicit(explicit_fields, "runtime") and session.runtime is not None:
+            runtime = session.runtime
+
+        base_image = spec.base_image
+        if not self._run_field_explicit(explicit_fields, "base_image") and session.base_image:
+            base_image = session.base_image
+
+        env = dict(spec.env or {})
+        if not self._run_field_explicit(explicit_fields, "env"):
+            env = dict(session.env or {})
+
+        timeout_sec = spec.timeout_sec
+        if not self._run_field_explicit(explicit_fields, "timeout_sec") and session.timeout_sec is not None:
+            timeout_sec = int(session.timeout_sec)
+
+        cpu = spec.cpu
+        if not self._run_field_explicit(explicit_fields, "cpu") and session.cpu_limit is not None:
+            cpu = float(session.cpu_limit)
+
+        memory_mb = spec.memory_mb
+        if not self._run_field_explicit(explicit_fields, "memory_mb") and session.memory_mb is not None:
+            memory_mb = int(session.memory_mb)
+
+        network_policy = spec.network_policy
+        if not self._run_field_explicit(explicit_fields, "network_policy") and session.network_policy:
+            network_policy = str(session.network_policy)
+
+        trust_level = spec.trust_level
+        if not self._run_field_explicit(explicit_fields, "trust_level") and session.trust_level is not None:
+            trust_level = session.trust_level
+
+        persona_id = spec.persona_id
+        if not self._run_field_explicit(explicit_fields, "persona_id") and session.persona_id is not None:
+            persona_id = str(session.persona_id)
+
+        workspace_id = spec.workspace_id
+        if not self._run_field_explicit(explicit_fields, "workspace_id") and session.workspace_id is not None:
+            workspace_id = str(session.workspace_id)
+
+        workspace_group_id = spec.workspace_group_id
+        if not self._run_field_explicit(explicit_fields, "workspace_group_id") and session.workspace_group_id is not None:
+            workspace_group_id = str(session.workspace_group_id)
+
+        scope_snapshot_id = spec.scope_snapshot_id
+        if not self._run_field_explicit(explicit_fields, "scope_snapshot_id") and session.scope_snapshot_id is not None:
+            scope_snapshot_id = str(session.scope_snapshot_id)
+
+        return RunSpec(
+            session_id=spec.session_id,
+            runtime=runtime,
+            base_image=base_image,
+            command=list(spec.command),
+            env=env,
+            startup_timeout_sec=spec.startup_timeout_sec,
+            timeout_sec=timeout_sec,
+            cpu=cpu,
+            memory_mb=memory_mb,
+            network_policy=network_policy,
+            files_inline=list(spec.files_inline or []),
+            capture_patterns=list(spec.capture_patterns or []),
+            interactive=spec.interactive,
+            stdin_max_bytes=spec.stdin_max_bytes,
+            stdin_max_frame_bytes=spec.stdin_max_frame_bytes,
+            stdin_bps=spec.stdin_bps,
+            stdin_idle_timeout_sec=spec.stdin_idle_timeout_sec,
+            trust_level=trust_level,
+            port_mappings=list(spec.port_mappings or []),
+            run_as_root=spec.run_as_root,
+            read_only_root=spec.read_only_root,
+            persona_id=persona_id,
+            workspace_id=workspace_id,
+            workspace_group_id=workspace_group_id,
+            scope_snapshot_id=scope_snapshot_id,
+        )
+
+    def start_run_scaffold(
+        self,
+        user_id: str | int,
+        spec: RunSpec,
+        spec_version: str,
+        idem_key: str | None,
+        raw_body: dict,
+        *,
+        explicit_fields: set[str] | None = None,
+    ) -> RunStatus:
         # Validate requested spec version
         self._validate_spec_version(spec_version)
-        # Apply policy then enqueue via orchestrator (idempotency-aware)
-        runtime_preflights = self._collect_runtime_preflights(network_policy="deny_all")
-        firecracker_preflight = runtime_preflights.get(RuntimeType.firecracker)
-        lima_preflight = runtime_preflights.get(RuntimeType.lima)
-        spec = self.policy.apply_to_run(
-            spec,
-            firecracker_available=bool(firecracker_preflight.available) if firecracker_preflight is not None else bool(firecracker_available()),
-            lima_available=bool(lima_preflight.available) if lima_preflight is not None else bool(lima_available()),
-            runtime_preflights=runtime_preflights,
-        )
-        self._validate_lima_policy(
-            runtime=spec.runtime,
-            network_policy=spec.network_policy,
-            runtime_preflight=lima_preflight,
-        )
-        # Validate Firecracker kernel/rootfs when real execution is enabled
-        self._validate_firecracker_config(spec)
+
+        def _prepare_spec_for_enqueue(candidate: RunSpec) -> RunSpec:
+            runtime_preflights = self._collect_runtime_preflights(network_policy="deny_all")
+            firecracker_preflight = runtime_preflights.get(RuntimeType.firecracker)
+            lima_preflight = runtime_preflights.get(RuntimeType.lima)
+            candidate = self.policy.apply_to_run(
+                candidate,
+                firecracker_available=bool(firecracker_preflight.available) if firecracker_preflight is not None else bool(firecracker_available()),
+                lima_available=bool(lima_preflight.available) if lima_preflight is not None else bool(lima_available()),
+                runtime_preflights=runtime_preflights,
+            )
+            self._validate_lima_policy(
+                runtime=candidate.runtime,
+                network_policy=candidate.network_policy,
+                runtime_preflight=lima_preflight,
+            )
+            self._validate_firecracker_config(candidate)
+            return candidate
+
         session_id = str(spec.session_id or "").strip() if getattr(spec, "session_id", None) is not None else ""
         if session_id:
             with self._workspace_operation_lock(session_id):
-                if self._orch.get_session(session_id, allow_cache_on_store_error=False) is None:
+                session = self._orch.get_session(session_id, allow_cache_on_store_error=False)
+                if session is None:
                     raise ValueError("session_not_found")
+                spec = self._resolve_session_backed_run_spec(
+                    spec,
+                    session=session,
+                    explicit_fields=explicit_fields,
+                )
+                if not spec.base_image:
+                    raise ValueError("session_base_image_required")
+                spec = _prepare_spec_for_enqueue(spec)
                 status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
         else:
+            spec = _prepare_spec_for_enqueue(spec)
             status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
         # Configure stdin caps in hub if interactive is requested (spec 1.1)
         try:
@@ -1546,11 +1663,6 @@ class SandboxService:
         session_root = os.path.dirname(ws_path) if os.path.basename(ws_path) == "workspace" else ws_path
         shutil.rmtree(session_root, ignore_errors=True)
 
-    def _cleanup_workspace_operation_lock_file(self, session_id: str, workspace_root: str | None = None) -> None:
-        lock_path = self._workspace_operation_lock_path(session_id, workspace_root)
-        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
-            os.unlink(lock_path)
-
     def _destroy_session_serialized(self, session_id: str) -> bool:
         ws = self._orch.get_session_workspace_path(session_id)
         if not ws:
@@ -1559,7 +1671,6 @@ class SandboxService:
                 with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                     with self._snapshot_lock(session_id):
                         self._snapshots.cleanup_session_snapshots(session_id)
-                self._cleanup_workspace_operation_lock_file(session_id)
             return destroyed
 
         destroyed = False
@@ -1571,7 +1682,6 @@ class SandboxService:
         if destroyed:
             with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                 self._remove_session_workspace_tree(ws)
-            self._cleanup_workspace_operation_lock_file(session_id, ws)
         return destroyed
 
     def create_snapshot(self, session_id: str) -> dict:

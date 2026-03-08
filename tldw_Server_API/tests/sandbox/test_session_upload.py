@@ -96,6 +96,39 @@ async def test_upload_files_streams_plain_upload_without_unbounded_read(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_upload_files_offloads_filesystem_work_to_threads(monkeypatch, tmp_path) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
+
+    monkeypatch.setattr(sb, "_require_session_owner", lambda session_id, current_user: "1")
+    monkeypatch.setattr(sb._service, "get_session_workspace_path", lambda session_id: str(tmp_path))
+    monkeypatch.setattr(sb._service._orch, "get_session_workspace_path", lambda session_id, **kwargs: str(tmp_path))
+
+    upload = UploadFile(filename="threaded.txt", file=io.BytesIO(b"threaded upload"))
+    original_to_thread = sb.asyncio.to_thread
+    calls: list[str] = []
+
+    async def _tracked_to_thread(func, /, *args, **kwargs):
+        calls.append(getattr(func, "__name__", repr(func)))
+        return await original_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(sb.asyncio, "to_thread", _tracked_to_thread)
+
+    response = await sb.upload_files(
+        request=None,  # type: ignore[arg-type]
+        session_id="sess-offload",
+        files=[upload],
+        current_user=_user(1),
+        audit_service=None,
+    )
+
+    assert response.file_count == 1
+    assert "_workspace_usage_bytes_sync" in calls
+    assert "_prepare_temp_target_sync" in calls
+    assert "_write_fd_chunk_sync" in calls
+    assert "_finalize_temp_target_sync" in calls
+
+
+@pytest.mark.asyncio
 async def test_upload_files_streams_tar_members_without_full_member_read(monkeypatch, tmp_path) -> None:
     from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
 

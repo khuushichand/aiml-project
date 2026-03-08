@@ -247,7 +247,7 @@ def test_destroy_session_cleans_snapshots_artifacts_and_usage(monkeypatch, tmp_p
     assert svc._orch._store.get_user_artifact_bytes("user-77") == 0  # type: ignore[attr-defined]
 
 
-def test_destroy_session_removes_session_root_and_workspace_lock_file(monkeypatch, tmp_path: Path) -> None:
+def test_destroy_session_removes_session_root_but_keeps_workspace_lock_file(monkeypatch, tmp_path: Path) -> None:
     _configure_sqlite_store(monkeypatch, tmp_path)
 
     svc = SandboxService()
@@ -273,7 +273,7 @@ def test_destroy_session_removes_session_root_and_workspace_lock_file(monkeypatc
     assert svc.destroy_session(session.id) is True
 
     assert not session_root.exists()
-    assert not lock_path.exists()
+    assert lock_path.exists()
 
 
 def test_create_snapshot_rejects_active_session_runs(monkeypatch, tmp_path: Path) -> None:
@@ -448,10 +448,15 @@ def test_session_backed_start_run_waits_for_snapshot_workspace_operation(monkeyp
     snapshot_thread.start()
     assert snapshot_entered.wait(timeout=1.0)
 
-    run_thread = threading.Thread(target=_run_start, daemon=True)
-    run_thread.start()
+    run_attempted = threading.Event()
 
-    time.sleep(0.05)
+    def _run_start_with_signal() -> None:
+        run_attempted.set()
+        _run_start()
+
+    run_thread = threading.Thread(target=_run_start_with_signal, daemon=True)
+    run_thread.start()
+    assert run_attempted.wait(timeout=1.0)
     assert not enqueue_entered.is_set(), "session-backed run enqueue should wait for workspace operations"
 
     release_snapshot.set()
@@ -537,10 +542,15 @@ def test_session_backed_start_run_waits_for_snapshot_workspace_operation_across_
     snapshot_thread.start()
     assert snapshot_entered.wait(timeout=1.0)
 
-    run_thread = threading.Thread(target=_run_start, daemon=True)
-    run_thread.start()
+    run_attempted = threading.Event()
 
-    time.sleep(0.05)
+    def _run_start_with_signal() -> None:
+        run_attempted.set()
+        _run_start()
+
+    run_thread = threading.Thread(target=_run_start_with_signal, daemon=True)
+    run_thread.start()
+    assert run_attempted.wait(timeout=1.0)
     assert not enqueue_entered.is_set(), "cross-service session-backed enqueue should wait for workspace operations"
 
     release_snapshot.set()
@@ -595,6 +605,15 @@ def test_list_snapshots_waits_for_cross_service_snapshot_create(monkeypatch, tmp
         except BaseException as exc:  # pragma: no cover - asserted via errors list
             create_errors.append(exc)
 
+    list_called = threading.Event()
+    original_list_snapshots = svc_list._snapshots.list_snapshots
+
+    def _tracked_list_snapshots(session_id: str):
+        list_called.set()
+        return original_list_snapshots(session_id)
+
+    monkeypatch.setattr(svc_list._snapshots, "list_snapshots", _tracked_list_snapshots)
+
     def _run_list() -> None:
         try:
             list_result["snapshots"] = svc_list.list_snapshots(session.id)
@@ -605,10 +624,16 @@ def test_list_snapshots_waits_for_cross_service_snapshot_create(monkeypatch, tmp
     create_thread.start()
     assert snapshot_entered.wait(timeout=1.0)
 
-    list_thread = threading.Thread(target=_run_list, daemon=True)
-    list_thread.start()
+    list_attempted = threading.Event()
 
-    time.sleep(0.05)
+    def _run_list_with_signal() -> None:
+        list_attempted.set()
+        _run_list()
+
+    list_thread = threading.Thread(target=_run_list_with_signal, daemon=True)
+    list_thread.start()
+    assert list_attempted.wait(timeout=1.0)
+    assert not list_called.is_set(), "snapshot listing should not reach the underlying store while create holds the lock"
     assert "snapshots" not in list_result, "cross-service snapshot listing should wait for in-progress create"
 
     release_snapshot.set()
@@ -662,6 +687,15 @@ def test_get_snapshot_info_waits_for_cross_service_snapshot_create(monkeypatch, 
         except BaseException as exc:  # pragma: no cover - asserted via errors list
             create_errors.append(exc)
 
+    info_called = threading.Event()
+    original_get_snapshot_info = svc_info._snapshots.get_snapshot_info
+
+    def _tracked_get_snapshot_info(session_id: str, snapshot_id_arg: str):
+        info_called.set()
+        return original_get_snapshot_info(session_id, snapshot_id_arg)
+
+    monkeypatch.setattr(svc_info._snapshots, "get_snapshot_info", _tracked_get_snapshot_info)
+
     def _run_info() -> None:
         try:
             info_result["snapshot"] = svc_info.get_snapshot_info(session.id, snapshot_id)
@@ -672,10 +706,16 @@ def test_get_snapshot_info_waits_for_cross_service_snapshot_create(monkeypatch, 
     create_thread.start()
     assert snapshot_entered.wait(timeout=1.0)
 
-    info_thread = threading.Thread(target=_run_info, daemon=True)
-    info_thread.start()
+    info_attempted = threading.Event()
 
-    time.sleep(0.05)
+    def _run_info_with_signal() -> None:
+        info_attempted.set()
+        _run_info()
+
+    info_thread = threading.Thread(target=_run_info_with_signal, daemon=True)
+    info_thread.start()
+    assert info_attempted.wait(timeout=1.0)
+    assert not info_called.is_set(), "snapshot info should not reach the underlying store while create holds the lock"
     assert "snapshot" not in info_result, "cross-service snapshot info should wait for in-progress create"
 
     release_snapshot.set()
@@ -729,6 +769,15 @@ def test_delete_snapshot_waits_for_cross_service_snapshot_create(monkeypatch, tm
         except BaseException as exc:  # pragma: no cover - asserted via errors list
             create_errors.append(exc)
 
+    delete_called = threading.Event()
+    original_delete_snapshot = svc_delete._snapshots.delete_snapshot
+
+    def _tracked_delete_snapshot(session_id: str, snapshot_id_arg: str):
+        delete_called.set()
+        return original_delete_snapshot(session_id, snapshot_id_arg)
+
+    monkeypatch.setattr(svc_delete._snapshots, "delete_snapshot", _tracked_delete_snapshot)
+
     def _run_delete() -> None:
         try:
             delete_result["deleted"] = svc_delete.delete_snapshot(session.id, snapshot_id)
@@ -739,10 +788,16 @@ def test_delete_snapshot_waits_for_cross_service_snapshot_create(monkeypatch, tm
     create_thread.start()
     assert snapshot_entered.wait(timeout=1.0)
 
-    delete_thread = threading.Thread(target=_run_delete, daemon=True)
-    delete_thread.start()
+    delete_attempted = threading.Event()
 
-    time.sleep(0.05)
+    def _run_delete_with_signal() -> None:
+        delete_attempted.set()
+        _run_delete()
+
+    delete_thread = threading.Thread(target=_run_delete_with_signal, daemon=True)
+    delete_thread.start()
+    assert delete_attempted.wait(timeout=1.0)
+    assert not delete_called.is_set(), "snapshot delete should not reach the underlying store while create holds the lock"
     assert "deleted" not in delete_result, "cross-service snapshot delete should wait for in-progress create"
 
     release_snapshot.set()
