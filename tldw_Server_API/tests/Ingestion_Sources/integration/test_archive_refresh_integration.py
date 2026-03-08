@@ -87,7 +87,7 @@ class _FakeMediaDB:
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_archive_sync_failure_marks_staged_snapshot_failed_and_preserves_previous_success(
+async def test_archive_sync_sink_failure_marks_item_degraded_and_preserves_previous_binding(
     tmp_path,
     monkeypatch,
 ):
@@ -195,9 +195,11 @@ async def test_archive_sync_failure_marks_staged_snapshot_failed_and_preserves_p
             user_id=1,
         )
 
-        assert jm.completed is None
-        assert jm.failed is not None
-        assert "simulated archive apply failure" in str(jm.failed["error"])
+        assert jm.failed is None
+        assert jm.completed is not None
+        assert jm.completed["result"]["status"] == "completed"
+        assert jm.completed["result"]["degraded_items"] == 1
+        assert jm.completed["result"]["sink_failed_items"] == 1
 
         state_cur = await db.execute(
             "SELECT last_successful_snapshot_id, last_sync_status, active_job_id "
@@ -205,8 +207,8 @@ async def test_archive_sync_failure_marks_staged_snapshot_failed_and_preserves_p
             (int(source["id"]),),
         )
         state_row = await state_cur.fetchone()
-        assert state_row["last_successful_snapshot_id"] == int(previous_snapshot["id"])
-        assert state_row["last_sync_status"] == "failure"
+        assert state_row["last_successful_snapshot_id"] == int(staged_snapshot["id"])
+        assert state_row["last_sync_status"] == "success"
         assert state_row["active_job_id"] is None
 
         snapshot_cur = await db.execute(
@@ -214,17 +216,19 @@ async def test_archive_sync_failure_marks_staged_snapshot_failed_and_preserves_p
             (int(staged_snapshot["id"]),),
         )
         snapshot_row = await snapshot_cur.fetchone()
-        assert snapshot_row["status"] == "failed"
-        assert "simulated archive apply failure" in json.loads(snapshot_row["summary_json"])["error"]
+        assert snapshot_row["status"] == "success"
+        assert json.loads(snapshot_row["summary_json"])["degraded_items"] == 1
 
         item_cur = await db.execute(
-            "SELECT sync_status, binding_json FROM ingestion_source_items "
+            "SELECT content_hash, sync_status, binding_json, present_in_source FROM ingestion_source_items "
             "WHERE source_id = ? AND normalized_relative_path = ?",
             (int(source["id"]), "alpha.md"),
         )
         item_row = await item_cur.fetchone()
-        assert item_row["sync_status"] == "sync_managed"
+        assert item_row["content_hash"] == hashlib.sha256("previous body".encode("utf-8")).hexdigest()
+        assert item_row["sync_status"] == "degraded_sink_error"
         assert json.loads(item_row["binding_json"])["note_id"] == note_id
+        assert item_row["present_in_source"] == 1
 
         updated_note = notes_db.get_note_by_id(note_id=note_id)
         assert updated_note is not None

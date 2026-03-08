@@ -41,6 +41,20 @@ except ImportError:  # pragma: no cover - optional
     get_db_pool = None  # type: ignore
 
 try:
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+        CharactersRAGDBError as NotesDatabaseError,
+    )
+except ImportError:  # pragma: no cover - optional
+    NotesDatabaseError = None  # type: ignore
+
+try:
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+        DatabaseError as MediaDatabaseError,
+    )
+except ImportError:  # pragma: no cover - optional
+    MediaDatabaseError = None  # type: ignore
+
+try:
     from tldw_Server_API.app.core.Jobs.manager import JobManager
 except ImportError:  # pragma: no cover - optional
     JobManager = None  # type: ignore
@@ -54,6 +68,14 @@ _NONCRITICAL_EXCEPTIONS = (
     TypeError,
     ValueError,
 )
+_SINK_ITEM_EXCEPTIONS = tuple(
+    exc
+    for exc in (
+        NotesDatabaseError,
+        MediaDatabaseError,
+    )
+    if exc is not None
+) + _NONCRITICAL_EXCEPTIONS
 
 
 def _previous_snapshot_map(rows: list[dict[str, Any]]) -> dict[str, dict[str, str | None]]:
@@ -295,6 +317,8 @@ async def _process_sync_job(
                 "deleted": len(diff_result.get("deleted", [])),
                 "unchanged": len(diff_result.get("unchanged", [])),
                 "detached_conflicts": 0,
+                "ingestion_failed_items": len(extraction_failures),
+                "sink_failed_items": 0,
                 "degraded_items": len(extraction_failures),
                 "current_item_count": len(current_items) + len(extraction_failures),
             }
@@ -309,13 +333,47 @@ async def _process_sync_job(
                     if existing_row
                     else {}
                 )
-                result = _apply_change_to_sink(
-                    sink_db=sink_db,
-                    sink_type=sink_type,
-                    binding=existing_binding,
-                    change=change,
-                    policy=policy,
-                )
+                try:
+                    result = _apply_change_to_sink(
+                        sink_db=sink_db,
+                        sink_type=sink_type,
+                        binding=existing_binding,
+                        change=change,
+                        policy=policy,
+                    )
+                except _SINK_ITEM_EXCEPTIONS as exc:
+                    preserved_content_hash = None if existing_row is None else existing_row.get("content_hash")
+                    preserved_present_in_source = (
+                        bool(existing_row.get("present_in_source"))
+                        if existing_row is not None
+                        else event_type != "deleted"
+                    )
+                    updated_row = await upsert_source_item(
+                        db,
+                        source_id=source_id,
+                        normalized_relative_path=relative_path,
+                        content_hash=None if preserved_content_hash is None else str(preserved_content_hash),
+                        sync_status="degraded_sink_error",
+                        binding=existing_binding,
+                        present_in_source=preserved_present_in_source,
+                    )
+                    all_rows_map[relative_path] = updated_row
+                    await record_ingestion_item_event(
+                        db,
+                        source_id=source_id,
+                        item_path=relative_path,
+                        event_type="sink_failed",
+                        payload={
+                            "action": "sink_failed",
+                            "job_id": str(jid),
+                            "sync_status": "degraded_sink_error",
+                            "error": str(exc),
+                            "event_type": event_type,
+                        },
+                    )
+                    result_summary["degraded_items"] += 1
+                    result_summary["sink_failed_items"] += 1
+                    continue
                 action = str(result.get("action") or "").strip().lower()
                 if sink_type == "notes":
                     binding = _build_notes_binding(sink_db, result, existing_binding)

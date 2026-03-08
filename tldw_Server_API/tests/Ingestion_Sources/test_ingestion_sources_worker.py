@@ -375,3 +375,100 @@ async def test_process_sync_job_archive_snapshot_notes_source_consumes_staged_sn
         assert note is not None
         assert note["title"] == "Alpha"
         assert note["content"] == archive_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_process_sync_job_continues_after_sink_apply_failure_for_other_items(
+    tmp_path,
+    monkeypatch,
+):
+    source_root = tmp_path / "allowed" / "docs"
+    source_root.mkdir(parents=True)
+    (source_root / "alpha.md").write_text("# Alpha\n\nfirst body\n", encoding="utf-8")
+    (source_root / "beta.md").write_text("# Beta\n\nsecond body\n", encoding="utf-8")
+
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("INGESTION_SOURCE_ALLOWED_ROOTS", str(tmp_path / "allowed"))
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+
+    import tldw_Server_API.app.services.ingestion_sources_worker as worker
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        ensure_ingestion_sources_schema,
+    )
+
+    meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+    async with aiosqlite.connect(str(meta_db_path)) as db:
+        db.row_factory = aiosqlite.Row
+        await ensure_ingestion_sources_schema(db)
+        source = await create_source(
+            db,
+            user_id=1,
+            payload={
+                "source_type": "local_directory",
+                "sink_type": "notes",
+                "policy": "canonical",
+                "config": {"path": str(source_root)},
+            },
+        )
+
+        async def _fake_get_db_pool():
+            return _SQLitePool(db)
+
+        real_apply_notes_change = worker.apply_notes_change
+
+        def _sometimes_fail_apply_notes_change(notes_db, *, binding, change, policy):
+            if change.get("relative_path") == "alpha.md":
+                raise ValueError("simulated note apply failure")
+            return real_apply_notes_change(notes_db, binding=binding, change=change, policy=policy)
+
+        monkeypatch.setattr(worker, "get_db_pool", _fake_get_db_pool, raising=False)
+        monkeypatch.setattr(worker, "apply_notes_change", _sometimes_fail_apply_notes_change)
+
+        jm = _FakeJobManager()
+        await worker._process_sync_job(
+            jm,
+            jid=88,
+            lease_id="lease-88",
+            worker_id="worker-1",
+            source_id=int(source["id"]),
+            user_id=1,
+        )
+
+        assert jm.failed is None
+        assert jm.completed is not None
+        assert jm.completed["result"]["status"] == "completed"
+        assert jm.completed["result"]["created"] == 2
+        assert jm.completed["result"]["degraded_items"] == 1
+        assert jm.completed["result"]["sink_failed_items"] == 1
+        assert jm.completed["result"]["processed"] == 1
+
+        alpha_cur = await db.execute(
+            "SELECT content_hash, sync_status, binding_json, present_in_source "
+            "FROM ingestion_source_items WHERE source_id = ? AND normalized_relative_path = ?",
+            (int(source["id"]), "alpha.md"),
+        )
+        alpha_row = await alpha_cur.fetchone()
+        assert alpha_row["content_hash"] is None
+        assert alpha_row["sync_status"] == "degraded_sink_error"
+        assert json.loads(alpha_row["binding_json"]) == {}
+        assert alpha_row["present_in_source"] == 1
+
+        beta_cur = await db.execute(
+            "SELECT sync_status, binding_json, present_in_source "
+            "FROM ingestion_source_items WHERE source_id = ? AND normalized_relative_path = ?",
+            (int(source["id"]), "beta.md"),
+        )
+        beta_row = await beta_cur.fetchone()
+        beta_binding = json.loads(beta_row["binding_json"])
+        assert beta_row["sync_status"] == "sync_managed"
+        assert beta_row["present_in_source"] == 1
+
+        notes_db = CharactersRAGDB(db_path=str(DatabasePaths.get_chacha_db_path(1)), client_id="1")
+        beta_note = notes_db.get_note_by_id(note_id=beta_binding["note_id"])
+        assert beta_note is not None
+        assert beta_note["title"] == "Beta"
+        assert "second body" in beta_note["content"]
