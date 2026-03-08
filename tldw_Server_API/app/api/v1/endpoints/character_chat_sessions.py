@@ -399,9 +399,17 @@ def _convert_db_conversation_to_response(
     settings: Optional[dict[str, Any]] = None,
 ) -> ChatSessionResponse:
     """Convert database conversation to response model."""
+    character_id = conv_data.get('character_id')
+    assistant_kind = conv_data.get('assistant_kind') or ("character" if character_id is not None else None)
+    assistant_id = conv_data.get('assistant_id')
+    if assistant_id is None and character_id is not None:
+        assistant_id = str(character_id)
     return ChatSessionResponse(
         id=conv_data.get('id', ''),
-        character_id=conv_data.get('character_id', 0),
+        character_id=character_id,
+        assistant_kind=assistant_kind,
+        assistant_id=assistant_id,
+        persona_memory_mode=conv_data.get('persona_memory_mode'),
         title=conv_data.get('title'),
         rating=conv_data.get('rating'),
         state=conv_data.get('state', 'in-progress'),
@@ -2041,7 +2049,7 @@ async def create_chat_session(
     alternate_index: Optional[int] = Query(None, ge=0, description="Index for alternate greeting when greeting_strategy=alternate_index"),
 ):
     """
-    Create a new chat session with a character.
+    Create a new chat session with a character or persona assistant identity.
 
     Args:
         session_data: Chat session creation data
@@ -2081,13 +2089,26 @@ async def create_chat_session(
                 detail="Quota enforcement unavailable. Please try again later."
             ) from e
 
-        # Verify character exists
-        character = db.get_character_card_by_id(session_data.character_id)
-        if not character:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Character with ID {session_data.character_id} not found"
-            )
+        character: dict[str, Any] | None = None
+        persona_profile: dict[str, Any] | None = None
+        assistant_display_name = "Assistant"
+
+        if session_data.assistant_kind == "persona":
+            persona_profile = db.get_persona_profile(session_data.assistant_id or "", user_id=str(current_user.id))
+            if not persona_profile:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Persona with ID {session_data.assistant_id} not found",
+                )
+            assistant_display_name = persona_profile.get("name") or assistant_display_name
+        else:
+            character = db.get_character_card_by_id(session_data.character_id)
+            if not character:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Character with ID {session_data.character_id} not found"
+                )
+            assistant_display_name = character.get("name") or assistant_display_name
 
         # Validate parent conversation (if any) for ownership and root lineage
         parent_conversation = None
@@ -2121,12 +2142,15 @@ async def create_chat_session(
         # Generate chat ID and title
         chat_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        title = session_data.title or f"{character['name']} Chat ({timestamp})"
+        title = session_data.title or f"{assistant_display_name} Chat ({timestamp})"
 
         # Create conversation data
         conv_data = {
             'id': chat_id,
             'character_id': session_data.character_id,
+            'assistant_kind': session_data.assistant_kind,
+            'assistant_id': session_data.assistant_id,
+            'persona_memory_mode': session_data.persona_memory_mode,
             'title': title,
             'root_id': parent_root_id or chat_id,  # Inherit root for forks
             'parent_conversation_id': validated_parent_id,
@@ -2158,7 +2182,7 @@ async def create_chat_session(
 
         # Optionally seed the chat with a greeting (first_message or alternate)
         seed_status: Optional[str] = None
-        if seed_first_message:
+        if seed_first_message and character is not None:
             try:
                 raw_name = character.get('name') or 'Assistant'
                 choice_text: Optional[str] = None
@@ -2191,21 +2215,24 @@ async def create_chat_session(
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as _seed_err:
                 seed_status = "failed"
                 logger.warning(f"Failed to seed first message for chat {created_id}: {_seed_err}")
+        elif seed_first_message:
+            seed_status = "no_greeting"
 
         # Persist a greetings checksum so staleness can be detected later.
-        try:
-            checksum = _compute_greetings_checksum(character)
-            updated_settings = db.upsert_conversation_settings(
-                created_id,
-                {"greetingsChecksum": checksum},
-            )
-            # Keep optimistic-locking version in response in sync with DB.
-            if updated_settings:
-                latest_conv = db.get_conversation_by_id(created_id)
-                if isinstance(latest_conv, dict):
-                    created_conv = latest_conv
-        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
-            pass  # best-effort; staleness detection degrades gracefully
+        if character is not None:
+            try:
+                checksum = _compute_greetings_checksum(character)
+                updated_settings = db.upsert_conversation_settings(
+                    created_id,
+                    {"greetingsChecksum": checksum},
+                )
+                # Keep optimistic-locking version in response in sync with DB.
+                if updated_settings:
+                    latest_conv = db.get_conversation_by_id(created_id)
+                    if isinstance(latest_conv, dict):
+                        created_conv = latest_conv
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                pass  # best-effort; staleness detection degrades gracefully
 
         if response is not None and seed_status is not None:
             try:
@@ -2214,7 +2241,13 @@ async def create_chat_session(
                 logger.debug("Failed to set X-Chat-Seed-Status header: {}", exc)
 
         # Log creation
-        logger.info(f"Created chat session {created_id} for character {session_data.character_id} by user {current_user.id}")
+        logger.info(
+            "Created chat session {} for {} {} by user {}",
+            created_id,
+            session_data.assistant_kind,
+            session_data.assistant_id,
+            current_user.id,
+        )
 
         return _convert_db_conversation_to_response(created_conv)
 

@@ -3841,6 +3841,20 @@ def _calculate_recency(dt_value: datetime | None, half_life_days: float) -> floa
     return math.exp(-age_days / half_life_days)
 
 
+def _conversation_assistant_identity_fields(conversation: dict[str, Any]) -> dict[str, Any]:
+    character_id = conversation.get("character_id")
+    assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
+    assistant_id = conversation.get("assistant_id")
+    if assistant_id is None and character_id is not None:
+        assistant_id = str(character_id)
+    return {
+        "character_id": character_id,
+        "assistant_kind": assistant_kind,
+        "assistant_id": assistant_id,
+        "persona_memory_mode": conversation.get("persona_memory_mode"),
+    }
+
+
 def _verify_conversation_ownership(
     db: CharactersRAGDB,
     conversation_id: str,
@@ -4323,12 +4337,13 @@ async def list_chat_conversations(
             keyword_rows = keyword_map.get(conv_id, [])
             keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
             message_count = message_counts.get(conv_id, 0)
+            assistant_fields = _conversation_assistant_identity_fields(row)
 
             bm25_norm = row.get("_bm25_norm") if order_by in {"bm25", "hybrid"} else None
             items.append(
                 ConversationListItem(
                     id=conv_id,
-                    character_id=row.get("character_id"),
+                    **assistant_fields,
                     title=row.get("title"),
                     state=row.get("state") or "in-progress",
                     topic_label=row.get("topic_label"),
@@ -4450,7 +4465,7 @@ async def update_chat_conversation(
 
         return ConversationListItem(
             id=updated.get("id") or conversation_id,
-            character_id=updated.get("character_id"),
+            **_conversation_assistant_identity_fields(updated),
             title=updated.get("title"),
             state=updated.get("state") or "in-progress",
             topic_label=updated.get("topic_label"),
@@ -4643,6 +4658,7 @@ async def get_conversation_tree(
 
         metadata = ConversationMetadata(
             id=conversation.get("id") or conversation_id,
+            **_conversation_assistant_identity_fields(conversation),
             title=conversation.get("title"),
             state=conversation.get("state") or "in-progress",
             topic_label=conversation.get("topic_label"),
