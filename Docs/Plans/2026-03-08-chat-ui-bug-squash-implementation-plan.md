@@ -284,7 +284,7 @@ git commit -m "fix(chat-ui): avoid no-op server chat settings writes"
 
 ### Task 4: Add Stale-Version Recovery For Chat Mutations In The API Client
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/services/tldw/TldwApiClient.ts`
@@ -361,6 +361,8 @@ git commit -m "fix(chat-ui): retry chat mutations once on version conflict"
 ```
 
 ### Task 5: Surface Distinct Sidebar States And Conflict-Specific Mutation Feedback
+
+**Status:** Not Started
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/Common/ChatSidebar/ServerChatList.tsx`
