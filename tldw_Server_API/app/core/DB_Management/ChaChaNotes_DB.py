@@ -434,7 +434,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 30  # Schema v30 adds quizzes.source_bundle_json for mixed-source metadata
+    _CURRENT_SCHEMA_VERSION = 31  # Schema v31 adds persona origin snapshots for character-derived personas
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -2905,6 +2905,25 @@ UPDATE db_schema_version
    AND version < 30;
 """
 
+    _MIGRATION_SQL_V30_TO_V31 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 31 - Persona origin snapshots (2026-03-07)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE persona_profiles
+  ADD COLUMN IF NOT EXISTS origin_character_id INTEGER;
+
+ALTER TABLE persona_profiles
+  ADD COLUMN IF NOT EXISTS origin_character_name TEXT;
+
+ALTER TABLE persona_profiles
+  ADD COLUMN IF NOT EXISTS origin_character_snapshot_at TEXT;
+
+UPDATE db_schema_version
+   SET version = 31
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 31;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4408,6 +4427,40 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V29->V30: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V30 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v30_to_v31(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V30 to V31 (persona origin snapshots)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V30 to V31 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
+            if "origin_character_id" not in existing_cols:
+                conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_id INTEGER")
+            if "origin_character_name" not in existing_cols:
+                conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_name TEXT")
+            if "origin_character_snapshot_at" not in existing_cols:
+                conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_snapshot_at TEXT")
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 31
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 31;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 31:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V30->V31 failed version check. Expected 31, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V31 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V30->V31 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V30->V31 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V30->V31: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V31 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4635,6 +4688,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 30 and current_db_version == 29:
                         self._migrate_from_v29_to_v30(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 31 and current_db_version == 30:
+                        self._migrate_from_v30_to_v31(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -4938,6 +4994,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v28_to_v29(conn)
                             elif fallback_version == 29:
                                 self._migrate_from_v29_to_v30(conn)
+                            elif fallback_version == 30:
+                                self._migrate_from_v30_to_v31(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5003,6 +5061,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 30 and current_db_version == 29:
                     self._migrate_from_v29_to_v30(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 31 and current_db_version == 30:
+                    self._migrate_from_v30_to_v31(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -5282,6 +5343,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 30:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V29_TO_V30, conn, expected_version=30)
                 current_version = 30
+            if current_version < 31:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V30_TO_V31, conn, expected_version=31)
+                current_version = 31
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -6444,6 +6508,30 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             except (TypeError, ValueError) as exc:
                 raise InputError("character_card_id must be an integer when provided.") from exc  # noqa: TRY003
 
+        origin_character_id = profile_data.get("origin_character_id")
+        origin_character_name = profile_data.get("origin_character_name")
+        origin_character_snapshot_at = profile_data.get("origin_character_snapshot_at")
+        if character_card_id is not None:
+            source_character = self.get_character_card_by_id(character_card_id)
+            if source_character is None:
+                raise InputError(  # noqa: TRY003
+                    f"character_card_id '{character_card_id}' must reference an existing active character."
+                )
+            origin_character_id = source_character.get("id") or character_card_id
+            source_character_name = str(source_character.get("name") or "").strip()
+            origin_character_name = source_character_name or None
+            origin_character_snapshot_at = origin_character_snapshot_at or now
+
+        if origin_character_id is not None:
+            try:
+                origin_character_id = int(origin_character_id)
+            except (TypeError, ValueError) as exc:
+                raise InputError("origin_character_id must be an integer when provided.") from exc  # noqa: TRY003
+        if origin_character_name is not None:
+            origin_character_name = str(origin_character_name).strip() or None
+        if origin_character_snapshot_at is not None:
+            origin_character_snapshot_at = str(origin_character_snapshot_at)
+
         deleted_value = self._normalize_deleted_input(profile_data.get("deleted", False))
         version = self._parse_version_input(profile_data.get("version", 1))
 
@@ -6458,15 +6546,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         query = (
             "INSERT INTO persona_profiles("
-            "id, user_id, name, character_card_id, mode, system_prompt, "
+            "id, user_id, name, character_card_id, origin_character_id, origin_character_name, "
+            "origin_character_snapshot_at, mode, system_prompt, "
             "is_active, use_persona_state_context_default, created_at, last_modified, deleted, version"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         params = (
             persona_id,
             user_id,
             name,
             character_card_id,
+            origin_character_id,
+            origin_character_name,
+            origin_character_snapshot_at,
             mode,
             system_prompt,
             is_active_db,
