@@ -96,7 +96,8 @@ const {
     listWorldBooks: vi.fn(async () => ({ world_books: [] })),
     listCharacterWorldBooks: vi.fn(async () => []),
     attachWorldBookToCharacter: vi.fn(async () => ({})),
-    detachWorldBookFromCharacter: vi.fn(async () => ({}))
+    detachWorldBookFromCharacter: vi.fn(async () => ({})),
+    fetchWithAuth: vi.fn()
   },
   templateData: [
     {
@@ -285,6 +286,7 @@ describe("CharactersManager first-use onboarding", () => {
     window.history.replaceState({}, "", "/")
     useNavigateMock.mockReturnValue(navigateMock)
     confirmDangerMock.mockResolvedValue(true)
+    tldwClientMock.fetchWithAuth.mockReset()
     useStorageMock.mockImplementation(
       (_key: unknown, defaultValue: unknown) => [
         defaultValue ?? null,
@@ -4080,6 +4082,141 @@ describe("CharactersManager first-use onboarding", () => {
     await waitFor(() => {
       expect(screen.getByRole("dialog", { name: /Import preview/i })).toHaveClass(
         "ant-zoom-leave-active"
+      )
+    })
+  })
+
+  it("creates a persona from a character and opens Persona Garden on the new profile", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: 7,
+      name: "Captain A",
+      description: "Command strategist",
+      system_prompt: "Lead with confidence.",
+      greeting: "Ready for orders?",
+      version: 1
+    }
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    tldwClientMock.fetchWithAuth.mockImplementation((path: string, init?: any) => {
+      if (path === "/api/v1/persona/profiles?limit=200") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path === "/api/v1/persona/profiles" && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ id: "persona-captain-a" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Create Persona from Character" })
+    )
+
+    await waitFor(() => {
+      expect(tldwClientMock.fetchWithAuth).toHaveBeenCalledWith(
+        "/api/v1/persona/profiles",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.objectContaining({
+            name: "Captain A Persona",
+            character_card_id: 7,
+            mode: "persistent_scoped"
+          })
+        })
+      )
+    })
+    expect(navigateMock).toHaveBeenCalledWith(
+      "/persona?persona_id=persona-captain-a&tab=profiles"
+    )
+  })
+
+  it("opens the existing derived persona in Persona Garden from row actions", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: 9,
+      name: "Archivist",
+      description: "Knows the stacks.",
+      system_prompt: "Preserve institutional memory.",
+      greeting: "What record do you need?",
+      version: 1
+    }
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    tldwClientMock.fetchWithAuth.mockImplementation((path: string) => {
+      if (path === "/api/v1/persona/profiles?limit=200") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            {
+              id: "persona-archivist",
+              name: "Archivist Persona",
+              origin_character_id: 9
+            }
+          ]
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open in Persona Garden" })
+    )
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith(
+        "/persona?persona_id=persona-archivist&tab=profiles"
       )
     })
   })

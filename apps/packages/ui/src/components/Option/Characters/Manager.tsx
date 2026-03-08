@@ -90,6 +90,7 @@ import {
   defaultCharacterStorage,
   resolveCharacterSelectionId
 } from "@/utils/default-character-preference"
+import { buildPersonaGardenRoute } from "@/utils/persona-garden-route"
 
 const MAX_NAME_LENGTH = 500
 const MAX_NAME_DISPLAY_LENGTH = 75
@@ -114,6 +115,12 @@ type CharacterListScope = "active" | "deleted"
 type TableDensity = "comfortable" | "compact" | "dense"
 type DefaultCharacterPreferenceQueryResult = {
   defaultCharacterId: string | null
+}
+type PersonaProfileSummary = {
+  id?: string | number | null
+  name?: string | null
+  character_card_id?: number | null
+  origin_character_id?: number | null
 }
 const DEFAULT_ADVANCED_SECTION_STATE: AdvancedSectionState = {
   promptControl: true,
@@ -6040,6 +6047,238 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }, 0)
   }, [setSelectedCharacter, navigate])
 
+  const getCharacterNumericId = React.useCallback((record: any): number | null => {
+    const parsed = Number(record?.id)
+    return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : null
+  }, [])
+
+  const getCharacterDisplayName = React.useCallback(
+    (record: any): string =>
+      String(record?.name || record?.title || record?.slug || "Character").trim() ||
+      "Character",
+    []
+  )
+
+  const listPersonaProfiles = React.useCallback(async (): Promise<PersonaProfileSummary[]> => {
+    const response = await tldwClient.fetchWithAuth(
+      "/api/v1/persona/profiles?limit=200" as any,
+      { method: "GET" }
+    )
+    if (!response.ok) {
+      throw new Error(response.error || "Failed to load persona profiles")
+    }
+    const payload = await response.json()
+    return Array.isArray(payload) ? (payload as PersonaProfileSummary[]) : []
+  }, [])
+
+  const findPersonaForCharacter = React.useCallback(
+    (
+      profiles: PersonaProfileSummary[],
+      characterId: number
+    ): PersonaProfileSummary | null =>
+      profiles.find((profile) => {
+        const originCharacterId = Number(profile?.origin_character_id)
+        const linkedCharacterId = Number(profile?.character_card_id)
+        return originCharacterId === characterId || linkedCharacterId === characterId
+      }) || null,
+    []
+  )
+
+  const buildSuggestedPersonaName = React.useCallback(
+    (record: any, profiles: PersonaProfileSummary[]): string => {
+      const baseName = `${getCharacterDisplayName(record)} Persona`
+      const existingNames = new Set(
+        profiles
+          .map((profile) => String(profile?.name || "").trim().toLowerCase())
+          .filter(Boolean)
+      )
+      if (!existingNames.has(baseName.toLowerCase())) {
+        return baseName
+      }
+      let suffix = 2
+      while (existingNames.has(`${baseName} ${suffix}`.toLowerCase())) {
+        suffix += 1
+      }
+      return `${baseName} ${suffix}`
+    },
+    [getCharacterDisplayName]
+  )
+
+  const openPersonaGardenForCharacter = React.useCallback(
+    async (record: any) => {
+      const characterId = getCharacterNumericId(record)
+      const characterName = getCharacterDisplayName(record)
+      if (characterId == null) {
+        notification.warning({
+          message: t("settings:manageCharacters.personaGarden.invalidCharacter", {
+            defaultValue: "Character missing a numeric ID"
+          }),
+          description: t(
+            "settings:manageCharacters.personaGarden.invalidCharacterDesc",
+            {
+              defaultValue:
+                "Save {{name}} to the server before opening a linked persona.",
+              name: characterName
+            }
+          )
+        })
+        return
+      }
+      try {
+        const profiles = await listPersonaProfiles()
+        const existingPersona = findPersonaForCharacter(profiles, characterId)
+        if (existingPersona?.id != null) {
+          navigate(
+            buildPersonaGardenRoute({
+              personaId: String(existingPersona.id),
+              tab: "profiles"
+            })
+          )
+          return
+        }
+        notification.info({
+          message: t("settings:manageCharacters.personaGarden.noneFound", {
+            defaultValue: "No linked persona yet"
+          }),
+          description: t(
+            "settings:manageCharacters.personaGarden.noneFoundDesc",
+            {
+              defaultValue:
+                "Open Persona Garden to create a persona derived from {{name}}.",
+              name: characterName
+            }
+          )
+        })
+        navigate(buildPersonaGardenRoute({ tab: "profiles" }))
+      } catch (error: any) {
+        notification.error({
+          message: t("settings:manageCharacters.personaGarden.openError", {
+            defaultValue: "Failed to open Persona Garden"
+          }),
+          description:
+            sanitizeServerErrorMessage(error?.message) ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+      }
+    },
+    [
+      findPersonaForCharacter,
+      getCharacterDisplayName,
+      getCharacterNumericId,
+      listPersonaProfiles,
+      navigate,
+      notification,
+      t
+    ]
+  )
+
+  const createPersonaFromCharacter = React.useCallback(
+    async (record: any) => {
+      const characterId = getCharacterNumericId(record)
+      const characterName = getCharacterDisplayName(record)
+      if (characterId == null) {
+        notification.warning({
+          message: t("settings:manageCharacters.personaGarden.invalidCharacter", {
+            defaultValue: "Character missing a numeric ID"
+          }),
+          description: t(
+            "settings:manageCharacters.personaGarden.invalidCharacterDesc",
+            {
+              defaultValue:
+                "Save {{name}} to the server before creating a linked persona.",
+              name: characterName
+            }
+          )
+        })
+        return
+      }
+      try {
+        const profiles = await listPersonaProfiles()
+        const existingPersona = findPersonaForCharacter(profiles, characterId)
+        if (existingPersona?.id != null) {
+          notification.info({
+            message: t("settings:manageCharacters.personaGarden.existingPersona", {
+              defaultValue: "Persona already exists"
+            }),
+            description: t(
+              "settings:manageCharacters.personaGarden.existingPersonaDesc",
+              {
+                defaultValue:
+                  "Opened the existing persona derived from {{name}}.",
+                name: characterName
+              }
+            )
+          })
+          navigate(
+            buildPersonaGardenRoute({
+              personaId: String(existingPersona.id),
+              tab: "profiles"
+            })
+          )
+          return
+        }
+
+        const personaName = buildSuggestedPersonaName(record, profiles)
+        const response = await tldwClient.fetchWithAuth("/api/v1/persona/profiles" as any, {
+          method: "POST",
+          body: {
+            name: personaName,
+            character_card_id: characterId,
+            mode: "persistent_scoped"
+          }
+        })
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to create persona from character")
+        }
+        const payload = await response.json()
+        const personaId = String(payload?.id || "").trim()
+        if (!personaId) {
+          throw new Error("Persona creation response missing id")
+        }
+        notification.success({
+          message: t("settings:manageCharacters.personaGarden.created", {
+            defaultValue: "Persona created"
+          }),
+          description: t("settings:manageCharacters.personaGarden.createdDesc", {
+            defaultValue:
+              "Created {{personaName}} from {{characterName}} and opened it in Persona Garden.",
+            personaName,
+            characterName
+          })
+        })
+        navigate(
+          buildPersonaGardenRoute({
+            personaId,
+            tab: "profiles"
+          })
+        )
+      } catch (error: any) {
+        notification.error({
+          message: t("settings:manageCharacters.personaGarden.createError", {
+            defaultValue: "Failed to create persona"
+          }),
+          description:
+            sanitizeServerErrorMessage(error?.message) ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+      }
+    },
+    [
+      buildSuggestedPersonaName,
+      findPersonaForCharacter,
+      getCharacterDisplayName,
+      getCharacterNumericId,
+      listPersonaProfiles,
+      navigate,
+      notification,
+      t
+    ]
+  )
+
   const handleChatInNewTab = React.useCallback(
     async (record: any) => {
       const characterSelection = buildCharacterSelectionPayload(record)
@@ -8275,6 +8514,32 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                             }
                           },
                           {
+                            key: "create-persona",
+                            icon: <UserCircle2 className="w-4 h-4" />,
+                            label: t(
+                              "settings:manageCharacters.actions.createPersonaFromCharacter",
+                              {
+                                defaultValue: "Create Persona from Character"
+                              }
+                            ),
+                            onClick: () => {
+                              void createPersonaFromCharacter(record)
+                            }
+                          },
+                          {
+                            key: "open-persona-garden",
+                            icon: <ExternalLink className="w-4 h-4" />,
+                            label: t(
+                              "settings:manageCharacters.actions.openInPersonaGarden",
+                              {
+                                defaultValue: "Open in Persona Garden"
+                              }
+                            ),
+                            onClick: () => {
+                              void openPersonaGardenForCharacter(record)
+                            }
+                          },
+                          {
                             key: "version-history",
                             icon: <Clock3 className="w-4 h-4" />,
                             label: t(
@@ -8464,6 +8729,18 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         onViewConversations={() => {
           if (previewCharacter) {
             handleViewConversations(previewCharacter)
+            setPreviewCharacter(null)
+          }
+        }}
+        onCreatePersonaFromCharacter={() => {
+          if (previewCharacter) {
+            void createPersonaFromCharacter(previewCharacter)
+            setPreviewCharacter(null)
+          }
+        }}
+        onOpenPersonaGarden={() => {
+          if (previewCharacter) {
+            void openPersonaGardenForCharacter(previewCharacter)
             setPreviewCharacter(null)
           }
         }}

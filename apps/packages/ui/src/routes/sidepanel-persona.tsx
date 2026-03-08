@@ -1,7 +1,7 @@
 import React from "react"
 import { Button, Checkbox, Input, Select, Tag, Typography } from "antd"
 import { CheckCircle2, Send, XCircle } from "lucide-react"
-import { useBlocker, useNavigate } from "react-router-dom"
+import { useBlocker, useLocation, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
@@ -15,6 +15,10 @@ import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { buildPersonaWebSocketUrl } from "@/services/persona-stream"
+import {
+  readPersonaGardenSearch,
+  type PersonaGardenTabKey
+} from "@/utils/persona-garden-route"
 import { SidepanelHeaderSimple } from "~/components/Sidepanel/Chat/SidepanelHeaderSimple"
 
 type PersonaInfo = {
@@ -97,8 +101,6 @@ type PersonaStateHistoryResponse = {
   entries?: PersonaStateHistoryEntry[]
 }
 
-type PersonaGardenTabKey = "live" | "profiles" | "state" | "scopes" | "policies"
-
 type UnsavedStateDiscardReason =
   | "generic"
   | "connect"
@@ -161,8 +163,13 @@ const _confirmWithBrowserPrompt = (message: string): boolean => {
 const SidepanelPersona = () => {
   const { t } = useTranslation(["sidepanel", "common"])
   const navigate = useNavigate()
+  const location = useLocation()
   const isOnline = useServerOnline()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
+  const routeBootstrap = React.useMemo(
+    () => readPersonaGardenSearch(location.search),
+    [location.search]
+  )
 
   const wsRef = React.useRef<WebSocket | null>(null)
   const manuallyClosingRef = React.useRef(false)
@@ -219,6 +226,18 @@ const SidepanelPersona = () => {
   const [activeSessionPersonaId, setActiveSessionPersonaId] = React.useState<string | null>(
     null
   )
+
+  React.useEffect(() => {
+    if (routeBootstrap.tab) {
+      setActiveTab(routeBootstrap.tab)
+    }
+  }, [routeBootstrap.tab])
+
+  React.useEffect(() => {
+    if (routeBootstrap.personaId) {
+      setSelectedPersonaId(routeBootstrap.personaId)
+    }
+  }, [routeBootstrap.personaId])
 
   const getUnsavedStateDiscardPrompt = React.useCallback(
     (reason: UnsavedStateDiscardReason): string => {
@@ -632,12 +651,13 @@ const SidepanelPersona = () => {
         : []
       setCatalog(personas)
 
+      const preferredPersonaId = routeBootstrap.personaId || selectedPersonaId
       const selectedPersonaIsValid = personas.some(
-        (persona) => String(persona.id || "") === selectedPersonaId
+        (persona) => String(persona.id || "") === preferredPersonaId
       )
       const resolvedPersonaId =
-        (selectedPersonaIsValid ? selectedPersonaId : personas[0]?.id) ||
-        selectedPersonaId ||
+        (selectedPersonaIsValid ? preferredPersonaId : personas[0]?.id) ||
+        preferredPersonaId ||
         "research_assistant"
       if (resolvedPersonaId && resolvedPersonaId !== selectedPersonaId) {
         setSelectedPersonaId(resolvedPersonaId)
@@ -756,6 +776,7 @@ const SidepanelPersona = () => {
     handleIncomingPayload,
     loadPersonaStateDocs,
     resumeSessionId,
+    routeBootstrap.personaId,
     selectedPersonaId
   ])
 
