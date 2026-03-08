@@ -564,6 +564,36 @@ async def get_source_item(
     return _deserialize_source_item_row(row)
 
 
+async def get_source_item_by_id(
+    db,
+    *,
+    source_id: int,
+    item_id: int,
+) -> dict[str, Any] | None:
+    cursor = await db.execute(
+        """
+        SELECT
+            id,
+            source_id,
+            normalized_relative_path,
+            content_hash,
+            sync_status,
+            binding_json,
+            present_in_source,
+            created_at,
+            updated_at
+        FROM ingestion_source_items
+        WHERE source_id = ?
+          AND id = ?
+        """,
+        (int(source_id), int(item_id)),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return _deserialize_source_item_row(row)
+
+
 async def upsert_source_item(
     db,
     *,
@@ -611,6 +641,57 @@ async def upsert_source_item(
         normalized_relative_path=normalized_relative_path,
     )
     return item or {}
+
+
+async def update_source_item_state(
+    db,
+    *,
+    item_id: int,
+    sync_status: str,
+    binding: dict[str, Any] | None = None,
+    present_in_source: bool | None = None,
+    content_hash: str | None = None,
+) -> dict[str, Any]:
+    existing_cursor = await db.execute(
+        """
+        SELECT source_id, binding_json, present_in_source, content_hash
+        FROM ingestion_source_items
+        WHERE id = ?
+        """,
+        (int(item_id),),
+    )
+    existing = _row_to_dict(await existing_cursor.fetchone())
+    if not existing:
+        raise ValueError(f"Source item not found: {item_id}")
+    now = _utc_now_text()
+    updated_binding = binding if binding is not None else _json_loads(existing.get("binding_json"), {})
+    await db.execute(
+        """
+        UPDATE ingestion_source_items
+        SET sync_status = ?,
+            binding_json = ?,
+            present_in_source = ?,
+            content_hash = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            str(sync_status),
+            _json_dumps(updated_binding),
+            1 if (existing.get("present_in_source") if present_in_source is None else present_in_source) else 0,
+            content_hash if content_hash is not None else existing.get("content_hash"),
+            now,
+            int(item_id),
+        ),
+    )
+    return (
+        await get_source_item_by_id(
+            db,
+            source_id=int(existing["source_id"]),
+            item_id=int(item_id),
+        )
+        or {}
+    )
 
 
 async def record_ingestion_item_event(

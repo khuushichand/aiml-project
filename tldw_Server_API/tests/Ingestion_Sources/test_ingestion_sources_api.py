@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import zipfile
 
@@ -180,6 +181,188 @@ def test_archive_upload_endpoint_stages_snapshot_and_enqueues_job(tmp_path, inge
             assert snapshot_row["snapshot_kind"] == "archive_snapshot"
             assert "notes.zip" in snapshot_row["summary_json"]
             assert queued_jobs[0]["source_id"] == int(source["id"])
+
+    import asyncio
+
+    asyncio.run(_run_test())
+
+
+@pytest.mark.integration
+def test_list_source_items_endpoint_returns_tracked_items(tmp_path, ingestion_sources_client, monkeypatch):
+    client, auth_headers = ingestion_sources_client
+
+    import aiosqlite
+    import tldw_Server_API.app.api.v1.endpoints.ingestion_sources as ep
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        ensure_ingestion_sources_schema,
+        upsert_source_item,
+    )
+
+    class _FakePool:
+        def __init__(self, db):
+            self._db = db
+
+        class _Tx:
+            def __init__(self, db):
+                self._db = db
+
+            async def __aenter__(self):
+                return self._db
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        def transaction(self):
+            return self._Tx(self._db)
+
+    async def _run_test() -> None:
+        meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+        async with aiosqlite.connect(str(meta_db_path)) as db:
+            db.row_factory = aiosqlite.Row
+            await ensure_ingestion_sources_schema(db)
+            source = await create_source(
+                db,
+                user_id=1,
+                payload={
+                    "source_type": "local_directory",
+                    "sink_type": "notes",
+                    "policy": "canonical",
+                    "config": {"path": "/tmp/example"},
+                },
+            )
+            await upsert_source_item(
+                db,
+                source_id=int(source["id"]),
+                normalized_relative_path="alpha.md",
+                content_hash="hash-1",
+                sync_status="sync_managed",
+                binding={"note_id": "note-1", "sync_status": "sync_managed", "current_version": 2},
+                present_in_source=True,
+            )
+
+            async def _fake_get_db_pool():
+                return _FakePool(db)
+
+            monkeypatch.setattr(ep, "get_db_pool", _fake_get_db_pool)
+
+            response = client.get(
+                f"/api/v1/ingestion-sources/{int(source['id'])}/items",
+                headers=auth_headers,
+            )
+
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert len(payload) == 1
+            assert payload[0]["normalized_relative_path"] == "alpha.md"
+            assert payload[0]["sync_status"] == "sync_managed"
+            assert payload[0]["binding"]["note_id"] == "note-1"
+            assert payload[0]["present_in_source"] is True
+
+    import asyncio
+
+    asyncio.run(_run_test())
+
+
+@pytest.mark.integration
+def test_reattach_item_endpoint_clears_detached_status(tmp_path, ingestion_sources_client, monkeypatch):
+    client, auth_headers = ingestion_sources_client
+
+    os.environ["USER_DB_BASE_DIR"] = str(tmp_path / "user_dbs")
+    os.environ["TEST_MODE"] = "true"
+
+    import aiosqlite
+    import tldw_Server_API.app.api.v1.endpoints.ingestion_sources as ep
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        ensure_ingestion_sources_schema,
+        upsert_source_item,
+    )
+
+    class _FakePool:
+        def __init__(self, db):
+            self._db = db
+
+        class _Tx:
+            def __init__(self, db):
+                self._db = db
+
+            async def __aenter__(self):
+                return self._db
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        def transaction(self):
+            return self._Tx(self._db)
+
+    async def _run_test() -> None:
+        meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+        async with aiosqlite.connect(str(meta_db_path)) as db:
+            db.row_factory = aiosqlite.Row
+            await ensure_ingestion_sources_schema(db)
+            source = await create_source(
+                db,
+                user_id=1,
+                payload={
+                    "source_type": "local_directory",
+                    "sink_type": "notes",
+                    "policy": "canonical",
+                    "config": {"path": "/tmp/example"},
+                },
+            )
+
+            notes_db = CharactersRAGDB(
+                db_path=str(DatabasePaths.get_chacha_db_path(1)),
+                client_id="1",
+            )
+            note_id = notes_db.add_note(title="Alpha", content="manual body")
+            note = notes_db.get_note_by_id(note_id=note_id)
+            assert note is not None
+
+            item = await upsert_source_item(
+                db,
+                source_id=int(source["id"]),
+                normalized_relative_path="alpha.md",
+                content_hash="hash-1",
+                sync_status="conflict_detached",
+                binding={
+                    "note_id": note_id,
+                    "sync_status": "conflict_detached",
+                    "current_version": 1,
+                },
+                present_in_source=True,
+            )
+
+            async def _fake_get_db_pool():
+                return _FakePool(db)
+
+            monkeypatch.setattr(ep, "get_db_pool", _fake_get_db_pool)
+
+            response = client.post(
+                f"/api/v1/ingestion-sources/{int(source['id'])}/items/{int(item['id'])}/reattach",
+                headers=auth_headers,
+            )
+
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["id"] == int(item["id"])
+            assert payload["sync_status"] == "sync_managed"
+            assert payload["binding"]["note_id"] == note_id
+            assert payload["binding"]["sync_status"] == "sync_managed"
+            assert payload["binding"]["current_version"] == int(note["version"])
+
+            item_cur = await db.execute(
+                "SELECT sync_status, binding_json FROM ingestion_source_items WHERE id = ?",
+                (int(item["id"]),),
+            )
+            item_row = await item_cur.fetchone()
+            assert item_row["sync_status"] == "sync_managed"
+            persisted_binding = json.loads(item_row["binding_json"])
+            assert persisted_binding["sync_status"] == "sync_managed"
+            assert persisted_binding["current_version"] == int(note["version"])
 
     import asyncio
 

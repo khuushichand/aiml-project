@@ -37,6 +37,20 @@ class IngestionSourceResponse(BaseModel):
     updated_at: str | None = None
 
 
+class IngestionSourceItemResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    source_id: int
+    normalized_relative_path: str
+    content_hash: str | None = None
+    sync_status: str
+    binding: dict[str, Any] = Field(default_factory=dict)
+    present_in_source: bool = True
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
 class IngestionSourceSyncTriggerResponse(BaseModel):
     status: str
     source_id: int

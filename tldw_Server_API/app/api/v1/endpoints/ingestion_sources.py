@@ -7,11 +7,14 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
 from tldw_Server_API.app.api.v1.schemas.ingestion_sources import (
     IngestionSourceCreateRequest,
+    IngestionSourceItemResponse,
     IngestionSourceResponse,
     IngestionSourceSyncTriggerResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import apply_archive_candidate
 from tldw_Server_API.app.core.Ingestion_Sources.jobs import enqueue_ingestion_source_job
 from tldw_Server_API.app.core.Ingestion_Sources.local_directory import validate_local_directory_source
@@ -20,7 +23,10 @@ from tldw_Server_API.app.core.Ingestion_Sources.service import (
     create_source,
     ensure_ingestion_sources_schema,
     get_source_by_id,
+    get_source_item_by_id,
     list_sources_by_user,
+    list_source_items,
+    update_source_item_state,
 )
 
 router = APIRouter(prefix="/ingestion-sources", tags=["ingestion-sources"])
@@ -69,6 +75,18 @@ async def get_ingestion_source(source_id: int, current_user: User = Depends(get_
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion source not found")
     return row
+
+
+@router.get("/{source_id}/items", response_model=list[IngestionSourceItemResponse])
+async def list_ingestion_source_items(source_id: int, current_user: User = Depends(get_request_user)):
+    db_pool = await get_db_pool()
+    async with db_pool.transaction() as db:
+        await ensure_ingestion_sources_schema(db)
+        row = await get_source_by_id(db, source_id=source_id, user_id=int(current_user.id))
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion source not found")
+        items = await list_source_items(db, source_id=source_id)
+    return items
 
 
 @router.post(
@@ -154,3 +172,59 @@ async def upload_ingestion_source_archive(
         "job_id": job.get("id"),
         "snapshot_status": "staged",
     }
+
+
+@router.post("/{source_id}/items/{item_id}/reattach", response_model=IngestionSourceItemResponse)
+async def reattach_ingestion_source_item(
+    source_id: int,
+    item_id: int,
+    current_user: User = Depends(get_request_user),
+):
+    db_pool = await get_db_pool()
+    async with db_pool.transaction() as db:
+        await ensure_ingestion_sources_schema(db)
+        source = await get_source_by_id(db, source_id=source_id, user_id=int(current_user.id))
+        if not source:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion source not found")
+        if str(source.get("sink_type") or "").strip().lower() != "notes":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Reattach is only supported for notes sinks",
+            )
+        item = await get_source_item_by_id(db, source_id=source_id, item_id=item_id)
+        if not item:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion source item not found")
+        if str(item.get("sync_status") or "").strip().lower() != "conflict_detached":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only detached items can be reattached",
+            )
+
+        binding = dict(item.get("binding") or {})
+        note_id = binding.get("note_id")
+        if not note_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Detached item is missing a bound note",
+            )
+
+        notes_db = CharactersRAGDB(
+            db_path=str(DatabasePaths.get_chacha_db_path(int(current_user.id))),
+            client_id=str(current_user.id),
+        )
+        note = notes_db.get_note_by_id(note_id=str(note_id))
+        if note is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Bound note no longer exists",
+            )
+
+        binding["sync_status"] = "sync_managed"
+        binding["current_version"] = int(note["version"])
+        updated = await update_source_item_state(
+            db,
+            item_id=item_id,
+            sync_status="sync_managed",
+            binding=binding,
+        )
+    return updated
