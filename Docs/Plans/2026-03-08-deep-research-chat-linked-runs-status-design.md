@@ -73,6 +73,12 @@ This endpoint should:
 - verify chat ownership exactly like other chat session endpoints
 - load linked research runs for that `chat_id` and current user
 - return a compact list, not full research session payloads
+- return all nonterminal runs plus only the latest bounded terminal history
+
+Recommended v1 bound:
+
+- all nonterminal linked runs
+- latest `10` terminal linked runs
 
 Suggested response shape:
 
@@ -87,7 +93,6 @@ Per run:
 - `control_state`
 - `latest_checkpoint_id`
 - `updated_at`
-- `console_url`
 
 This endpoint should not return:
 
@@ -112,6 +117,7 @@ The DB/helper contract should:
 - filter by `chat_id`
 - join handoff rows to current research session state
 - return newest linked runs first by `updated_at DESC`
+- bound terminal history server-side instead of sending the entire handoff history forever
 
 The frontend can then group:
 
@@ -128,6 +134,8 @@ Placement:
 
 - above the existing message list
 - below any thread-global empty/search scaffolding that belongs to the chat shell itself
+
+This matters for empty threads: if a linked run exists before any normal assistant reply is present, the status block must still remain visible and not get buried under the empty-state layout.
 
 Shape:
 
@@ -172,6 +180,7 @@ Behavior:
 - poll on a modest interval while the thread is open
 - use a faster interval when any linked run is nonterminal
 - slow the interval once all linked runs are terminal
+- treat query failures as non-blocking and silent in v1
 
 Recommended v1 behavior:
 
@@ -191,6 +200,8 @@ Suggested models:
 
 Do not reuse the full `ResearchRunResponse` or `ResearchRunListItemResponse` directly as the public chat contract. The chat endpoint should stay compact and chat-oriented, even if it is built from the same underlying fields.
 
+Do not include a backend-authored `console_url` field in this contract. The client should build the `/research?run=<id>` link through the shared route helper so route policy stays frontend-owned.
+
 ## Frontend Integration Shape
 
 Keep the frontend integration on the package-side chat surface, not only in `apps/tldw-frontend`.
@@ -201,9 +212,13 @@ Suggested frontend touches:
   - add a lightweight `listChatResearchRuns(chatId)` method
 - `apps/packages/ui/src/components/Option/Playground/PlaygroundChat.tsx`
   - fetch and render linked research rows
+- `apps/packages/ui/src/routes/route-paths.ts`
+  - reuse or extend the existing research run path helper
 - small colocated helper/presenter if needed for readability
 
 Do not add a transcript message renderer or mutate the chat message list to represent research progress.
+
+The backend endpoint should also use a proper research-service dependency path. It must not instantiate the research DB ad hoc inside the endpoint without the normal per-user path resolution that `ResearchService` already encapsulates.
 
 ## Testing Requirements
 
@@ -211,17 +226,20 @@ Do not add a transcript message renderer or mutate the chat message list to repr
 
 - listing linked runs for a chat returns only the owner’s linked runs
 - compact response shape excludes bundle/artifact/checkpoint payloads
+- compact response shape is bounded to all nonterminal plus latest bounded terminal rows
 - ordering is stable with mixed active and terminal runs
 - chats without linked runs return an empty list
 
 ### Frontend
 
 - stacked status rows render above the chat transcript
+- stacked status rows still render in the right place for an otherwise empty thread
 - multiple linked runs render distinctly
 - waiting/completed/failed states are visually distinct
-- `Open in Research` targets the correct run
+- `Open in Research` targets the correct run via the shared route helper
 - polling updates the status rows without touching message history
 - terminal overflow collapse works if implemented in this slice
+- query failure does not block chat rendering and does not emit transcript pollution or toast noise
 
 ## Exit Condition
 

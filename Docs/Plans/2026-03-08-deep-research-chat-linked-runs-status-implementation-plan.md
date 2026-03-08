@@ -22,6 +22,7 @@ Cover:
 
 - listing linked runs for a `chat_id` returns only that user’s runs
 - runs include compact fields only
+- terminal history is server-side bounded while nonterminal runs are preserved
 - linked runs are ordered newest first by updated time
 - chats with no linked runs return an empty list
 
@@ -63,6 +64,7 @@ In `ResearchSessionsDB.py` add a helper that:
 - filters by `chat_id`
 - joins `research_chat_handoffs` to `research_sessions`
 - returns compact linked-run rows ordered by `updated_at DESC`
+- bounds terminal rows server-side to all nonterminal plus latest `10` terminal runs
 
 Do not return full bundle, artifact, or checkpoint payload data.
 
@@ -73,7 +75,8 @@ In `ResearchService`, add a `list_chat_linked_runs(...)` helper that:
 - accepts `owner_user_id`
 - accepts `chat_id`
 - maps DB rows into a stable compact shape
-- constructs `console_url`
+
+Use the existing research service construction pattern so per-user DB resolution remains correct in multi-user mode.
 
 **Step 3: Add response schemas**
 
@@ -91,7 +94,6 @@ Include only:
 - `control_state`
 - `latest_checkpoint_id`
 - `updated_at`
-- `console_url`
 
 **Step 4: Add the endpoint**
 
@@ -104,6 +106,8 @@ The endpoint must:
 - load and ownership-check the chat
 - call `ResearchService.list_chat_linked_runs(...)`
 - return the compact response
+
+Do not construct `/research` URLs in the backend response.
 
 **Step 5: Run tests to verify they pass**
 
@@ -136,9 +140,10 @@ Cover:
 Cover:
 
 - when `serverChatId` exists, the chat renders a status block above messages
+- when the thread is otherwise empty, the status block still renders below empty-state scaffolding and above the transcript region
 - multiple linked runs render as stacked rows
 - waiting/completed/failed rows render distinct labels
-- `Open in Research` links to `/research?run=<id>`
+- `Open in Research` links are built through the shared research route helper
 - the status block does not appear for temporary chats or chats without a server ID
 
 **Step 3: Add polling behavior test**
@@ -148,7 +153,14 @@ Cover:
 - the query refetch interval is active for nonterminal runs
 - it slows when all rows are terminal
 
-**Step 4: Run tests to verify they fail**
+**Step 4: Add non-blocking failure test**
+
+Cover:
+
+- linked-run query failure does not break chat rendering
+- no transcript mutation or toast is emitted for that failure in v1
+
+**Step 5: Run tests to verify they fail**
 
 Run:
 
@@ -156,7 +168,7 @@ Run:
 
 Expected: FAIL for missing API client method and missing UI status block.
 
-**Step 5: Commit**
+**Step 6: Commit**
 
 Commit after the frontend tests are green later in this task group:
 
@@ -168,6 +180,7 @@ Commit after the frontend tests are green later in this task group:
 **Files:**
 - Modify: `apps/packages/ui/src/services/tldw/TldwApiClient.ts`
 - Modify: `apps/packages/ui/src/components/Option/Playground/PlaygroundChat.tsx`
+- Modify: `apps/packages/ui/src/routes/route-paths.ts`
 - Add if needed: `apps/packages/ui/src/components/Option/Playground/ResearchRunStatusStack.tsx`
 - Add if needed: `apps/packages/ui/src/components/Option/Playground/research-run-status.ts`
 
@@ -192,6 +205,7 @@ That helper should:
 - group nonterminal rows ahead of terminal rows
 - preserve backend order within each group
 - derive row labels like `Running`, `Needs review`, `Completed`, `Failed`, `Cancelled`
+- build `Open in Research` links through the shared route helper
 
 **Step 3: Render the stacked status block**
 
@@ -201,7 +215,8 @@ In `PlaygroundChat.tsx`:
 - do nothing when `serverChatId` is absent
 - fetch linked runs with a lightweight query
 - render the compact stacked rows above the transcript
-- include `Open in Research` links to `/research?run=<id>`
+- include `Open in Research` links through the shared route helper
+- keep query errors non-blocking and silent in v1
 
 **Step 4: Add terminal overflow handling**
 
@@ -222,7 +237,7 @@ Expected: PASS
 
 **Step 6: Commit**
 
-- `git add apps/packages/ui/src/services/tldw/TldwApiClient.ts apps/packages/ui/src/components/Option/Playground/PlaygroundChat.tsx apps/packages/ui/src/components/Option/Playground/ResearchRunStatusStack.tsx apps/packages/ui/src/components/Option/Playground/research-run-status.ts apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx apps/packages/ui/src/services/tldw/__tests__/TldwApiClient.research-runs.test.ts`
+- `git add apps/packages/ui/src/services/tldw/TldwApiClient.ts apps/packages/ui/src/components/Option/Playground/PlaygroundChat.tsx apps/packages/ui/src/routes/route-paths.ts apps/packages/ui/src/components/Option/Playground/ResearchRunStatusStack.tsx apps/packages/ui/src/components/Option/Playground/research-run-status.ts apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx apps/packages/ui/src/services/tldw/__tests__/TldwApiClient.research-runs.test.ts`
 - `git commit -m "feat(chat): show linked deep research runs in thread"`
 
 ### Task 5: Focused Verification And Plan Finalization
