@@ -381,6 +381,22 @@ vi.mock("antd", async (importOriginal) => {
   }
 })
 
+vi.mock("@/components/Common/Markdown", () => ({
+  Markdown: ({ message }: { message: string }) => <div data-testid="mock-markdown">{message}</div>
+}))
+
+vi.mock("@/components/Media/diff-worker-client", () => ({
+  computeDiffSync: () => [],
+  shouldUseWorkerDiff: () => false,
+  shouldRequireSampling: () => false,
+  sampleTextForDiff: (t: string) => t,
+  computeDiffWithWorker: async () => [],
+  createDiffWorker: () => null,
+  DIFF_SYNC_LINE_THRESHOLD: 4000,
+  DIFF_HARD_CHAR_THRESHOLD: 300_000,
+  DIFF_SAMPLED_CHAR_BUDGET: 120_000
+}))
+
 describe("MediaReviewPage stage4 card density improvements", () => {
   beforeEach(() => {
     mocks.bgRequest.mockReset()
@@ -460,7 +476,8 @@ describe("MediaReviewPage stage4 card density improvements", () => {
     const resultsList = await screen.findByTestId("media-review-results-list")
     const rows = within(resultsList).getAllByRole("button")
     indices.forEach((index) => {
-      fireEvent.click(rows[index])
+      const checkbox = within(rows[index]).getByRole('checkbox')
+      fireEvent.click(checkbox)
     })
   }
 

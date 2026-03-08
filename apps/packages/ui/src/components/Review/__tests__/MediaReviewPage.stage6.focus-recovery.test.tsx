@@ -333,6 +333,22 @@ vi.mock("antd", async (importOriginal) => {
   }
 })
 
+vi.mock("@/components/Common/Markdown", () => ({
+  Markdown: ({ message }: { message: string }) => <div data-testid="mock-markdown">{message}</div>
+}))
+
+vi.mock("@/components/Media/diff-worker-client", () => ({
+  computeDiffSync: () => [],
+  shouldUseWorkerDiff: () => false,
+  shouldRequireSampling: () => false,
+  sampleTextForDiff: (t: string) => t,
+  computeDiffWithWorker: async () => [],
+  createDiffWorker: () => null,
+  DIFF_SYNC_LINE_THRESHOLD: 4000,
+  DIFF_HARD_CHAR_THRESHOLD: 300_000,
+  DIFF_SAMPLED_CHAR_BUDGET: 120_000
+}))
+
 describe("MediaReviewPage stage6 focus recovery", () => {
   beforeEach(() => {
     mocks.bgRequest.mockReset()
@@ -384,6 +400,12 @@ describe("MediaReviewPage stage6 focus recovery", () => {
     return row as HTMLElement
   }
 
+  const selectItemByCheckbox = (title: string, options?: Record<string, unknown>): void => {
+    const row = getResultRowByTitle(title)
+    const checkbox = within(row).getByRole('checkbox')
+    fireEvent.click(checkbox, options)
+  }
+
   const extractUndoHandler = (): (() => void) => {
     const latestCall = mocks.messageInfo.mock.calls.at(-1)
     if (!latestCall) throw new Error("Missing message.info call")
@@ -405,7 +427,7 @@ describe("MediaReviewPage stage6 focus recovery", () => {
 
     const row = getResultRowByTitle("Item 4")
     row.focus()
-    fireEvent.click(row)
+    selectItemByCheckbox("Item 4")
 
     await waitFor(() => {
       expect(screen.getByText("1 / 30 selected")).toBeInTheDocument()
@@ -431,32 +453,31 @@ describe("MediaReviewPage stage6 focus recovery", () => {
     })
   })
 
-  it("restores focus to compare trigger after closing diff modal", async () => {
+  it("toggles inline comparison and closes via close button", async () => {
     render(<MediaReviewPage />)
 
     await waitFor(() => {
       expect(screen.getByText("0 / 30 selected")).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle("Item 1"))
-    fireEvent.click(getResultRowByTitle("Item 2"))
+    selectItemByCheckbox("Item 1")
+    selectItemByCheckbox("Item 2")
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /compare content/i })).toBeInTheDocument()
     })
 
-    const compareButton = screen.getByRole("button", { name: /compare content/i })
-    compareButton.focus()
-    fireEvent.click(compareButton)
+    fireEvent.click(screen.getByRole("button", { name: /compare content/i }))
 
     await waitFor(() => {
-      expect(screen.getByRole("dialog", { name: /diff view/i })).toBeInTheDocument()
+      expect(screen.getByTestId("comparison-split")).toBeInTheDocument()
     })
 
-    fireEvent.click(screen.getByRole("button", { name: "Close" }))
+    // Close via the close button inside comparison split
+    fireEvent.click(screen.getByTestId("close-comparison"))
 
     await waitFor(() => {
-      expect(compareButton).toHaveFocus()
+      expect(screen.queryByTestId("comparison-split")).not.toBeInTheDocument()
     })
   })
 })
