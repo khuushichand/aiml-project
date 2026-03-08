@@ -1083,13 +1083,6 @@ async def start_run(
     )
     # Scaffold: return immediate completed status without real execution
     try:
-        # Metrics: started
-        try:
-            rt = (spec.runtime.value if spec.runtime else (payload.runtime or "unknown"))
-            increment_counter("sandbox_runs_started_total", labels={"runtime": str(rt)})
-        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-            logger.debug("metrics: sandbox_runs_started_total failed")
-
         status = _service.start_run_scaffold(
             user_id=current_user.id,
             spec=spec,
@@ -1187,6 +1180,11 @@ async def start_run(
                 }
             })
         raise
+    try:
+        rt = (status.runtime.value if status.runtime else (payload.runtime or "unknown"))
+        increment_counter("sandbox_runs_started_total", labels={"runtime": str(rt)})
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+        logger.debug("metrics: sandbox_runs_started_total failed")
     # Metrics and audit post-run (if completed)
     try:
         if status.started_at and status.finished_at:
@@ -1812,12 +1810,17 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     async def _heartbeats() -> None:
         try:
             while True:
+                if hub.has_ended(run_id):
+                    return
                 await asyncio.sleep(10)
+                if hub.has_ended(run_id):
+                    return
                 # Publish via hub to attach seq and flow through the same queue.
                 # If this fails, skip the heartbeat to avoid injecting out-of-band frames
                 # with potentially inconsistent sequencing.
                 try:
-                    hub.publish_heartbeat(run_id)
+                    if not hub.publish_heartbeat(run_id):
+                        return
                     with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         increment_counter("sandbox_ws_heartbeats_sent_total", labels={"component": "sandbox"})
                 except _SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -1828,7 +1831,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     spawn_hb = True
     try:
         # If run already ended, avoid spawning heartbeats that could interleave
-        if bool(run_id in getattr(hub, "_ended", set())):
+        if hub.has_ended(run_id):
             spawn_hb = False
     except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         spawn_hb = True

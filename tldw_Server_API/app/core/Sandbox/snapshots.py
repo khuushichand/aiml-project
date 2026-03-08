@@ -144,7 +144,12 @@ class SnapshotManager:
                 # Add workspace contents with relative paths
                 for item in os.listdir(workspace_path):
                     item_path = os.path.join(workspace_path, item)
-                    tar.add(item_path, arcname=item)
+                    try:
+                        tar.add(item_path, arcname=item)
+                    except FileNotFoundError:
+                        # Concurrent atomic writers can remove temporary files
+                        # between directory enumeration and archive insertion.
+                        continue
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             # Clean up on failure
             with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
