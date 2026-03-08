@@ -5,9 +5,14 @@ import { normalizeListResponse, normalizePagedResponse } from './normalize';
 import type {
   AuditLog,
   BackupsResponse,
+  FeatureRegistryEntry,
   IncidentsResponse,
+  Invoice,
+  OrgUsageSummary,
+  Plan,
   RegistrationCode,
   RetentionPoliciesResponse,
+  Subscription,
   UserWithKeyCount,
 } from '@/types';
 export { ApiError };
@@ -1059,6 +1064,58 @@ export const api = {
   // Voice Workflow Templates
   getVoiceWorkflowTemplates: () =>
     requestJson('/voice/workflows/templates'),
+
+  // ============================================
+  // Plans & Billing
+  // ============================================
+  getPlans: (params?: Record<string, QueryParamValue>) => {
+    const qs = buildQueryString(params);
+    return requestJson<Plan[]>(`/billing/plans${qs}`);
+  },
+  getPlan: (planId: string) =>
+    requestJson<Plan>(`/billing/plans/${encodeURIComponent(planId)}`),
+  createPlan: (data: Partial<Plan>) =>
+    requestJson<Plan>('/billing/plans', { method: 'POST', body: JSON.stringify(data) }),
+  updatePlan: (planId: string, data: Partial<Plan>) =>
+    requestJson<Plan>(`/billing/plans/${encodeURIComponent(planId)}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deletePlan: (planId: string) =>
+    requestJson(`/billing/plans/${encodeURIComponent(planId)}`, { method: 'DELETE' }),
+
+  // Subscriptions
+  getSubscriptions: (params?: Record<string, QueryParamValue>) => {
+    const qs = buildQueryString(params);
+    return requestJson<Subscription[]>(`/billing/subscriptions${qs}`);
+  },
+  getOrgSubscription: (orgId: number) =>
+    requestJson<Subscription>(`/billing/orgs/${orgId}/subscription`),
+  createSubscription: (orgId: number, data: { plan_id: string; trial_days?: number }) =>
+    requestJson<{ checkout_url?: string; subscription?: Subscription }>(
+      `/billing/orgs/${orgId}/subscription`, { method: 'POST', body: JSON.stringify(data) }),
+  updateSubscription: (orgId: number, data: { plan_id: string }) =>
+    requestJson<Subscription>(`/billing/orgs/${orgId}/subscription`, { method: 'PUT', body: JSON.stringify(data) }),
+  cancelSubscription: (orgId: number) =>
+    requestJson(`/billing/orgs/${orgId}/subscription`, { method: 'DELETE' }),
+
+  // Usage & Invoices
+  getOrgUsageSummary: (orgId: number, params?: { period?: string }) => {
+    const qs = buildQueryString(params as Record<string, QueryParamValue>);
+    return requestJson<OrgUsageSummary>(`/billing/orgs/${orgId}/usage${qs}`);
+  },
+  getOrgInvoices: (orgId: number, params?: Record<string, QueryParamValue>) => {
+    const qs = buildQueryString(params);
+    return requestJson<Invoice[]>(`/billing/orgs/${orgId}/invoices${qs}`);
+  },
+
+  // Feature Registry
+  getFeatureRegistry: () =>
+    requestJson<FeatureRegistryEntry[]>('/billing/feature-registry'),
+  updateFeatureRegistry: (data: FeatureRegistryEntry[]) =>
+    requestJson<FeatureRegistryEntry[]>('/billing/feature-registry', { method: 'PUT', body: JSON.stringify(data) }),
+
+  // Onboarding
+  createOnboardingSession: (data: { org_name: string; org_slug: string; plan_id: string; owner_email?: string }) =>
+    requestJson<{ checkout_url?: string; org_id?: number }>(
+      '/billing/onboarding', { method: 'POST', body: JSON.stringify(data) }),
 };
 
 export default api;
