@@ -153,6 +153,24 @@ def test_step_types_include_deep_research_wait(client_with_wf: TestClient):
     assert "save_artifact" in properties
 
 
+def test_step_types_include_deep_research_load_bundle(client_with_wf: TestClient):
+    client = client_with_wf
+    r = client.get("/api/v1/workflows/step-types")
+    assert r.status_code == 200
+    payload = r.json()
+    deep_research_load_bundle = next(
+        (item for item in payload if item.get("name") == "deep_research_load_bundle"),
+        None,
+    )
+    assert deep_research_load_bundle is not None
+    assert "completed deep research run" in (deep_research_load_bundle.get("description") or "")
+    schema = deep_research_load_bundle.get("schema") or {}
+    properties = schema.get("properties") or {}
+    assert "run_id" in properties
+    assert "run" in properties
+    assert "save_artifact" in properties
+
+
 def test_on_failure_routing_to_log(client_with_wf: TestClient):
     client = client_with_wf
     # First step intentionally fails; on_failure routes to log step

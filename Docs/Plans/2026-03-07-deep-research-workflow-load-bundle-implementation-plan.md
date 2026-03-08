@@ -12,7 +12,7 @@
 
 ### Task 1: Add Red Backend Tests For The Bundle-Load Step
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/tests/Workflows/adapters/test_research_adapters.py`
@@ -65,7 +65,7 @@ Expected: FAIL for missing adapter registration, missing schema exposure, and mi
 
 ### Task 2: Implement Backend Config And Adapter
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/Workflows/adapters/research/_config.py`
@@ -147,7 +147,7 @@ Expected: PASS
 
 ### Task 3: Register The Step Type And Expose The Schema
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/Workflows/registry.py`
@@ -191,7 +191,7 @@ Expected: PASS
 
 ### Task 4: Add Red Frontend Workflow Editor Tests
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/WorkflowEditor/__tests__/step-registry.test.ts`
@@ -230,7 +230,7 @@ Expected: FAIL for missing metadata and fields.
 
 ### Task 5: Implement Workflow Editor Metadata
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/WorkflowEditor/step-registry.ts`
@@ -274,7 +274,7 @@ Expected: PASS
 
 ### Task 6: Add A Workflow Runtime Integration Test
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/tests/Workflows/test_workflows_api.py`
@@ -310,7 +310,7 @@ Expected: PASS
 
 ### Task 7: Run Verification And Commit
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-07-deep-research-workflow-load-bundle-implementation-plan.md`
@@ -379,3 +379,13 @@ git add \
   apps/packages/ui/src/components/WorkflowEditor/__tests__/NodeConfigPanel.test.tsx
 git commit -m "feat(workflows): add deep research bundle loader"
 ```
+
+## Completion Notes
+
+- Added the new `deep_research_load_bundle` workflow adapter, save-time validation, `/step-types` schema, and workflow-editor metadata.
+- Focused backend verification passed with:
+  - `python -m pytest ... -q -k "deep_research_load_bundle"` -> `6 passed`
+  - `python -m pytest ... -q -k "deep_research"` -> `19 passed`
+- Focused frontend verification passed with:
+  - `bunx vitest run ...step-registry.test.ts ...NodeConfigPanel.test.tsx` -> `20 passed`
+- Bandit on the touched backend scope reported `0` findings and `0` errors in `/tmp/bandit_deep_research_load_bundle.json`.

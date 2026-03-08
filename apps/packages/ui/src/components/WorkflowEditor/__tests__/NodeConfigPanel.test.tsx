@@ -228,4 +228,40 @@ describe("NodeConfigPanel selectors", () => {
     expect(screen.getByText("Fail on Cancelled")).toBeInTheDocument()
     expect(screen.getAllByText("Run").length).toBeGreaterThan(0)
   })
+
+  it("merges deep research load-bundle metadata with server schema fields", () => {
+    const schema: WorkflowStepSchema = {
+      type: "object",
+      properties: {
+        run_id: {
+          type: "string",
+          description: "Templated research run ID, typically {{ deep_research_wait.run_id }}"
+        },
+        run: { type: "object", description: "Optional prior step output object containing run_id" },
+        save_artifact: { type: "boolean", default: true }
+      }
+    }
+    setupStore("deep_research_load_bundle", schema, {
+      run_id: "{{ deep_research_wait.run_id }}",
+      save_artifact: true
+    })
+
+    vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
+      optionsByKey: {},
+      loadingByKey: {}
+    })
+
+    render(<NodeConfigPanel />)
+
+    expect(
+      screen.getByText("Use {{variable}} for template placeholders")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Save Artifact")).toBeInTheDocument()
+    expect(screen.getByText("Run ID")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Loads references from a completed deep research run without returning the full bundle"
+      )
+    ).toBeInTheDocument()
+  })
 })

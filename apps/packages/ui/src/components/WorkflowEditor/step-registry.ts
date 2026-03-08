@@ -681,6 +681,39 @@ export const BASE_STEP_REGISTRY: StepRegistry = {
     ]
   },
 
+  deep_research_load_bundle: {
+    type: "deep_research_load_bundle",
+    label: "Deep Research Load Bundle",
+    description:
+      "Loads references from a completed deep research run without returning the full bundle",
+    category: "research",
+    icon: "BookText",
+    color: "bg-violet-800",
+    inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }],
+    configSchema: [
+      {
+        key: "run_id",
+        type: "template-editor",
+        label: "Run ID",
+        description: "Primary chaining field, typically {{ deep_research_wait.run_id }}"
+      },
+      {
+        key: "run",
+        type: "json-editor",
+        label: "Run",
+        description: "Optional full wait output object containing run_id"
+      },
+      {
+        key: "save_artifact",
+        type: "checkbox",
+        label: "Save Artifact",
+        description: "Persist deep_research_bundle_ref.json as a workflow artifact",
+        default: true
+      }
+    ]
+  },
+
   // ─── Utility Steps ───────────────────────────────────────────────────────
 
   delay: {
@@ -912,6 +945,10 @@ const PORT_OVERRIDES: Record<
     inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
     outputs: [{ id: "result", label: "Result", dataType: "object" }]
   },
+  deep_research_load_bundle: {
+    inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }]
+  },
   // Audio
   tts: {
     inputs: [{ id: "text", label: "Text", dataType: "string", required: true }],
@@ -1116,6 +1153,7 @@ export const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
   // Research & Academic (10 types)
   deep_research: "research",
   deep_research_wait: "research",
+  deep_research_load_bundle: "research",
   arxiv_search: "research",
   arxiv_download: "research",
   pubmed_search: "research",
@@ -1266,6 +1304,7 @@ export const ICON_OVERRIDES: Record<string, string> = {
   // Research & Academic
   deep_research: "FileSearch",
   deep_research_wait: "Clock",
+  deep_research_load_bundle: "BookText",
   arxiv_search: "GraduationCap",
   arxiv_download: "Download",
   pubmed_search: "FlaskConical",

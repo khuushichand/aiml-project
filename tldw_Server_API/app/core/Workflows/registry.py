@@ -152,6 +152,7 @@ class StepTypeRegistry:
             "literature_review": StepType("literature_review", "Generate literature review summary"),
             "deep_research": StepType("deep_research", "Launch a deep research session and return its run reference; does not wait for completion"),
             "deep_research_wait": StepType("deep_research_wait", "waits for a launched deep-research run to finish and can return the final bundle"),
+            "deep_research_load_bundle": StepType("deep_research_load_bundle", "Loads references from a completed deep research run without returning the full bundle"),
         }
 
     def list(self) -> builtins.list[StepType]:

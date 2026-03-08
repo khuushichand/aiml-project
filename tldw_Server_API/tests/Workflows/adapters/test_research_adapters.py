@@ -13,6 +13,7 @@ This module tests all 11 research adapters:
 10. run_literature_review_adapter - Generate literature review
 11. run_deep_research_adapter - Launch a deep research session
 12. run_deep_research_wait_adapter - Wait for a deep research session
+13. run_deep_research_load_bundle_adapter - Load bundle refs from a completed deep research session
 """
 
 from __future__ import annotations
@@ -314,6 +315,225 @@ async def test_deep_research_wait_adapter_times_out_for_nonterminal_run(monkeypa
                 "poll_interval_seconds": 0.1,
                 "timeout_seconds": 2,
             },
+            {"user_id": "84"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_deep_research_load_bundle_adapter_returns_bundle_refs_and_records_artifact(monkeypatch):
+    """Test deep research load-bundle adapter returns compact refs and persists a JSON artifact."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_load_bundle_adapter,
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        id = "research-session-5"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-07T14:00:00+00:00"
+
+    class _FakeSnapshot:
+        artifacts = [
+            {
+                "artifact_name": "bundle.json",
+                "artifact_version": 1,
+                "content_type": "application/json",
+                "phase": "packaging",
+                "job_id": "job-7",
+            }
+        ]
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            captured["get_session_kwargs"] = kwargs
+            return _FakeSession()
+
+        def get_bundle(self, **kwargs):
+            captured["get_bundle_kwargs"] = kwargs
+            return {
+                "question": "What changed in the evidence base?",
+                "outline": {
+                    "sections": [
+                        {"title": "Overview"},
+                        {"title": "Findings"},
+                    ]
+                },
+                "claims": [
+                    {"text": "Claim A", "citations": [{"source_id": "src_1"}]},
+                    {"text": "Claim B", "citations": [{"source_id": "src_2"}]},
+                ],
+                "source_inventory": [
+                    {"source_id": "src_1", "title": "Source 1"},
+                    {"source_id": "src_2", "title": "Source 2"},
+                    {"source_id": "src_3", "title": "Source 3"},
+                ],
+                "unresolved_questions": ["Need stronger contradictory evidence"],
+            }
+
+        def get_stream_snapshot(self, **kwargs):
+            captured["get_stream_snapshot_kwargs"] = kwargs
+            return _FakeSnapshot()
+
+    added_artifacts: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.load_bundle._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    result = await run_deep_research_load_bundle_adapter(
+        {
+            "run_id": "{{ inputs.run_id }}",
+            "save_artifact": True,
+        },
+        {
+            "user_id": "42",
+            "step_run_id": "wf-step-3",
+            "inputs": {"run_id": "research-session-5"},
+            "add_artifact": lambda **kwargs: added_artifacts.append(kwargs),
+        },
+    )
+
+    assert result == {
+        "run_id": "research-session-5",
+        "status": "completed",
+        "phase": "completed",
+        "control_state": "running",
+        "completed_at": "2026-03-07T14:00:00+00:00",
+        "bundle_url": "/api/v1/research/runs/research-session-5/bundle",
+        "bundle_summary": {
+            "question": "What changed in the evidence base?",
+            "outline_titles": ["Overview", "Findings"],
+            "claim_count": 2,
+            "source_count": 3,
+            "unresolved_question_count": 1,
+        },
+        "artifacts": [
+            {
+                "artifact_name": "bundle.json",
+                "artifact_version": 1,
+                "content_type": "application/json",
+                "phase": "packaging",
+                "job_id": "job-7",
+            }
+        ],
+    }
+    assert captured["get_session_kwargs"] == {
+        "owner_user_id": "42",
+        "session_id": "research-session-5",
+    }
+    assert captured["get_bundle_kwargs"] == {
+        "owner_user_id": "42",
+        "session_id": "research-session-5",
+    }
+    assert captured["get_stream_snapshot_kwargs"] == {
+        "owner_user_id": "42",
+        "session_id": "research-session-5",
+    }
+    assert len(added_artifacts) == 1
+    assert added_artifacts[0]["type"] == "deep_research_bundle_ref"
+    assert added_artifacts[0]["mime_type"] == "application/json"
+    artifact_uri = str(added_artifacts[0]["uri"])
+    artifact_path = Path(artifact_uri.removeprefix("file://"))
+    assert artifact_path.name == "deep_research_bundle_ref.json"
+    assert json.loads(artifact_path.read_text(encoding="utf-8")) == result
+
+
+@pytest.mark.asyncio
+async def test_deep_research_load_bundle_adapter_accepts_wait_output_object(monkeypatch):
+    """Test deep research load-bundle adapter can resolve the run from a prior step output object."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_load_bundle_adapter,
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        id = "research-session-6"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-07T15:00:00+00:00"
+
+    class _FakeSnapshot:
+        artifacts = []
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            captured["get_session_kwargs"] = kwargs
+            return _FakeSession()
+
+        def get_bundle(self, **kwargs):
+            return {
+                "question": "What changed?",
+                "outline": {"sections": []},
+                "claims": [],
+                "source_inventory": [],
+                "unresolved_questions": [],
+            }
+
+        def get_stream_snapshot(self, **kwargs):
+            return _FakeSnapshot()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.load_bundle._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    result = await run_deep_research_load_bundle_adapter(
+        {
+            "run": {
+                "run_id": "research-session-6",
+                "bundle_url": "/api/v1/research/runs/research-session-6/bundle",
+            },
+            "save_artifact": False,
+        },
+        {"user_id": "84"},
+    )
+
+    assert result["run_id"] == "research-session-6"
+    assert result["bundle_summary"]["question"] == "What changed?"
+    assert captured["get_session_kwargs"] == {
+        "owner_user_id": "84",
+        "session_id": "research-session-6",
+    }
+
+
+@pytest.mark.asyncio
+async def test_deep_research_load_bundle_adapter_rejects_non_completed_runs(monkeypatch):
+    """Test deep research load-bundle adapter rejects runs that have not completed."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_load_bundle_adapter,
+    )
+
+    class _FakeSession:
+        id = "research-session-7"
+        status = "synthesizing"
+        phase = "synthesizing"
+        control_state = "running"
+        completed_at = None
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            return _FakeSession()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.load_bundle._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    with pytest.raises(RuntimeError, match="completed runs only"):
+        await run_deep_research_load_bundle_adapter(
+            {"run_id": "research-session-7"},
             {"user_id": "84"},
         )
 

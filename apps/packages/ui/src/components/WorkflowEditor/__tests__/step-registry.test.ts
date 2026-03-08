@@ -124,6 +124,7 @@ const ALL_STEP_TYPES: Record<StepCategory, string[]> = {
   research: [
     "deep_research",
     "deep_research_wait",
+    "deep_research_load_bundle",
     "arxiv_search",
     "arxiv_download",
     "pubmed_search",
@@ -326,6 +327,7 @@ describe("workflow step registry", () => {
       "stt_transcribe",
       "deep_research",
       "deep_research_wait",
+      "deep_research_load_bundle",
       "delay",
       "log",
       "start",

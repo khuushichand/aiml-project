@@ -546,6 +546,59 @@ def test_create_workflow_rejects_invalid_deep_research_wait_definition_without_j
     assert resp.status_code == 422
 
 
+def test_create_workflow_rejects_invalid_deep_research_load_bundle_definition(
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    definition = {
+        "name": "invalid-deep-research-load-bundle-definition",
+        "version": 1,
+        "steps": [
+            {
+                "id": "rl1",
+                "type": "deep_research_load_bundle",
+                "config": {
+                    "run": {"bundle_url": "/api/v1/research/runs/missing/bundle"},
+                },
+            }
+        ],
+    }
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_create_workflow_rejects_invalid_deep_research_load_bundle_definition_without_jsonschema(
+    monkeypatch,
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    original_import = builtins.__import__
+
+    def _patched_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "jsonschema":
+            raise ImportError("simulated missing jsonschema")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _patched_import)
+
+    definition = {
+        "name": "invalid-deep-research-load-bundle-definition-no-jsonschema",
+        "version": 1,
+        "steps": [
+            {
+                "id": "rl1",
+                "type": "deep_research_load_bundle",
+                "config": {
+                    "run": {"bundle_url": "/api/v1/research/runs/missing/bundle"},
+                },
+            }
+        ],
+    }
+
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
 def test_run_workflow_launches_deep_research_session(monkeypatch, client_with_workflows_db: TestClient):
     client = client_with_workflows_db
     captured: dict[str, object] = {}
@@ -725,6 +778,168 @@ def test_run_workflow_waits_for_deep_research_completion(monkeypatch, client_wit
     assert captured["get_bundle_kwargs"] == {
         "owner_user_id": "1",
         "session_id": "research-session-2",
+    }
+
+
+def test_run_workflow_loads_bundle_refs_after_wait(monkeypatch, client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+    captured: dict[str, object] = {}
+
+    class _LaunchSession:
+        id = "research-session-8"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _CompletedSession:
+        id = "research-session-8"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-07T14:30:00+00:00"
+
+    class _LaunchResearchService:
+        def create_session(self, **kwargs):
+            captured["create_session_kwargs"] = kwargs
+            return _LaunchSession()
+
+    class _WaitResearchService:
+        def get_session(self, **kwargs):
+            captured["wait_get_session_kwargs"] = kwargs
+            return _CompletedSession()
+
+    class _LoadBundleSnapshot:
+        artifacts = [
+            {
+                "artifact_name": "bundle.json",
+                "artifact_version": 1,
+                "content_type": "application/json",
+                "phase": "packaging",
+                "job_id": "job-99",
+            }
+        ]
+
+    class _LoadBundleResearchService:
+        def get_session(self, **kwargs):
+            captured["load_get_session_kwargs"] = kwargs
+            return _CompletedSession()
+
+        def get_bundle(self, **kwargs):
+            captured["load_get_bundle_kwargs"] = kwargs
+            return {
+                "question": "Investigate evidence-backed forecasting",
+                "outline": {"sections": [{"title": "Overview"}, {"title": "Findings"}]},
+                "claims": [
+                    {"text": "Claim A", "citations": [{"source_id": "src_1"}]},
+                    {"text": "Claim B", "citations": [{"source_id": "src_2"}]},
+                ],
+                "source_inventory": [
+                    {"source_id": "src_1", "title": "Source 1"},
+                    {"source_id": "src_2", "title": "Source 2"},
+                ],
+                "unresolved_questions": ["Need more contradictory evidence"],
+            }
+
+        def get_stream_snapshot(self, **kwargs):
+            captured["load_get_stream_snapshot_kwargs"] = kwargs
+            return _LoadBundleSnapshot()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _LaunchResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _WaitResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.load_bundle._build_research_service",
+        lambda: _LoadBundleResearchService(),
+    )
+
+    definition = {
+        "name": "launch-wait-load-deep-research",
+        "version": 1,
+        "steps": [
+            {
+                "id": "launch",
+                "type": "deep_research",
+                "config": {
+                    "query": "{{ inputs.topic }}",
+                },
+            },
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {
+                    "run_id": "{{ launch.run_id }}",
+                    "include_bundle": False,
+                },
+            },
+            {
+                "id": "load",
+                "type": "deep_research_load_bundle",
+                "config": {
+                    "run_id": "{{ wait.run_id }}",
+                },
+            },
+        ],
+    }
+
+    create = client.post("/api/v1/workflows", json=definition)
+    assert create.status_code == 201, create.text
+    wid = create.json()["id"]
+
+    run_id = client.post(
+        f"/api/v1/workflows/{wid}/run",
+        json={"inputs": {"topic": "evidence-backed forecasting"}},
+    ).json()["run_id"]
+
+    deadline = time.time() + 5
+    data = {}
+    while time.time() < deadline:
+        data = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if data["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.05)
+
+    assert data["status"] == "succeeded"
+    assert (data.get("outputs") or {}) == {
+        "run_id": "research-session-8",
+        "status": "completed",
+        "phase": "completed",
+        "control_state": "running",
+        "completed_at": "2026-03-07T14:30:00+00:00",
+        "bundle_url": "/api/v1/research/runs/research-session-8/bundle",
+        "bundle_summary": {
+            "question": "Investigate evidence-backed forecasting",
+            "outline_titles": ["Overview", "Findings"],
+            "claim_count": 2,
+            "source_count": 2,
+            "unresolved_question_count": 1,
+        },
+        "artifacts": [
+            {
+                "artifact_name": "bundle.json",
+                "artifact_version": 1,
+                "content_type": "application/json",
+                "phase": "packaging",
+                "job_id": "job-99",
+            }
+        ],
+    }
+    assert "bundle" not in (data.get("outputs") or {})
+    assert captured["load_get_session_kwargs"] == {
+        "owner_user_id": "1",
+        "session_id": "research-session-8",
+    }
+    assert captured["load_get_bundle_kwargs"] == {
+        "owner_user_id": "1",
+        "session_id": "research-session-8",
+    }
+    assert captured["load_get_stream_snapshot_kwargs"] == {
+        "owner_user_id": "1",
+        "session_id": "research-session-8",
     }
 
 

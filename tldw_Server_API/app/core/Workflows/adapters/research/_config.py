@@ -197,3 +197,29 @@ class DeepResearchWaitConfig(BaseAdapterConfig):
         if not run_id and not run_obj_id:
             raise ValueError("either run_id or run.run_id is required")
         return self
+
+
+class DeepResearchLoadBundleConfig(BaseAdapterConfig):
+    """Config for loading completed deep research bundle references from workflows."""
+
+    run_id: str | None = Field(
+        None,
+        description="Completed research run ID to load (templated)",
+    )
+    run: dict[str, Any] | None = Field(
+        None,
+        description="Optional prior step output object containing run_id",
+    )
+    save_artifact: bool | None = Field(
+        True,
+        description="Whether to persist the bundle reference payload as a workflow artifact",
+    )
+
+    @model_validator(mode="after")
+    def validate_run_reference(self) -> "DeepResearchLoadBundleConfig":
+        run_id = str(self.run_id or "").strip()
+        run_obj = self.run if isinstance(self.run, dict) else None
+        run_obj_id = str((run_obj or {}).get("run_id") or "").strip()
+        if not run_id and not run_obj_id:
+            raise ValueError("either run_id or run.run_id is required")
+        return self
