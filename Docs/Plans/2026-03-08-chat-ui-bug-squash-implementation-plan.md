@@ -362,7 +362,7 @@ git commit -m "fix(chat-ui): retry chat mutations once on version conflict"
 
 ### Task 5: Surface Distinct Sidebar States And Conflict-Specific Mutation Feedback
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/Common/ChatSidebar/ServerChatList.tsx`
@@ -439,6 +439,8 @@ git commit -m "fix(chat-ui): clarify sidebar refresh and mutation failure states
 ```
 
 ### Task 6: Final Verification And Cleanup
+
+**Status:** In Progress
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-08-chat-ui-bug-squash-design.md` only if implementation reality requires minor notes

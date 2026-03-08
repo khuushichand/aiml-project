@@ -24,6 +24,7 @@ import {
 import { updatePageTitle } from "@/utils/update-page-title"
 import { cn } from "@/libs/utils"
 import { normalizeConversationState } from "@/utils/conversation-state"
+import { isDictionaryVersionConflictError } from "@/components/Option/Dictionaries/listUtils"
 import { useDataTablesStore } from "@/store/data-tables"
 import { queueDataTablesPrefill } from "@/utils/data-tables-prefill"
 import { startCreateTableFromChat } from "@/utils/data-tables-create-flow"
@@ -234,12 +235,34 @@ export function ServerChatList({
 
   const {
     data: serverChatData,
-    status,
+    sidebarRefreshState,
+    hasUsableData,
+    isShowingStaleData,
     isLoading
   } = useServerChatHistory(searchQuery, {
     deletedOnly: isTrashView
   })
   const serverChats = serverChatData || []
+  const getChatVersionConflictMessage = React.useCallback(
+    () =>
+      t("common:chatChangedRetryFailed", {
+        defaultValue: "This chat changed on the server. Refresh and try again."
+      }),
+    [t]
+  )
+  const resolveChatMutationErrorMessage = React.useCallback(
+    (
+      error: unknown,
+      fallbackKey: string,
+      fallbackDefaultValue: string
+    ) =>
+      isDictionaryVersionConflictError(error)
+        ? getChatVersionConflictMessage()
+        : t(fallbackKey, {
+            defaultValue: fallbackDefaultValue
+          }),
+    [getChatVersionConflictMessage, t]
+  )
   const filteredChatsByType = React.useMemo(() => {
     if (chatTypeFilter === "trash") return serverChats
     if (chatTypeFilter === "all") return serverChats
@@ -503,11 +526,13 @@ export function ServerChatList({
           setRenamingChat(null)
           setRenameValue("")
         },
-        onError: () => {
+        onError: (error) => {
           message.error(
-            t("common:renameChatError", {
-              defaultValue: "Failed to rename chat."
-            })
+            resolveChatMutationErrorMessage(
+              error,
+              "common:renameChatError",
+              "Failed to rename chat."
+            )
           )
         }
       }
@@ -535,11 +560,13 @@ export function ServerChatList({
           setEditingTopicChat(null)
           setTopicValue("")
         },
-        onError: () => {
+        onError: (error) => {
           message.error(
-            t("option:somethingWentWrong", {
-              defaultValue: "Something went wrong"
-            })
+            resolveChatMutationErrorMessage(
+              error,
+              "common:updateChatTopicError",
+              "Failed to update chat topic."
+            )
           )
         }
       }
@@ -564,11 +591,13 @@ export function ServerChatList({
               setServerChatVersion(updated?.version ?? null)
             }
           },
-          onError: () => {
+          onError: (error) => {
             message.error(
-              t("option:somethingWentWrong", {
-                defaultValue: "Something went wrong"
-              })
+              resolveChatMutationErrorMessage(
+                error,
+                "common:updateChatStateError",
+                "Failed to update chat status."
+              )
             )
           }
         }
@@ -612,13 +641,22 @@ export function ServerChatList({
           chatId: chat.id
         })
         message.error(
-          t("common:deleteChatError", {
-            defaultValue: "Failed to move chat to trash."
-          })
+          resolveChatMutationErrorMessage(
+            err,
+            "common:deleteChatError",
+            "Failed to move chat to trash."
+          )
         )
       }
     },
-    [clearChat, confirmDanger, queryClient, serverChatId, setPinnedChatIds, t]
+    [
+      clearChat,
+      confirmDanger,
+      queryClient,
+      resolveChatMutationErrorMessage,
+      serverChatId,
+      setPinnedChatIds
+    ]
   )
 
   const handleRestoreChat = React.useCallback(
@@ -639,13 +677,15 @@ export function ServerChatList({
           chatId: chat.id
         })
         message.error(
-          t("common:restoreChatError", {
-            defaultValue: "Failed to restore chat."
-          })
+          resolveChatMutationErrorMessage(
+            err,
+            "common:restoreChatError",
+            "Failed to restore chat."
+          )
         )
       }
     },
-    [queryClient, t]
+    [queryClient, resolveChatMutationErrorMessage]
   )
 
   const handleHardDeleteChat = React.useCallback(
@@ -678,13 +718,22 @@ export function ServerChatList({
           chatId: chat.id
         })
         message.error(
-          t("common:deleteChatError", {
-            defaultValue: "Failed to delete chat permanently."
-          })
+          resolveChatMutationErrorMessage(
+            err,
+            "common:deleteChatError",
+            "Failed to delete chat permanently."
+          )
         )
       }
     },
-    [clearChat, confirmDanger, queryClient, serverChatId, setPinnedChatIds, t]
+    [
+      clearChat,
+      confirmDanger,
+      queryClient,
+      resolveChatMutationErrorMessage,
+      serverChatId,
+      setPinnedChatIds
+    ]
   )
 
   const handleOpenSettings = React.useCallback(
@@ -955,7 +1004,7 @@ export function ServerChatList({
   }
 
   // Loading state
-  if (isLoading) {
+  if (isLoading && !hasUsableData) {
     return (
       <div className={cn("flex justify-center items-center py-8", className)}>
         <Skeleton active paragraph={{ rows: 4 }} />
@@ -964,13 +1013,25 @@ export function ServerChatList({
   }
 
   // Error state
-  if (status === "error") {
+  if (sidebarRefreshState === "hard-error") {
     return (
       <div className={cn("flex justify-center items-center py-8 px-2", className)}>
         <span className="text-xs text-text-subtle text-center">
           {t("common:serverChatsUnavailableServerError", {
             defaultValue:
               "Server chats unavailable right now. Check your server logs or try again."
+          })}
+        </span>
+      </div>
+    )
+  }
+
+  if (sidebarRefreshState === "recoverable-error" && !hasUsableData) {
+    return (
+      <div className={cn("flex justify-center items-center py-8 px-2", className)}>
+        <span className="text-xs text-text-subtle text-center">
+          {t("common:serverChatsUnavailableRecoverable", {
+            defaultValue: "Unable to refresh server chats right now. Try again shortly."
           })}
         </span>
       </div>
@@ -1101,6 +1162,14 @@ export function ServerChatList({
           ]}
         />
       </div>
+      {sidebarRefreshState === "recoverable-error" && isShowingStaleData && (
+        <div className="mx-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-text-subtle">
+          {t("common:serverChatsShowingStaleData", {
+            defaultValue:
+              "Showing saved chats from the last successful refresh. Some recent changes may be missing."
+          })}
+        </div>
+      )}
       {selectionMode && (
         <div className="sticky top-0 z-10 border-b border-border bg-surface2 px-2 py-2">
           <div className="flex items-center justify-between text-xs text-text-subtle">
