@@ -3,11 +3,13 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.Sandbox.models import RunPhase, RunStatus, RuntimeType, TrustLevel
+from tldw_Server_API.app.core.Sandbox.orchestrator import SessionActiveRunsConflict
 
 
 def _client(monkeypatch) -> TestClient:
@@ -223,6 +225,48 @@ def test_session_backed_run_inherits_session_defaults(monkeypatch) -> None:
     assert spec.trust_level == TrustLevel.trusted
 
 
+def test_session_backed_run_returns_not_found_if_session_disappears_during_start(monkeypatch) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
+
+    monkeypatch.setattr(sb, "_require_session_owner", lambda session_id, current_user: "1")
+    monkeypatch.setattr(
+        sb._service,
+        "get_session",
+        lambda session_id: SimpleNamespace(
+            runtime=RuntimeType.docker,
+            base_image="python:3.11-slim",
+            env={},
+            timeout_sec=None,
+            cpu_limit=None,
+            memory_mb=None,
+            network_policy=None,
+            trust_level=None,
+            persona_id=None,
+            workspace_id=None,
+            workspace_group_id=None,
+            scope_snapshot_id=None,
+        ),
+    )
+
+    def _raise_session_not_found(*, user_id, spec, spec_version, idem_key, raw_body):
+        raise ValueError("session_not_found")
+
+    monkeypatch.setattr(sb._service, "start_run_scaffold", _raise_session_not_found)
+
+    with _client(monkeypatch) as client:
+        response = client.post(
+            "/api/v1/sandbox/runs",
+            json={
+                "spec_version": "1.0",
+                "session_id": "sess-gone",
+                "command": ["python", "-c", "print('hello')"],
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "session_not_found"}
+
+
 def test_delete_session_cancels_and_drains_active_runs(monkeypatch) -> None:
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "0")
 
@@ -259,3 +303,87 @@ def test_delete_session_cancels_and_drains_active_runs(monkeypatch) -> None:
         run_after = client.get(f"/api/v1/sandbox/runs/{run_id}")
         assert run_after.status_code == 200
         assert run_after.json().get("phase") == "killed"
+
+
+def test_restore_snapshot_returns_conflict_when_active_runs_exist(monkeypatch) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
+
+    monkeypatch.setattr(sb, "_require_session_owner", lambda session_id, current_user: "1")
+
+    def _raise_active_runs(session_id: str, snapshot_id: str) -> bool:
+        raise SessionActiveRunsConflict(
+            session_id=session_id,
+            active_runs=1,
+        )
+
+    monkeypatch.setattr(sb._service, "restore_snapshot", _raise_active_runs)
+
+    with _client(monkeypatch) as client:
+        response = client.post(
+            "/api/v1/sandbox/sessions/sess-restore-busy/restore",
+            json={"snapshot_id": "snap-123"},
+        )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {
+            "error": "session_has_active_runs",
+            "active_runs": 1,
+            "session_id": "sess-restore-busy",
+        }
+    }
+
+
+def test_create_snapshot_returns_conflict_when_active_runs_exist(monkeypatch) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
+
+    monkeypatch.setattr(sb, "_require_session_owner", lambda session_id, current_user: "1")
+
+    def _raise_active_runs(session_id: str) -> dict[str, Any]:
+        raise SessionActiveRunsConflict(
+            session_id=session_id,
+            active_runs=1,
+        )
+
+    monkeypatch.setattr(sb._service, "create_snapshot", _raise_active_runs)
+
+    with _client(monkeypatch) as client:
+        response = client.post("/api/v1/sandbox/sessions/sess-snapshot-busy/snapshot")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {
+            "error": "session_has_active_runs",
+            "active_runs": 1,
+            "session_id": "sess-snapshot-busy",
+        }
+    }
+
+
+def test_clone_session_returns_conflict_when_active_runs_exist(monkeypatch) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
+
+    monkeypatch.setattr(sb, "_require_session_owner", lambda session_id, current_user: "1")
+
+    def _raise_active_runs(session_id: str, new_name: str | None = None):
+        raise SessionActiveRunsConflict(
+            session_id=session_id,
+            active_runs=1,
+        )
+
+    monkeypatch.setattr(sb._service, "clone_session", _raise_active_runs)
+
+    with _client(monkeypatch) as client:
+        response = client.post(
+            "/api/v1/sandbox/sessions/sess-clone-busy/clone",
+            json={"new_session_name": "copy"},
+        )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {
+            "error": "session_has_active_runs",
+            "active_runs": 1,
+            "session_id": "sess-clone-busy",
+        }
+    }

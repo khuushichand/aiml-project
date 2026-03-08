@@ -4,11 +4,15 @@ import asyncio
 import base64
 import binascii
 import contextlib
+import hashlib
 import os
+import shutil
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from typing import Any
 
 from loguru import logger
 
@@ -62,6 +66,66 @@ _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
 )
 
+try:
+    import fcntl  # type: ignore
+    _SANDBOX_SERVICE_HAS_FCNTL = True
+except Exception:
+    _SANDBOX_SERVICE_HAS_FCNTL = False
+
+try:
+    import msvcrt  # type: ignore
+    _SANDBOX_SERVICE_HAS_MSVCRT = True
+except Exception:
+    _SANDBOX_SERVICE_HAS_MSVCRT = False
+
+_SANDBOX_WORKSPACE_FALLBACK_LOCKS: dict[str, threading.Lock] = {}
+_SANDBOX_WORKSPACE_FALLBACK_LOCKS_GUARD = threading.Lock()
+
+
+def _get_sandbox_workspace_thread_lock(lock_path: str) -> threading.Lock:
+    key = str(os.path.abspath(lock_path))
+    with _SANDBOX_WORKSPACE_FALLBACK_LOCKS_GUARD:
+        lock = _SANDBOX_WORKSPACE_FALLBACK_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _SANDBOX_WORKSPACE_FALLBACK_LOCKS[key] = lock
+    return lock
+
+
+def _acquire_workspace_file_lock(lock_path: str) -> tuple[str, Any]:
+    if _SANDBOX_SERVICE_HAS_FCNTL:
+        handle = open(lock_path, "a", encoding="utf-8")
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return ("fcntl", handle)
+
+    if _SANDBOX_SERVICE_HAS_MSVCRT:
+        handle = open(lock_path, "a+b")
+        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+            handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return ("msvcrt", handle)
+
+    lock = _get_sandbox_workspace_thread_lock(lock_path)
+    lock.acquire()
+    return ("thread", lock)
+
+
+def _release_workspace_file_lock(lock_handle: tuple[str, Any]) -> None:
+    kind, handle = lock_handle
+    if kind == "fcntl":
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+        return
+
+    if kind == "msvcrt":
+        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+            handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        handle.close()
+        return
+
+    handle.release()
+
 
 class SandboxService:
     """High-level orchestrator facade for sandbox operations.
@@ -84,7 +148,7 @@ class SandboxService:
             storage_path=os.getenv("SANDBOX_SNAPSHOT_PATH")
         )
         self._snapshot_locks_guard = threading.RLock()
-        self._snapshot_locks: dict[str, threading.RLock] = {}
+        self._snapshot_locks: dict[str, threading.Lock] = {}
         self._maintenance_lock = threading.RLock()
         self._maintenance_stop = threading.Event()
         self._maintenance_thread: threading.Thread | None = None
@@ -833,12 +897,7 @@ class SandboxService:
 
     def destroy_session(self, session_id: str) -> bool:
         try:
-            destroyed = bool(self._orch.destroy_session(session_id))
-            if destroyed:
-                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
-                    with self._snapshot_lock(session_id):
-                        self._snapshots.cleanup_session_snapshots(session_id)
-            return destroyed
+            return self._destroy_session_serialized(session_id)
         except SessionActiveRunsConflict:
             timeout_sec = 10.0
             try:
@@ -891,12 +950,7 @@ class SandboxService:
                     )
                 time.sleep(0.05)
 
-            destroyed = bool(self._orch.destroy_session(session_id))
-            if destroyed:
-                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
-                    with self._snapshot_lock(session_id):
-                        self._snapshots.cleanup_session_snapshots(session_id)
-            return destroyed
+            return self._destroy_session_serialized(session_id)
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"destroy_session failed: {e}")
             return False
@@ -935,7 +989,14 @@ class SandboxService:
         )
         # Validate Firecracker kernel/rootfs when real execution is enabled
         self._validate_firecracker_config(spec)
-        status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
+        session_id = str(spec.session_id or "").strip() if getattr(spec, "session_id", None) is not None else ""
+        if session_id:
+            with self._workspace_operation_lock(session_id):
+                if self._orch.get_session(session_id, allow_cache_on_store_error=False) is None:
+                    raise ValueError("session_not_found")
+                status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
+        else:
+            status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
         # Configure stdin caps in hub if interactive is requested (spec 1.1)
         try:
             interactive = bool(spec.interactive) if getattr(spec, "interactive", None) is not None else False
@@ -1376,14 +1437,142 @@ class SandboxService:
     # Snapshot Operations
     # -----------------
 
-    def _snapshot_lock(self, session_id: str) -> threading.RLock:
+    def _snapshot_lock(self, session_id: str) -> threading.Lock:
         sid = str(session_id or "")
         with self._snapshot_locks_guard:
             lock = self._snapshot_locks.get(sid)
             if lock is None:
-                lock = threading.RLock()
+                lock = threading.Lock()
                 self._snapshot_locks[sid] = lock
             return lock
+
+    def _workspace_operation_lock_dir(self) -> str:
+        raw_root = ""
+        try:
+            raw_root = str(
+                os.getenv("SANDBOX_ROOT_DIR")
+                or getattr(app_settings, "SANDBOX_ROOT_DIR", "")
+                or ""
+            ).strip()
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            raw_root = ""
+        if raw_root:
+            base_dir = os.path.join(os.path.abspath(raw_root), ".sandbox-workspace-locks")
+        else:
+            base_dir = os.path.join(tempfile.gettempdir(), "tldw-sandbox-workspace-locks")
+        os.makedirs(base_dir, exist_ok=True)
+        return base_dir
+
+    def _workspace_operation_lock_path(self, session_id: str, workspace_root: str | None = None) -> str:
+        sid = str(session_id or "").strip()
+        if sid:
+            lock_key = f"session:{sid}"
+        else:
+            workspace_path = os.path.abspath(str(workspace_root or "")).strip()
+            if not workspace_path:
+                raise ValueError("Session not found or no workspace")
+            lock_key = f"workspace:{workspace_path}"
+        digest = hashlib.sha256(lock_key.encode("utf-8")).hexdigest()
+        return os.path.join(self._workspace_operation_lock_dir(), f"{digest}.lock")
+
+    def _resolve_workspace_operation_root(self, session_id: str, workspace_root: str | None = None) -> str:
+        sid = str(session_id or "").strip()
+        if sid:
+            live_ws = str(
+                self._orch.get_session_workspace_path(
+                    sid,
+                    allow_cache_on_store_error=False,
+                ) or ""
+            ).strip()
+            if not live_ws:
+                raise ValueError("session_not_found")
+            return live_ws
+        ws = str(workspace_root or "").strip()
+        if not ws:
+            raise ValueError("Session not found or no workspace")
+        return ws
+
+    @contextlib.contextmanager
+    def _workspace_operation_lock(self, session_id: str, workspace_root: str | None = None):
+        sid = str(session_id or "").strip()
+        with self._snapshot_lock(sid):
+            lock_path = self._workspace_operation_lock_path(sid, workspace_root)
+            lock_handle = _acquire_workspace_file_lock(lock_path)
+            try:
+                ws = self._resolve_workspace_operation_root(sid, workspace_root)
+                yield ws
+            finally:
+                _release_workspace_file_lock(lock_handle)
+
+    @contextlib.asynccontextmanager
+    async def async_workspace_operation_lock(self, session_id: str, workspace_root: str | None = None):
+        sid = str(session_id or "").strip()
+        thread_lock = self._snapshot_lock(sid)
+        await asyncio.to_thread(thread_lock.acquire)
+        try:
+            lock_path = self._workspace_operation_lock_path(sid, workspace_root)
+            lock_handle = await asyncio.to_thread(_acquire_workspace_file_lock, lock_path)
+            try:
+                ws = await asyncio.to_thread(self._resolve_workspace_operation_root, sid, workspace_root)
+                yield ws
+            finally:
+                await asyncio.to_thread(_release_workspace_file_lock, lock_handle)
+        finally:
+            thread_lock.release()
+
+    def _active_session_run_count(self, session_id: str) -> int:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return 0
+        return (
+            self._orch.count_runs(session_id=sid, phase=RunPhase.queued.value)
+            + self._orch.count_runs(session_id=sid, phase=RunPhase.starting.value)
+            + self._orch.count_runs(session_id=sid, phase=RunPhase.running.value)
+        )
+
+    def _ensure_no_active_session_runs(self, session_id: str) -> None:
+        active_runs = self._active_session_run_count(session_id)
+        if active_runs > 0:
+            raise SessionActiveRunsConflict(
+                session_id=str(session_id),
+                active_runs=active_runs,
+            )
+
+    def _remove_session_workspace_tree(self, workspace_root: str | None) -> None:
+        ws = str(workspace_root or "").strip()
+        if not ws:
+            return
+        ws_path = os.path.abspath(ws)
+        session_root = os.path.dirname(ws_path) if os.path.basename(ws_path) == "workspace" else ws_path
+        shutil.rmtree(session_root, ignore_errors=True)
+
+    def _cleanup_workspace_operation_lock_file(self, session_id: str, workspace_root: str | None = None) -> None:
+        lock_path = self._workspace_operation_lock_path(session_id, workspace_root)
+        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+            os.unlink(lock_path)
+
+    def _destroy_session_serialized(self, session_id: str) -> bool:
+        ws = self._orch.get_session_workspace_path(session_id)
+        if not ws:
+            destroyed = bool(self._orch.destroy_session(session_id))
+            if destroyed:
+                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                    with self._snapshot_lock(session_id):
+                        self._snapshots.cleanup_session_snapshots(session_id)
+                self._cleanup_workspace_operation_lock_file(session_id)
+            return destroyed
+
+        destroyed = False
+        with self._workspace_operation_lock(session_id, ws):
+            destroyed = bool(self._orch.destroy_session(session_id, remove_workspace_tree=False))
+            if destroyed:
+                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                    self._snapshots.cleanup_session_snapshots(session_id)
+        if destroyed:
+            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                self._remove_session_workspace_tree(ws)
+            self._cleanup_workspace_operation_lock_file(session_id, ws)
+        return destroyed
 
     def create_snapshot(self, session_id: str) -> dict:
         """Create a snapshot of a session's workspace.
@@ -1397,10 +1586,8 @@ class SandboxService:
         Raises:
             ValueError: If session not found or has no workspace.
         """
-        with self._snapshot_lock(session_id):
-            ws = self._orch.get_session_workspace_path(session_id)
-            if not ws:
-                raise ValueError("Session not found or no workspace")
+        with self._workspace_operation_lock(session_id) as ws:
+            self._ensure_no_active_session_runs(session_id)
             result = self._snapshots.create_snapshot(session_id, ws)
             deleted = self._snapshots.enforce_quota(
                 session_id,
@@ -1424,10 +1611,8 @@ class SandboxService:
         Raises:
             ValueError: If session or snapshot not found.
         """
-        with self._snapshot_lock(session_id):
-            ws = self._orch.get_session_workspace_path(session_id)
-            if not ws:
-                raise ValueError("Session not found or no workspace")
+        with self._workspace_operation_lock(session_id) as ws:
+            self._ensure_no_active_session_runs(session_id)
             return self._snapshots.restore_snapshot(session_id, snapshot_id, ws)
 
     def clone_session(self, session_id: str, new_name: str | None = None) -> Session:
@@ -1443,12 +1628,8 @@ class SandboxService:
         Raises:
             ValueError: If source session not found.
         """
-        with self._snapshot_lock(session_id):
-            # Get source session info
-            source_ws = self._orch.get_session_workspace_path(session_id)
-            if not source_ws:
-                raise ValueError("Source session not found or no workspace")
-
+        with self._workspace_operation_lock(session_id) as source_ws:
+            self._ensure_no_active_session_runs(session_id)
             source_owner = self._orch.get_session_owner(session_id)
             if not source_owner:
                 raise ValueError("Source session owner not found")
@@ -1505,7 +1686,7 @@ class SandboxService:
         Returns:
             List of snapshot metadata dictionaries.
         """
-        with self._snapshot_lock(session_id):
+        with self._workspace_operation_lock(session_id):
             return self._snapshots.list_snapshots(session_id)
 
     def delete_snapshot(self, session_id: str, snapshot_id: str) -> bool:
@@ -1518,7 +1699,7 @@ class SandboxService:
         Returns:
             True if deleted successfully.
         """
-        with self._snapshot_lock(session_id):
+        with self._workspace_operation_lock(session_id):
             return self._snapshots.delete_snapshot(session_id, snapshot_id)
 
     def get_snapshot_info(self, session_id: str, snapshot_id: str) -> dict | None:
@@ -1531,5 +1712,5 @@ class SandboxService:
         Returns:
             Snapshot metadata or None if not found.
         """
-        with self._snapshot_lock(session_id):
+        with self._workspace_operation_lock(session_id):
             return self._snapshots.get_snapshot_info(session_id, snapshot_id)
