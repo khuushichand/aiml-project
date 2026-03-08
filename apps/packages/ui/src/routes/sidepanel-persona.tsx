@@ -11,6 +11,7 @@ import { PoliciesPanel } from "@/components/PersonaGarden/PoliciesPanel"
 import { ProfilePanel } from "@/components/PersonaGarden/ProfilePanel"
 import { ScopesPanel } from "@/components/PersonaGarden/ScopesPanel"
 import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
+import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
@@ -1477,6 +1478,17 @@ const SidepanelPersona = () => {
           personaCount={catalog.length}
           connected={connected}
           sessionId={sessionId}
+        />
+      )
+    },
+    {
+      key: "voice",
+      label: t("sidepanel:persona.tabVoice", "Voice & Examples"),
+      content: (
+        <VoiceExamplesPanel
+          selectedPersonaId={selectedPersonaId}
+          selectedPersonaName={selectedPersonaName}
+          isActive={activeTab === "voice"}
         />
       )
     },

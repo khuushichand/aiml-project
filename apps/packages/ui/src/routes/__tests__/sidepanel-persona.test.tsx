@@ -248,6 +248,7 @@ describe("SidepanelPersona", () => {
     expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Persona Garden")
     expect(screen.getByRole("tab", { name: "Live Session" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Profiles" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Voice & Examples" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "State Docs" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Scopes" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Policies" })).toBeInTheDocument()

@@ -274,6 +274,36 @@ export interface PersonaProfile extends PersonaProfileSummary {
   use_persona_state_context_default?: boolean
 }
 
+export interface PersonaExemplar {
+  id: string
+  persona_id: string
+  kind: string
+  content: string
+  tone?: string | null
+  scenario_tags: string[]
+  capability_tags: string[]
+  priority: number
+  enabled: boolean
+  source_type?: string | null
+  source_ref?: string | null
+  notes?: string | null
+  created_at?: string | null
+  last_modified?: string | null
+}
+
+export type PersonaExemplarInput = {
+  kind: string
+  content: string
+  tone?: string | null
+  scenario_tags?: string[]
+  capability_tags?: string[]
+  priority?: number
+  enabled?: boolean
+  source_type?: string | null
+  source_ref?: string | null
+  notes?: string | null
+}
+
 export type ConversationSharePermission = "view"
 
 export interface ConversationShareLinkSummary {
@@ -340,6 +370,54 @@ const normalizePersonaProfile = <T extends Record<string, unknown>>(
   return {
     ...candidate,
     id: String(candidate?.id ?? candidate?.persona_id ?? "")
+  }
+}
+
+const normalizeStringArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => item.length > 0)
+}
+
+const normalizePersonaExemplar = (
+  input: Record<string, unknown> | null | undefined
+): PersonaExemplar => {
+  const candidate = input && typeof input === "object" ? input : {}
+  const priorityValue = Number(candidate?.priority)
+  return {
+    id: String(candidate?.id ?? ""),
+    persona_id: String(candidate?.persona_id ?? candidate?.personaId ?? ""),
+    kind: String(candidate?.kind ?? "style"),
+    content: String(candidate?.content ?? ""),
+    tone:
+      candidate?.tone == null || String(candidate.tone).trim() === ""
+        ? null
+        : String(candidate.tone),
+    scenario_tags: normalizeStringArray(
+      candidate?.scenario_tags ?? candidate?.scenarioTags
+    ),
+    capability_tags: normalizeStringArray(
+      candidate?.capability_tags ?? candidate?.capabilityTags
+    ),
+    priority: Number.isFinite(priorityValue) ? priorityValue : 0,
+    enabled: candidate?.enabled !== false,
+    source_type:
+      candidate?.source_type == null || String(candidate.source_type).trim() === ""
+        ? null
+        : String(candidate.source_type),
+    source_ref:
+      candidate?.source_ref == null || String(candidate.source_ref).trim() === ""
+        ? null
+        : String(candidate.source_ref),
+    notes:
+      candidate?.notes == null || String(candidate.notes).trim() === ""
+        ? null
+        : String(candidate.notes),
+    created_at:
+      candidate?.created_at == null ? null : String(candidate.created_at),
+    last_modified:
+      candidate?.last_modified == null ? null : String(candidate.last_modified)
   }
 }
 
@@ -3680,6 +3758,64 @@ export class TldwApiClient {
     return normalizePersonaProfile(
       payload as Record<string, unknown> | null | undefined
     )
+  }
+
+  async listPersonaExemplars(
+    personaId: string | number
+  ): Promise<PersonaExemplar[]> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const payload = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars`,
+      method: "GET"
+    })
+    const list = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : []
+    return list.map((item) =>
+      normalizePersonaExemplar(item as Record<string, unknown>)
+    )
+  }
+
+  async createPersonaExemplar(
+    personaId: string | number,
+    payload: PersonaExemplarInput
+  ): Promise<PersonaExemplar> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const response = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars`,
+      method: "POST",
+      body: payload
+    })
+    return normalizePersonaExemplar(response as Record<string, unknown>)
+  }
+
+  async updatePersonaExemplar(
+    personaId: string | number,
+    exemplarId: string | number,
+    payload: Partial<PersonaExemplarInput>
+  ): Promise<PersonaExemplar> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const encodedExemplarId = encodeURIComponent(String(exemplarId))
+    const response = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/${encodedExemplarId}`,
+      method: "PATCH",
+      body: payload
+    })
+    return normalizePersonaExemplar(response as Record<string, unknown>)
+  }
+
+  async deletePersonaExemplar(
+    personaId: string | number,
+    exemplarId: string | number
+  ): Promise<void> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const encodedExemplarId = encodeURIComponent(String(exemplarId))
+    await this.request<void>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/${encodedExemplarId}`,
+      method: "DELETE"
+    })
   }
 
   private isVersionConflictError(error: unknown): boolean {

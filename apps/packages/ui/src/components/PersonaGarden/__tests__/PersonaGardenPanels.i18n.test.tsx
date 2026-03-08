@@ -8,10 +8,19 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    listPersonaExemplars: () => Promise.resolve([]),
+    createPersonaExemplar: () => Promise.resolve({}),
+    updatePersonaExemplar: () => Promise.resolve({})
+  }
+}))
+
 import { PersonaGardenTabs } from "../PersonaGardenTabs"
 import { PoliciesPanel } from "../PoliciesPanel"
 import { ProfilePanel } from "../ProfilePanel"
 import { ScopesPanel } from "../ScopesPanel"
+import { VoiceExamplesPanel } from "../VoiceExamplesPanel"
 
 describe("Persona Garden panel i18n", () => {
   it("routes panel headings and helper copy through react-i18next", () => {
@@ -24,6 +33,11 @@ describe("Persona Garden panel i18n", () => {
           connected={false}
           sessionId={null}
         />
+        <VoiceExamplesPanel
+          selectedPersonaId=""
+          selectedPersonaName=""
+          isActive={false}
+        />
         <PoliciesPanel hasPendingPlan={false} />
         <ScopesPanel selectedPersonaName="" />
       </>
@@ -34,6 +48,9 @@ describe("Persona Garden panel i18n", () => {
     ).toBeInTheDocument()
     expect(
       screen.getByText("sidepanel:personaGarden.profile.noneSelected")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("sidepanel:personaGarden.voiceExamples.heading")
     ).toBeInTheDocument()
     expect(
       screen.getByText("sidepanel:personaGarden.policies.heading")
