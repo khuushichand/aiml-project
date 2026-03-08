@@ -12,7 +12,7 @@
 
 ### Task 1: Add Red Tests For Checkpoint-Aware Wait Behavior
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/tests/Workflows/adapters/test_research_adapters.py`
@@ -113,7 +113,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 
 ### Task 2: Add Durable Workflow↔Research Wait Storage
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/DB_Management/Workflows_DB.py`
@@ -184,7 +184,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 
 ### Task 3: Make Adapter-Returned Wait States First-Class In The Engine
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/Workflows/engine.py`
@@ -247,7 +247,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 
 ### Task 4: Make `deep_research_wait` Checkpoint-Aware
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/Workflows/adapters/research/wait.py`
@@ -324,7 +324,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 
 ### Task 5: Add The Async Auto-Resume Bridge
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Add: `tldw_Server_API/app/core/Workflows/research_wait_bridge.py`
@@ -405,7 +405,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 
 ### Task 6: Run Full Focused Verification And Security Checks
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-07-deep-research-workflow-checkpoint-aware-wait-implementation-plan.md`
@@ -458,3 +458,35 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
   Docs/Plans/2026-03-07-deep-research-workflow-checkpoint-aware-wait-implementation-plan.md
 git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr commit -m "docs(research): finalize checkpoint-aware wait plan"
 ```
+
+## Verification Notes
+
+- Focused backend verification passed:
+
+```bash
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate
+python -m pytest \
+  tldw_Server_API/tests/Workflows/adapters/test_research_adapters.py \
+  tldw_Server_API/tests/Workflows/test_engine_scheduler.py \
+  tldw_Server_API/tests/Workflows/test_workflows_api.py \
+  tldw_Server_API/tests/Workflows/test_workflows_db.py \
+  tldw_Server_API/tests/Research/test_research_runs_endpoint.py \
+  -q -k "deep_research_wait or research_checkpoint or workflow_research_wait"
+```
+
+Result: `15 passed, 99 deselected`
+
+- Bandit on the touched backend scope passed:
+
+```bash
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate
+python -m bandit -r \
+  tldw_Server_API/app/core/Workflows/adapters/research/wait.py \
+  tldw_Server_API/app/core/Workflows/engine.py \
+  tldw_Server_API/app/core/Workflows/research_wait_bridge.py \
+  tldw_Server_API/app/core/DB_Management/Workflows_DB.py \
+  tldw_Server_API/app/api/v1/endpoints/research_runs.py \
+  -f json -o /tmp/bandit_deep_research_workflow_checkpoint_wait.json
+```
+
+Result: `0` findings and `0` errors in `/tmp/bandit_deep_research_workflow_checkpoint_wait.json`
