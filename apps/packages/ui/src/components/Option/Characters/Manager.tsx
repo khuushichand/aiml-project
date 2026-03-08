@@ -122,6 +122,13 @@ type PersonaProfileSummary = {
   character_card_id?: number | null
   origin_character_id?: number | null
 }
+type PersonaGardenAction = "open" | "create"
+type PersonaGardenActionContext = {
+  characterId: number
+  characterName: string
+  profiles: PersonaProfileSummary[]
+  existingPersona: PersonaProfileSummary | null
+}
 const DEFAULT_ADVANCED_SECTION_STATE: AdvancedSectionState = {
   promptControl: true,
   generationSettings: false,
@@ -6047,6 +6054,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }, 0)
   }, [setSelectedCharacter, navigate])
 
+  const pendingPersonaCreateIdsRef = React.useRef<Set<number>>(new Set())
+  const [pendingPersonaCreateIds, setPendingPersonaCreateIds] = React.useState<number[]>([])
+  const pendingPersonaCreateIdSet = React.useMemo(
+    () => new Set(pendingPersonaCreateIds),
+    [pendingPersonaCreateIds]
+  )
+
   const getCharacterNumericId = React.useCallback((record: any): number | null => {
     const parsed = Number(record?.id)
     return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : null
@@ -6104,8 +6118,45 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     [getCharacterDisplayName]
   )
 
-  const openPersonaGardenForCharacter = React.useCallback(
-    async (record: any) => {
+  const setPersonaCreatePending = React.useCallback(
+    (characterId: number, pending: boolean) => {
+      const nextPendingIds = new Set(pendingPersonaCreateIdsRef.current)
+      if (pending) {
+        nextPendingIds.add(characterId)
+      } else {
+        nextPendingIds.delete(characterId)
+      }
+      pendingPersonaCreateIdsRef.current = nextPendingIds
+      setPendingPersonaCreateIds(Array.from(nextPendingIds))
+    },
+    []
+  )
+
+  const isPersonaCreatePending = React.useCallback(
+    (record: any): boolean => {
+      const characterId = getCharacterNumericId(record)
+      return characterId != null && pendingPersonaCreateIdSet.has(characterId)
+    },
+    [getCharacterNumericId, pendingPersonaCreateIdSet]
+  )
+
+  const getCreatePersonaActionLabel = React.useCallback(
+    (record: any): string =>
+      isPersonaCreatePending(record)
+        ? t("settings:manageCharacters.actions.creatingPersonaFromCharacter", {
+            defaultValue: "Creating Persona..."
+          })
+        : t("settings:manageCharacters.actions.createPersonaFromCharacter", {
+            defaultValue: "Create Persona from Character"
+          }),
+    [isPersonaCreatePending, t]
+  )
+
+  const loadPersonaGardenActionContext = React.useCallback(
+    async (
+      record: any,
+      action: PersonaGardenAction
+    ): Promise<PersonaGardenActionContext | null> => {
       const characterId = getCharacterNumericId(record)
       const characterName = getCharacterDisplayName(record)
       if (characterId == null) {
@@ -6117,50 +6168,43 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             "settings:manageCharacters.personaGarden.invalidCharacterDesc",
             {
               defaultValue:
-                "Save {{name}} to the server before opening a linked persona.",
+                action === "create"
+                  ? "Save {{name}} to the server before creating a linked persona."
+                  : "Save {{name}} to the server before opening a linked persona.",
               name: characterName
             }
           )
         })
-        return
+        return null
       }
       try {
         const profiles = await listPersonaProfiles()
-        const existingPersona = findPersonaForCharacter(profiles, characterId)
-        if (existingPersona?.id != null) {
-          navigate(
-            buildPersonaGardenRoute({
-              personaId: String(existingPersona.id),
-              tab: "profiles"
-            })
-          )
-          return
+        return {
+          characterId,
+          characterName,
+          profiles,
+          existingPersona: findPersonaForCharacter(profiles, characterId)
         }
-        notification.info({
-          message: t("settings:manageCharacters.personaGarden.noneFound", {
-            defaultValue: "No linked persona yet"
-          }),
-          description: t(
-            "settings:manageCharacters.personaGarden.noneFoundDesc",
-            {
-              defaultValue:
-                "Open Persona Garden to create a persona derived from {{name}}.",
-              name: characterName
-            }
-          )
-        })
-        navigate(buildPersonaGardenRoute({ tab: "profiles" }))
       } catch (error: any) {
         notification.error({
-          message: t("settings:manageCharacters.personaGarden.openError", {
-            defaultValue: "Failed to open Persona Garden"
-          }),
+          message: t(
+            action === "create"
+              ? "settings:manageCharacters.personaGarden.createError"
+              : "settings:manageCharacters.personaGarden.openError",
+            {
+              defaultValue:
+                action === "create"
+                  ? "Failed to create persona"
+                  : "Failed to open Persona Garden"
+            }
+          ),
           description:
             sanitizeServerErrorMessage(error?.message) ||
             t("settings:manageCharacters.notification.someError", {
               defaultValue: "Something went wrong. Please try again later"
             })
         })
+        return null
       }
     },
     [
@@ -6168,6 +6212,44 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       getCharacterDisplayName,
       getCharacterNumericId,
       listPersonaProfiles,
+      notification,
+      t
+    ]
+  )
+
+  const openPersonaGardenForCharacter = React.useCallback(
+    async (record: any) => {
+      const context = await loadPersonaGardenActionContext(record, "open")
+      if (!context) {
+        return
+      }
+      const { characterName, existingPersona } = context
+      if (existingPersona?.id != null) {
+        navigate(
+          buildPersonaGardenRoute({
+            personaId: String(existingPersona.id),
+            tab: "profiles"
+          })
+        )
+        return
+      }
+      notification.info({
+        message: t("settings:manageCharacters.personaGarden.noneFound", {
+          defaultValue: "No linked persona yet"
+        }),
+        description: t(
+          "settings:manageCharacters.personaGarden.noneFoundDesc",
+          {
+            defaultValue:
+              "Open Persona Garden to create a persona derived from {{name}}.",
+            name: characterName
+          }
+        )
+      })
+      navigate(buildPersonaGardenRoute({ tab: "profiles" }))
+    },
+    [
+      loadPersonaGardenActionContext,
       navigate,
       notification,
       t
@@ -6177,26 +6259,17 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const createPersonaFromCharacter = React.useCallback(
     async (record: any) => {
       const characterId = getCharacterNumericId(record)
-      const characterName = getCharacterDisplayName(record)
-      if (characterId == null) {
-        notification.warning({
-          message: t("settings:manageCharacters.personaGarden.invalidCharacter", {
-            defaultValue: "Character missing a numeric ID"
-          }),
-          description: t(
-            "settings:manageCharacters.personaGarden.invalidCharacterDesc",
-            {
-              defaultValue:
-                "Save {{name}} to the server before creating a linked persona.",
-              name: characterName
-            }
-          )
-        })
+      if (characterId == null || pendingPersonaCreateIdsRef.current.has(characterId)) {
         return
       }
+      setPersonaCreatePending(characterId, true)
       try {
-        const profiles = await listPersonaProfiles()
-        const existingPersona = findPersonaForCharacter(profiles, characterId)
+        const context = await loadPersonaGardenActionContext(record, "create")
+        if (!context) {
+          return
+        }
+        const { characterId: resolvedCharacterId, characterName, profiles, existingPersona } =
+          context
         if (existingPersona?.id != null) {
           notification.info({
             message: t("settings:manageCharacters.personaGarden.existingPersona", {
@@ -6225,7 +6298,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           method: "POST",
           body: {
             name: personaName,
-            character_card_id: characterId,
+            character_card_id: resolvedCharacterId,
             mode: "persistent_scoped"
           }
         })
@@ -6265,16 +6338,17 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               defaultValue: "Something went wrong. Please try again later"
             })
         })
+      } finally {
+        setPersonaCreatePending(characterId, false)
       }
     },
     [
       buildSuggestedPersonaName,
-      findPersonaForCharacter,
-      getCharacterDisplayName,
       getCharacterNumericId,
-      listPersonaProfiles,
+      loadPersonaGardenActionContext,
       navigate,
       notification,
+      setPersonaCreatePending,
       t
     ]
   )
@@ -8516,12 +8590,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                           {
                             key: "create-persona",
                             icon: <UserCircle2 className="w-4 h-4" />,
-                            label: t(
-                              "settings:manageCharacters.actions.createPersonaFromCharacter",
-                              {
-                                defaultValue: "Create Persona from Character"
-                              }
-                            ),
+                            label: getCreatePersonaActionLabel(record),
+                            disabled: isPersonaCreatePending(record),
                             onClick: () => {
                               void createPersonaFromCharacter(record)
                             }
@@ -8750,6 +8820,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             setPreviewCharacter(null)
           }
         }}
+        creatingPersonaFromCharacter={
+          previewCharacter ? isPersonaCreatePending(previewCharacter) : false
+        }
         attachedWorldBooks={previewCharacterWorldBooks}
         attachedWorldBooksLoading={previewCharacterWorldBooksLoading}
         launchedFromWorldBooks={crossNavigationContext.launchedFromWorldBooks}

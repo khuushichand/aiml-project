@@ -6517,20 +6517,20 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 raise InputError(  # noqa: TRY003
                     f"character_card_id '{character_card_id}' must reference an existing active character."
                 )
-            origin_character_id = int(source_character.get("id") or character_card_id)
+            origin_character_id = source_character.get("id") or character_card_id
             source_character_name = str(source_character.get("name") or "").strip()
             origin_character_name = source_character_name or None
-            origin_character_snapshot_at = str(origin_character_snapshot_at or now)
-        else:
-            if origin_character_id is not None:
-                try:
-                    origin_character_id = int(origin_character_id)
-                except (TypeError, ValueError) as exc:
-                    raise InputError("origin_character_id must be an integer when provided.") from exc  # noqa: TRY003
-            if origin_character_name is not None:
-                origin_character_name = str(origin_character_name).strip() or None
-            if origin_character_snapshot_at is not None:
-                origin_character_snapshot_at = str(origin_character_snapshot_at)
+            origin_character_snapshot_at = origin_character_snapshot_at or now
+
+        if origin_character_id is not None:
+            try:
+                origin_character_id = int(origin_character_id)
+            except (TypeError, ValueError) as exc:
+                raise InputError("origin_character_id must be an integer when provided.") from exc  # noqa: TRY003
+        if origin_character_name is not None:
+            origin_character_name = str(origin_character_name).strip() or None
+        if origin_character_snapshot_at is not None:
+            origin_character_snapshot_at = str(origin_character_snapshot_at)
 
         deleted_value = self._normalize_deleted_input(profile_data.get("deleted", False))
         version = self._parse_version_input(profile_data.get("version", 1))

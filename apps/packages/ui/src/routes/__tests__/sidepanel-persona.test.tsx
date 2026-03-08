@@ -260,7 +260,7 @@ describe("SidepanelPersona", () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",
       authMode: "single-user",
-      apiKey: "persona-key"
+      apiKey: ""
     })
     mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
       if (path.includes("/persona/catalog")) {

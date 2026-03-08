@@ -4159,6 +4159,88 @@ describe("CharactersManager first-use onboarding", () => {
     )
   })
 
+  it("disables create persona while a create request is already pending for the character", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: 7,
+      name: "Captain A",
+      description: "Command strategist",
+      system_prompt: "Lead with confidence.",
+      greeting: "Ready for orders?",
+      version: 1
+    }
+    let resolveCreate: ((value: any) => void) | null = null
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    tldwClientMock.fetchWithAuth.mockImplementation((path: string, init?: any) => {
+      if (path === "/api/v1/persona/profiles?limit=200") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path === "/api/v1/persona/profiles" && init?.method === "POST") {
+        return new Promise((resolve) => {
+          resolveCreate = resolve
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Create Persona from Character" })
+    )
+
+    await waitFor(() => {
+      expect(
+        tldwClientMock.fetchWithAuth.mock.calls.filter(
+          ([path, init]) =>
+            path === "/api/v1/persona/profiles" && init?.method === "POST"
+        )
+      ).toHaveLength(1)
+    })
+
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    const pendingCreateItem = await screen.findByRole("menuitem", {
+      name: "Creating Persona..."
+    })
+    expect(pendingCreateItem).toHaveAttribute("aria-disabled", "true")
+
+    resolveCreate?.({
+      ok: true,
+      json: async () => ({ id: "persona-captain-a" })
+    })
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith(
+        "/persona?persona_id=persona-captain-a&tab=profiles"
+      )
+    })
+  }, 15000)
+
   it("opens the existing derived persona in Persona Garden from row actions", async () => {
     const user = userEvent.setup()
     const characterRecord = {

@@ -16,9 +16,9 @@ import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { buildPersonaWebSocketUrl } from "@/services/persona-stream"
 import {
-  readPersonaGardenSearch,
   type PersonaGardenTabKey
 } from "@/utils/persona-garden-route"
+import { usePersonaGardenRouteBootstrap } from "@/hooks/usePersonaGardenRouteBootstrap"
 import { SidepanelHeaderSimple } from "~/components/Sidepanel/Chat/SidepanelHeaderSimple"
 
 type PersonaInfo = {
@@ -166,10 +166,6 @@ const SidepanelPersona = () => {
   const location = useLocation()
   const isOnline = useServerOnline()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
-  const routeBootstrap = React.useMemo(
-    () => readPersonaGardenSearch(location.search),
-    [location.search]
-  )
 
   const wsRef = React.useRef<WebSocket | null>(null)
   const manuallyClosingRef = React.useRef(false)
@@ -226,18 +222,11 @@ const SidepanelPersona = () => {
   const [activeSessionPersonaId, setActiveSessionPersonaId] = React.useState<string | null>(
     null
   )
-
-  React.useEffect(() => {
-    if (routeBootstrap.tab) {
-      setActiveTab(routeBootstrap.tab)
-    }
-  }, [routeBootstrap.tab])
-
-  React.useEffect(() => {
-    if (routeBootstrap.personaId) {
-      setSelectedPersonaId(routeBootstrap.personaId)
-    }
-  }, [routeBootstrap.personaId])
+  const routeBootstrap = usePersonaGardenRouteBootstrap({
+    search: location.search,
+    setActiveTab,
+    setSelectedPersonaId
+  })
 
   const getUnsavedStateDiscardPrompt = React.useCallback(
     (reason: UnsavedStateDiscardReason): string => {

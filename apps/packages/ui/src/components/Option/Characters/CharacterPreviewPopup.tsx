@@ -30,6 +30,7 @@ interface CharacterPreviewPopupProps {
   onCreatePersonaFromCharacter: () => void
   onOpenPersonaGarden: () => void
   onViewVersionHistory: () => void
+  creatingPersonaFromCharacter?: boolean
   attachedWorldBooks?: Array<{ id: number; name: string }>
   attachedWorldBooksLoading?: boolean
   launchedFromWorldBooks?: boolean
@@ -53,6 +54,7 @@ export function CharacterPreviewPopup({
   onCreatePersonaFromCharacter,
   onOpenPersonaGarden,
   onViewVersionHistory,
+  creatingPersonaFromCharacter = false,
   attachedWorldBooks = [],
   attachedWorldBooksLoading = false,
   launchedFromWorldBooks = false,
@@ -113,9 +115,13 @@ export function CharacterPreviewPopup({
     }
   )
   const createPersonaLabel = t(
-    "settings:manageCharacters.actions.createPersonaFromCharacter",
+    creatingPersonaFromCharacter
+      ? "settings:manageCharacters.actions.creatingPersonaFromCharacter"
+      : "settings:manageCharacters.actions.createPersonaFromCharacter",
     {
-      defaultValue: "Create Persona from Character"
+      defaultValue: creatingPersonaFromCharacter
+        ? "Creating Persona..."
+        : "Create Persona from Character"
     }
   )
   const openPersonaGardenLabel = t(
@@ -323,6 +329,7 @@ export function CharacterPreviewPopup({
                     key: "create-persona",
                     icon: <UserCircle2 className="w-4 h-4" />,
                     label: createPersonaLabel,
+                    disabled: creatingPersonaFromCharacter,
                     onClick: onCreatePersonaFromCharacter
                   },
                   {

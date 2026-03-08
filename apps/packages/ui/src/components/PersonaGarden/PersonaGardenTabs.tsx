@@ -1,4 +1,5 @@
 import React from "react"
+import { useTranslation } from "react-i18next"
 
 export type PersonaGardenTabItem = {
   key: string
@@ -17,11 +18,15 @@ export const PersonaGardenTabs: React.FC<PersonaGardenTabsProps> = ({
   items,
   onChange
 }) => {
+  const { t } = useTranslation(["sidepanel", "common"])
+
   return (
     <div className="flex flex-1 flex-col gap-3">
       <div
         role="tablist"
-        aria-label="Persona Garden sections"
+        aria-label={t("sidepanel:personaGarden.tabs.ariaLabel", {
+          defaultValue: "Persona Garden sections"
+        })}
         className="flex flex-wrap gap-2"
       >
         {items.map((item) => {
