@@ -197,6 +197,16 @@ export type State = {
   setServerChatTitle: (title: string | null) => void
   serverChatCharacterId: string | number | null
   setServerChatCharacterId: (id: string | number | null) => void
+  serverChatAssistantKind: "character" | "persona" | null
+  setServerChatAssistantKind: (
+    kind: "character" | "persona" | null
+  ) => void
+  serverChatAssistantId: string | null
+  setServerChatAssistantId: (id: string | null) => void
+  serverChatPersonaMemoryMode: "read_only" | "read_write" | null
+  setServerChatPersonaMemoryMode: (
+    mode: "read_only" | "read_write" | null
+  ) => void
   serverChatMetaLoaded: boolean
   setServerChatMetaLoaded: (loaded: boolean) => void
   serverChatLoadState: "idle" | "loading" | "loaded" | "failed"

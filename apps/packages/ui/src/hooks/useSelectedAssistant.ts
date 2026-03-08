@@ -63,18 +63,27 @@ export const useSelectedAssistant = (
     () => normalizeAssistantSelection(initialValue),
     [initialValue]
   )
-  const [selectedAssistant, setSelectedAssistant, meta] = useStorage<
-    AssistantSelection | null
-  >(
+  const storageResult = useStorage<AssistantSelection | null>(
     { key: SELECTED_ASSISTANT_STORAGE_KEY, instance: selectedAssistantStorage },
     normalizedInitialValue
-  )
+  ) as readonly [
+    AssistantSelection | null,
+    (value: AssistantSelection | null) => Promise<void> | void,
+    | {
+        isLoading?: boolean
+        setRenderValue?: (value: AssistantSelection | null) => void
+      }
+    | undefined
+  ]
+  const [selectedAssistant, setSelectedAssistant, meta] = storageResult
   const migratedRef = React.useRef(false)
-  const setRenderValueRef = React.useRef(meta.setRenderValue)
+  const setRenderValueRef = React.useRef(
+    meta?.setRenderValue ?? (() => undefined)
+  )
 
   React.useEffect(() => {
-    setRenderValueRef.current = meta.setRenderValue
-  }, [meta.setRenderValue])
+    setRenderValueRef.current = meta?.setRenderValue ?? (() => undefined)
+  }, [meta?.setRenderValue])
 
   React.useEffect(() => {
     const subscriber: Subscriber = (value) => {
@@ -98,7 +107,7 @@ export const useSelectedAssistant = (
   )
 
   React.useEffect(() => {
-    if (meta.isLoading || migratedRef.current) return
+    if (meta?.isLoading || migratedRef.current) return
 
     const normalizedLocalSelection = normalizeAssistantSelection(
       parseSelectedAssistantValue(selectedAssistant)
@@ -158,11 +167,14 @@ export const useSelectedAssistant = (
     return () => {
       cancelled = true
     }
-  }, [meta.isLoading, selectedAssistant, setSelectedAssistantWithBroadcast])
+  }, [meta?.isLoading, selectedAssistant, setSelectedAssistantWithBroadcast])
 
   return [
     normalizeAssistantSelection(parseSelectedAssistantValue(selectedAssistant)),
     setSelectedAssistantWithBroadcast,
-    meta
+    {
+      isLoading: meta?.isLoading ?? false,
+      setRenderValue: meta?.setRenderValue ?? (() => undefined)
+    }
   ] as const
 }

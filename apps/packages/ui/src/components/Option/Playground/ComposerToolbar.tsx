@@ -12,7 +12,7 @@ import {
   ChevronDown
 } from "lucide-react"
 import { PromptSelect } from "@/components/Common/PromptSelect"
-import { CharacterSelect } from "@/components/Common/CharacterSelect"
+import { AssistantSelect } from "@/components/Common/AssistantSelect"
 import { Button as TldwButton } from "@/components/Common/Button"
 import { ConnectionStatus } from "@/components/Layouts/ConnectionStatus"
 import {
@@ -440,7 +440,8 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
 
   const characterSelectControl = React.useMemo(
     () => (
-      <CharacterSelect
+      <AssistantSelect
+        variant="dropdown"
         showLabel={isProMode ? undefined : false}
         iconClassName="h-4 w-4"
         className="text-text-muted hover:text-text"
