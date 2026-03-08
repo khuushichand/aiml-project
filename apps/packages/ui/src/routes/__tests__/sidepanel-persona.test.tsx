@@ -233,6 +233,11 @@ describe("SidepanelPersona", () => {
     render(<SidepanelPersona />)
 
     expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Persona Garden")
+    expect(screen.getByRole("tab", { name: "Live Session" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Profiles" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "State Docs" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Scopes" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Policies" })).toBeInTheDocument()
     expect(screen.getByTestId("persona-memory-toggle")).toBeInTheDocument()
     expect(screen.getByTestId("persona-resume-session-select")).toBeInTheDocument()
   })
