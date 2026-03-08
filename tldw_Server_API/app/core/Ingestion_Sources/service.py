@@ -560,6 +560,32 @@ async def get_latest_source_snapshot(
     return result
 
 
+async def list_source_snapshots(
+    db,
+    *,
+    source_id: int,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    query = """
+        SELECT id, source_id, snapshot_kind, status, summary_json, created_at
+        FROM ingestion_source_snapshots
+        WHERE source_id = ?
+    """
+    params: list[Any] = [int(source_id)]
+    if status is not None:
+        query += " AND status = ?"
+        params.append(str(status))
+    query += " ORDER BY id DESC"
+    cursor = await db.execute(query, tuple(params))
+    rows = await cursor.fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        result = _row_to_dict(row)
+        result["summary"] = _json_loads(result.pop("summary_json", None), {})
+        results.append(result)
+    return results
+
+
 async def update_source_snapshot(
     db,
     *,
@@ -588,6 +614,17 @@ async def update_source_snapshot(
     )
     updated = await get_source_snapshot_by_id(db, snapshot_id=snapshot_id)
     return updated or {}
+
+
+async def delete_source_snapshot(
+    db,
+    *,
+    snapshot_id: int,
+) -> None:
+    await db.execute(
+        "DELETE FROM ingestion_source_snapshots WHERE id = ?",
+        (int(snapshot_id),),
+    )
 
 
 async def create_source_artifact(
@@ -653,6 +690,43 @@ async def get_source_artifact_by_id(
     if row is None:
         return None
     return _deserialize_source_artifact_row(row)
+
+
+async def list_source_artifacts(
+    db,
+    *,
+    source_id: int,
+    snapshot_id: int | None = None,
+    artifact_kind: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    query = """
+        SELECT
+            id,
+            source_id,
+            snapshot_id,
+            artifact_kind,
+            status,
+            storage_path,
+            metadata_json,
+            created_at
+        FROM ingestion_source_artifacts
+        WHERE source_id = ?
+    """
+    params: list[Any] = [int(source_id)]
+    if snapshot_id is not None:
+        query += " AND snapshot_id = ?"
+        params.append(int(snapshot_id))
+    if artifact_kind is not None:
+        query += " AND artifact_kind = ?"
+        params.append(str(artifact_kind))
+    if status is not None:
+        query += " AND status = ?"
+        params.append(str(status))
+    query += " ORDER BY id DESC"
+    cursor = await db.execute(query, tuple(params))
+    rows = await cursor.fetchall()
+    return [_deserialize_source_artifact_row(row) for row in rows]
 
 
 async def get_latest_source_artifact(
@@ -732,6 +806,17 @@ async def update_source_artifact(
     )
     updated = await get_source_artifact_by_id(db, artifact_id=artifact_id)
     return updated or {}
+
+
+async def delete_source_artifact(
+    db,
+    *,
+    artifact_id: int,
+) -> None:
+    await db.execute(
+        "DELETE FROM ingestion_source_artifacts WHERE id = ?",
+        (int(artifact_id),),
+    )
 
 
 async def list_source_items(

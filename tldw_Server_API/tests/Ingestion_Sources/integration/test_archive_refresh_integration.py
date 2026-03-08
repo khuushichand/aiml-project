@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import io
 import json
+from pathlib import Path
 
 import aiosqlite
 import pytest
@@ -318,3 +319,247 @@ async def test_archive_sync_rebuilds_items_from_persisted_artifact_when_snapshot
         artifact_row = await artifact_cur.fetchone()
         assert artifact_row is not None
         assert artifact_row["status"] == "active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_archive_sync_prunes_superseded_success_snapshot_and_artifact_when_retention_is_one(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+    monkeypatch.setenv("INGESTION_SOURCES_SUCCESSFUL_SNAPSHOT_RETENTION_COUNT", "1")
+
+    import tldw_Server_API.app.services.ingestion_sources_worker as worker
+    from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import persist_archive_artifact
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        create_source_snapshot,
+        ensure_ingestion_sources_schema,
+        update_source_artifact,
+    )
+
+    old_buffer = io.BytesIO()
+    with zipfile.ZipFile(old_buffer, "w") as archive:
+        archive.writestr("export/alpha.md", "# Alpha\n\nold body\n")
+    new_buffer = io.BytesIO()
+    with zipfile.ZipFile(new_buffer, "w") as archive:
+        archive.writestr("export/alpha.md", "# Alpha\n\nnew body\n")
+
+    meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+    async with aiosqlite.connect(str(meta_db_path)) as db:
+        db.row_factory = aiosqlite.Row
+        await ensure_ingestion_sources_schema(db)
+        source = await create_source(
+            db,
+            user_id=1,
+            payload={
+                "source_type": "archive_snapshot",
+                "sink_type": "notes",
+                "policy": "canonical",
+                "config": {},
+            },
+        )
+        previous_snapshot = await create_source_snapshot(
+            db,
+            source_id=int(source["id"]),
+            snapshot_kind="archive_snapshot",
+            status="success",
+            summary={"filename": "notes-v1.zip", "item_count": 1},
+        )
+        previous_artifact = await persist_archive_artifact(
+            db,
+            user_id=1,
+            source_id=int(source["id"]),
+            snapshot_id=int(previous_snapshot["id"]),
+            filename="notes-v1.zip",
+            archive_bytes=old_buffer.getvalue(),
+        )
+        await update_source_artifact(
+            db,
+            artifact_id=int(previous_artifact["id"]),
+            status="active",
+        )
+        await db.execute(
+            "UPDATE ingestion_source_state SET last_successful_snapshot_id = ? WHERE source_id = ?",
+            (int(previous_snapshot["id"]), int(source["id"])),
+        )
+
+        staged_snapshot = await create_source_snapshot(
+            db,
+            source_id=int(source["id"]),
+            snapshot_kind="archive_snapshot",
+            status="staged",
+            summary={"filename": "notes-v2.zip", "item_count": 1},
+        )
+        staged_artifact = await persist_archive_artifact(
+            db,
+            user_id=1,
+            source_id=int(source["id"]),
+            snapshot_id=int(staged_snapshot["id"]),
+            filename="notes-v2.zip",
+            archive_bytes=new_buffer.getvalue(),
+        )
+        await db.execute(
+            "UPDATE ingestion_source_snapshots SET summary_json = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {
+                        "filename": "notes-v2.zip",
+                        "artifact_id": int(staged_artifact["id"]),
+                        "item_count": 1,
+                    }
+                ),
+                int(staged_snapshot["id"]),
+            ),
+        )
+
+        async def _fake_get_db_pool():
+            return _SQLitePool(db)
+
+        monkeypatch.setattr(worker, "get_db_pool", _fake_get_db_pool, raising=False)
+
+        jm = _FakeJobManager()
+        old_storage_path = str(previous_artifact["storage_path"])
+        new_storage_path = str(staged_artifact["storage_path"])
+        await worker._process_sync_job(
+            jm,
+            jid=93,
+            lease_id="lease-93",
+            worker_id="worker-1",
+            source_id=int(source["id"]),
+            user_id=1,
+        )
+
+        assert jm.failed is None
+        assert jm.completed is not None
+
+        snapshot_cur = await db.execute(
+            "SELECT id, status FROM ingestion_source_snapshots WHERE source_id = ? ORDER BY id ASC",
+            (int(source["id"]),),
+        )
+        remaining_snapshots = await snapshot_cur.fetchall()
+        assert len(remaining_snapshots) == 1
+        assert remaining_snapshots[0]["id"] == int(staged_snapshot["id"])
+        assert remaining_snapshots[0]["status"] == "success"
+
+        artifact_cur = await db.execute(
+            "SELECT id, status, storage_path FROM ingestion_source_artifacts WHERE source_id = ? ORDER BY id ASC",
+            (int(source["id"]),),
+        )
+        remaining_artifacts = await artifact_cur.fetchall()
+        assert len(remaining_artifacts) == 1
+        assert remaining_artifacts[0]["id"] == int(staged_artifact["id"])
+        assert remaining_artifacts[0]["status"] == "active"
+        assert remaining_artifacts[0]["storage_path"] == new_storage_path
+        assert not Path(old_storage_path).exists()
+        assert Path(new_storage_path).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_prune_archive_source_retention_removes_expired_failed_and_staged_candidates(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+
+    from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import (
+        persist_archive_artifact,
+        prune_archive_source_retention,
+    )
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        create_source_snapshot,
+        ensure_ingestion_sources_schema,
+        update_source_artifact,
+    )
+
+    failed_buffer = io.BytesIO()
+    with zipfile.ZipFile(failed_buffer, "w") as archive:
+        archive.writestr("export/failed.md", "# Failed\n\nbody\n")
+    staged_buffer = io.BytesIO()
+    with zipfile.ZipFile(staged_buffer, "w") as archive:
+        archive.writestr("export/staged.md", "# Staged\n\nbody\n")
+
+    meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+    async with aiosqlite.connect(str(meta_db_path)) as db:
+        db.row_factory = aiosqlite.Row
+        await ensure_ingestion_sources_schema(db)
+        source = await create_source(
+            db,
+            user_id=1,
+            payload={
+                "source_type": "archive_snapshot",
+                "sink_type": "notes",
+                "policy": "canonical",
+                "config": {},
+            },
+        )
+        failed_snapshot = await create_source_snapshot(
+            db,
+            source_id=int(source["id"]),
+            snapshot_kind="archive_snapshot",
+            status="failed",
+            summary={"filename": "failed.zip"},
+        )
+        failed_artifact = await persist_archive_artifact(
+            db,
+            user_id=1,
+            source_id=int(source["id"]),
+            snapshot_id=int(failed_snapshot["id"]),
+            filename="failed.zip",
+            archive_bytes=failed_buffer.getvalue(),
+        )
+        await update_source_artifact(
+            db,
+            artifact_id=int(failed_artifact["id"]),
+            status="failed",
+        )
+
+        staged_snapshot = await create_source_snapshot(
+            db,
+            source_id=int(source["id"]),
+            snapshot_kind="archive_snapshot",
+            status="staged",
+            summary={"filename": "staged.zip"},
+        )
+        staged_artifact = await persist_archive_artifact(
+            db,
+            user_id=1,
+            source_id=int(source["id"]),
+            snapshot_id=int(staged_snapshot["id"]),
+            filename="staged.zip",
+            archive_bytes=staged_buffer.getvalue(),
+        )
+
+        failed_storage_path = str(failed_artifact["storage_path"])
+        staged_storage_path = str(staged_artifact["storage_path"])
+        result = await prune_archive_source_retention(
+            db,
+            source_id=int(source["id"]),
+            successful_snapshots_to_keep=1,
+            failed_snapshot_max_age_seconds=0,
+            staged_snapshot_max_age_seconds=0,
+        )
+
+        assert result == {
+            "deleted_snapshots": 2,
+            "deleted_artifacts": 2,
+            "deleted_files": 2,
+        }
+        snapshot_cur = await db.execute(
+            "SELECT COUNT(*) AS cnt FROM ingestion_source_snapshots WHERE source_id = ?",
+            (int(source["id"]),),
+        )
+        assert (await snapshot_cur.fetchone())["cnt"] == 0
+
+        artifact_cur = await db.execute(
+            "SELECT COUNT(*) AS cnt FROM ingestion_source_artifacts WHERE source_id = ?",
+            (int(source["id"]),),
+        )
+        assert (await artifact_cur.fetchone())["cnt"] == 0
+        assert not Path(failed_storage_path).exists()
+        assert not Path(staged_storage_path).exists()

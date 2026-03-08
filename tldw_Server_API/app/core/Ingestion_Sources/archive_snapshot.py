@@ -3,9 +3,11 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
+import os
 import stat
 import tempfile
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any
@@ -20,7 +22,13 @@ from tldw_Server_API.app.core.Ingestion_Sources.local_directory import (
     MEDIA_SUPPORTED_SUFFIXES,
     NOTES_SUPPORTED_SUFFIXES,
 )
-from tldw_Server_API.app.core.Ingestion_Sources.service import create_source_artifact
+from tldw_Server_API.app.core.Ingestion_Sources.service import (
+    create_source_artifact,
+    delete_source_artifact,
+    delete_source_snapshot,
+    list_source_artifacts,
+    list_source_snapshots,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files import (
     convert_document_to_text,
 )
@@ -226,6 +234,122 @@ def build_archive_snapshot_from_bytes(
 ) -> dict[str, dict[str, Any]]:
     members = validate_archive_members(archive_bytes, filename=filename)
     return build_archive_snapshot(members)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_created_at(value: Any) -> datetime:
+    raw = str(value or "").strip()
+    if not raw:
+        return _utc_now()
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return _utc_now()
+
+
+def _retention_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _remove_storage_path(storage_path: str | None) -> bool:
+    if not storage_path:
+        return False
+    path = Path(str(storage_path))
+    removed = False
+    with contextlib.suppress(FileNotFoundError, OSError):
+        path.unlink()
+        removed = True
+    current = path.parent
+    for _ in range(3):
+        with contextlib.suppress(OSError):
+            current.rmdir()
+        current = current.parent
+    return removed
+
+
+async def prune_archive_source_retention(
+    db,
+    *,
+    source_id: int,
+    successful_snapshots_to_keep: int | None = None,
+    failed_snapshot_max_age_seconds: int | None = None,
+    staged_snapshot_max_age_seconds: int | None = None,
+) -> dict[str, int]:
+    success_keep_count = max(
+        1,
+        successful_snapshots_to_keep
+        if successful_snapshots_to_keep is not None
+        else _retention_int("INGESTION_SOURCES_SUCCESSFUL_SNAPSHOT_RETENTION_COUNT", 3),
+    )
+    failed_max_age = (
+        failed_snapshot_max_age_seconds
+        if failed_snapshot_max_age_seconds is not None
+        else _retention_int("INGESTION_SOURCES_FAILED_SNAPSHOT_RETENTION_SECONDS", 86400)
+    )
+    staged_max_age = (
+        staged_snapshot_max_age_seconds
+        if staged_snapshot_max_age_seconds is not None
+        else _retention_int("INGESTION_SOURCES_STAGED_SNAPSHOT_RETENTION_SECONDS", 3600)
+    )
+
+    snapshots = await list_source_snapshots(db, source_id=source_id)
+    artifacts = await list_source_artifacts(db, source_id=source_id, artifact_kind="archive_upload")
+    artifacts_by_snapshot: dict[int, list[dict[str, Any]]] = {}
+    for artifact in artifacts:
+        snapshot_id = artifact.get("snapshot_id")
+        if snapshot_id is None:
+            continue
+        artifacts_by_snapshot.setdefault(int(snapshot_id), []).append(artifact)
+
+    now = _utc_now()
+    success_snapshot_ids = [
+        int(snapshot["id"])
+        for snapshot in snapshots
+        if str(snapshot.get("status") or "").strip().lower() == "success"
+    ]
+    kept_success_ids = set(success_snapshot_ids[:success_keep_count])
+
+    deleted_snapshots = 0
+    deleted_artifacts = 0
+    deleted_files = 0
+    for snapshot in snapshots:
+        snapshot_id = int(snapshot["id"])
+        status = str(snapshot.get("status") or "").strip().lower()
+        created_at = _parse_created_at(snapshot.get("created_at"))
+        age_seconds = max(0, int((now - created_at).total_seconds()))
+        should_delete = False
+        if status == "success":
+            should_delete = snapshot_id not in kept_success_ids
+        elif status == "failed":
+            should_delete = age_seconds >= max(0, failed_max_age)
+        elif status == "staged":
+            should_delete = age_seconds >= max(0, staged_max_age)
+
+        if not should_delete:
+            continue
+
+        for artifact in artifacts_by_snapshot.get(snapshot_id, []):
+            if _remove_storage_path(artifact.get("storage_path")):
+                deleted_files += 1
+            await delete_source_artifact(db, artifact_id=int(artifact["id"]))
+            deleted_artifacts += 1
+        await delete_source_snapshot(db, snapshot_id=snapshot_id)
+        deleted_snapshots += 1
+
+    return {
+        "deleted_snapshots": deleted_snapshots,
+        "deleted_artifacts": deleted_artifacts,
+        "deleted_files": deleted_files,
+    }
 
 
 async def apply_archive_candidate(

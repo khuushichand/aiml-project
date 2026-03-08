@@ -10,6 +10,7 @@ from loguru import logger
 from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import (
     build_archive_snapshot_from_bytes,
     load_archive_artifact_bytes,
+    prune_archive_source_retention,
 )
 from tldw_Server_API.app.core.Ingestion_Sources.diffing import diff_snapshots
 from tldw_Server_API.app.core.Ingestion_Sources.jobs import DOMAIN, ingestion_sources_queue
@@ -367,6 +368,9 @@ async def _process_sync_job(
                 outcome="success",
                 snapshot_id=int(snapshot["id"]),
             )
+            if staged_snapshot:
+                with contextlib.suppress(_NONCRITICAL_EXCEPTIONS):
+                    await prune_archive_source_retention(db, source_id=source_id)
 
         jm.complete_job(
             jid,
@@ -402,6 +406,9 @@ async def _process_sync_job(
                     outcome="failure",
                     error=str(exc),
                 )
+                if staged_snapshot:
+                    with contextlib.suppress(_NONCRITICAL_EXCEPTIONS):
+                        await prune_archive_source_retention(db, source_id=source_id)
         jm.fail_job(
             jid,
             error=str(exc),
