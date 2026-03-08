@@ -96,6 +96,7 @@ export interface ACPWSPromptCompleteMessage {
   session_id: string
   stop_reason?: string
   raw_result: Record<string, unknown>
+  usage?: ACPTokenUsage | null
 }
 
 export interface ACPWSDoneMessage {
@@ -150,6 +151,10 @@ export interface ACPSessionNewRequest {
   agent_type?: ACPAgentType
   tags?: string[]
   mcp_servers?: ACPMCPServerConfig[]
+  persona_id?: string | null
+  workspace_id?: string | null
+  workspace_group_id?: string | null
+  scope_snapshot_id?: string | null
 }
 
 export interface ACPSessionNewResponse {
@@ -161,6 +166,10 @@ export interface ACPSessionNewResponse {
   sandbox_run_id?: string | null
   ssh_ws_url?: string | null
   ssh_user?: string | null
+  persona_id?: string | null
+  workspace_id?: string | null
+  workspace_group_id?: string | null
+  scope_snapshot_id?: string | null
 }
 
 export interface ACPSessionPromptRequest {
@@ -205,6 +214,7 @@ export interface ACPSessionListItem {
   workspace_id?: string | null
   workspace_group_id?: string | null
   scope_snapshot_id?: string | null
+  forked_from?: string | null
 }
 
 export interface ACPSessionListResponse {
@@ -247,6 +257,10 @@ export interface ACPSession {
   agentType?: ACPAgentType
   tags?: string[]
   mcpServers?: ACPMCPServerConfig[]
+  personaId?: string | null
+  workspaceId?: string | null
+  workspaceGroupId?: string | null
+  scopeSnapshotId?: string | null
   state: ACPSessionState
   capabilities?: Record<string, unknown>
   sandboxSessionId?: string | null

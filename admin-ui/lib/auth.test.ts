@@ -132,6 +132,17 @@ describe('auth API key storage', () => {
     const auth = await import('./auth');
 
     expect(auth.getJWTToken()).toBeNull();
+    expect(auth.hasStoredAuth()).toBe(false);
+  });
+
+  it('treats the API-key auth mode cookie as single-user mode after reload', async () => {
+    document.cookie = 'admin_auth_mode=single_user; path=/';
+    document.cookie = 'admin_session=1; path=/';
+
+    vi.resetModules();
+    const auth = await import('./auth');
+
+    expect(auth.isSingleUserMode()).toBe(true);
     expect(auth.hasStoredAuth()).toBe(true);
   });
 });

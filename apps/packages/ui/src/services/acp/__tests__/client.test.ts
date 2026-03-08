@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
-import { ACPRestClient } from "@/services/acp/client"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { ACPRestClient, ACPWebSocketClient } from "@/services/acp/client"
 
 describe("ACPRestClient", () => {
   beforeEach(() => {
@@ -85,5 +85,77 @@ describe("ACPRestClient", () => {
         body: JSON.stringify({ message_index: 3, name: "Forked" }),
       })
     )
+  })
+})
+
+describe("ACPWebSocketClient", () => {
+  class MockWebSocket {
+    static instances: MockWebSocket[] = []
+    static CONNECTING = 0
+    static OPEN = 1
+    static CLOSING = 2
+    static CLOSED = 3
+
+    readonly url: string
+    readyState = MockWebSocket.CONNECTING
+    onopen: (() => void) | null = null
+    onclose: ((event: CloseEvent) => void) | null = null
+    onerror: ((event: Event) => void) | null = null
+    onmessage: ((event: MessageEvent) => void) | null = null
+
+    constructor(url: string) {
+      this.url = url
+      MockWebSocket.instances.push(this)
+    }
+
+    close(): void {
+      this.readyState = MockWebSocket.CLOSED
+    }
+
+    send(): void {}
+
+    open(): void {
+      this.readyState = MockWebSocket.OPEN
+      this.onopen?.()
+    }
+
+    closeWith(code: number, reason = ""): void {
+      this.readyState = MockWebSocket.CLOSED
+      this.onclose?.({ code, reason } as CloseEvent)
+    }
+  }
+
+  const createClient = () =>
+    new ACPWebSocketClient({
+      serverUrl: "http://localhost:8000",
+      getAuthHeaders: async () => ({ "X-API-KEY": "test-key" }),
+      getAuthParams: async () => ({ api_key: "test-key" }),
+    })
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    MockWebSocket.instances = []
+    vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket)
+  })
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it.each([4401, 4404, 4429])("does not reconnect for fatal close code %s", async (code) => {
+    const client = createClient()
+
+    await client.connect("sess-1")
+    expect(MockWebSocket.instances).toHaveLength(1)
+
+    const ws = MockWebSocket.instances[0]
+    ws.open()
+    ws.closeWith(code)
+
+    await vi.advanceTimersByTimeAsync(60000)
+
+    expect(MockWebSocket.instances).toHaveLength(1)
   })
 })

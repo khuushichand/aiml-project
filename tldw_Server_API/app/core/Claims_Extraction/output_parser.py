@@ -5,13 +5,16 @@ from dataclasses import dataclass
 from typing import Any
 
 from tldw_Server_API.app.core.exceptions import BadRequestError
+from tldw_Server_API.app.core.LLM_Calls.structured_generation import (
+    StructuredGenerationParseError,
+    parse_and_validate_structured_output,
+    resolve_structured_response_format,
+)
 from tldw_Server_API.app.core.LLM_Calls.structured_output import (
     StructuredOutputNoPayloadError,
-    StructuredOutputOptions,
     StructuredOutputParseError,
     StructuredOutputSchemaError,
     extract_items,
-    parse_structured_output,
 )
 
 
@@ -46,16 +49,16 @@ def parse_claims_llm_output(
 ) -> Any:
     """Parse raw model text into JSON with strict/lenient handling."""
     try:
-        return parse_structured_output(
-            text,
-            options=StructuredOutputOptions(
-                parse_mode=parse_mode,
-                strip_think_tags=strip_think_tags,
-            ),
+        return parse_and_validate_structured_output(
+            raw_text=text,
+            schema={},
+            parse_mode=parse_mode,
+            strip_think_tags=strip_think_tags,
         )
-    except StructuredOutputNoPayloadError as exc:
-        raise ClaimsOutputNoJsonError(str(exc)) from exc
-    except StructuredOutputParseError as exc:
+    except StructuredGenerationParseError as exc:
+        cause = exc.__cause__
+        if isinstance(cause, StructuredOutputNoPayloadError):
+            raise ClaimsOutputNoJsonError(str(cause)) from exc
         raise ClaimsOutputParseError(str(exc)) from exc
 
 
@@ -129,51 +132,12 @@ def resolve_claims_response_format(
     schema_name: str,
     json_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Choose response_format using capability validation with safe fallback."""
-    try:
-        from tldw_Server_API.app.core.LLM_Calls.capability_registry import get_allowed_fields
-
-        if "response_format" not in get_allowed_fields(provider):
-            return None
-    except Exception:
-        return None
-
-    capabilities: dict[str, Any] = {}
-    try:
-        from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-        from tldw_Server_API.app.core.LLM_Calls.adapter_utils import normalize_provider
-
-        adapter = get_registry().get_adapter(normalize_provider(provider))
-        if adapter is not None:
-            caps = adapter.capabilities() or {}
-            if isinstance(caps, dict):
-                capabilities = caps
-    except Exception:
-        capabilities = {}
-
-    supported_types: set[str] = set()
-    for key in ("response_format_types", "supported_response_format_types"):
-        value = capabilities.get(key)
-        if isinstance(value, (list, tuple, set)):
-            supported_types |= {str(v).strip().lower() for v in value if str(v).strip()}
-    if capabilities.get("supports_json_object") is True:
-        supported_types.add("json_object")
-    if capabilities.get("supports_json_schema") is True:
-        supported_types.add("json_schema")
-    if not supported_types:
-        supported_types = {"json_object"}
-
-    if "json_schema" in supported_types and isinstance(json_schema, dict):
-        return {
-            "type": "json_schema",
-            "json_schema": {
-                "name": schema_name,
-                "schema": json_schema,
-            },
-        }
-    if "json_object" in supported_types:
-        return {"type": "json_object"}
-    return None
+    """Choose response_format using shared structured-generation negotiation."""
+    return resolve_structured_response_format(
+        provider,
+        schema_name=schema_name,
+        json_schema=json_schema,
+    )
 
 
 __all__ = [

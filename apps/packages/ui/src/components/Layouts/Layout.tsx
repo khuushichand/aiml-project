@@ -40,6 +40,7 @@ import {
 import { useSetting } from "@/hooks/useSetting"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 import { useStoreMessageOption } from "@/store/option"
+import { usePromptPaletteCommands } from "@/components/Option/Prompt/usePromptPaletteCommands"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
@@ -225,13 +226,16 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     }
   }
 
+  const promptPaletteCommands = usePromptPaletteCommands()
+
   const commandPaletteProps = {
     onNewChat: clearChat,
     onToggleRag: () => setChatMode(chatMode === "rag" ? "normal" : "rag"),
     onToggleWebSearch: () => setWebSearch(!webSearch),
     onIngestPage: handleIngestPage,
     onSwitchModel: () => setOpenModelSettings(true),
-    onToggleSidebar: toggleSidebar
+    onToggleSidebar: toggleSidebar,
+    additionalCommands: promptPaletteCommands,
   }
 
   // Quick Chat Helper toggle

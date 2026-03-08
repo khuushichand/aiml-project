@@ -147,6 +147,39 @@ def test_chat_completion_request_requires_conversation_for_tldw_continuation():
     assert "conversation_id is required" in str(exc_info.value)
 
 
+@pytest.mark.unit
+def test_chat_completion_request_accepts_json_schema_response_format():
+    req = ChatCompletionRequest(
+        model="test-m",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Return structured")],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                },
+            },
+        },
+    )
+    assert req.response_format is not None
+    assert req.response_format.type == "json_schema"
+    assert req.response_format.json_schema is not None
+    assert req.response_format.json_schema.name == "answer_schema"
+
+
+@pytest.mark.unit
+def test_chat_completion_request_rejects_json_schema_without_schema_object():
+    with pytest.raises(ValidationError):
+        ChatCompletionRequest(
+            model="test-m",
+            messages=[ChatCompletionUserMessageParam(role="user", content="Return structured")],
+            response_format={"type": "json_schema", "json_schema": {"name": "bad"}},
+        )
+
+
 # --- Tests for FunctionDefinition Parameter Validation ---
 
 @pytest.mark.unit

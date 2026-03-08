@@ -85,6 +85,52 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/any
+  - id: acp.agents.list
+    description: View available ACP agents and their configuration status.
+    resource_tags:
+      - acp
+      - agents
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/acp-agents-list
+  - id: acp.sessions.read
+    description: View ACP session metadata, history, diagnostics, and audit artifacts.
+    resource_tags:
+      - acp
+      - sessions
+      - read
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/acp-sessions-read
+  - id: acp.sessions.manage
+    description: Create, control, reconcile, and fork ACP sessions.
+    resource_tags:
+      - acp
+      - sessions
+      - control
+    sensitivity_tier: restricted
+    rate_limit_class: admin
+    default_roles:
+      - admin
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/acp-sessions-manage
   - id: chat.completions
     description: Invoke chat completion style LLM endpoints.
     resource_tags:

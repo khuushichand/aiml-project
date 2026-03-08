@@ -121,9 +121,10 @@ Keep the existing connector tables:
 
 - `external_accounts`
 - `external_sources`
-- `external_items`
 
-Add purpose-specific sync tables.
+Evolve `external_items` into the canonical remote-object binding table instead of adding a second item-mapping table. The current connectors implementation already uses `external_items` for dedupe and ingest state, so v1 should extend that table in place rather than create a competing source of truth.
+
+Add purpose-specific sync tables alongside it.
 
 ### `external_source_sync_state`
 
@@ -146,17 +147,20 @@ Suggested fields:
 - `webhook_expires_at`
 - `needs_full_rescan`
 - `consecutive_failures`
+- `active_job_id`
+- `active_run_token`
+- `active_lease_expires_at`
 
-### `external_item_bindings`
+### `external_items`
 
-One row per remote object bound to one local `Media` item.
+One row per remote object bound to one local `Media` item. This table replaces the “dedupe only” role it has today and becomes the single source of truth for remote identity, local binding, and item-level sync state.
 
 Suggested fields:
 
 - `id`
 - `source_id`
 - `provider`
-- `remote_id`
+- `external_id`
 - `remote_parent_id`
 - `remote_path`
 - `remote_name`
@@ -175,7 +179,7 @@ Suggested fields:
 
 Constraints:
 
-- unique key on `(source_id, provider, remote_id)`
+- unique key on `(source_id, provider, external_id)`
 
 ### `external_item_events`
 
@@ -183,7 +187,7 @@ Append-only audit trail for per-item state transitions.
 
 Suggested fields:
 
-- `binding_id`
+- `external_item_id`
 - `event_type` (`created`, `content_updated`, `metadata_updated`, `deleted_upstream`, `restored_upstream`, `access_revoked`, `ingest_failed`, `archived`)
 - `job_id`
 - `occurred_at`
@@ -199,13 +203,23 @@ Do not create a separate content version subsystem. Use the existing Media DB mo
 This aligns with existing helpers such as:
 
 - `create_document_version(...)`
-- `process_media_update(...)`
+- `add_media_with_keywords(..., overwrite=True)`
 - `get_all_document_versions(...)`
 
 Provider metadata should be persisted in two places:
 
-1. Stable operational mapping in `external_item_bindings`
+1. Stable operational mapping in `external_items`
 2. Per-revision provider snapshot in `DocumentVersions.safe_metadata`
+
+### Migration and Backfill
+
+Existing connector imports may already have rows in `external_items` that contain only dedupe fields. Before incremental sync is enabled for an existing source:
+
+- backfill the new binding columns in `external_items`
+- resolve or infer the bound `media_id` where possible
+- if a binding cannot be safely inferred, mark the source `needs_full_rescan = true` and require a bounded repair bootstrap before enabling incremental sync
+
+The rollout must not allow two parallel sources of truth for remote object state.
 
 Suggested `safe_metadata` payload on each synced version:
 
@@ -232,7 +246,7 @@ When a source is first connected:
 1. enqueue `bootstrap_scan`
 2. enumerate the source recursively
 3. resolve shared links to canonical remote IDs when possible
-4. create `external_item_bindings` for discovered files
+4. create or backfill `external_items` bindings for discovered files
 5. ingest supported items into `Media`
 6. create initial `DocumentVersions`
 7. persist the initial cursor or delta token
@@ -246,7 +260,7 @@ Triggered by polling, manual run, or webhook:
 2. if `needs_full_rescan` is true, run a bounded repair rescan instead of delta
 3. call the provider adapter for `list_changes(cursor)`
 4. normalize provider responses into shared change types
-5. reconcile each normalized change against `external_item_bindings`
+5. reconcile each normalized change against `external_items`
 6. persist updated cursor or delta token
 7. finalize job result and source sync health
 
@@ -273,8 +287,16 @@ Provider-specific events should be normalized into:
 - Download or export the latest content.
 - Compare provider revision and content hash.
 - If unchanged, no-op.
-- If changed, create a new `DocumentVersion` for the existing `media_id`.
+- If changed, update the existing `Media` row and create a new `DocumentVersion` in the same transaction.
+- The content-update path must atomically update:
+  - `Media.content`
+  - `Media.content_hash`
+  - `Media.last_modified`
+  - `Media.version`
+  - `media_fts`
+  - the new `DocumentVersion`
 - Update binding fields including revision, hash, modification time, and current version number.
+- Do not use `process_media_update()` as-is for this path, because it only appends a document version and does not refresh the canonical `Media` content or FTS state.
 
 #### `metadata_updated`
 
@@ -284,12 +306,12 @@ Provider-specific events should be normalized into:
 #### `deleted` or `permission_lost`
 
 - Mark the binding as `archived_upstream_removed` or `orphaned`.
-- Archive the local media item from default active views.
+- Archive the local media item from default active views using the existing trash semantics (`mark_as_trash`), not hard delete.
 - Preserve version history and audit trail.
 
 #### `restored`
 
-- Unarchive the local media item.
+- Unarchive the local media item using the existing restore semantics (`restore_from_trash`).
 - Refresh metadata.
 - Optionally force a content refresh if the provider cannot prove the latest content hash or revision.
 
@@ -320,6 +342,17 @@ If a source sync partially succeeds:
 - keep the job result explicit about processed, skipped, and failed counts
 - do not roll back already-ingested items
 
+## Source-Scoped Concurrency and Idempotency
+
+Hybrid triggering means polling, manual sync, and webhook-triggered sync can all target the same source. The system must therefore enforce source-scoped fencing:
+
+- at most one active processing sync run per source
+- every enqueued sync job uses a Jobs `idempotency_key` derived from `source_id`, `sync_kind`, and the strongest available cursor or event identity
+- `external_source_sync_state` tracks `active_job_id`, `active_run_token`, and lease expiry so stale or duplicated jobs can no-op safely
+- webhook retries or duplicate poll submissions must converge on the same queued job whenever possible
+
+Correctness must not depend on provider-side event uniqueness.
+
 ## API and Worker Additions
 
 The existing connectors API should remain the entry point. Additive endpoints or behaviors may include:
@@ -328,6 +361,13 @@ The existing connectors API should remain the entry point. Additive endpoints or
 - source sync status fields
 - webhook callback endpoints per provider
 - subscription status and expiry visibility
+
+The connector schema surface must also expand early enough to represent the approved v1 scope:
+
+- add provider `onedrive`
+- add source type `file`
+- keep existing Notion types (`page`, `database`) for backward compatibility
+- represent Microsoft library or site context through source `options` metadata until a distinct `library` type is justified
 
 Jobs should remain queryable through the existing Jobs surfaces rather than a connectors-specific status system.
 

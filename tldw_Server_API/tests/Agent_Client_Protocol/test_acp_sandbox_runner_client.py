@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -74,6 +75,40 @@ def test_is_self_referential_agent_command_detects_runner_binary() -> None:
             pytest.fail(
                 f"_is_self_referential_agent_command({command!r}) returned {actual}, expected {expected}"
             )
+
+
+@pytest.mark.unit
+def test_permission_policy_tier_resolution_matches_standard_runner(monkeypatch) -> None:
+    from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import ACPRunnerClient
+    import tldw_Server_API.app.services.admin_acp_sessions_service as store_src
+
+    class _PolicyStore:
+        def resolve_permission_tier(self, tool_name: str) -> str | None:
+            if tool_name == "fs.write":
+                return "individual"
+            return None
+
+    mock_config = MagicMock()
+    mock_config.command = "echo"
+    mock_config.args = []
+    mock_config.env = {}
+    mock_config.cwd = None
+    mock_config.startup_timeout_sec = 10
+
+    monkeypatch.setattr(store_src, "_store", _PolicyStore(), raising=False)
+
+    runner = ACPRunnerClient(mock_config)
+    sandbox = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+
+    assert runner._determine_permission_tier("fs.write") == "individual"
+    assert sandbox._determine_permission_tier("fs.write") == "individual"
+    assert runner._determine_permission_tier("git.status") == "auto"
+    assert sandbox._determine_permission_tier("git.status") == "auto"
 
 
 @pytest.mark.unit

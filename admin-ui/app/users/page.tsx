@@ -35,12 +35,14 @@ import {
 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
+import { isSingleUserMode } from '@/lib/auth';
 import { Organization, User } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportUsers, ExportFormat } from '@/lib/export';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { useUrlState, useUrlPagination } from '@/lib/use-url-state';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useResourceState } from '@/lib/use-resource-state';
@@ -59,7 +61,6 @@ type BulkActionType =
   | 'deactivate'
   | 'delete'
   | 'assign-role'
-  | 'reset-password'
   | 'mfa-require'
   | 'mfa-clear'
   | null;
@@ -163,9 +164,11 @@ const invitationStatusBadgeVariant = (status: InvitationStatus): 'default' | 'se
 function UsersPageContent() {
   const router = useRouter();
   const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success, error: showError } = useToast();
   const { selectedOrg } = useOrgContext();
   const { user: currentUser } = usePermissions();
+  const requirePasswordReauth = !isSingleUserMode();
   const currentUserId = currentUser?.id;
   const [bulkAction, setBulkAction] = useState<BulkActionType>(null);
   const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
@@ -579,19 +582,22 @@ function UsersPageContent() {
   const handleBulkToggleActive = async (nextState: boolean) => {
     const ids = Array.from(selectedUserIds);
     if (ids.length === 0) return;
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: nextState ? 'Activate selected users' : 'Deactivate selected users',
-      message: `${nextState ? 'Activate' : 'Deactivate'} ${ids.length} selected user${ids.length !== 1 ? 's' : ''}?`,
+      message: `${nextState ? 'Activate' : 'Deactivate'} ${ids.length} selected user${ids.length !== 1 ? 's' : ''}? Reauthentication is required.`,
       confirmText: nextState ? 'Activate' : 'Deactivate',
-      variant: nextState ? 'default' : 'warning',
-      icon: nextState ? 'check' : 'warning',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setBulkAction(nextState ? 'activate' : 'deactivate');
       const results = await Promise.allSettled(
-        ids.map((id) => api.updateUser(id.toString(), { is_active: nextState }))
+        ids.map((id) => api.updateUser(id.toString(), {
+          is_active: nextState,
+          reason: approval.reason,
+          admin_password: approval.adminPassword,
+        }))
       );
       const failures = results.filter((result) => result.status === 'rejected').length;
       if (failures > 0) {
@@ -622,19 +628,21 @@ function UsersPageContent() {
       showError('Cannot delete yourself', 'Remove your account from the selection to continue.');
       return;
     }
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Delete selected users',
       message: `Delete ${ids.length} selected user${ids.length !== 1 ? 's' : ''}? This cannot be undone.`,
       confirmText: 'Delete',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setBulkAction('delete');
       const results = await Promise.allSettled(
-        ids.map((id) => api.deleteUser(id.toString()))
+        ids.map((id) => api.deleteUser(id.toString(), {
+          reason: approval.reason,
+          admin_password: approval.adminPassword,
+        }))
       );
       const failures = results.filter((result) => result.status === 'rejected').length;
       if (failures > 0) {
@@ -661,19 +669,22 @@ function UsersPageContent() {
   const handleBulkAssignRole = async () => {
     const ids = Array.from(selectedUserIds);
     if (ids.length === 0 || !bulkRole) return;
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Assign role to selected users',
-      message: `Assign "${bulkRole}" role to ${ids.length} selected user${ids.length !== 1 ? 's' : ''}?`,
+      message: `Assign "${bulkRole}" role to ${ids.length} selected user${ids.length !== 1 ? 's' : ''}? Reauthentication is required.`,
       confirmText: 'Assign role',
-      variant: 'default',
-      icon: 'check',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setBulkAction('assign-role');
       const results = await Promise.allSettled(
-        ids.map((id) => api.updateUser(id.toString(), { role: bulkRole }))
+        ids.map((id) => api.updateUser(id.toString(), {
+          role: bulkRole,
+          reason: approval.reason,
+          admin_password: approval.adminPassword,
+        }))
       );
       const failures = results.filter((result) => result.status === 'rejected').length;
       if (failures > 0) {
@@ -697,60 +708,25 @@ function UsersPageContent() {
     }
   };
 
-  const handleBulkResetPasswords = async () => {
-    const ids = Array.from(selectedUserIds);
-    if (ids.length === 0) return;
-    const confirmed = await confirm({
-      title: 'Reset selected user passwords',
-      message: `Reset passwords for ${ids.length} selected user${ids.length !== 1 ? 's' : ''}?`,
-      confirmText: 'Reset passwords',
-      variant: 'warning',
-      icon: 'warning',
-    });
-    if (!confirmed) return;
-
-    try {
-      setBulkAction('reset-password');
-      const results = await Promise.allSettled(
-        ids.map((id) => api.resetUserPassword(id.toString(), { force_password_change: true }))
-      );
-      const failures = results.filter((result) => result.status === 'rejected').length;
-      if (failures > 0) {
-        showError(
-          'Bulk password reset incomplete',
-          `${ids.length - failures} reset, ${failures} failed.`
-        );
-      } else {
-        success(
-          'Passwords reset',
-          `${ids.length} user${ids.length !== 1 ? 's' : ''} now require a password change on next login.`
-        );
-      }
-      handleClearSelection();
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to reset passwords';
-      showError('Bulk password reset failed', message);
-    } finally {
-      setBulkAction(null);
-    }
-  };
-
   const handleBulkSetMfaRequirement = async (requireMfa: boolean) => {
     const ids = Array.from(selectedUserIds);
     if (ids.length === 0) return;
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: requireMfa ? 'Require MFA for selected users' : 'Clear MFA requirement for selected users',
       message: `${requireMfa ? 'Require MFA for' : 'Clear MFA requirement for'} ${ids.length} selected user${ids.length !== 1 ? 's' : ''}?`,
       confirmText: requireMfa ? 'Require MFA' : 'Clear requirement',
-      variant: requireMfa ? 'default' : 'warning',
-      icon: requireMfa ? 'check' : 'warning',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setBulkAction(requireMfa ? 'mfa-require' : 'mfa-clear');
       const results = await Promise.allSettled(
-        ids.map((id) => api.setUserMfaRequirement(id.toString(), { require_mfa: requireMfa }))
+        ids.map((id) => api.setUserMfaRequirement(id.toString(), {
+          require_mfa: requireMfa,
+          reason: approval.reason,
+          admin_password: approval.adminPassword,
+        }))
       );
       const failures = results.filter((result) => result.status === 'rejected').length;
       const successIds: number[] = [];
@@ -887,17 +863,20 @@ function UsersPageContent() {
 
   const handleToggleActive = async (user: User) => {
     const nextState = !user.is_active;
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: nextState ? 'Activate User' : 'Deactivate User',
-      message: `${nextState ? 'Activate' : 'Deactivate'} ${user.username || user.email}?`,
+      message: `${nextState ? 'Activate' : 'Deactivate'} ${user.username || user.email}? Reauthentication is required.`,
       confirmText: nextState ? 'Activate' : 'Deactivate',
-      variant: nextState ? 'default' : 'warning',
-      icon: nextState ? 'check' : 'warning',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
-      await api.updateUser(user.id.toString(), { is_active: nextState });
+      await api.updateUser(user.id.toString(), {
+        is_active: nextState,
+        reason: approval.reason,
+        admin_password: approval.adminPassword,
+      });
       success('User updated', `${user.username || user.email} ${nextState ? 'activated' : 'deactivated'}.`);
       void loadUsers();
     } catch (err: unknown) {
@@ -913,14 +892,13 @@ function UsersPageContent() {
     }
     const userId = user.id;
     if (deletingUserIds.has(userId)) return;
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Delete User',
       message: `Delete ${user.username || user.email}? This cannot be undone.`,
       confirmText: 'Delete',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setDeletingUserIds((prev) => {
@@ -928,7 +906,10 @@ function UsersPageContent() {
         next.add(userId);
         return next;
       });
-      await api.deleteUser(String(userId));
+      await api.deleteUser(String(userId), {
+        reason: approval.reason,
+        admin_password: approval.adminPassword,
+      });
       success('User deleted', `${user.username || user.email} removed.`);
       void loadUsers();
     } catch (err: unknown) {
@@ -1329,17 +1310,6 @@ function UsersPageContent() {
                       >
                         <UserX className="mr-2 h-4 w-4" />
                         Deactivate
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleBulkResetPasswords}
-                        loading={bulkAction === 'reset-password'}
-                        loadingText="Resetting..."
-                        disabled={bulkBusy && bulkAction !== 'reset-password'}
-                      >
-                        <Key className="mr-2 h-4 w-4" />
-                        Reset Passwords
                       </Button>
                       <Button
                         variant="outline"

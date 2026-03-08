@@ -5,13 +5,17 @@ import { clearAdminSessionCookies, getBackendAuthHeaders } from '@/lib/server-au
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const headers = getBackendAuthHeaders(request);
 
-  await fetch(buildApiUrl('/auth/logout'), {
-    method: 'POST',
-    headers,
-    cache: 'no-store',
-  }).catch(() => {
-    // Best-effort server logout. Local session cookies are still cleared below.
-  });
+  try {
+    await fetch(buildApiUrl('/auth/logout'), {
+      method: 'POST',
+      headers,
+      cache: 'no-store',
+    });
+  } catch (error) {
+    console.warn('Admin UI backend logout failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   const response = NextResponse.json({ ok: true });
   clearAdminSessionCookies(response);

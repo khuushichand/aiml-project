@@ -393,6 +393,79 @@ async def test_acp_stage_adapter_creates_session_and_prompts(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_acp_stage_adapter_registers_created_session_and_records_prompt(monkeypatch):
+    """Workflow-created ACP sessions should use the shared session-store contract."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="acp-session-store")
+            self.prompt = AsyncMock(
+                return_value={
+                    "content": "Workflow reply",
+                    "usage": {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6},
+                }
+            )
+            self.verify_session_access = AsyncMock(return_value=True)
+
+    class _StubStore:
+        def __init__(self) -> None:
+            self.register_session = AsyncMock()
+            self.record_prompt = AsyncMock()
+
+    stub_runner = _StubRunner()
+    stub_store = _StubStore()
+
+    async def _get_runner_client():
+        return stub_runner
+
+    async def _get_store():
+        return stub_store
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_acp_session_store",
+        _get_store,
+    )
+
+    config = {
+        "stage": "impl",
+        "cwd": "/workspace/repo",
+        "agent_type": "codex",
+        "prompt_template": "Implement {{ inputs.task }}",
+        "workspace_id": "workspace-1",
+    }
+    context = {"inputs": {"task": "shared store"}, "user_id": "11"}
+
+    result = await run_acp_stage_adapter(config, context)
+
+    assert result.get("status") == "ok"
+    stub_store.register_session.assert_awaited_once_with(
+        session_id="acp-session-store",
+        user_id=11,
+        agent_type="codex",
+        name="Workflow impl",
+        cwd="/workspace/repo",
+        tags=["workflow", "acp_stage", "impl"],
+        persona_id=None,
+        workspace_id="workspace-1",
+        workspace_group_id=None,
+        scope_snapshot_id=None,
+    )
+    stub_store.record_prompt.assert_awaited_once_with(
+        "acp-session-store",
+        [{"role": "user", "content": "Implement shared store"}],
+        {
+            "content": "Workflow reply",
+            "usage": {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6},
+        },
+    )
+
+
+@pytest.mark.asyncio
 async def test_acp_stage_output_includes_schema_version(monkeypatch):
     """Test ACP stage adapter emits output schema version."""
     from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter

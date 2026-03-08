@@ -5,8 +5,14 @@ import { setApiKeySessionCookies } from '@/lib/server-auth';
 const isAdminApiKeyLoginEnabled = (): boolean =>
   process.env.ADMIN_UI_ALLOW_API_KEY_LOGIN === 'true';
 
+const isEnterpriseAdminUiMode = (): boolean =>
+  process.env.ADMIN_UI_ENTERPRISE_MODE === 'true';
+
+const isSingleUserAuthMode = (): boolean =>
+  process.env.AUTH_MODE === 'single_user';
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  if (!isAdminApiKeyLoginEnabled()) {
+  if (isEnterpriseAdminUiMode() || !isAdminApiKeyLoginEnabled() || !isSingleUserAuthMode()) {
     return NextResponse.json(
       { detail: 'Admin UI API key login is disabled. Use multi-user credentials.' },
       { status: 403 }

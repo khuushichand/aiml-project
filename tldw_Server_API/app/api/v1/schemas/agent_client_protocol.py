@@ -296,6 +296,7 @@ class ACPSessionInfo(BaseModel):
     scope_snapshot_id: str | None = Field(
         default=None, description="Scope snapshot identifier bound to this ACP session"
     )
+    forked_from: str | None = Field(default=None, description="Source session ID when this session was forked")
 
 
 class ACPSessionListResponse(BaseModel):

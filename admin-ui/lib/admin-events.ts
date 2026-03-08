@@ -119,7 +119,7 @@ export function subscribeToAdminEvents(
     const queryString = params.toString();
     const url = buildProxyUrl(`/admin/events/stream${queryString ? `?${queryString}` : ''}`);
 
-    const headers = new Headers(buildAuthHeaders('GET'));
+    const headers = new Headers(buildAuthHeaders());
     headers.set('Accept', 'text/event-stream');
 
     abortController = new AbortController();

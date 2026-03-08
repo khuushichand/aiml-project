@@ -14,10 +14,12 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { ArrowLeft, Key, Save, Building2, Users, Shield, Monitor, RefreshCw, Trash2, Clock, ShieldCheck, Plus, X } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
+import { isSingleUserMode } from '@/lib/auth';
 import { formatDateTime } from '@/lib/format';
 import { parseOptionalInt } from '@/lib/number';
 import {
@@ -61,10 +63,9 @@ type EffectivePermission = {
 };
 
 const roleOptions = [
-  { value: 'member', label: 'Member' },
+  { value: 'user', label: 'User' },
   { value: 'admin', label: 'Admin' },
-  { value: 'super_admin', label: 'Super Admin' },
-  { value: 'owner', label: 'Owner' },
+  { value: 'service', label: 'Service' },
 ] as const;
 
 type UserRole = (typeof roleOptions)[number]['value'];
@@ -72,7 +73,7 @@ type UserRole = (typeof roleOptions)[number]['value'];
 type UserFormData = {
   username: string;
   email: string;
-  role: UserRole;
+  role: string;
   is_active: boolean;
   storage_quota_mb: number;
 };
@@ -95,7 +96,6 @@ type UserSession = {
 };
 
 type PasswordResetResponse = {
-  temporary_password?: string;
   force_password_change?: boolean;
   message?: string;
 };
@@ -330,7 +330,9 @@ export default function UserDetailPage() {
   const router = useRouter();
   const userId = Array.isArray(params.id) ? params.id[0] : params.id;
   const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success: toastSuccess, error: showError } = useToast();
+  const requirePasswordReauth = !isSingleUserMode();
 
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -355,12 +357,12 @@ export default function UserDetailPage() {
   const [teamMembershipsError, setTeamMembershipsError] = useState('');
   const [forcePasswordChangeOnNextLogin, setForcePasswordChangeOnNextLogin] = useState(true);
   const [passwordResetLoading, setPasswordResetLoading] = useState(false);
-  const [temporaryPassword, setTemporaryPassword] = useState('');
+  const [resetPasswordValue, setResetPasswordValue] = useState('');
 
   const [formData, setFormData] = useState<UserFormData>({
     username: '',
     email: '',
-    role: 'member',
+    role: 'user',
     is_active: true,
     storage_quota_mb: 0,
   });
@@ -402,7 +404,9 @@ export default function UserDetailPage() {
       setIsAuthorized(true);
       const data = await api.getUser(userId);
       const userValue = data as User & { rate_limits?: UserRateLimits; metadata?: Record<string, unknown> };
-      const roleValue = userValue.role && isValidRole(userValue.role) ? userValue.role : 'member';
+      const roleValue = typeof userValue.role === 'string' && userValue.role.trim()
+        ? userValue.role
+        : 'user';
       setUser(userValue);
       setFormData({
         username: userValue.username || '',
@@ -664,11 +668,54 @@ export default function UserDetailPage() {
       setError('You are not authorized to update this user.');
       return;
     }
+    const requiresPrivilegedApproval = Boolean(
+      user && (
+        formData.role !== user.role
+        || formData.is_active !== user.is_active
+      )
+    );
     try {
       setSaving(true);
       setError('');
       setSuccess('');
-      await api.updateUser(userId, formData);
+      const payload: Record<string, unknown> = {};
+      const normalizedEmail = formData.email.trim();
+      const currentEmail = typeof user?.email === 'string' ? user.email.trim() : '';
+      if (normalizedEmail !== currentEmail) {
+        payload.email = normalizedEmail;
+      }
+      if (user && formData.role !== user.role && isValidRole(formData.role)) {
+        payload.role = formData.role;
+      }
+      if (user && formData.is_active !== user.is_active) {
+        payload.is_active = formData.is_active;
+      }
+      if (user && formData.storage_quota_mb !== user.storage_quota_mb) {
+        payload.storage_quota_mb = formData.storage_quota_mb;
+      }
+      if (Object.keys(payload).length === 0) {
+        setSuccess('No changes to save');
+        setSaving(false);
+        return;
+      }
+      if (requiresPrivilegedApproval) {
+        const approval = await promptPrivilegedAction({
+          title: 'Apply privileged user changes',
+          message: 'Changing role or activation state requires a reason and reauthentication.',
+          confirmText: 'Apply changes',
+          requirePassword: requirePasswordReauth,
+        });
+        if (!approval) {
+          setSaving(false);
+          return;
+        }
+        Object.assign(payload, {
+          ...payload,
+          reason: approval.reason,
+          admin_password: approval.adminPassword,
+        });
+      }
+      await api.updateUser(userId, payload);
       setSuccess('User updated successfully');
       void loadUser();
     } catch (err: unknown) {
@@ -691,17 +738,19 @@ export default function UserDetailPage() {
 
   const handleDisableMfa = async () => {
     if (!mfaStatus?.enabled) return;
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Disable MFA',
       message: `Disable MFA for ${user?.username || user?.email || 'this user'}?`,
       confirmText: 'Disable MFA',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
-      await api.disableUserMfa(userId);
+      await api.disableUserMfa(userId, {
+        reason: approval.reason,
+        admin_password: approval.adminPassword,
+      });
       toastSuccess('MFA disabled', 'Multi-factor authentication has been turned off.');
       void loadSecurity();
     } catch (err: unknown) {
@@ -711,17 +760,19 @@ export default function UserDetailPage() {
   };
 
   const handleRevokeSession = async (session: UserSession) => {
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Revoke Session',
       message: 'Revoke this session? The user will be signed out on that device.',
       confirmText: 'Revoke',
-      variant: 'warning',
-      icon: 'warning',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
-      await api.revokeUserSession(userId, session.id.toString());
+      await api.revokeUserSession(userId, session.id.toString(), {
+        reason: approval.reason,
+        admin_password: approval.adminPassword,
+      });
       toastSuccess('Session revoked', 'The session has been revoked.');
       void loadSecurity();
     } catch (err: unknown) {
@@ -731,17 +782,19 @@ export default function UserDetailPage() {
   };
 
   const handleRevokeAllSessions = async () => {
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Revoke All Sessions',
       message: 'Revoke all active sessions for this user? They will be signed out everywhere.',
       confirmText: 'Revoke all',
-      variant: 'warning',
-      icon: 'warning',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
-      await api.revokeAllUserSessions(userId);
+      await api.revokeAllUserSessions(userId, {
+        reason: approval.reason,
+        admin_password: approval.adminPassword,
+      });
       toastSuccess('Sessions revoked', 'All sessions have been revoked.');
       void loadSecurity();
     } catch (err: unknown) {
@@ -751,25 +804,33 @@ export default function UserDetailPage() {
   };
 
   const handleResetPassword = async () => {
-    const confirmed = await confirm({
+    const normalizedTemporaryPassword = resetPasswordValue.trim();
+    if (normalizedTemporaryPassword.length < 10) {
+      showError('Password reset failed', 'Enter a temporary password with at least 10 characters.');
+      return;
+    }
+
+    const approval = await promptPrivilegedAction({
       title: 'Reset Password',
       message: `Reset password for ${user?.username || user?.email || 'this user'}?`,
       confirmText: 'Reset password',
-      variant: 'warning',
-      icon: 'warning',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setPasswordResetLoading(true);
-      const result = await api.resetUserPassword(userId, {
+      await api.resetUserPassword(userId, {
+        temporary_password: normalizedTemporaryPassword,
         force_password_change: forcePasswordChangeOnNextLogin,
+        reason: approval.reason,
+        admin_password: approval.adminPassword,
       }) as PasswordResetResponse;
-      const tempPassword = typeof result.temporary_password === 'string'
-        ? result.temporary_password
-        : '';
-      setTemporaryPassword(tempPassword);
-      toastSuccess('Password reset', 'A new temporary password has been generated.');
+      setResetPasswordValue('');
+      toastSuccess(
+        'Password reset',
+        'Temporary password updated. Share it with the user through an approved secure channel.'
+      );
       void loadUser();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to reset password';
@@ -1074,12 +1135,22 @@ export default function UserDetailPage() {
                         }
                       }}
                     >
+                      {!isValidRole(formData.role) && formData.role ? (
+                        <option value={formData.role}>
+                          Unsupported ({formData.role})
+                        </option>
+                      ) : null}
                       {roleOptions.map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>
                       ))}
                     </Select>
+                    {!isValidRole(formData.role) && formData.role ? (
+                      <p className="text-xs text-muted-foreground">
+                        This account uses an unsupported role value. It will be preserved unless you explicitly choose a supported replacement.
+                      </p>
+                    ) : null}
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -1219,6 +1290,22 @@ export default function UserDetailPage() {
                         Reset Password
                       </Button>
                     </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="temporary-password">Temporary Password to Set</Label>
+                      <Input
+                        id="temporary-password"
+                        type="password"
+                        autoComplete="new-password"
+                        value={resetPasswordValue}
+                        onChange={(event) => setResetPasswordValue(event.target.value)}
+                        disabled={!isAuthorized || passwordResetLoading}
+                        minLength={10}
+                        placeholder="Enter a temporary password to share securely"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Set the temporary password yourself so it never needs to be returned to the browser.
+                      </p>
+                    </div>
                     <label className="flex items-center gap-2 text-sm">
                       <input
                         type="checkbox"
@@ -1229,14 +1316,6 @@ export default function UserDetailPage() {
                       />
                       Force Password Change on Next Login
                     </label>
-                    {temporaryPassword && (
-                      <Alert>
-                        <AlertDescription className="space-y-1">
-                          <div className="font-medium">Temporary password (shown once)</div>
-                          <code className="rounded bg-muted px-2 py-1 text-xs">{temporaryPassword}</code>
-                        </AlertDescription>
-                      </Alert>
-                    )}
                   </div>
 
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

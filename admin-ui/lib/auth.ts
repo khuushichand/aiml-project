@@ -2,6 +2,7 @@
 
 const AUTH_CHANGE_EVENT = 'tldw-admin-auth-change';
 const SESSION_MARKER_COOKIE = 'admin_session';
+const AUTH_MODE_COOKIE = 'admin_auth_mode';
 
 // In-memory storage for legacy single-user API key mode.
 let inMemoryApiKey: string | null = null;
@@ -21,6 +22,17 @@ const hasSessionMarker = (): boolean => {
   return document.cookie
     .split(';')
     .some((cookie) => cookie.trim().startsWith(`${SESSION_MARKER_COOKIE}=`));
+};
+
+const getCookieValue = (name: string): string | null => {
+  if (typeof document === 'undefined') return null;
+  const cookie = document.cookie
+    .split(';')
+    .map((value) => value.trim())
+    .find((value) => value.startsWith(`${name}=`));
+  if (!cookie) return null;
+  const [, rawValue] = cookie.split('=');
+  return rawValue ? decodeURIComponent(rawValue) : null;
 };
 
 const emitAuthChange = (): void => {
@@ -112,7 +124,7 @@ const isAuthenticatedLoginPayload = (value: LoginSuccessPayload): boolean =>
  */
 export function isSingleUserMode(): boolean {
   if (typeof window === 'undefined') return false;
-  return !!getApiKey();
+  return getCookieValue(AUTH_MODE_COOKIE) === 'single_user' || !!getApiKey();
 }
 
 /**
@@ -141,7 +153,7 @@ export function getJWTToken(): string | null {
 
 export function hasStoredAuth(): boolean {
   if (typeof window === 'undefined') return false;
-  return hasSessionMarker() || !!getApiKey() || !!localStorage.getItem('user');
+  return hasSessionMarker() || !!getApiKey();
 }
 
 /**

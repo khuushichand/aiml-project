@@ -22,6 +22,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, Da
 
 # ChaChaNotes database
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.ChatWorkflows_DB import ChatWorkflowsDatabase
 
 #from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
 #list_prompts as sqlite_list_prompts,
@@ -145,6 +146,11 @@ single_user_workflows_path: str = single_user_config.get(
     'workflows_path',
     fallback=str(DatabasePaths.get_workflows_db_path(DatabasePaths.get_single_user_id()))
 )
+single_user_chat_workflows_path: str = single_user_config.get(
+    'Database',
+    'chat_workflows_path',
+    fallback=str(DatabasePaths.get_chat_workflows_db_path(DatabasePaths.get_single_user_id())),
+)
 
 DB_MANAGER_RUNTIME_EXCEPTIONS = (
     OSError,
@@ -214,7 +220,8 @@ def reset_content_backend(
     global _CONTENT_DB_BACKEND, _POSTGRES_CONTENT_MODE
     global content_db_settings
     global single_user_db_path, single_user_backup_path, single_user_backup_dir
-    global single_user_chacha_path, single_user_workflows_path, single_user_config
+    global single_user_chacha_path, single_user_workflows_path
+    global single_user_chat_workflows_path, single_user_config
 
     cfg = config or single_user_config
 
@@ -261,6 +268,11 @@ def reset_content_backend(
             'Database',
             'workflows_path',
             fallback=str(DatabasePaths.get_workflows_db_path(DatabasePaths.get_single_user_id())),
+        )
+        single_user_chat_workflows_path = cfg.get(
+            'Database',
+            'chat_workflows_path',
+            fallback=str(DatabasePaths.get_chat_workflows_db_path(DatabasePaths.get_single_user_id())),
         )
         # Recompute db_type to reflect updated settings
         global db_type
@@ -474,6 +486,27 @@ def create_workflows_database(
 
     return WorkflowsDatabase(
         db_path=str(target_path),
+        backend=backend_to_use,
+    )
+
+
+def create_chat_workflows_database(
+    client_id: str,
+    *,
+    db_path: Union[str, Path, None] = None,
+    backend: Optional[DatabaseBackend] = None,
+) -> ChatWorkflowsDatabase:
+    """Factory for Chat Workflows database instances."""
+
+    target_path = Path(db_path) if db_path else Path(single_user_chat_workflows_path)
+    backend_to_use = backend or _ensure_content_backend_loaded()
+
+    if backend_to_use and backend_to_use.backend_type != BackendType.POSTGRESQL:
+        backend_to_use = None
+
+    return ChatWorkflowsDatabase(
+        db_path=str(target_path),
+        client_id=client_id,
         backend=backend_to_use,
     )
 

@@ -1055,6 +1055,107 @@ def test_create_chat_completion_with_optional_params(
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
+def test_non_stream_structured_json_schema_success_returns_metadata(
+    mock_load_template,
+    mock_chat_api_call,
+    client,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
+    default_chat_request_data,
+):
+    mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
+    mock_chat_api_call.return_value = {
+        "id": "chatcmpl-structured-success",
+        "choices": [{"message": {"role": "assistant", "content": '{"answer":"ok"}'}}],
+    }
+
+    app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
+    app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
+
+    request_data_dict = default_chat_request_data.model_dump(exclude_none=True)
+    request_data_dict["response_format"] = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "answer_schema",
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+            },
+        },
+    }
+
+    response = client.post_with_csrf(
+        "/api/v1/chat/completions",
+        json=request_data_dict,
+        headers=get_auth_headers(valid_auth_token),
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    payload = response.json()
+    assert payload["tldw_structured"]["validated"] is True
+    assert payload["tldw_structured"]["validated_payload"] == {"answer": "ok"}
+    assert payload["tldw_structured"]["mode_used"] in {"json_object", "json_schema"}
+    assert isinstance(payload["tldw_structured"]["fallback_used"], bool)
+
+    app.dependency_overrides.pop(get_media_db_for_user, None)
+    app.dependency_overrides.pop(get_chacha_db_for_user, None)
+
+
+@pytest.mark.unit
+@patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
+@patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
+@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
+def test_non_stream_structured_json_schema_failure_returns_400(
+    mock_load_template,
+    mock_chat_api_call,
+    client,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
+    default_chat_request_data,
+):
+    mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
+    mock_chat_api_call.return_value = {
+        "id": "chatcmpl-structured-failure",
+        "choices": [{"message": {"role": "assistant", "content": '{"answer":123}'}}],
+    }
+
+    app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
+    app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
+
+    request_data_dict = default_chat_request_data.model_dump(exclude_none=True)
+    request_data_dict["response_format"] = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "answer_schema",
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+            },
+        },
+    }
+
+    response = client.post_with_csrf(
+        "/api/v1/chat/completions",
+        json=request_data_dict,
+        headers=get_auth_headers(valid_auth_token),
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    payload = response.json()
+    assert payload["detail"]["code"] == "structured_output_schema_error"
+
+    app.dependency_overrides.pop(get_media_db_for_user, None)
+    app.dependency_overrides.pop(get_chacha_db_for_user, None)
+
+
+@pytest.mark.unit
+@patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
+@patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
+@patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
 def test_create_chat_completion_with_tools_unit(
     mock_load_template,
     mock_chat_api_call,

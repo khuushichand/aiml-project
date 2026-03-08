@@ -30,7 +30,6 @@ import {
 import {
   createRegenerateLastMessage,
   createEditMessage,
-  createStopStreamingRequest,
   createBranchMessage
 } from "@/hooks/handlers/messageHandlers"
 import { generateBranchFromMessageIds } from "@/db/dexie/branch"
@@ -57,7 +56,10 @@ import {
   type ImageGenerationPromptMode,
   type ImageGenerationRequestSnapshot
 } from "@/utils/image-generation-chat"
-import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
+import {
+  resolveApiProviderForModel,
+  resolveExplicitProviderForSelectedModel
+} from "@/utils/resolve-api-provider"
 import { consumeStreamingChunk } from "@/utils/streaming-chunks"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeConversationState } from "@/utils/conversation-state"
@@ -80,6 +82,10 @@ import { generateTitle } from "@/services/title"
 import { trackCompareMetric } from "@/utils/compare-metrics"
 import { MAX_COMPARE_MODELS } from "@/hooks/chat/compare-constants"
 import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
+import {
+  discardAbortedTurnIfRequested,
+  isAbortLikeError
+} from "@/hooks/chat/abort-turn-cleanup"
 import type { Character } from "@/types/character"
 import type {
   MessageSteeringMode,
@@ -117,10 +123,15 @@ type ChatModeOverrides = {
   historyId?: string | null
   serverChatId?: string | null
   selectedModel?: string | null
+  selectedSystemPrompt?: string | null
+  toolChoice?: ToolChoice | null
+  useOCR?: boolean
+  webSearch?: boolean
   imageEventSyncPolicy?: ImageGenerationEventSyncPolicy
 } & Record<string, unknown>
 
 const loadActorSettings = () => import("@/services/actor-settings")
+const STREAMING_UPDATE_INTERVAL_MS = 80
 
 type SaveMessagePayload = Omit<SaveMessageData, "setHistoryId"> & {
   setHistoryId?: SaveMessageData["setHistoryId"]
@@ -147,16 +158,6 @@ type TldwChatMeta =
   | number
   | null
   | undefined
-
-const isAbortLikeError = (error: unknown): boolean => {
-  if (error instanceof Error) {
-    if (error.name === "AbortError") return true
-    return error.message.toLowerCase().includes("abort")
-  }
-  return String(error || "")
-    .toLowerCase()
-    .includes("abort")
-}
 
 const attemptCharacterStreamRecoveryPersist = async ({
   chatId,
@@ -414,6 +415,7 @@ export const useChatActions = ({
     [appendFormattingGuidePrompt]
   )
   const messagesRef = React.useRef(messages)
+  const discardCurrentTurnOnAbortRef = React.useRef(false)
 
   React.useEffect(() => {
     messagesRef.current = messages
@@ -806,13 +808,31 @@ export const useChatActions = ({
     const effectiveSelectedModel = getEffectiveSelectedModel(
       overrides.selectedModel
     )
+    const resolvedSelectedSystemPrompt = Object.prototype.hasOwnProperty.call(
+      overrides,
+      "selectedSystemPrompt"
+    )
+      ? (overrides.selectedSystemPrompt as string | null)
+      : selectedSystemPrompt
+    const resolvedToolChoice =
+      overrides.toolChoice === "auto" ||
+      overrides.toolChoice === "required" ||
+      overrides.toolChoice === "none"
+        ? overrides.toolChoice
+        : toolChoice
+    const resolvedUseOCR =
+      typeof overrides.useOCR === "boolean" ? overrides.useOCR : useOCR
+    const resolvedWebSearch =
+      typeof overrides.webSearch === "boolean"
+        ? overrides.webSearch
+        : webSearch
 
     return {
       selectedModel: effectiveSelectedModel || "",
-      useOCR,
-      selectedSystemPrompt,
+      useOCR: resolvedUseOCR,
+      selectedSystemPrompt: resolvedSelectedSystemPrompt,
       selectedKnowledge,
-      toolChoice,
+      toolChoice: resolvedToolChoice,
       currentChatModelSettings,
       setMessages,
       setIsSearchingInternet,
@@ -833,7 +853,7 @@ export const useChatActions = ({
       ragSources,
       ragAdvancedOptions,
       setActionInfo,
-      webSearch,
+      webSearch: resolvedWebSearch,
       actorSettings,
       systemPromptAppendix,
       messageSteeringPrompts: resolvedMessageSteeringPrompts,
@@ -970,6 +990,45 @@ export const useChatActions = ({
         ? normalizeMessageVariants(regenerateFromMessage)
         : []
     const resolvedModel = model?.trim()
+    let streamingTimer: ReturnType<typeof setTimeout> | null = null
+    let pendingStreamingText = ""
+    let pendingReasoningTime = 0
+    let lastStreamingUpdateAt = 0
+
+    const flushStreamingUpdate = () => {
+      if (pendingStreamingText.length === 0) return
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === generateMessageId
+            ? updateActiveVariant(m, {
+                message: pendingStreamingText,
+                reasoning_time_taken: pendingReasoningTime
+              })
+            : m
+        )
+      )
+      pendingStreamingText = ""
+      pendingReasoningTime = 0
+      lastStreamingUpdateAt = Date.now()
+    }
+
+    const scheduleStreamingUpdate = (text: string, reasoningTime: number) => {
+      pendingStreamingText = text
+      pendingReasoningTime = reasoningTime
+      if (streamingTimer !== null) return
+      const elapsed = Date.now() - lastStreamingUpdateAt
+      const delay = Math.max(0, STREAMING_UPDATE_INTERVAL_MS - elapsed)
+      streamingTimer = setTimeout(() => {
+        streamingTimer = null
+        flushStreamingUpdate()
+      }, delay)
+    }
+
+    const cancelStreamingUpdate = () => {
+      if (streamingTimer === null) return
+      clearTimeout(streamingTimer)
+      streamingTimer = null
+    }
 
     try {
       if (!resolvedModel) {
@@ -1267,9 +1326,14 @@ export const useChatActions = ({
       let streamTransportInterrupted = false
       let streamTransportInterruptionReason: string | null = null
 
+      const explicitProvider = resolveExplicitProviderForSelectedModel({
+        currentSelectedModel: getEffectiveSelectedModel(),
+        requestedSelectedModel: resolvedModel,
+        explicitProvider: currentChatModelSettings.apiProvider
+      })
       const resolvedApiProvider = await resolveApiProviderForModel({
         modelId: resolvedModel,
-        explicitProvider: currentChatModelSettings.apiProvider
+        explicitProvider
       })
       const normalizedModel = resolvedModel.replace(/^tldw:/, "").trim()
       const streamModel =
@@ -1320,16 +1384,7 @@ export const useChatActions = ({
         apiReasoning = chunkState.apiReasoning
 
         if (chunkState.token) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === generateMessageId
-                ? updateActiveVariant(m, {
-                    message: fullText + "▋",
-                    reasoning_time_taken: timetaken
-                  })
-                : m
-            )
-          )
+          scheduleStreamingUpdate(`${fullText}▋`, timetaken)
         }
         if (count === 0) {
           setIsProcessing(true)
@@ -1353,6 +1408,8 @@ export const useChatActions = ({
         count++
         if (signal?.aborted) break
       }
+      cancelStreamingUpdate()
+      flushStreamingUpdate()
 
       if (signal?.aborted) {
         const abortError = new Error("AbortError")
@@ -1574,6 +1631,22 @@ export const useChatActions = ({
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: chatHistory,
+          previousHistory: chatMemory,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        return
+      }
+
+      cancelStreamingUpdate()
       await attemptCharacterStreamRecoveryPersist({
         chatId: activeChatId,
         temporaryChat,
@@ -1645,6 +1718,8 @@ export const useChatActions = ({
       setIsProcessing(false)
       setStreaming(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
+      cancelStreamingUpdate()
       setAbortController(null)
     }
   }
@@ -1860,6 +1935,7 @@ export const useChatActions = ({
     imageGenerationSource,
     imageEventSyncPolicy,
     messageSteeringOverride,
+    requestOverrides,
     continueOutputTarget = "chat",
     serverChatIdOverride
   }: {
@@ -1881,10 +1957,13 @@ export const useChatActions = ({
     imageGenerationSource?: "slash-command" | "generate-modal" | "message-regen"
     imageEventSyncPolicy?: ImageGenerationEventSyncPolicy
     messageSteeringOverride?: Partial<MessageSteeringState> | null
+    requestOverrides?: ChatModeOverrides
     continueOutputTarget?: "chat" | "composer_input"
     serverChatIdOverride?: string | null
   }) => {
-    const effectiveSelectedModel = getEffectiveSelectedModel()
+    const effectiveSelectedModel = getEffectiveSelectedModel(
+      requestOverrides?.selectedModel
+    )
     setStreaming(true)
     const trimmedImageBackendOverride =
       typeof imageBackendOverride === "string"
@@ -1927,6 +2006,7 @@ export const useChatActions = ({
     }
 
     const chatModeParams = await buildChatModeParams({
+      ...(requestOverrides ?? {}),
       selectedModel: effectiveSelectedModel,
       messageSteering: messageSteeringForTurn,
       userMessageType,
@@ -2600,9 +2680,26 @@ export const useChatActions = ({
     }
   })
 
-  const stopStreamingRequest = createStopStreamingRequest(
-    abortController,
-    setAbortController
+  const stopStreamingRequest = React.useCallback(
+    (options?: unknown) => {
+      if (!abortController) {
+        return
+      }
+
+      const discardTurn =
+        typeof options === "object" &&
+        options !== null &&
+        "discardTurn" in options &&
+        options.discardTurn === true
+
+      if (discardTurn) {
+        discardCurrentTurnOnAbortRef.current = true
+      }
+
+      abortController.abort()
+      setAbortController(null)
+    },
+    [abortController, setAbortController]
   )
 
   const editMessage = createEditMessage({
