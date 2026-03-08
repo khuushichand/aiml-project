@@ -185,6 +185,7 @@ async def _process_sync_job(
         raise RuntimeError("Database pool unavailable for ingestion sources worker.")
 
     pool = await get_db_pool()
+    staged_snapshot: dict[str, Any] | None = None
 
     async with pool.transaction() as db:
         await ensure_ingestion_sources_schema(db)
@@ -211,7 +212,6 @@ async def _process_sync_job(
         source_type = str(source.get("source_type") or "").strip().lower()
         sink_type = str(source.get("sink_type") or "").strip().lower()
         policy = str(source.get("policy") or "canonical").strip().lower()
-        staged_snapshot: dict[str, Any] | None = None
         if source_type == "local_directory":
             current_items = build_local_directory_snapshot(source.get("config") or {}, sink_type=sink_type)
         elif source_type == "archive_snapshot":
@@ -343,6 +343,16 @@ async def _process_sync_job(
     except _NONCRITICAL_EXCEPTIONS as exc:
         with contextlib.suppress(_NONCRITICAL_EXCEPTIONS):
             async with pool.transaction() as db:
+                if staged_snapshot:
+                    await update_source_snapshot(
+                        db,
+                        snapshot_id=int(staged_snapshot["id"]),
+                        status="failed",
+                        summary={
+                            "status": "failed",
+                            "error": str(exc),
+                        },
+                    )
                 await finish_source_sync_job(
                     db,
                     source_id=source_id,
