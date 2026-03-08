@@ -108,6 +108,12 @@ async def test_synthesizer_groups_notes_into_sections_and_claims():
     assert result.synthesis_summary["section_count"] == 2
     assert result.synthesis_summary["claim_count"] == 2
     assert result.synthesis_summary["coverage"]["missing_focus_areas"] == []
+    assert result.verification_summary["supported_claim_count"] == 2
+    assert result.verification_summary["unsupported_claim_count"] == 0
+    assert result.source_trust[0]["snapshot_policy"] == "full_artifact"
+    assert result.claims[0].support_level == "strong"
+    assert result.claims[0].supporting_note_ids == ["note_background"]
+    assert "local_corpus" in result.claims[0].trust_labels
 
 
 @pytest.mark.asyncio
@@ -135,6 +141,79 @@ async def test_synthesizer_omits_unsupported_claims_and_carries_unresolved_quest
     assert "weak_external_coverage" in result.unresolved_questions
     assert "missing evidence" in result.synthesis_summary["coverage"]["missing_focus_areas"]
     assert any("missing evidence" in item for item in result.unresolved_questions)
+    assert result.verification_summary["supported_claim_count"] == 1
+    assert result.verification_summary["unsupported_claim_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_surfaces_unsupported_provider_claims_and_contradictions():
+    from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
+
+    provider = _SynthesisProviderStub(
+        {
+            "outline_sections": [
+                {
+                    "title": "Background",
+                    "focus_area": "background",
+                    "source_ids": ["src_background"],
+                    "note_ids": ["note_background"],
+                }
+            ],
+            "claims": [
+                {
+                    "claim_id": "clm_supported",
+                    "text": "Supported claim",
+                    "focus_area": "background",
+                    "source_ids": ["src_background"],
+                    "citations": [{"source_id": "src_background"}],
+                    "confidence": 0.81,
+                },
+                {
+                    "claim_id": "clm_unsupported",
+                    "text": "Unsupported claim",
+                    "focus_area": "background",
+                    "source_ids": ["src_web"],
+                    "citations": [{"source_id": "src_web"}],
+                    "confidence": 0.42,
+                },
+            ],
+            "report_sections": [
+                {
+                    "title": "Background",
+                    "markdown": "Evidence-backed section text.",
+                }
+            ],
+            "unresolved_questions": [],
+            "summary": {"mode": "llm_backed"},
+        }
+    )
+
+    synthesizer = ResearchSynthesizer(synthesis_provider=provider)
+    result = await synthesizer.synthesize(
+        plan=_plan(["background"]),
+        source_registry=[
+            _source("src_background", "background"),
+            _source("src_web", "background"),
+        ],
+        evidence_notes=[
+            _note("note_background", "src_background", "background", "Grounded evidence."),
+            _note("note_contradiction", "src_background", "background", "However, another internal note contradicts the prior assumption."),
+        ],
+        collection_summary={"remaining_gaps": []},
+        provider_config={"synthesis": {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2}},
+    )
+
+    unsupported = {claim["claim_id"]: claim for claim in result.unsupported_claims}
+    contradictions = result.contradictions
+
+    assert result.synthesis_summary["mode"] == "llm_backed"
+    assert result.verification_summary["supported_claim_count"] == 1
+    assert result.verification_summary["unsupported_claim_count"] == 1
+    assert "clm_unsupported" in unsupported
+    assert unsupported["clm_unsupported"]["reason"] == "no_supporting_notes"
+    assert result.claims[1].support_level == "unsupported"
+    assert contradictions[0]["note_id"] == "note_contradiction"
+    assert contradictions[0]["focus_area"] == "background"
 
 
 @pytest.mark.asyncio

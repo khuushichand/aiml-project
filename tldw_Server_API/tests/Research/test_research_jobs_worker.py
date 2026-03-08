@@ -956,6 +956,10 @@ async def test_synthesizing_job_writes_artifacts_and_opens_outline_review(tmp_pa
     assert (tmp_path / "outputs" / "research" / session.id / "claims.json").exists()
     assert (tmp_path / "outputs" / "research" / session.id / "report_v1.md").exists()
     assert (tmp_path / "outputs" / "research" / session.id / "synthesis_summary.json").exists()
+    assert (tmp_path / "outputs" / "research" / session.id / "verification_summary.json").exists()
+    assert (tmp_path / "outputs" / "research" / session.id / "unsupported_claims.json").exists()
+    assert (tmp_path / "outputs" / "research" / session.id / "contradictions.json").exists()
+    assert (tmp_path / "outputs" / "research" / session.id / "source_trust.json").exists()
 
 
 @pytest.mark.asyncio
@@ -1665,6 +1669,50 @@ async def test_packaging_job_writes_bundle_and_completes_session(tmp_path):
         phase="packaging",
         job_id=None,
     )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="verification_summary.json",
+        payload={
+            "supported_claim_count": 1,
+            "unsupported_claim_count": 0,
+            "contradiction_count": 0,
+        },
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="unsupported_claims.json",
+        payload={"claims": []},
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="contradictions.json",
+        payload={"contradictions": []},
+        phase="packaging",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="source_trust.json",
+        payload={
+            "sources": [
+                {
+                    "source_id": "src_1",
+                    "snapshot_policy": "full_artifact",
+                    "trust_label": "local_corpus",
+                }
+            ]
+        },
+        phase="packaging",
+        job_id=None,
+    )
 
     result = await handle_research_phase_job(
         {
@@ -1694,6 +1742,10 @@ async def test_packaging_job_writes_bundle_and_completes_session(tmp_path):
     assert bundle is not None
     assert bundle["question"] == session.query
     assert bundle["claims"][0]["citations"][0]["source_id"] == "src_1"
+    assert bundle["verification_summary"]["supported_claim_count"] == 1
+    assert bundle["unsupported_claims"] == []
+    assert bundle["contradictions"] == []
+    assert bundle["source_trust"][0]["snapshot_policy"] == "full_artifact"
 
 
 @pytest.mark.asyncio

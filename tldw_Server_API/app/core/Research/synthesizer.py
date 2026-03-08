@@ -46,6 +46,72 @@ def _fallback_reason(exc: Exception) -> str:
     return str(exc).strip() or exc.__class__.__name__
 
 
+_CONTRADICTION_MARKERS = (
+    "contradict",
+    "conflict",
+    "disagree",
+    "however",
+    "in contrast",
+    "opposes",
+)
+
+
+def _source_trust_profile(source: ResearchSourceRecord) -> dict[str, Any]:
+    source_type = (source.source_type or "").strip().lower()
+    provider = (source.provider or "").strip().lower()
+    trust_tier = (source.trust_tier or "").strip().lower()
+
+    if provider == "local_corpus" or trust_tier == "internal":
+        trust_label = "local_corpus"
+        snapshot_policy = "full_artifact"
+    elif source_type in {"primary_document", "official_filing", "official_statement"}:
+        trust_label = "primary_source"
+        snapshot_policy = "metadata_only"
+    elif source_type == "academic_paper" or provider in {"arxiv", "pubmed", "crossref"}:
+        trust_label = "secondary_source"
+        snapshot_policy = "metadata_only"
+    elif source_type in {"web_result", "metadata_record"}:
+        trust_label = "metadata_only"
+        snapshot_policy = "metadata_only"
+    else:
+        trust_label = "external_source"
+        snapshot_policy = "metadata_only"
+
+    warnings: list[str] = []
+    if snapshot_policy == "metadata_only":
+        warnings.append("full_source_snapshot_unavailable")
+
+    return {
+        "source_id": source.source_id,
+        "title": source.title,
+        "provider": source.provider,
+        "source_type": source.source_type,
+        "trust_tier": source.trust_tier,
+        "trust_label": trust_label,
+        "snapshot_policy": snapshot_policy,
+        "warnings": warnings,
+    }
+
+
+def _extract_contradictions(evidence_notes: list[ResearchEvidenceNote]) -> list[dict[str, Any]]:
+    contradictions: list[dict[str, Any]] = []
+    for note in evidence_notes:
+        lowered = note.text.lower()
+        marker = next((candidate for candidate in _CONTRADICTION_MARKERS if candidate in lowered), None)
+        if marker is None:
+            continue
+        contradictions.append(
+            {
+                "note_id": note.note_id,
+                "source_id": note.source_id,
+                "focus_area": note.focus_area,
+                "marker": marker,
+                "text": note.text,
+            }
+        )
+    return contradictions
+
+
 class ResearchSynthesizer:
     """Build synthesis artifacts from normalized research evidence."""
 
@@ -108,6 +174,133 @@ class ResearchSynthesizer:
             if "provider" in provider_config or "model" in provider_config:
                 return dict(provider_config)
         return {}
+
+    def _finalize_result(
+        self,
+        *,
+        plan: ResearchPlan,
+        source_registry: list[ResearchSourceRecord],
+        evidence_notes: list[ResearchEvidenceNote],
+        outline_sections: list[ResearchOutlineSection],
+        claims: list[ResearchSynthesizedClaim],
+        report_markdown: str,
+        unresolved_questions: list[str],
+        summary: dict[str, Any],
+    ) -> ResearchSynthesisResult:
+        source_trust = [_source_trust_profile(source) for source in source_registry]
+        trust_by_source_id = {entry["source_id"]: entry for entry in source_trust}
+        contradictions = _extract_contradictions(evidence_notes)
+
+        note_lookup: dict[tuple[str, str], list[ResearchEvidenceNote]] = defaultdict(list)
+        fallback_note_lookup: dict[str, list[ResearchEvidenceNote]] = defaultdict(list)
+        for note in evidence_notes:
+            note_lookup[(note.source_id, note.focus_area)].append(note)
+            fallback_note_lookup[note.source_id].append(note)
+
+        verified_claims: list[ResearchSynthesizedClaim] = []
+        unsupported_claims: list[dict[str, Any]] = []
+        supported_claim_count = 0
+        unsupported_claim_count = 0
+        support_level_counts: dict[str, int] = defaultdict(int)
+        trust_label_counts: dict[str, int] = defaultdict(int)
+
+        for entry in source_trust:
+            trust_label_counts[str(entry["trust_label"])] += 1
+
+        for claim in claims:
+            supporting_notes: list[ResearchEvidenceNote] = []
+            for source_id in claim.source_ids:
+                supporting_notes.extend(note_lookup.get((source_id, claim.focus_area), []))
+            if not supporting_notes:
+                for source_id in claim.source_ids:
+                    supporting_notes.extend(fallback_note_lookup.get(source_id, []))
+
+            supporting_note_ids = list(dict.fromkeys(note.note_id for note in supporting_notes))
+            trust_labels = list(
+                dict.fromkeys(
+                    trust_by_source_id[source_id]["trust_label"]
+                    for source_id in claim.source_ids
+                    if source_id in trust_by_source_id
+                )
+            )
+            snapshot_policies = list(
+                dict.fromkeys(
+                    trust_by_source_id[source_id]["snapshot_policy"]
+                    for source_id in claim.source_ids
+                    if source_id in trust_by_source_id
+                )
+            )
+            warnings: list[str] = []
+            if not supporting_note_ids:
+                support_level = "unsupported"
+                warnings.append("no_supporting_notes")
+            elif any(label in {"local_corpus", "primary_source"} for label in trust_labels):
+                support_level = "strong"
+            elif len(set(claim.source_ids)) >= 2 or len(supporting_note_ids) >= 2:
+                support_level = "strong"
+            elif all(policy == "metadata_only" for policy in snapshot_policies) and snapshot_policies:
+                support_level = "limited"
+                warnings.append("metadata_only_support")
+            else:
+                support_level = "supported"
+
+            verified_claim = ResearchSynthesizedClaim(
+                claim_id=claim.claim_id,
+                text=claim.text,
+                focus_area=claim.focus_area,
+                source_ids=list(claim.source_ids),
+                citations=list(claim.citations),
+                confidence=claim.confidence,
+                support_level=support_level,
+                supporting_note_ids=supporting_note_ids,
+                trust_labels=trust_labels,
+                snapshot_policies=snapshot_policies,
+                warnings=warnings,
+            )
+            verified_claims.append(verified_claim)
+            support_level_counts[support_level] += 1
+            if support_level == "unsupported":
+                unsupported_claim_count += 1
+                unsupported_claims.append(
+                    {
+                        "claim_id": verified_claim.claim_id,
+                        "text": verified_claim.text,
+                        "focus_area": verified_claim.focus_area,
+                        "reason": "no_supporting_notes",
+                        "source_ids": list(verified_claim.source_ids),
+                        "citations": list(verified_claim.citations),
+                    }
+                )
+            else:
+                supported_claim_count += 1
+
+        verification_summary = {
+            "query": plan.query,
+            "claim_count": len(verified_claims),
+            "supported_claim_count": supported_claim_count,
+            "unsupported_claim_count": unsupported_claim_count,
+            "contradiction_count": len(contradictions),
+            "support_level_counts": dict(support_level_counts),
+            "trust_label_counts": dict(trust_label_counts),
+        }
+        summary.update(
+            {
+                "verification_summary": verification_summary,
+                "unsupported_claim_count": unsupported_claim_count,
+                "contradiction_count": len(contradictions),
+            }
+        )
+        return ResearchSynthesisResult(
+            outline_sections=outline_sections,
+            claims=verified_claims,
+            report_markdown=report_markdown,
+            unresolved_questions=unresolved_questions,
+            synthesis_summary=summary,
+            verification_summary=verification_summary,
+            unsupported_claims=unsupported_claims,
+            contradictions=contradictions,
+            source_trust=source_trust,
+        )
 
     def _build_provider_result(
         self,
@@ -223,12 +416,15 @@ class ResearchSynthesizer:
                 },
             }
         )
-        return ResearchSynthesisResult(
+        return self._finalize_result(
+            plan=plan,
+            source_registry=source_registry,
+            evidence_notes=evidence_notes,
             outline_sections=outline_sections,
             claims=claims,
             report_markdown=report_markdown,
             unresolved_questions=unresolved_questions,
-            synthesis_summary=summary,
+            summary=summary,
         )
 
     @staticmethod
@@ -262,6 +458,10 @@ class ResearchSynthesizer:
             report_markdown=result.report_markdown,
             unresolved_questions=result.unresolved_questions,
             synthesis_summary=summary,
+            verification_summary=result.verification_summary,
+            unsupported_claims=result.unsupported_claims,
+            contradictions=result.contradictions,
+            source_trust=result.source_trust,
         )
 
     def _synthesize_deterministic(
@@ -380,12 +580,15 @@ class ResearchSynthesizer:
             },
         }
 
-        return ResearchSynthesisResult(
+        return self._finalize_result(
+            plan=plan,
+            source_registry=source_registry,
+            evidence_notes=evidence_notes,
             outline_sections=outline_sections,
             claims=claims,
             report_markdown=report_markdown,
             unresolved_questions=unresolved_questions,
-            synthesis_summary=synthesis_summary,
+            summary=synthesis_summary,
         )
 
 

@@ -322,6 +322,14 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
 
     package = store.read_json(session_id=session_id, artifact_name="bundle.json")
     assert package is not None
+    assert package["verification_summary"]["supported_claim_count"] == 1
+    assert package["verification_summary"]["unsupported_claim_count"] == 0
+    assert package["unsupported_claims"] == []
+    assert package["contradictions"] == []
+    matching_source_trust = next(
+        item for item in package["source_trust"] if item["source_id"] == first_source["source_id"]
+    )
+    assert matching_source_trust["snapshot_policy"] in {"full_artifact", "metadata_excerpt"}
 
     with TestClient(app) as client:
         run_resp = client.get(f"/api/v1/research/runs/{session_id}")
@@ -333,6 +341,9 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
         assert run_resp.json()["completed_at"] is not None
         assert bundle_resp.status_code == 200
         assert bundle_resp.json()["question"] == "Test deep research run"
+        assert bundle_resp.json()["verification_summary"]["supported_claim_count"] == 1
+        assert bundle_resp.json()["unsupported_claims"] == []
+        assert bundle_resp.json()["contradictions"] == []
         assert artifact_resp.status_code == 200
         assert artifact_resp.json()["artifact_name"] == "report_v1.md"
         assert artifact_resp.json()["content_type"] == "text/markdown"

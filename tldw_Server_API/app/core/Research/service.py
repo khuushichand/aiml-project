@@ -54,6 +54,10 @@ class ResearchService:
         "claims.json",
         "report_v1.md",
         "synthesis_summary.json",
+        "verification_summary.json",
+        "unsupported_claims.json",
+        "contradictions.json",
+        "source_trust.json",
         "bundle.json",
     }
 
@@ -380,6 +384,10 @@ class ResearchService:
         claims: list[dict[str, Any]],
         source_inventory: list[dict[str, Any]],
         unresolved_questions: list[str] | None = None,
+        verification_summary: dict[str, Any] | None = None,
+        unsupported_claims: list[dict[str, Any]] | None = None,
+        contradictions: list[dict[str, Any]] | None = None,
+        source_trust: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Build and persist the final deep research package."""
         db = self._db_for_user(owner_user_id)
@@ -394,6 +402,10 @@ class ResearchService:
             claims=claims,
             source_inventory=source_inventory,
             unresolved_questions=unresolved_questions,
+            verification_summary=verification_summary,
+            unsupported_claims=unsupported_claims,
+            contradictions=contradictions,
+            source_trust=source_trust,
         )
         artifact_store = ResearchArtifactStore(
             base_dir=self._outputs_dir_for_user(owner_user_id),

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -82,6 +82,11 @@ class ResearchSynthesizedClaim:
     source_ids: list[str]
     citations: list[dict[str, Any]]
     confidence: float
+    support_level: str = "supported"
+    supporting_note_ids: list[str] = field(default_factory=list)
+    trust_labels: list[str] = field(default_factory=list)
+    snapshot_policies: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -91,3 +96,7 @@ class ResearchSynthesisResult:
     report_markdown: str
     unresolved_questions: list[str]
     synthesis_summary: dict[str, Any]
+    verification_summary: dict[str, Any] = field(default_factory=dict)
+    unsupported_claims: list[dict[str, Any]] = field(default_factory=list)
+    contradictions: list[dict[str, Any]] = field(default_factory=list)
+    source_trust: list[dict[str, Any]] = field(default_factory=list)

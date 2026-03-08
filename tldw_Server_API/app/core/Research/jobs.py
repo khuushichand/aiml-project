@@ -644,6 +644,38 @@ async def _handle_synthesizing_phase(
         phase="synthesizing",
         job_id=job_id,
     )
+    artifact_store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="verification_summary.json",
+        payload=result.verification_summary,
+        phase="synthesizing",
+        job_id=job_id,
+    )
+    artifact_store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="unsupported_claims.json",
+        payload={"claims": result.unsupported_claims},
+        phase="synthesizing",
+        job_id=job_id,
+    )
+    artifact_store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="contradictions.json",
+        payload={"contradictions": result.contradictions},
+        phase="synthesizing",
+        job_id=job_id,
+    )
+    artifact_store.write_json(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        artifact_name="source_trust.json",
+        payload={"sources": result.source_trust},
+        phase="synthesizing",
+        job_id=job_id,
+    )
 
     next_phase = "packaging"
     next_status = "queued"
@@ -680,7 +712,7 @@ async def _handle_synthesizing_phase(
         next_phase=next_phase,
         next_status=next_status,
         checkpoint_id=checkpoint_id,
-        artifacts_written=4,
+        artifacts_written=8,
     )
 
 
@@ -712,6 +744,10 @@ async def _handle_packaging_phase(
     synthesis_summary = artifact_store.read_json(session_id=session.id, artifact_name="synthesis_summary.json")
     if synthesis_summary is None:
         raise ValueError(f"missing synthesis summary artifact for session {session.id}")
+    verification_summary = artifact_store.read_json(session_id=session.id, artifact_name="verification_summary.json") or {}
+    unsupported_claims_payload = artifact_store.read_json(session_id=session.id, artifact_name="unsupported_claims.json") or {}
+    contradictions_payload = artifact_store.read_json(session_id=session.id, artifact_name="contradictions.json") or {}
+    source_trust_payload = artifact_store.read_json(session_id=session.id, artifact_name="source_trust.json") or {}
 
     package = build_final_package(
         brief={"query": plan.query},
@@ -720,6 +756,10 @@ async def _handle_packaging_phase(
         claims=list(claims_payload.get("claims", [])),
         source_inventory=list(source_registry_payload.get("sources", [])),
         unresolved_questions=list(synthesis_summary.get("unresolved_questions", [])),
+        verification_summary=verification_summary,
+        unsupported_claims=list(unsupported_claims_payload.get("claims", [])),
+        contradictions=list(contradictions_payload.get("contradictions", [])),
+        source_trust=list(source_trust_payload.get("sources", [])),
     )
 
     artifact_store.write_json(
