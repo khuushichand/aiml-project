@@ -89,10 +89,16 @@ class SessionRecord:
             "forked_from": self.forked_from,
         }
 
-    def to_detail_dict(self, *, has_websocket: bool = False) -> dict[str, Any]:
+    def to_detail_dict(
+        self,
+        *,
+        has_websocket: bool = False,
+        fork_lineage: list[str] | None = None,
+    ) -> dict[str, Any]:
         d = self.to_info_dict(has_websocket=has_websocket)
         d["messages"] = list(self.messages)
         d["cwd"] = self.cwd
+        d["fork_lineage"] = fork_lineage or []
         return d
 
 
@@ -251,6 +257,131 @@ class ACPSessionStore:
         # Permission policies — keyed by id
         self._permission_policies: dict[int, PermissionPolicy] = {}
         self._permission_policy_seq = 0
+        # Session TTL cleanup task
+        self._cleanup_task: asyncio.Task | None = None
+        # Quotas (loaded from config on first use)
+        self._session_ttl_seconds: int = 86400
+        self._max_concurrent_per_user: int = 5
+        self._max_tokens_per_session: int = 1_000_000
+        self._max_session_duration_seconds: int = 14400
+
+    def configure_quotas(
+        self,
+        session_ttl_seconds: int = 86400,
+        max_concurrent_per_user: int = 5,
+        max_tokens_per_session: int = 1_000_000,
+        max_session_duration_seconds: int = 14400,
+    ) -> None:
+        """Set quota limits from config."""
+        self._session_ttl_seconds = session_ttl_seconds
+        self._max_concurrent_per_user = max_concurrent_per_user
+        self._max_tokens_per_session = max_tokens_per_session
+        self._max_session_duration_seconds = max_session_duration_seconds
+
+    def start_cleanup_task(self) -> None:
+        """Start background task to evict expired sessions."""
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.ensure_future(self._cleanup_loop())
+
+    def stop_cleanup_task(self) -> None:
+        """Cancel the cleanup background task."""
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+            self._cleanup_task = None
+
+    async def _cleanup_loop(self) -> None:
+        """Periodically evict expired sessions."""
+        while True:
+            try:
+                await asyncio.sleep(300)  # Check every 5 minutes
+                await self._evict_expired_sessions()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("ACP session cleanup error: {}", exc)
+                await asyncio.sleep(60)
+
+    async def _evict_expired_sessions(self) -> int:
+        """Evict sessions past TTL or max duration. Returns count evicted."""
+        now = time.time()
+        evicted = 0
+        async with self._lock:
+            to_evict: list[str] = []
+            for sid, rec in self._sessions.items():
+                if rec.status != "active":
+                    continue
+                try:
+                    created = datetime.fromisoformat(rec.created_at).timestamp()
+                except (ValueError, TypeError):
+                    continue
+                age = now - created
+                if age > self._session_ttl_seconds:
+                    to_evict.append(sid)
+                    continue
+                if age > self._max_session_duration_seconds:
+                    to_evict.append(sid)
+            for sid in to_evict:
+                rec = self._sessions.get(sid)
+                if rec:
+                    rec.status = "closed"
+                    rec.last_activity_at = datetime.now(timezone.utc).isoformat()
+                    evicted += 1
+                    logger.info("ACP session {} evicted (TTL/duration expired)", sid)
+        return evicted
+
+    async def check_session_quota(self, user_id: int) -> dict[str, Any] | None:
+        """Check if user can create a new session. Returns None if ok, or error dict."""
+        active_count = 0
+        async with self._lock:
+            for rec in self._sessions.values():
+                if rec.user_id == user_id and rec.status == "active":
+                    active_count += 1
+        if active_count >= self._max_concurrent_per_user:
+            return {
+                "code": "quota_exceeded",
+                "message": f"Max concurrent sessions ({self._max_concurrent_per_user}) exceeded",
+                "current": active_count,
+                "limit": self._max_concurrent_per_user,
+            }
+        return None
+
+    async def check_token_quota(self, session_id: str) -> dict[str, Any] | None:
+        """Check if a session has exceeded its token quota. Returns None if ok."""
+        rec = self._sessions.get(session_id)
+        if not rec:
+            return None
+        if rec.usage.total_tokens >= self._max_tokens_per_session:
+            return {
+                "code": "token_quota_exceeded",
+                "message": f"Session token limit ({self._max_tokens_per_session}) exceeded",
+                "current": rec.usage.total_tokens,
+                "limit": self._max_tokens_per_session,
+            }
+        return None
+
+    async def get_quota_status(self, user_id: int, session_id: str | None = None) -> dict[str, Any]:
+        """Get current quota usage for a user/session."""
+        active_count = 0
+        async with self._lock:
+            for rec in self._sessions.values():
+                if rec.user_id == user_id and rec.status == "active":
+                    active_count += 1
+        result: dict[str, Any] = {
+            "concurrent_sessions": {
+                "current": active_count,
+                "limit": self._max_concurrent_per_user,
+            },
+            "session_ttl_seconds": self._session_ttl_seconds,
+            "max_session_duration_seconds": self._max_session_duration_seconds,
+        }
+        if session_id:
+            rec = self._sessions.get(session_id)
+            if rec:
+                result["session_tokens"] = {
+                    "current": rec.usage.total_tokens,
+                    "limit": self._max_tokens_per_session,
+                }
+        return result
 
     # -- Session CRUD -------------------------------------------------------
 
@@ -328,6 +459,24 @@ class ACPSessionStore:
 
     async def get_session(self, session_id: str) -> SessionRecord | None:
         return self._sessions.get(session_id)
+
+    async def get_fork_lineage(self, session_id: str, *, max_depth: int = 50) -> list[str]:
+        """Walk the forked_from chain and return ancestor session IDs (oldest first)."""
+        lineage: list[str] = []
+        current_id = session_id
+        seen: set[str] = {current_id}
+        for _ in range(max_depth):
+            rec = self._sessions.get(current_id)
+            if not rec or not rec.forked_from:
+                break
+            parent_id = rec.forked_from
+            if parent_id in seen:
+                break  # cycle guard
+            seen.add(parent_id)
+            lineage.append(parent_id)
+            current_id = parent_id
+        lineage.reverse()  # oldest ancestor first
+        return lineage
 
     async def build_bootstrap_prompt(
         self,
