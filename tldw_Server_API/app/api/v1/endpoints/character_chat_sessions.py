@@ -44,6 +44,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     CharacterChatCompletionV2Response,
     CharacterChatStreamPersistRequest,
     CharacterChatStreamPersistResponse,
+    ChatLinkedResearchRunsListResponse,
     ChatSessionCreate,
     ChatSessionListResponse,
     ChatSessionResponse,
@@ -123,6 +124,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError,
 )
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.Research.service import ResearchService
 from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_provider_line, sse_done
 
 # Completion schemas centralized in schemas/chat_session_schemas.py
@@ -309,6 +311,11 @@ def _verify_chat_ownership(
 
 
 router = APIRouter()
+
+
+def _get_research_service() -> ResearchService:
+    """Return the default deep research service for chat-linked status reads."""
+    return ResearchService(research_db_path=None, outputs_dir=None, job_manager=None)
 
 # Simple per-chat throttle used for legacy /complete endpoint in tests (TEST_MODE only)
 # Bounded to prevent unbounded memory growth - uses constants from Character_Chat.constants
@@ -2504,6 +2511,40 @@ async def get_chat_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while retrieving chat session"
+        ) from e
+
+
+@router.get(
+    "/{chat_id}/research-runs",
+    response_model=ChatLinkedResearchRunsListResponse,
+    summary="List deep research runs linked to a chat session",
+    tags=["Chat Sessions"],
+)
+async def list_chat_linked_research_runs(
+    chat_id: str = Path(..., description="Chat session ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+    research_service: ResearchService = Depends(_get_research_service),
+):
+    """Return compact deep research run status rows linked to the chat thread."""
+    try:
+        conversation = db.get_conversation_by_id(chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        runs = research_service.list_chat_linked_runs(
+            owner_user_id=str(current_user.id),
+            chat_id=chat_id,
+            terminal_limit=10,
+        )
+        return ChatLinkedResearchRunsListResponse(runs=runs)
+
+    except HTTPException:
+        raise
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Error listing linked research runs for chat {chat_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while retrieving linked research runs",
         ) from e
 
 

@@ -285,3 +285,32 @@ Update this plan with:
 - This slice intentionally keeps research state outside the transcript.
 - This slice intentionally uses polling, not research SSE, in chat.
 - This slice intentionally links out to `/research` instead of reproducing checkpoint or bundle UI inside chat.
+
+## Execution Status
+
+- Task 1: Complete
+- Task 2: Complete
+- Task 3: Complete
+- Task 4: Complete
+- Task 5: Complete
+
+## Actual Verification
+
+- Backend red:
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/Research/test_research_jobs_service.py /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/Character_Chat/test_character_chat_endpoints.py /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/AuthNZ/integration/test_chat_research_runs_endpoint.py -q`
+  - Result: `3 failed, 31 passed, 1 skipped`
+- Backend green:
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/Research/test_research_jobs_service.py /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/Character_Chat/test_character_chat_endpoints.py /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/AuthNZ/integration/test_chat_research_runs_endpoint.py -q`
+  - Result: `34 passed, 1 skipped`
+- Frontend red:
+  - `cd /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui && bunx vitest run src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx src/services/tldw/__tests__/TldwApiClient.research-runs.test.ts`
+  - Result: `6 failed`
+- Frontend green:
+  - `cd /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui && bunx vitest run src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx src/services/tldw/__tests__/TldwApiClient.research-runs.test.ts`
+  - Result: `6 passed`
+- Related frontend regression subset:
+  - `cd /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui && bunx vitest run src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx src/components/Option/Playground/__tests__/PlaygroundChat.search.integration.test.tsx src/components/Option/Playground/__tests__/PlaygroundChat.image-generation-event.integration.test.tsx src/services/tldw/__tests__/TldwApiClient.research-runs.test.ts`
+  - Result: `15 passed`
+- Bandit:
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/core/DB_Management/ResearchSessionsDB.py /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/core/Research/service.py /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/api/v1/schemas/chat_session_schemas.py -f json -o /tmp/bandit_chat_linked_runs_status.json`
+  - Result: JSON written to `/tmp/bandit_chat_linked_runs_status.json`; no findings in the new linked-runs code, and only pre-existing low-severity findings remained in untouched legacy lines of `character_chat_sessions.py`

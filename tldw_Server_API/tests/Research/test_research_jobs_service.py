@@ -120,6 +120,111 @@ def test_create_session_without_chat_handoff_has_no_linkage(tmp_path):
     assert db.get_chat_handoff(session.id) is None
 
 
+def test_list_chat_linked_runs_returns_compact_bounded_rows_ordered_by_session_update(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            return {"id": 21, "uuid": "job-21", "status": "queued"}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=DummyJobs(),
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+
+    terminal_ids: list[str] = []
+    for index in range(12):
+        session = service.create_session(
+            owner_user_id="owner-1",
+            query=f"terminal query {index}",
+            source_policy="balanced",
+            autonomy_mode="checkpointed",
+            chat_handoff={"chat_id": "chat_123"},
+        )
+        terminal_ids.append(session.id)
+        db.update_phase(
+            session.id,
+            phase="completed",
+            status="completed",
+            completed_at=f"2026-03-08T00:00:{index:02d}+00:00",
+            active_job_id=None,
+        )
+
+    active = service.create_session(
+        owner_user_id="owner-1",
+        query="active query",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        chat_handoff={"chat_id": "chat_123"},
+    )
+    db.update_phase(
+        active.id,
+        phase="collecting",
+        status="running",
+        active_job_id="22",
+    )
+
+    other_user = service.create_session(
+        owner_user_id="owner-2",
+        query="other user query",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        chat_handoff={"chat_id": "chat_123"},
+    )
+    db.update_phase(
+        other_user.id,
+        phase="completed",
+        status="completed",
+        completed_at="2026-03-08T00:02:00+00:00",
+        active_job_id=None,
+    )
+
+    runs = service.list_chat_linked_runs(owner_user_id="owner-1", chat_id="chat_123")
+
+    assert [run.run_id for run in runs] == [
+        active.id,
+        terminal_ids[-1],
+        terminal_ids[-2],
+        terminal_ids[-3],
+        terminal_ids[-4],
+        terminal_ids[-5],
+        terminal_ids[-6],
+        terminal_ids[-7],
+        terminal_ids[-8],
+        terminal_ids[-9],
+        terminal_ids[-10],
+    ]
+    assert all(run.run_id != terminal_ids[0] for run in runs)
+    assert all(run.run_id != other_user.id for run in runs)
+    assert all(
+        set(run.__dict__) == {
+            "run_id",
+            "query",
+            "status",
+            "phase",
+            "control_state",
+            "latest_checkpoint_id",
+            "updated_at",
+        }
+        for run in runs
+    )
+
+
+def test_list_chat_linked_runs_returns_empty_list_when_chat_has_no_runs(tmp_path):
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=None,
+    )
+
+    assert service.list_chat_linked_runs(owner_user_id="owner-1", chat_id="missing-chat") == []
+
+
 def test_approve_plan_review_enqueues_collecting_job(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
     from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore

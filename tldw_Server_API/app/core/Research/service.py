@@ -15,6 +15,7 @@ from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import (
 )
 from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import (
     ResearchArtifactRow,
+    ResearchChatLinkedRunRow,
     ResearchCheckpointRow,
     ResearchRunEventRow,
     ResearchSessionRow,
@@ -493,6 +494,20 @@ class ResearchService:
     ) -> list[ResearchSessionRow]:
         db = self._db_for_user(owner_user_id)
         return db.list_sessions(owner_user_id, limit=limit)
+
+    def list_chat_linked_runs(
+        self,
+        *,
+        owner_user_id: str,
+        chat_id: str,
+        terminal_limit: int = 10,
+    ) -> list[ResearchChatLinkedRunRow]:
+        db = self._db_for_user(owner_user_id)
+        return db.list_chat_linked_runs(
+            owner_user_id=str(owner_user_id),
+            chat_id=str(chat_id),
+            terminal_limit=terminal_limit,
+        )
 
     def get_session(self, *, owner_user_id: str, session_id: str) -> ResearchSessionRow:
         db = self._db_for_user(owner_user_id)

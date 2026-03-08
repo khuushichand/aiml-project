@@ -257,6 +257,20 @@ export interface ServerChatSummary {
   version?: number | null
 }
 
+export interface ChatLinkedResearchRun {
+  run_id: string
+  query: string
+  status: string
+  phase: string
+  control_state: string
+  latest_checkpoint_id: string | null
+  updated_at: string
+}
+
+export interface ChatLinkedResearchRunsResponse {
+  runs: ChatLinkedResearchRun[]
+}
+
 export type ConversationSharePermission = "view"
 
 export interface ConversationShareLinkSummary {
@@ -3716,6 +3730,31 @@ export class TldwApiClient {
       method: "GET"
     })
     return this.normalizeChatSummary(res)
+  }
+
+  async listChatResearchRuns(
+    chat_id: string | number
+  ): Promise<ChatLinkedResearchRunsResponse> {
+    const cid = String(chat_id)
+    const response = await bgRequest<any>({
+      path: `/api/v1/chats/${cid}/research-runs`,
+      method: "GET"
+    })
+    const runs = Array.isArray(response?.runs) ? response.runs : []
+    return {
+      runs: runs.map((run: any) => ({
+        run_id: String(run?.run_id ?? ""),
+        query: String(run?.query ?? ""),
+        status: String(run?.status ?? ""),
+        phase: String(run?.phase ?? ""),
+        control_state: String(run?.control_state ?? "running"),
+        latest_checkpoint_id:
+          typeof run?.latest_checkpoint_id === "string" && run.latest_checkpoint_id.trim()
+            ? run.latest_checkpoint_id
+            : null,
+        updated_at: String(run?.updated_at ?? "")
+      }))
+    }
   }
 
   async getChatSettings(chat_id: string | number): Promise<ChatSettingsResponse> {

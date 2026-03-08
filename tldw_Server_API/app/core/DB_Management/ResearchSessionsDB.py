@@ -105,6 +105,17 @@ class ResearchChatHandoffRow:
     delivered_at: str | None
 
 
+@dataclass(frozen=True)
+class ResearchChatLinkedRunRow:
+    run_id: str
+    query: str
+    status: str
+    phase: str
+    control_state: str
+    latest_checkpoint_id: str | None
+    updated_at: str
+
+
 class ResearchSessionsDB:
     """SQLite-backed storage for research sessions and related metadata."""
 
@@ -340,6 +351,20 @@ class ResearchSessionsDB:
             delivered_at=str(row["delivered_at"]) if row["delivered_at"] else None,
         )
 
+    @staticmethod
+    def _chat_linked_run_from_row(row: sqlite3.Row | None) -> ResearchChatLinkedRunRow | None:
+        if row is None:
+            return None
+        return ResearchChatLinkedRunRow(
+            run_id=str(row["run_id"]),
+            query=str(row["query"]),
+            status=str(row["status"]),
+            phase=str(row["phase"]),
+            control_state=str(row["control_state"]),
+            latest_checkpoint_id=str(row["latest_checkpoint_id"]) if row["latest_checkpoint_id"] else None,
+            updated_at=str(row["updated_at"]),
+        )
+
     def create_session(
         self,
         *,
@@ -429,6 +454,64 @@ class ResearchSessionsDB:
                 (session_id,),
             ).fetchone()
         return self._chat_handoff_from_row(row)
+
+    def list_chat_linked_runs(
+        self,
+        *,
+        owner_user_id: str,
+        chat_id: str,
+        terminal_limit: int = 10,
+    ) -> list[ResearchChatLinkedRunRow]:
+        bounded_terminal_limit = max(0, int(terminal_limit))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                WITH linked_runs AS (
+                    SELECT
+                        s.id AS run_id,
+                        s.query,
+                        s.status,
+                        s.phase,
+                        s.control_state,
+                        s.latest_checkpoint_id,
+                        s.updated_at,
+                        CASE
+                            WHEN s.status IN ('completed', 'failed', 'cancelled') THEN 1
+                            ELSE 0
+                        END AS is_terminal,
+                        CASE
+                            WHEN s.status IN ('completed', 'failed', 'cancelled') THEN
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY CASE
+                                        WHEN s.status IN ('completed', 'failed', 'cancelled') THEN 1
+                                        ELSE 0
+                                    END
+                                    ORDER BY s.updated_at DESC, s.id DESC
+                                )
+                            ELSE 0
+                        END AS terminal_rank
+                    FROM research_chat_handoffs AS h
+                    INNER JOIN research_sessions AS s
+                        ON s.id = h.session_id
+                    WHERE h.owner_user_id = ?
+                      AND h.chat_id = ?
+                      AND s.owner_user_id = ?
+                )
+                SELECT
+                    run_id,
+                    query,
+                    status,
+                    phase,
+                    control_state,
+                    latest_checkpoint_id,
+                    updated_at
+                FROM linked_runs
+                WHERE is_terminal = 0 OR terminal_rank <= ?
+                ORDER BY is_terminal ASC, updated_at DESC, run_id DESC
+                """,
+                (str(owner_user_id), str(chat_id), str(owner_user_id), bounded_terminal_limit),
+            ).fetchall()
+        return [run for row in rows if (run := self._chat_linked_run_from_row(row)) is not None]
 
     def mark_chat_handoff_chat_inserted(
         self,
@@ -1263,6 +1346,7 @@ class ResearchSessionsDB:
 
 __all__ = [
     "ResearchArtifactRow",
+    "ResearchChatLinkedRunRow",
     "ResearchCheckpointRow",
     "ResearchRunEventRow",
     "ResearchSessionRow",

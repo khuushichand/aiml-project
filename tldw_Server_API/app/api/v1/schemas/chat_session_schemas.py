@@ -109,6 +109,29 @@ class ChatSessionListResponse(BaseModel):
     offset: int = Field(..., description="Offset for pagination")
 
 
+class ChatLinkedResearchRunResponse(BaseModel):
+    """Compact research run status surfaced alongside a chat thread."""
+
+    run_id: str = Field(..., description="Research run identifier")
+    query: str = Field(..., description="Original research query")
+    status: str = Field(..., description="Current research run status")
+    phase: str = Field(..., description="Current research phase")
+    control_state: str = Field(..., description="Current research control state")
+    latest_checkpoint_id: Optional[str] = Field(None, description="Latest checkpoint ID, when present")
+    updated_at: str = Field(..., description="Last research session update timestamp")
+
+    model_config = {"from_attributes": True}
+
+
+class ChatLinkedResearchRunsListResponse(BaseModel):
+    """Compact linked deep research runs for a single chat thread."""
+
+    runs: list[ChatLinkedResearchRunResponse] = Field(
+        default_factory=list,
+        description="Linked deep research runs for this chat",
+    )
+
+
 class ChatSettingsUpdate(BaseModel):
     """Schema for updating chat settings."""
     settings: dict[str, Any] = Field(..., description="Chat settings payload")

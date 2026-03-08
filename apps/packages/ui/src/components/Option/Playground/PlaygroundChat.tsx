@@ -16,12 +16,15 @@ import { resolveMessageCostUsd } from "@/components/Common/Playground/message-us
 import { formatCost } from "@/utils/model-pricing"
 import { fetchChatModels } from "@/services/tldw-server"
 import { tldwModels } from "@/services/tldw"
+import { tldwClient, type ChatLinkedResearchRun } from "@/services/tldw/TldwApiClient"
 import { applyVariantToMessage } from "@/utils/message-variants"
 import {
   buildNormalizedPreview,
   computeNormalizedPreviewBudget
 } from "./compare-normalized-preview"
 import { computeResponseDiffPreview } from "./compare-response-diff"
+import { ResearchRunStatusStack } from "./ResearchRunStatusStack"
+import { getChatLinkedResearchRefetchInterval } from "./research-run-status"
 import type { Character } from "@/types/character"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { ChatGreetingPicker } from "@/components/Common/ChatGreetingPicker"
@@ -223,10 +226,32 @@ export const PlaygroundChat = ({
   const compareModeActive = compareFeatureEnabled && compareMode
   const stableHistoryId =
     temporaryChat || historyId === "temp" ? null : historyId
+  const linkedResearchRunsEnabled = Boolean(serverChatId) && !temporaryChat
   const [conversationInstanceId, setConversationInstanceId] = React.useState(
     () => generateID()
   )
+  const [linkedResearchRunErrorCount, setLinkedResearchRunErrorCount] = React.useState(0)
   const previousMessageCount = React.useRef(messages.length)
+  const latestLinkedResearchSuccessAt = React.useRef(0)
+  const latestLinkedResearchErrorAt = React.useRef(0)
+
+  const linkedResearchRunsQuery = useQuery({
+    queryKey: ["playground:chat-linked-research-runs", serverChatId],
+    queryFn: async () => {
+      if (!serverChatId) {
+        return { runs: [] as ChatLinkedResearchRun[] }
+      }
+      await tldwClient.initialize().catch(() => null)
+      return await tldwClient.listChatResearchRuns(serverChatId)
+    },
+    enabled: linkedResearchRunsEnabled,
+    retry: false,
+    refetchInterval: (query) => {
+      const data = query.state.data as { runs?: ChatLinkedResearchRun[] } | undefined
+      const runs = Array.isArray(data?.runs) ? data.runs : []
+      return getChatLinkedResearchRefetchInterval(runs, linkedResearchRunErrorCount)
+    }
+  })
 
   React.useEffect(() => {
     const hasStableId = Boolean(serverChatId || stableHistoryId)
@@ -239,7 +264,46 @@ export const PlaygroundChat = ({
     }
     previousMessageCount.current = messages.length
   }, [messages.length, serverChatId, stableHistoryId])
+
+  React.useEffect(() => {
+    if (!linkedResearchRunsEnabled) {
+      latestLinkedResearchSuccessAt.current = 0
+      latestLinkedResearchErrorAt.current = 0
+      setLinkedResearchRunErrorCount(0)
+    }
+  }, [linkedResearchRunsEnabled])
+
+  React.useEffect(() => {
+    if (
+      linkedResearchRunsQuery.isSuccess &&
+      linkedResearchRunsQuery.dataUpdatedAt > 0 &&
+      linkedResearchRunsQuery.dataUpdatedAt !== latestLinkedResearchSuccessAt.current
+    ) {
+      latestLinkedResearchSuccessAt.current = linkedResearchRunsQuery.dataUpdatedAt
+      latestLinkedResearchErrorAt.current = 0
+      setLinkedResearchRunErrorCount(0)
+    }
+  }, [linkedResearchRunsQuery.dataUpdatedAt, linkedResearchRunsQuery.isSuccess])
+
+  React.useEffect(() => {
+    if (
+      linkedResearchRunsQuery.isError &&
+      linkedResearchRunsQuery.errorUpdatedAt > 0 &&
+      linkedResearchRunsQuery.errorUpdatedAt !== latestLinkedResearchErrorAt.current
+    ) {
+      latestLinkedResearchErrorAt.current = linkedResearchRunsQuery.errorUpdatedAt
+      setLinkedResearchRunErrorCount((current) => current + 1)
+    }
+  }, [linkedResearchRunsQuery.errorUpdatedAt, linkedResearchRunsQuery.isError])
   const blocks = React.useMemo(() => buildBlocks(messages), [messages])
+  const linkedResearchRuns = React.useMemo(() => {
+    if (!linkedResearchRunsEnabled || !linkedResearchRunsQuery.isSuccess) {
+      return []
+    }
+    return Array.isArray(linkedResearchRunsQuery.data?.runs)
+      ? linkedResearchRunsQuery.data.runs
+      : []
+  }, [linkedResearchRunsEnabled, linkedResearchRunsQuery.data?.runs, linkedResearchRunsQuery.isSuccess])
   const normalizedSearchQuery =
     typeof searchQuery === "string" ? searchQuery.trim() : ""
   const resolveSearchMatch = React.useCallback(
@@ -855,6 +919,7 @@ export const PlaygroundChat = ({
           serverChatId={serverChatId}
           className="mb-6 mt-4"
         />
+        <ResearchRunStatusStack runs={linkedResearchRuns} />
         {blocks.map((block, blockIndex) => {
           if (block.kind === "single") {
             const message = messages[block.index]
