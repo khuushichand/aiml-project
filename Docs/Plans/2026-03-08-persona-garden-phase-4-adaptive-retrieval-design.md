@@ -130,6 +130,7 @@ Add a persona-owned exemplar entity with the following shape:
 
 - `id`
 - `persona_id`
+- `user_id`
 - `kind`
 - `content`
 - `tone`
@@ -141,6 +142,23 @@ Add a persona-owned exemplar entity with the following shape:
 - `source_ref`
 - `notes`
 - timestamps/versioning metadata
+
+### Tag Format
+
+Use normalized free-form strings for:
+
+- `tone`
+- `scenario_tags`
+- `capability_tags`
+
+Normalization rules:
+
+- trim whitespace
+- lowercase
+- collapse duplicates
+- reject empty values after normalization
+
+This keeps the model flexible without forcing an enum migration every time prompt-taxonomy language evolves.
 
 ### Recommended `kind` values
 
@@ -218,6 +236,19 @@ Rank exemplars by:
 - capability tag match
 - priority
 - token budget cost
+
+### Capability Truth Source
+
+`capability_tags` are advisory retrieval hints, not the source of truth.
+
+Real capability truth must come from live runtime constraints such as:
+
+- persona policy rules
+- tool confirmation requirements
+- actual configured/default tool availability
+- any assistant/runtime capability checks already in force
+
+If an exemplar's `capability_tags` disagree with runtime truth, runtime truth wins and the exemplar is dropped or ignored.
 
 ### Prompt Assembly Rule
 
@@ -366,6 +397,7 @@ Token-overlap style metrics may be useful as internal diagnostics, but should no
 - add Persona Garden `Voice & Examples`
 - add manual CRUD
 - add deterministic retrieval
+- land retrieval through a shared persona prompt-assembly seam that ordinary persona chat uses first
 
 ### Phase 2: Adaptive Retrieval
 
@@ -373,6 +405,7 @@ Token-overlap style metrics may be useful as internal diagnostics, but should no
 - rank exemplars by scenario/tone/boundary relevance
 - add prompt-budget and conflict handling
 - add prompt preview/debug visibility
+- wire the same shared retrieval layer into the live Persona Garden runtime once the backend assembly seam is shared
 
 ### Phase 3: Assisted Ingestion
 
@@ -396,4 +429,4 @@ Start with:
 - Persona Garden configuration surfaces
 - prompt preview/debug integration
 
-Do not expand immediately into the full live persona websocket path unless the prompt assembly code becomes shared enough that the retrieval layer can be reused without duplicating behavior.
+The live Persona Garden websocket path should consume the same retrieval layer once the backend assembly seam is shared. Do not duplicate retrieval logic separately for ordinary chat and live persona.
