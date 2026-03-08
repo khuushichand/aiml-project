@@ -25,7 +25,7 @@ Add `apps/tldw-frontend/__tests__/pages/chat-workflows-route.test.tsx` to assert
 Example assertion shape:
 
 ```ts
-const source = readFileSync("apps/tldw-frontend/pages/chat-workflows.tsx", "utf8")
+const source = readFileSync("pages/chat-workflows.tsx", "utf8")
 expect(source).toMatch(/dynamic\(\(\) => import\("@\/routes\/option-chat-workflows"\)/)
 expect(source).toMatch(/ssr:\s*false/)
 ```
@@ -91,9 +91,9 @@ Expected: PASS
 Add minimal assertions such as:
 
 ```ts
-expect(routeRegistrySource).toMatch(/group:\s*"workspace"/)
-expect(routeRegistrySource).toMatch(/labelToken:\s*"option:header.chatWorkflows"/)
-expect(routeRegistrySource).toMatch(/order:\s*10\.5/)
+expect(routeRegistrySource).toMatch(
+  /path:\s*"\/chat-workflows"[\s\S]*?group:\s*"workspace"[\s\S]*?labelToken:\s*"option:header.chatWorkflows"[\s\S]*?order:\s*10\.5/
+)
 ```
 
 Do not add broad route-registry snapshot coverage.
