@@ -38,6 +38,7 @@ In `test_engine_step_types.py` or `test_workflows_api.py`, add failing coverage 
 - the returned schema includes `run_id`, `run`, `include_bundle`, `fail_on_cancelled`, `fail_on_failed`, `poll_interval_seconds`, `timeout_seconds`, and `save_artifact`
 - the description makes terminal waiting behavior explicit
 - workflow definition validation rejects malformed `deep_research_wait` config
+- save-time validation still rejects malformed `deep_research_wait` config when `jsonschema` is unavailable
 
 **Step 3: Run the focused backend tests to verify failure**
 
@@ -77,6 +78,8 @@ In `_config.py`, add a `DeepResearchWaitConfig` model with:
 
 Use the existing adapter config base class and keep validation helpers in the model where that reduces adapter branching.
 
+Keep `run_id` as the primary user-facing config path. Support `run` for advanced/API-authored definitions, but do not make full-object input the main UI path.
+
 **Step 2: Add the adapter implementation**
 
 Create `wait.py` with a `@registry.register(...)` adapter for `deep_research_wait`.
@@ -94,6 +97,7 @@ The adapter should:
   - `failed`
   - `cancelled`
   - or timeout
+- check `context["is_cancelled"]()` on every poll cycle and stop immediately if the workflow itself was cancelled
 - when `include_bundle=True` and the run completed, load the final bundle through the research core
 - build:
 
@@ -117,6 +121,7 @@ The adapter should:
 Terminal behavior:
 
 - raise on timeout
+- return `{"__status__": "cancelled"}` when the workflow cancellation hook trips during waiting
 - raise on `failed` when `fail_on_failed=True`
 - raise on `cancelled` when `fail_on_cancelled=True`
 - otherwise return the terminal result object without raising
@@ -166,7 +171,19 @@ In `workflows.py`, extend the `schemas` map for `/step-types` with a `deep_resea
 
 Use an example that shows chaining from a prior launch step.
 
-Also add a matching `deep_research_wait` validation schema to the workflow-definition validation map so malformed configs fail at save/run request time instead of only inside the adapter.
+Also add:
+
+- a matching `deep_research_wait` validation schema to the workflow-definition validation map
+- an explicit `_validate_deep_research_wait_config(...)` helper
+
+The explicit validator should enforce:
+
+- at least one usable run reference is present
+- `run_id` wins when both are present
+- `run` only counts when it is an object with a non-empty `run_id`
+- `poll_interval_seconds` stays within the approved bounds
+
+This keeps save-time validation reliable even when optional `jsonschema` support is not installed.
 
 **Step 3: Re-run backend introspection tests**
 
@@ -209,6 +226,7 @@ In `NodeConfigPanel.test.tsx`, add failing coverage that checks the wait node re
 - `fail_on_failed`
 - `poll_interval_seconds`
 - `save_artifact`
+- helper text or description makes `run_id: "{{ deep_research.run_id }}"` the primary chaining pattern
 
 **Step 3: Run focused frontend tests to verify failure**
 
@@ -246,7 +264,7 @@ In `step-registry.ts`, add a `deep_research_wait` entry with:
 Expose config fields for:
 
 - `run_id` via `template-editor`
-- `run` via `json-editor`
+- `run` via `json-editor` as a secondary advanced field
 - `include_bundle` via `checkbox`
 - `fail_on_cancelled` via `checkbox`
 - `fail_on_failed` via `checkbox`
@@ -254,6 +272,8 @@ Expose config fields for:
 - `save_artifact` via `checkbox`
 
 If the server-driven schema path overrides local metadata for this step, add the smallest possible targeted override so the rendered controls still match the approved UX.
+
+Make `run_id` the primary authoring path in the node description or field help text, using `{{ deep_research.run_id }}` as the concrete example.
 
 **Step 3: Re-run frontend workflow editor tests**
 
@@ -285,6 +305,7 @@ Add failing integration coverage that:
   - `deep_research_wait`
 - runs the workflow
 - verifies the wait step receives the launch output, waits to terminal state, and exposes `bundle` in step results when the run completes
+- verifies workflow cancellation during the wait step exits promptly instead of polling until research timeout
 
 Prefer existing research test-mode fixtures so the workflow does not depend on live providers.
 
@@ -323,6 +344,8 @@ python -m pytest \
 ```
 
 Expected: PASS
+
+Note: if bundle-size behavior is adjusted during implementation, add one focused assertion that `include_bundle=false` returns only pointers/metadata and not the full package.
 
 **Step 2: Run focused frontend verification**
 

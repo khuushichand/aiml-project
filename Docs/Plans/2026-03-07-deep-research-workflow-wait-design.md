@@ -93,7 +93,7 @@ Constraints:
 - the resolved `run_id` must be non-empty after template resolution
 - `poll_interval_seconds` should be clamped to sane minimum and maximum bounds
 - config validation should happen in two places:
-  - at workflow-definition save time through the workflows endpoint schema map
+  - at workflow-definition save time through a dedicated `_validate_deep_research_wait_config(...)` helper plus the workflows endpoint schema map
   - defensively inside the adapter with a Pydantic config model at execution time
 
 ### Output
@@ -111,6 +111,8 @@ The step output should be small but useful:
 - terminal metadata such as failure or cancellation context when available from the session model
 
 If `save_artifact` is true, the full output object is persisted as a JSON workflow artifact for operator inspection and downstream reuse.
+
+Because workflow step outputs are copied into workflow run state and downstream step context, `include_bundle=true` should be treated as appropriate for modest bundle sizes. For large reports or pointer-style orchestration, workflows should set `include_bundle=false` and consume `bundle_url` or the saved artifact instead.
 
 ## Backend Design
 
@@ -130,6 +132,12 @@ The adapter should:
 6. optionally load the final bundle through the research core when the run completed
 7. optionally write a full JSON wait-result file into the workflow step artifact directory and register it with `add_artifact`
 8. return the wait-result object as the step result
+
+The polling loop must be workflow-cancellation-aware:
+
+- check `context["is_cancelled"]()` on every poll cycle
+- if the workflow run was cancelled while waiting, stop immediately and return `{"__status__": "cancelled"}` so the workflow engine can terminate cleanly
+- do not keep polling a research run after the enclosing workflow has been cancelled
 
 The adapter must not call:
 
@@ -169,7 +177,12 @@ Update:
 
 `workflows.py` should expose a proper JSON schema for `deep_research_wait` through `/api/v1/workflows/step-types`, including the waiting semantics in the description and the approved config fields.
 
-It should also add a `deep_research_wait` validation schema to the workflow-definition validation map so malformed configs fail at save time instead of only at runtime.
+It should also add:
+
+- a `deep_research_wait` validation schema to the workflow-definition validation map
+- a dedicated `_validate_deep_research_wait_config(...)` helper in the workflows endpoint
+
+The explicit validator should enforce the run-reference contract even when `jsonschema` is unavailable, mirroring the save-time protection used by the existing `deep_research` launch step.
 
 ## Frontend Design
 
@@ -193,7 +206,7 @@ Expose these config fields:
 - `run_id`
   - `template-editor`
 - `run`
-  - object-oriented field, likely `json-editor`
+  - secondary object-oriented field, likely `json-editor`
 - `include_bundle`
   - `checkbox`
 - `fail_on_cancelled`
@@ -209,6 +222,12 @@ Expose these config fields:
 
 The node should feel like an explicit terminal wait step, not like a second launcher.
 
+The primary workflow-editor chaining path should be `run_id`, not `run`. In normal authoring, users should set:
+
+- `run_id: "{{ deep_research.run_id }}"`
+
+Support for the full `run` object should remain available for advanced or API-authored definitions, but it is not the primary UI path in v1.
+
 As with the launcher, the backend schema and the frontend registry must cooperate so `run_id` still renders as a template-oriented field instead of degrading to plain text under server-schema precedence.
 
 ## Data Flow
@@ -216,7 +235,7 @@ As with the launcher, the backend schema and the frontend registry must cooperat
 Workflow run:
 
 1. `deep_research` launches a session and returns `run_id`
-2. `deep_research_wait` receives either the prior step output or a raw `run_id`
+2. `deep_research_wait` normally receives `run_id: "{{ deep_research.run_id }}"`, but can also accept the full prior step output object
 3. the adapter resolves the actual `run_id`
 4. the adapter polls `ResearchService.get_session(...)`
 5. if the run completes and `include_bundle` is true, the adapter loads the final bundle
@@ -242,6 +261,12 @@ Optional artifact path:
 
 - if the run does not reach terminal state before `timeout_seconds`, the workflow step should fail clearly
 - the timeout should bound workflow waiting, not mutate the research session itself
+
+### Workflow Cancellation
+
+- the wait loop must check the workflow cancellation hook on every poll cycle
+- if the workflow was cancelled while waiting, the adapter should stop immediately and return `{"__status__": "cancelled"}`
+- workflow cancellation should not require the research run itself to become cancelled first
 
 ### Terminal Outcomes
 
@@ -269,6 +294,7 @@ Add tests for:
 - waiting from a prior launcher output object
 - completed run returns `bundle` when requested
 - timeout handling
+- workflow cancellation during the wait loop exits promptly
 - `failed` and `cancelled` behavior under both fail and allow configs
 - workflow artifact persistence when `save_artifact` is true
 - `/api/v1/workflows/step-types` includes `deep_research_wait`
@@ -313,6 +339,26 @@ Mitigation:
 - keep `deep_research` launch-only
 - keep `deep_research_wait` terminal-only
 - make both descriptions explicit in backend schema and frontend editor text
+
+### Workflow State Size
+
+If large bundles are returned as normal step outputs, workflow run state and downstream context can grow quickly.
+
+Mitigation:
+
+- keep `include_bundle=true` as the convenient default for modest outputs
+- document `include_bundle=false` as the preferred mode for large-report or pointer-style workflows
+- always expose `bundle_url` and the saved JSON artifact so workflows can consume references instead of copying the whole package
+
+### Workflow State Size
+
+If large bundles are returned as normal step outputs, workflow run state and downstream context can grow quickly.
+
+Mitigation:
+
+- keep `include_bundle=true` as the convenient default for modest outputs
+- document `include_bundle=false` as the preferred mode for large-report or pointer-style workflows
+- always expose `bundle_url` and the saved JSON artifact so workflows can consume references instead of copying the whole package
 
 ## Exit Condition
 
