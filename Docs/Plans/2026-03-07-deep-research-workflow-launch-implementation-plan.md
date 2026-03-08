@@ -35,6 +35,7 @@ In `test_engine_step_types.py` or `test_workflows_api.py`, add failing coverage 
 - `/api/v1/workflows/step-types` includes `deep_research`
 - the returned schema includes `query`, `source_policy`, `autonomy_mode`, `limits_json`, `provider_overrides`, and `save_artifact`
 - the description makes launch-only behavior explicit
+- workflow definition validation rejects clearly invalid `deep_research` config before execution
 
 **Step 3: Run the focused backend tests to verify failure**
 
@@ -81,6 +82,7 @@ The adapter should:
 
 - read the resolved `query`
 - derive `owner_user_id` from workflow context using existing context/user helpers
+- defensively validate the raw config with `DeepResearchConfig.model_validate(...)`
 - instantiate or use `ResearchService`
 - call `create_session(...)`
 - build:
@@ -99,7 +101,10 @@ The adapter should:
 }
 ```
 
-- optionally persist the same payload via `context["add_artifact"]`
+- optionally persist the same payload by:
+  - resolving the per-step artifact directory
+  - writing `deep_research_launch.json`
+  - registering the file through `context["add_artifact"]` with `mime_type="application/json"`
 
 Keep the adapter launch-only. Do not add waiting logic.
 
@@ -147,6 +152,8 @@ In `workflows.py`, extend the `schemas` map for `/step-types` with a `deep_resea
 
 Use an example that shows a templated query.
 
+Also add a matching `deep_research` validation schema to the workflow-definition validation map so malformed configs fail at save/run request time instead of only inside the adapter.
+
 **Step 3: Re-run backend introspection tests**
 
 Run:
@@ -176,12 +183,13 @@ In `step-registry.test.ts`, add failing assertions that:
 - it is categorized as `research`
 - its label is `Deep Research Run`
 - its description contains launch-only wording
+- if server schema is present, the resulting editor field treatment still preserves the intended deep-research controls
 
 **Step 2: Add config-panel tests**
 
 In `NodeConfigPanel.test.tsx`, add failing coverage that checks the deep research node renders:
 
-- required `query`
+- required `query` as a template-oriented editor experience
 - `source_policy`
 - `autonomy_mode`
 - `save_artifact`
@@ -226,6 +234,8 @@ Expose config fields for:
 - `save_artifact` via `checkbox`
 
 Use only the choices approved in design.
+
+If the server-driven schema path overrides local metadata for this step, add the smallest possible targeted override so the rendered controls still match the approved UX.
 
 **Step 3: Re-run frontend workflow editor tests**
 

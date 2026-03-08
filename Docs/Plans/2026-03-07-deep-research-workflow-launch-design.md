@@ -80,6 +80,9 @@ Constraints:
 
 - the workflow adapter resolves templated config values through the normal workflow engine template-resolution path
 - this slice does not expose raw research-internal fields beyond the public run creation contract
+- validation should happen in two places:
+  - at workflow-definition save time through the workflows endpoint schema map
+  - defensively inside the adapter with the Pydantic config model at execution time
 
 ### Output
 
@@ -111,7 +114,7 @@ The adapter should:
 2. resolve the workflow owner from adapter context
 3. call `ResearchService.create_session(...)` directly
 4. build the launch reference object
-5. optionally persist a workflow artifact with `add_artifact`
+5. optionally write a full JSON launch payload file into the workflow step artifact directory and register it with `add_artifact`
 6. return the launch reference object as the step result
 
 The adapter must not call:
@@ -128,6 +131,8 @@ Add a Pydantic config model alongside the existing research adapter config model
 - `tldw_Server_API/app/core/Workflows/adapters/research/_config.py`
 
 This config model should mirror the supported research-run creation contract and keep validation local to the adapter layer.
+
+It is not enough to rely on decorator metadata alone because the workflow runtime currently passes raw config dicts to adapters. The adapter should therefore call `DeepResearchConfig.model_validate(...)` defensively before launching the research session.
 
 ### Adapter Registration
 
@@ -151,6 +156,8 @@ Update:
 `registry.py` should gain the human-facing step type entry.
 
 `workflows.py` should expose a proper JSON schema for `deep_research` through `/api/v1/workflows/step-types`, including the launch-only description so the editor and any API consumers understand the intended behavior.
+
+It should also add a `deep_research` validation schema to the workflow-definition validation map so invalid config can be rejected before execution instead of relying on runtime failure alone.
 
 ## Frontend Design
 
@@ -185,6 +192,13 @@ Expose these config fields:
 
 The node should feel like a launcher/reference step, not like an inline research execution environment.
 
+Because `NodeConfigPanel` prefers server schema fields when `/step-types` returns a schema, this slice must ensure the backend schema and the frontend registry agree on field intent. In practice that means either:
+
+- the server schema descriptions and shapes are sufficient for the existing schema-to-field mapper to infer the intended controls, or
+- the frontend adds a small deep-research override so `query` still renders as a `template-editor` and the select fields remain explicit.
+
+The design goal is not “add metadata in one place,” but “the editor actually renders the intended controls.”
+
 ## Data Flow
 
 Workflow run:
@@ -200,7 +214,8 @@ Workflow run:
 Optional artifact path:
 
 1. adapter serializes the launch reference object
-2. adapter saves it as a workflow artifact if `save_artifact` is enabled
+2. adapter writes it to a JSON file such as `deep_research_launch.json` in the per-step artifact directory
+3. adapter registers that file as a workflow artifact if `save_artifact` is enabled
 3. operators can inspect that artifact from workflow run details later
 
 ## Error Handling
