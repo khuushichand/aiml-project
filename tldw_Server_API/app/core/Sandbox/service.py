@@ -33,6 +33,7 @@ from .models import (
 )
 from .orchestrator import SandboxOrchestrator, SessionActiveRunsConflict
 from .policy import SandboxPolicy, SandboxPolicyConfig, compute_policy_hash
+from .runtime_capabilities import RuntimePreflightResult, collect_runtime_preflights
 from .runners.docker_runner import DockerRunner, docker_available
 from .runners.firecracker_runner import FirecrackerRunner, firecracker_available, firecracker_real_enabled
 from .runners.lima_runner import LimaRunner, lima_available
@@ -161,6 +162,7 @@ class SandboxService:
         *,
         runtime: RuntimeType | None,
         network_policy: str | None,
+        runtime_preflight: RuntimePreflightResult | None = None,
     ) -> None:
         if runtime != RuntimeType.lima:
             return
@@ -178,7 +180,7 @@ class SandboxService:
                 requirement=requested_policy,
                 reasons=["strict_allowlist_not_supported"],
             )
-        preflight = LimaRunner().preflight(network_policy=requested_policy)
+        preflight = runtime_preflight or LimaRunner().preflight(network_policy=requested_policy)
         if preflight.available:
             return
         reasons = list(preflight.reasons or [])
@@ -209,6 +211,26 @@ class SandboxService:
             return max(1, int(raw))
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             return 30
+
+    def _collect_runtime_preflights(
+        self,
+        *,
+        network_policy: str | None,
+    ) -> dict[RuntimeType, RuntimePreflightResult]:
+        requested_policy = str(network_policy or self.policy.cfg.network_default or "deny_all").strip().lower()
+        try:
+            return collect_runtime_preflights(network_policy=requested_policy)
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            return {
+                RuntimeType.firecracker: RuntimePreflightResult(
+                    runtime=RuntimeType.firecracker,
+                    available=bool(firecracker_available()),
+                ),
+                RuntimeType.lima: RuntimePreflightResult(
+                    runtime=RuntimeType.lima,
+                    available=bool(lima_available()),
+                ),
+            }
 
     def _effective_max_concurrent_runs(self) -> int:
         try:
@@ -526,6 +548,26 @@ class SandboxService:
             with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                 hb.join(timeout=0.1)
 
+    def _mark_run_failed(
+        self,
+        status: RunStatus,
+        *,
+        reason: str,
+    ) -> None:
+        now = datetime.utcnow()
+        try:
+            status.phase = RunPhase.failed
+            status.message = str(reason)
+            if not status.started_at:
+                status.started_at = now
+            status.finished_at = now
+            status.exit_code = None
+            self._orch.update_run(status.id, status)
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            pass
+        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+            get_hub().publish_event(status.id, "end", {"exit_code": None, "reason": reason})
+
     def feature_discovery(self) -> list[dict]:
         images = [
             "python:3.11-slim",
@@ -584,20 +626,19 @@ class SandboxService:
                 execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             execute_enabled = False
-        try:
-            lima_preflight = LimaRunner().preflight(network_policy="deny_all")
-            lima_enforcement_ready = dict(lima_preflight.enforcement_ready or {})
-            # Allowlist enforcement is not implemented for Lima runtime execution.
-            lima_enforcement_ready["allowlist"] = False
-            lima_host = dict(lima_preflight.host or {})
-        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-            lima_enforcement_ready = {"deny_all": False, "allowlist": False}
-            lima_host = {}
+        runtime_preflights = self._collect_runtime_preflights(network_policy="deny_all")
+        docker_preflight = runtime_preflights.get(RuntimeType.docker)
+        firecracker_preflight = runtime_preflights.get(RuntimeType.firecracker)
+        lima_preflight = runtime_preflights.get(RuntimeType.lima)
+        lima_enforcement_ready = dict((lima_preflight.enforcement_ready if lima_preflight else {}) or {})
+        # Allowlist enforcement is not implemented for Lima runtime execution.
+        lima_enforcement_ready["allowlist"] = False
+        lima_host = dict((lima_preflight.host if lima_preflight else {}) or {})
 
         return [
             {
                 "name": "docker",
-                "available": bool(docker_available()),
+                "available": bool(docker_preflight.available) if docker_preflight is not None else bool(docker_available()),
                 "default_images": images,
                 "max_cpu": max_cpu,
                 "max_mem_mb": max_mem_mb,
@@ -609,7 +650,14 @@ class SandboxService:
                 "artifact_ttl_hours": artifact_ttl_hours,
                 "supported_spec_versions": supported_spec_versions,
                 # Advertise interactive only when real runner execution is enabled and available
-                "interactive_supported": bool(execute_enabled and docker_available()),
+                "interactive_supported": bool(
+                    execute_enabled
+                    and (
+                        bool(docker_preflight.available)
+                        if docker_preflight is not None
+                        else bool(docker_available())
+                    )
+                ),
                 "egress_allowlist_supported": bool(egress_supported),
                 "store_mode": store_mode,
                 "notes": (
@@ -620,7 +668,7 @@ class SandboxService:
             },
             {
                 "name": "firecracker",
-                "available": bool(firecracker_available()),
+                "available": bool(firecracker_preflight.available) if firecracker_preflight is not None else bool(firecracker_available()),
                 "default_images": images,  # firecracker images will differ; placeholder for UX
                 "max_cpu": max_cpu,
                 "max_mem_mb": max_mem_mb,
@@ -657,7 +705,7 @@ class SandboxService:
             },
             {
                 "name": "lima",
-                "available": bool(lima_available()),
+                "available": bool(lima_preflight.available) if lima_preflight is not None else bool(lima_available()),
                 "default_images": ["ubuntu:24.04"],  # Lima uses distro images
                 "max_cpu": max_cpu,
                 "max_mem_mb": max_mem_mb,
@@ -756,10 +804,20 @@ class SandboxService:
     def create_session(self, user_id: str | int, spec: SessionSpec, spec_version: str, idem_key: str | None, raw_body: dict) -> Session:
         # Validate requested spec version
         self._validate_spec_version(spec_version)
-        fc_ok = firecracker_available()
-        lima_ok = lima_available()
-        spec = self.policy.apply_to_session(spec, firecracker_available=fc_ok, lima_available=lima_ok)
-        self._validate_lima_policy(runtime=spec.runtime, network_policy=spec.network_policy)
+        runtime_preflights = self._collect_runtime_preflights(network_policy="deny_all")
+        firecracker_preflight = runtime_preflights.get(RuntimeType.firecracker)
+        lima_preflight = runtime_preflights.get(RuntimeType.lima)
+        spec = self.policy.apply_to_session(
+            spec,
+            firecracker_available=bool(firecracker_preflight.available) if firecracker_preflight is not None else bool(firecracker_available()),
+            lima_available=bool(lima_preflight.available) if lima_preflight is not None else bool(lima_available()),
+            runtime_preflights=runtime_preflights,
+        )
+        self._validate_lima_policy(
+            runtime=spec.runtime,
+            network_policy=spec.network_policy,
+            runtime_preflight=lima_preflight,
+        )
         # Validate Firecracker kernel/rootfs when real execution is enabled
         self._validate_firecracker_config(spec)
         # delegate to orchestrator (with idempotency)
@@ -854,10 +912,20 @@ class SandboxService:
         # Validate requested spec version
         self._validate_spec_version(spec_version)
         # Apply policy then enqueue via orchestrator (idempotency-aware)
-        fc_ok = firecracker_available()
-        lima_ok = lima_available()
-        spec = self.policy.apply_to_run(spec, firecracker_available=fc_ok, lima_available=lima_ok)
-        self._validate_lima_policy(runtime=spec.runtime, network_policy=spec.network_policy)
+        runtime_preflights = self._collect_runtime_preflights(network_policy="deny_all")
+        firecracker_preflight = runtime_preflights.get(RuntimeType.firecracker)
+        lima_preflight = runtime_preflights.get(RuntimeType.lima)
+        spec = self.policy.apply_to_run(
+            spec,
+            firecracker_available=bool(firecracker_preflight.available) if firecracker_preflight is not None else bool(firecracker_available()),
+            lima_available=bool(lima_preflight.available) if lima_preflight is not None else bool(lima_available()),
+            runtime_preflights=runtime_preflights,
+        )
+        self._validate_lima_policy(
+            runtime=spec.runtime,
+            network_policy=spec.network_policy,
+            runtime_preflight=lima_preflight,
+        )
         # Validate Firecracker kernel/rootfs when real execution is enabled
         self._validate_firecracker_config(spec)
         status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
@@ -974,10 +1042,12 @@ class SandboxService:
                             self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Background docker execution failed: {e}")
+                            self._mark_run_failed(status, reason="docker_failed")
                     try:
                         self._submit_background_worker(_worker)
                     except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Background docker submission failed: {e}")
+                        self._mark_run_failed(status, reason="docker_failed")
                 else:
                     dr = DockerRunner()
                     ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
@@ -1020,7 +1090,8 @@ class SandboxService:
                     with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
             except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"Docker execution failed; keeping enqueue status. Error: {e}")
+                logger.warning(f"Docker execution failed; marking run failed. Error: {e}")
+                self._mark_run_failed(status, reason="docker_failed")
         elif execute_enabled and spec.runtime == RuntimeType.firecracker:
             try:
                 env_bg = os.getenv("SANDBOX_BACKGROUND_EXECUTION")
@@ -1063,10 +1134,12 @@ class SandboxService:
                                 self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Firecracker background execution failed: {e}")
+                            self._mark_run_failed(status, reason="firecracker_failed")
                     try:
                         self._submit_background_worker(_worker_fc)
                     except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Firecracker background submission failed: {e}")
+                        self._mark_run_failed(status, reason="firecracker_failed")
                 else:
                     # Foreground
                     fr = FirecrackerRunner()
@@ -1163,10 +1236,12 @@ class SandboxService:
                                 pass
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Lima background execution failed: {e}")
+                            self._mark_run_failed(status, reason="lima_failed")
                     try:
                         self._submit_background_worker(_worker_lima)
                     except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Lima background submission failed: {e}")
+                        self._mark_run_failed(status, reason="lima_failed")
                 else:
                     # Foreground
                     ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None

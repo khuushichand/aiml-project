@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.36] 2026-03-08
+
+### Added
+
+- **TTS "Compose & Compare" Redesign** — New A/B comparison workflow for the Speech Playground TTS tab:
+  - **`UnifiedAudioPlayer`** (`components/Common/UnifiedAudioPlayer.tsx`): Single audio player component for all providers — play/pause/seek slider, time display, waveform visualization (via `WaveformCanvas`), download button; accepts `audioUrl`, `audioBlob`, or streaming mode; replaces per-provider player inconsistency
+  - **`RenderStrip`** (`components/Option/Speech/RenderStrip.tsx`): Self-contained generation card with five states (`idle`, `generating`, `ready`, `playing`, `error`); config tags (provider, voice, format, speed) as clickable chips; embeds `UnifiedAudioPlayer` for playback and `TtsJobProgress` for long-running generations; undo notification on remove with 4-second restore window
+  - **`useMultiRenderState`** hook (`hooks/useMultiRenderState.ts`): Manages array of render strips with independent generation lifecycle; actions: `addRender`, `removeRender`, `generateRender`, `generateAll`, `clearAll`, `playAllSequentially`; play-one-at-a-time enforcement (starting one pauses others); object URL lifecycle management (create on generate, revoke on remove/unmount)
+  - **`VoicePickerModal`** (`components/Option/Speech/VoicePickerModal.tsx`): Unified voice selection across all 19 backend TTS providers; search input, recent voices row (last 5 from localStorage), provider-grouped catalog (Local Engines / Cloud Providers) with collapsible sections; inline `[Play]` preview per voice; capability badges (Stream, Clone); selecting a voice returns `{ provider, voice, model }` and auto-selects provider
+  - **Render strips zone** in `SpeechPlaygroundPage.tsx`: Between text editor and action bar — maps `useMultiRenderState` to `RenderStrip` components; "Add Render", "Pick Voice", "Generate All", "Play All", "Clear" controls; per-strip generate, edit (opens voice picker), retry, remove actions
+  - **Action bar extensions** in `TtsStickyActionBar.tsx`: "Add Render" button with separator, "Play All" button (shown when multiple ready strips exist)
+  - **Smart defaults**: Last-used voice config persisted to `localStorage` for render strip defaults; recent voices tracked in voice picker
+  - **Accessibility**: `role="region"` + `aria-label` on all strips and players; `role="option"` + keyboard Enter on voice picker items; `aria-label` on all interactive buttons
+  - 36 new tests: `UnifiedAudioPlayer.test.tsx` (8), `RenderStrip.test.tsx` (11), `useMultiRenderState.test.ts` (10), `VoicePickerModal.test.tsx` (7)
+
+### Fixed
+
+- Sandbox runs no longer remain stuck in `starting` when Docker, Firecracker, or Lima runner startup fails; runner exceptions now persist a terminal `failed` state.
+- `sandbox_runs_started_total` now increments only after a sandbox run scaffold is accepted, so rejected requests are no longer counted as started runs.
+- Sandbox runtime admission now uses shared runtime preflight results across service and policy layers instead of diverging ad hoc availability booleans.
+- Sandbox websocket log streams now stop emitting heartbeats after a run ends, preventing terminal `end` frames from being buried in multi-subscriber stress scenarios.
+- Sandbox snapshot creation now tolerates transient files disappearing during concurrent atomic workspace writes, avoiding archive failures on temporary rename targets.
+- `RunStreamHub` subscriber registration now works in synchronous Python 3.11 contexts where no default main-thread event loop exists.
+
 ## [0.1.35] 2026-03-08
 
 ### Added

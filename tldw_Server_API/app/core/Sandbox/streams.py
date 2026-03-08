@@ -88,11 +88,7 @@ class RunStreamHub:
         """
         with self._lock:
             q = asyncio.Queue(self._max_queue)
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                # Fallback to stored loop if called from a non-async context
-                loop = self._loop or asyncio.get_event_loop()
+            loop = self._resolve_subscriber_loop()
             self._queues.setdefault(run_id, []).append((loop, q))
             return q
 
@@ -111,10 +107,7 @@ class RunStreamHub:
         """
         with self._lock:
             q = asyncio.Queue(self._max_queue)
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = self._loop or asyncio.get_event_loop()
+            loop = self._resolve_subscriber_loop()
             # Stamp seq on buffered frames if missing, then copy into this queue
             buf = self._buffers.get(run_id) or []
             import copy as _copy
@@ -140,10 +133,7 @@ class RunStreamHub:
             return self.subscribe_with_buffer(run_id)
         with self._lock:
             q = asyncio.Queue(self._max_queue)
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = self._loop or asyncio.get_event_loop()
+            loop = self._resolve_subscriber_loop()
             buf = self._buffers.get(run_id) or []
             import copy as _copy
             for frame in buf[-100:]:
@@ -156,6 +146,20 @@ class RunStreamHub:
                     break
             self._queues.setdefault(run_id, []).append((loop, q))
             return q
+
+    def _resolve_subscriber_loop(self) -> asyncio.AbstractEventLoop:
+        try:
+            return asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        if self._loop is not None:
+            return self._loop
+        try:
+            return asyncio.get_event_loop()
+        except RuntimeError:
+            # Python 3.11+ may not create a default loop for sync callers.
+            # A private loop is sufficient for unit tests that drain buffers directly.
+            return asyncio.new_event_loop()
 
     def unsubscribe(self, run_id: str, q: asyncio.Queue) -> None:
         """Remove a subscriber queue for a run.
@@ -290,9 +294,17 @@ class RunStreamHub:
         frame = {"type": "event", "event": event, "data": data or {}}
         self._publish(run_id, frame)
 
-    def publish_heartbeat(self, run_id: str) -> None:
-        """Publish a heartbeat frame with seq attached by the hub."""
+    def has_ended(self, run_id: str) -> bool:
+        with self._lock:
+            return run_id in self._ended
+
+    def publish_heartbeat(self, run_id: str) -> bool:
+        """Publish a heartbeat frame unless the run is already ended."""
+        with self._lock:
+            if run_id in self._ended:
+                return False
         self._publish(run_id, {"type": "heartbeat"})
+        return True
 
     def publish_truncated(self, run_id: str, reason: str) -> None:
         """Publish a truncated frame with a reason code."""
