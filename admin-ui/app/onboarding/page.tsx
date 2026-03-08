@@ -70,6 +70,7 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
 
 function OnboardingPageContent() {
   const { success, error: showError } = useToast();
+  const billingEnabled = isBillingEnabled();
   const [currentStep, setCurrentStep] = useState(1);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
@@ -100,10 +101,12 @@ function OnboardingPageContent() {
   }, [showError]);
 
   useEffect(() => {
-    fetchPlans();
-  }, [fetchPlans]);
+    if (billingEnabled) {
+      fetchPlans();
+    }
+  }, [billingEnabled, fetchPlans]);
 
-  if (!isBillingEnabled()) {
+  if (!billingEnabled) {
     return (
       <div className="mx-auto max-w-2xl p-8">
         <Alert>
@@ -143,10 +146,12 @@ function OnboardingPageContent() {
         plan_id: selectedPlanId!,
         owner_email: values.owner_email || undefined,
       });
-      if (result.checkout_url) {
+      if (result.checkout_url && result.checkout_url.startsWith('https://')) {
         window.location.href = result.checkout_url;
-      } else {
+      } else if (!result.checkout_url) {
         success('Organization created successfully');
+        setSelectedPlanId(null);
+        setCurrentStep(1);
       }
     } catch {
       showError('Failed to create organization');
@@ -319,7 +324,7 @@ function OnboardingPageContent() {
 
 export default function OnboardingPage() {
   return (
-    <PermissionGuard>
+    <PermissionGuard role={['admin', 'super_admin', 'owner']}>
       <OnboardingPageContent />
     </PermissionGuard>
   );

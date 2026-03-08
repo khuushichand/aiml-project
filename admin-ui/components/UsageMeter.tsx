@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils';
+import { formatCents } from '@/lib/formatters';
 
 interface UsageMeterProps {
   used: number;
@@ -9,10 +10,6 @@ interface UsageMeterProps {
 
 function formatTokens(n: number): string {
   return n.toLocaleString();
-}
-
-function formatCents(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
 }
 
 export function UsageMeter({ used, included, overageCostCents, className }: UsageMeterProps) {
