@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.35] 2026-03-08
+
+### Added
+
+- Chat UI regression coverage for server-chat reliability:
+  - Added recoverable refresh regression coverage in `useServerChatHistory.test.ts`
+  - Added selected-chat load state and stale-request guard coverage in `useServerChatLoader.test.ts`
+  - Added selected-chat failure rendering coverage in `PlaygroundChat.server-load-state.test.tsx`
+  - Added settings sync no-op coverage in `chat-settings.sync.test.ts`
+  - Added stale-version mutation retry coverage in `tldw-api-client.chat-trash.test.ts` and `tldw-api-client.chat-mutations.test.ts`
+  - Added sidebar reliability and conflict-feedback coverage in `ServerChatList.reliability.test.tsx`
+
+### Fixed
+
+- **Chat UI reliability bug squash**:
+  - Preserved server chat sidebar data on recoverable refresh failures instead of collapsing to an empty state during transient auth/config/rate-limit issues
+  - Added explicit selected server chat load states (`idle`, `loading`, `loaded`, `failed`) so chat switching no longer leaves the conversation pane blank on failed loads
+  - Rendered a dedicated selected-chat failure state in the playground instead of the generic empty-chat shell
+  - Stopped no-op server chat settings sync writes when only sync metadata changed, preventing version churn during chat load
+  - Retried chat delete, restore, and update mutations once after optimistic-lock conflicts by fetching the latest chat version first
+  - Clarified sidebar reliability states with stale-data warnings, unavailable refresh copy, and conflict-specific mutation error messaging for chat actions
+
 ## [0.1.34] 2026-03-07
 
 ### Added
