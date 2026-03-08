@@ -60,6 +60,31 @@ def test_create_and_approve_research_run():
         assert approve_resp.json()["phase"] == "collecting"
 
 
+def test_patch_and_approve_research_run_returns_400_for_invalid_checkpoint_patch():
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    class StubService:
+        def approve_checkpoint(self, **kwargs):
+            assert kwargs["session_id"] == "rs_1"
+            assert kwargs["checkpoint_id"] == "cp_1"
+            raise ValueError("invalid_checkpoint_patch:plan_review:query")
+
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        approve_resp = client.post(
+            "/api/v1/research/runs/rs_1/checkpoints/cp_1/patch-and-approve",
+            json={"patch_payload": {"query": "Mutated query"}},
+        )
+
+    assert approve_resp.status_code == 400
+    assert approve_resp.json()["detail"] == "invalid_checkpoint_patch:plan_review:query"
+
+
 def test_create_research_run_passes_provider_overrides():
     from tldw_Server_API.app.api.v1.endpoints import research_runs
 

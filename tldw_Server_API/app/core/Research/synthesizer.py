@@ -60,13 +60,18 @@ class ResearchSynthesizer:
         evidence_notes: list[ResearchEvidenceNote],
         collection_summary: dict[str, object] | None = None,
         provider_config: dict[str, Any] | None = None,
+        outline_seed: list[dict[str, str]] | None = None,
+        approved_outline_locked: bool = False,
     ) -> ResearchSynthesisResult:
         deterministic = self._synthesize_deterministic(
             plan=plan,
             source_registry=source_registry,
             evidence_notes=evidence_notes,
             collection_summary=collection_summary,
+            outline_seed=outline_seed,
         )
+        if approved_outline_locked:
+            return self._with_summary_mode(deterministic, mode="deterministic_outline_locked")
         synthesis_config = self._resolve_synthesis_config(provider_config)
         provider = str(synthesis_config.get("provider") or "").strip()
         model = str(synthesis_config.get("model") or "").strip()
@@ -266,6 +271,7 @@ class ResearchSynthesizer:
         source_registry: list[ResearchSourceRecord],
         evidence_notes: list[ResearchEvidenceNote],
         collection_summary: dict[str, object] | None = None,
+        outline_seed: list[dict[str, str]] | None = None,
     ) -> ResearchSynthesisResult:
         source_index = {source.source_id: source for source in source_registry}
         notes_by_focus_area: dict[str, list[ResearchEvidenceNote]] = defaultdict(list)
@@ -286,9 +292,44 @@ class ResearchSynthesizer:
             if gap_text and gap_text not in unresolved_questions:
                 unresolved_questions.append(gap_text)
 
-        for focus_area in plan.focus_areas:
+        seed_sections = [
+            {
+                "title": str(section.get("title") or "").strip(),
+                "focus_area": str(section.get("focus_area") or "").strip(),
+            }
+            for section in (outline_seed or [])
+            if isinstance(section, dict)
+            and str(section.get("title") or "").strip()
+            and str(section.get("focus_area") or "").strip()
+        ]
+        ordered_focus_areas = [section["focus_area"] for section in seed_sections] or list(plan.focus_areas)
+        seeded_titles = {
+            section["focus_area"]: section["title"]
+            for section in seed_sections
+        }
+
+        for focus_area in ordered_focus_areas:
             notes = notes_by_focus_area.get(focus_area, [])
+            section_title = seeded_titles.get(focus_area, _title_for_focus_area(focus_area))
             if not notes:
+                if seed_sections:
+                    outline_sections.append(
+                        ResearchOutlineSection(
+                            title=section_title,
+                            focus_area=focus_area,
+                            source_ids=[],
+                            note_ids=[],
+                        )
+                    )
+                    report_sections.append(
+                        "\n".join(
+                            [
+                                f"## {section_title}",
+                                "",
+                                "No collected evidence currently supports this section.",
+                            ]
+                        )
+                    )
                 missing_focus_areas.append(focus_area)
                 unresolved = f"missing evidence for focus area: {focus_area}"
                 if unresolved not in unresolved_questions:
@@ -299,7 +340,7 @@ class ResearchSynthesizer:
             source_ids = list(dict.fromkeys(note.source_id for note in notes))
             note_ids = [note.note_id for note in notes]
             section = ResearchOutlineSection(
-                title=_title_for_focus_area(focus_area),
+                title=section_title,
                 focus_area=focus_area,
                 source_ids=source_ids,
                 note_ids=note_ids,

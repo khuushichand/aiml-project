@@ -44,6 +44,8 @@ class ResearchService:
     _ALLOWED_ARTIFACT_NAMES = {
         "plan.json",
         "approved_plan.json",
+        "approved_sources.json",
+        "approved_outline.json",
         "provider_config.json",
         "source_registry.json",
         "evidence_notes.jsonl",
@@ -156,9 +158,19 @@ class ResearchService:
         if checkpoint_type == "plan_review":
             return ("collecting", True)
         if checkpoint_type == "sources_review":
-            return ("synthesizing", False)
+            return ("synthesizing", True)
         if checkpoint_type == "outline_review":
             return ("packaging", True)
+        raise ValueError(f"unsupported checkpoint type: {checkpoint_type}")
+
+    @staticmethod
+    def _artifact_name_for_checkpoint(checkpoint_type: str) -> str:
+        if checkpoint_type == "plan_review":
+            return "approved_plan.json"
+        if checkpoint_type == "sources_review":
+            return "approved_sources.json"
+        if checkpoint_type == "outline_review":
+            return "approved_outline.json"
         raise ValueError(f"unsupported checkpoint type: {checkpoint_type}")
 
     @staticmethod
@@ -282,7 +294,8 @@ class ResearchService:
         if checkpoint is None or checkpoint.session_id != session_id:
             raise KeyError(checkpoint_id)
 
-        merged_payload = apply_checkpoint_patch(
+        patch_result = apply_checkpoint_patch(
+            checkpoint_type=checkpoint.checkpoint_type,
             proposed_payload=checkpoint.proposed_payload,
             patch_payload=patch_payload or {},
         )
@@ -303,43 +316,28 @@ class ResearchService:
             job_id=None,
         )
 
-        if checkpoint.checkpoint_type == "plan_review":
-            artifact_store = ResearchArtifactStore(
-                base_dir=self._outputs_dir_for_user(owner_user_id),
-                db=db,
-            )
-            artifact_store.write_json(
-                owner_user_id=owner_user_id,
-                session_id=session_id,
-                artifact_name="approved_plan.json",
-                payload=merged_payload,
-                phase="collecting",
-                job_id=None,
-            )
-
         next_phase, should_enqueue = self._next_phase_for_checkpoint(checkpoint.checkpoint_type)
-        if not should_enqueue:
-            updated, _ = db.update_phase_with_event(
-                session_id,
-                phase=next_phase,
-                status="queued",
-                control_state=session.control_state,
-                active_job_id=None,
-                owner_user_id=owner_user_id,
-                event_type="status",
-                event_payload=self._status_event_payload(
-                    session_id=session.id,
-                    status="queued",
-                    phase=next_phase,
-                    control_state=session.control_state,
-                    active_job_id=None,
-                    latest_checkpoint_id=session.latest_checkpoint_id,
-                    completed_at=session.completed_at,
-                ),
-                event_phase=next_phase,
-                event_job_id=None,
-            )
-            return updated
+        enqueue_payload_overrides: dict[str, Any] = {}
+        if checkpoint.checkpoint_type == "sources_review":
+            recollect = patch_result.artifact_payload.get("recollect")
+            if isinstance(recollect, dict) and bool(recollect.get("enabled")):
+                next_phase = "collecting"
+        elif checkpoint.checkpoint_type == "outline_review" and patch_payload:
+            next_phase = "synthesizing"
+            enqueue_payload_overrides["approved_outline_locked"] = True
+
+        artifact_store = ResearchArtifactStore(
+            base_dir=self._outputs_dir_for_user(owner_user_id),
+            db=db,
+        )
+        artifact_store.write_json(
+            owner_user_id=owner_user_id,
+            session_id=session_id,
+            artifact_name=self._artifact_name_for_checkpoint(checkpoint.checkpoint_type),
+            payload=patch_result.artifact_payload,
+            phase=next_phase,
+            job_id=None,
+        )
 
         job = enqueue_research_phase_job(
             jm=self._job_manager_for_session(),
@@ -347,6 +345,7 @@ class ResearchService:
             phase=next_phase,
             owner_user_id=session.owner_user_id,
             checkpoint_id=checkpoint.id,
+            payload_overrides=enqueue_payload_overrides,
         )
         updated, _ = db.update_phase_with_event(
             session_id,

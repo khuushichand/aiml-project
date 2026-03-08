@@ -58,6 +58,7 @@ def test_create_session_enqueues_planning_job(tmp_path):
 
 def test_approve_plan_review_enqueues_collecting_job(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
     from tldw_Server_API.app.core.Research.service import ResearchService
 
     captured: dict[str, object] = {}
@@ -105,9 +106,17 @@ def test_approve_plan_review_enqueues_collecting_job(tmp_path):
     assert updated.active_job_id == "10"
     assert captured["payload"]["phase"] == "collecting"
     assert captured["payload"]["session_id"] == session.id
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    assert store.read_json(session_id=session.id, artifact_name="approved_plan.json") == {
+        "query": session.query,
+        "focus_areas": ["evidence alignment", "contradictions"],
+        "source_policy": session.source_policy,
+        "autonomy_mode": session.autonomy_mode,
+        "stop_criteria": {"min_cited_sections": 1},
+    }
 
 
-def test_approve_sources_review_advances_to_synthesizing_without_requeue(tmp_path):
+def test_approve_plan_review_rejects_read_only_session_fields(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
     from tldw_Server_API.app.core.Research.service import ResearchService
 
@@ -136,8 +145,59 @@ def test_approve_sources_review_advances_to_synthesizing_without_requeue(tmp_pat
         proposed_payload={
             "query": session.query,
             "focus_areas": ["evidence alignment"],
-            "source_inventory": [{"source_id": "src_1"}],
-            "collection_summary": {"source_count": 1},
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+        },
+    )
+
+    with pytest.raises(ValueError, match="query"):
+        service.approve_checkpoint(
+            owner_user_id="1",
+            session_id=session.id,
+            checkpoint_id=checkpoint.id,
+            patch_payload={"query": "Changed query"},
+        )
+
+
+def test_approve_sources_review_enqueues_synthesizing_job_and_writes_review_artifact(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    captured: dict[str, object] = {}
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            captured.update(kwargs)
+            return {"id": 11, "uuid": "job-11", "status": "queued"}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=DummyJobs(),
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Map evidence gaps",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="awaiting_source_review",
+        status="waiting_human",
+    )
+    checkpoint = db.create_checkpoint(
+        session_id=session.id,
+        checkpoint_type="sources_review",
+        proposed_payload={
+            "query": session.query,
+            "focus_areas": ["evidence alignment"],
+            "source_inventory": [
+                {"source_id": "src_1", "title": "Primary memo"},
+                {"source_id": "src_2", "title": "Counterevidence note"},
+                {"source_id": "src_3", "title": "Background summary"},
+            ],
+            "collection_summary": {"source_count": 3},
         },
     )
 
@@ -145,10 +205,111 @@ def test_approve_sources_review_advances_to_synthesizing_without_requeue(tmp_pat
         owner_user_id="1",
         session_id=session.id,
         checkpoint_id=checkpoint.id,
+        patch_payload={
+            "pinned_source_ids": ["src_1"],
+            "dropped_source_ids": ["src_3"],
+            "prioritized_source_ids": ["src_2"],
+            "recollect": {
+                "enabled": False,
+                "need_primary_sources": False,
+                "need_contradictions": False,
+                "guidance": "",
+            },
+        },
     )
 
     assert updated.phase == "synthesizing"
-    assert updated.active_job_id is None
+    assert updated.active_job_id == "11"
+    assert captured["payload"]["phase"] == "synthesizing"
+    assert captured["payload"]["session_id"] == session.id
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    assert store.read_json(session_id=session.id, artifact_name="approved_sources.json") == {
+        "pinned_source_ids": ["src_1"],
+        "dropped_source_ids": ["src_3"],
+        "prioritized_source_ids": ["src_2"],
+        "recollect": {
+            "enabled": False,
+            "need_primary_sources": False,
+            "need_contradictions": False,
+            "guidance": "",
+        },
+    }
+
+
+def test_approve_sources_review_with_recollect_enqueues_collecting_job(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    captured: dict[str, object] = {}
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            captured.update(kwargs)
+            return {"id": 12, "uuid": "job-12", "status": "queued"}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=DummyJobs(),
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Map evidence gaps",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="awaiting_source_review",
+        status="waiting_human",
+    )
+    checkpoint = db.create_checkpoint(
+        session_id=session.id,
+        checkpoint_type="sources_review",
+        proposed_payload={
+            "query": session.query,
+            "focus_areas": ["evidence alignment"],
+            "source_inventory": [
+                {"source_id": "src_1", "title": "Primary memo"},
+                {"source_id": "src_2", "title": "Counterevidence note"},
+            ],
+            "collection_summary": {"source_count": 2},
+        },
+    )
+
+    updated = service.approve_checkpoint(
+        owner_user_id="1",
+        session_id=session.id,
+        checkpoint_id=checkpoint.id,
+        patch_payload={
+            "pinned_source_ids": ["src_1"],
+            "dropped_source_ids": [],
+            "prioritized_source_ids": ["src_1"],
+            "recollect": {
+                "enabled": True,
+                "need_primary_sources": True,
+                "need_contradictions": True,
+                "guidance": "Find newer contradictory primary evidence.",
+            },
+        },
+    )
+
+    assert updated.phase == "collecting"
+    assert updated.active_job_id == "12"
+    assert captured["payload"]["phase"] == "collecting"
+    assert captured["payload"]["session_id"] == session.id
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    assert store.read_json(session_id=session.id, artifact_name="approved_sources.json") == {
+        "pinned_source_ids": ["src_1"],
+        "dropped_source_ids": [],
+        "prioritized_source_ids": ["src_1"],
+        "recollect": {
+            "enabled": True,
+            "need_primary_sources": True,
+            "need_contradictions": True,
+            "guidance": "Find newer contradictory primary evidence.",
+        },
+    }
 
 
 def test_approve_outline_review_enqueues_packaging_job(tmp_path):
@@ -197,6 +358,75 @@ def test_approve_outline_review_enqueues_packaging_job(tmp_path):
     assert updated.active_job_id == "12"
     assert captured["payload"]["phase"] == "packaging"
     assert captured["payload"]["session_id"] == session.id
+
+
+def test_approve_outline_review_patch_enqueues_resynthesis_with_locked_outline(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    captured: dict[str, object] = {}
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            captured.update(kwargs)
+            return {"id": 13, "uuid": "job-13", "status": "queued"}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=DummyJobs(),
+    )
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Map evidence gaps",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="awaiting_outline_review",
+        status="waiting_human",
+    )
+    checkpoint = db.create_checkpoint(
+        session_id=session.id,
+        checkpoint_type="outline_review",
+        proposed_payload={
+            "outline": {
+                "sections": [
+                    {"title": "Background", "focus_area": "history"},
+                    {"title": "Evidence", "focus_area": "evidence"},
+                ]
+            },
+            "claim_count": 1,
+            "report_preview": "# Research Report",
+            "focus_areas": ["history", "evidence"],
+        },
+    )
+
+    updated = service.approve_checkpoint(
+        owner_user_id="1",
+        session_id=session.id,
+        checkpoint_id=checkpoint.id,
+        patch_payload={
+            "sections": [
+                {"title": "Evidence first", "focus_area": "evidence"},
+                {"title": "Historical context", "focus_area": "history"},
+            ]
+        },
+    )
+
+    assert updated.phase == "synthesizing"
+    assert updated.active_job_id == "13"
+    assert captured["payload"]["phase"] == "synthesizing"
+    assert captured["payload"]["approved_outline_locked"] is True
+    assert captured["payload"]["session_id"] == session.id
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    assert store.read_json(session_id=session.id, artifact_name="approved_outline.json") == {
+        "sections": [
+            {"title": "Evidence first", "focus_area": "evidence"},
+            {"title": "Historical context", "focus_area": "history"},
+        ]
+    }
 
 
 def test_get_session_bundle_and_allowlisted_artifacts(tmp_path):

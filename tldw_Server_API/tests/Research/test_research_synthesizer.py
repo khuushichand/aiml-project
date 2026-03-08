@@ -252,3 +252,40 @@ async def test_synthesizer_falls_back_when_provider_raises():
 
     assert result.synthesis_summary["mode"] == "deterministic_fallback"
     assert "provider unavailable" in result.synthesis_summary["fallback_reason"]
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_uses_locked_outline_seed_order_and_titles():
+    from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
+
+    synthesizer = ResearchSynthesizer()
+    result = await synthesizer.synthesize(
+        plan=_plan(["background", "counterevidence"]),
+        source_registry=[
+            _source("src_background", "background"),
+            _source("src_counter", "counterevidence"),
+        ],
+        evidence_notes=[
+            _note("note_background", "src_background", "background", "Background evidence."),
+            _note("note_counter", "src_counter", "counterevidence", "Counterevidence."),
+        ],
+        collection_summary={"remaining_gaps": []},
+        provider_config={"synthesis": {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2}},
+        outline_seed=[
+            {"title": "Counterevidence First", "focus_area": "counterevidence"},
+            {"title": "Background Context", "focus_area": "background"},
+        ],
+        approved_outline_locked=True,
+    )
+
+    assert [section.title for section in result.outline_sections] == [
+        "Counterevidence First",
+        "Background Context",
+    ]
+    assert [section.focus_area for section in result.outline_sections] == [
+        "counterevidence",
+        "background",
+    ]
+    assert "## Counterevidence First" in result.report_markdown
+    assert "## Background Context" in result.report_markdown
+    assert result.synthesis_summary["mode"] == "deterministic_outline_locked"

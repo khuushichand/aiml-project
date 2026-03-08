@@ -90,20 +90,24 @@ def enqueue_research_phase_job(
     phase: str,
     owner_user_id: str,
     checkpoint_id: str | None = None,
+    payload_overrides: dict[str, Any] | None = None,
     policy_version: int = 1,
     priority: int = 5,
 ) -> dict[str, Any]:
     """Create a core Jobs entry for a research session phase."""
+    payload = {
+        "session_id": session_id,
+        "phase": phase,
+        "checkpoint_id": checkpoint_id,
+        "policy_version": int(policy_version),
+    }
+    if isinstance(payload_overrides, dict):
+        payload.update(payload_overrides)
     return jm.create_job(
         domain=RESEARCH_DOMAIN,
         queue=RESEARCH_QUEUE,
         job_type=RESEARCH_JOB_TYPE,
-        payload={
-            "session_id": session_id,
-            "phase": phase,
-            "checkpoint_id": checkpoint_id,
-            "policy_version": int(policy_version),
-        },
+        payload=payload,
         owner_user_id=str(owner_user_id),
         priority=priority,
         idempotency_key=f"research:{session_id}:{phase}:{checkpoint_id or 'none'}:{policy_version}",
@@ -163,6 +167,7 @@ async def handle_research_phase_job(
             db=db,
             artifact_store=artifact_store,
             job_id=job_id,
+            approved_outline_locked=bool(payload.get("approved_outline_locked")),
             synthesizer=synthesizer or ResearchSynthesizer(),
         )
     if phase == "packaging":
@@ -259,15 +264,45 @@ async def _handle_collecting_phase(
 
     plan = _load_effective_plan(session=session, artifact_store=artifact_store)
     provider_config = _load_provider_config(session=session, artifact_store=artifact_store)
+    approved_sources = _load_approved_sources(artifact_store=artifact_store, session=session)
+    dropped_source_ids = set(approved_sources.get("dropped_source_ids", []))
+    pinned_source_ids = set(approved_sources.get("pinned_source_ids", []))
+    recollect = approved_sources.get("recollect", {}) if isinstance(approved_sources.get("recollect"), dict) else {}
+    recollect_enabled = bool(recollect.get("enabled"))
 
     sources_by_fingerprint: dict[str, dict[str, Any]] = {}
     evidence_notes: list[dict[str, Any]] = []
+    evidence_note_ids: set[str] = set()
     remaining_gaps: list[str] = []
     gap_set: set[str] = set()
     lane_counts = {"local": 0, "academic": 0, "web": 0}
     lane_attempts = {"local": 0, "academic": 0, "web": 0}
     lane_errors: list[dict[str, str]] = []
     deduped_sources = 0
+    if recollect_enabled:
+        existing_sources_payload = artifact_store.read_json(session_id=session.id, artifact_name="source_registry.json")
+        existing_evidence_notes_payload = artifact_store.read_jsonl(session_id=session.id, artifact_name="evidence_notes.jsonl")
+        existing_sources = [
+            record
+            for record in (existing_sources_payload or {}).get("sources", [])
+            if isinstance(record, dict)
+        ]
+        existing_notes = [
+            record
+            for record in (existing_evidence_notes_payload or [])
+            if isinstance(record, dict)
+        ]
+        for record in existing_sources:
+            source_id = str(record.get("source_id") or "").strip()
+            fingerprint = str(record.get("fingerprint") or "").strip()
+            if source_id in pinned_source_ids and source_id not in dropped_source_ids and fingerprint:
+                sources_by_fingerprint[fingerprint] = dict(record)
+        for note in existing_notes:
+            source_id = str(note.get("source_id") or "").strip()
+            note_id = str(note.get("note_id") or "").strip()
+            if source_id in pinned_source_ids and source_id not in dropped_source_ids and note_id and note_id not in evidence_note_ids:
+                evidence_note_ids.add(note_id)
+                evidence_notes.append(dict(note))
 
     for focus_area in plan.focus_areas:
         result = await broker.collect_focus_area(
@@ -276,16 +311,29 @@ async def _handle_collecting_phase(
             focus_area=focus_area,
             plan=plan,
             provider_config=provider_config,
-            context={},
+            context={
+                "approved_sources": approved_sources,
+                "recollect": dict(recollect),
+            },
         )
         for source in result.sources:
             serialized = asdict(source)
+            if serialized["source_id"] in dropped_source_ids:
+                continue
             fingerprint = str(serialized["fingerprint"])
             if fingerprint in sources_by_fingerprint:
                 deduped_sources += 1
                 continue
             sources_by_fingerprint[fingerprint] = serialized
-        evidence_notes.extend(asdict(note) for note in result.evidence_notes)
+        for note in result.evidence_notes:
+            serialized_note = asdict(note)
+            if serialized_note["source_id"] in dropped_source_ids:
+                continue
+            note_id = str(serialized_note["note_id"])
+            if note_id in evidence_note_ids:
+                continue
+            evidence_note_ids.add(note_id)
+            evidence_notes.append(serialized_note)
         metrics = result.collection_metrics or {}
         lane_metrics = metrics.get("lane_counts") if isinstance(metrics.get("lane_counts"), dict) else {}
         for lane in lane_counts:
@@ -326,6 +374,7 @@ async def _handle_collecting_phase(
             "lane_attempts": lane_attempts,
             "deduped_sources": deduped_sources,
         },
+        "review_directives": approved_sources if approved_sources else None,
     }
 
     artifact_store.write_json(
@@ -405,12 +454,100 @@ def _load_provider_config(
     return resolve_provider_config(session.provider_overrides_json)
 
 
+def _load_approved_sources(*, artifact_store: ResearchArtifactStore, session: Any) -> dict[str, Any]:
+    payload = artifact_store.read_json(session_id=session.id, artifact_name="approved_sources.json")
+    if not isinstance(payload, dict):
+        return {
+            "pinned_source_ids": [],
+            "dropped_source_ids": [],
+            "prioritized_source_ids": [],
+            "recollect": {
+                "enabled": False,
+                "need_primary_sources": False,
+                "need_contradictions": False,
+                "guidance": "",
+            },
+        }
+    recollect_payload = payload.get("recollect")
+    if not isinstance(recollect_payload, dict):
+        recollect_payload = {}
+    return {
+        "pinned_source_ids": [
+            str(source_id).strip()
+            for source_id in payload.get("pinned_source_ids", [])
+            if str(source_id).strip()
+        ],
+        "dropped_source_ids": [
+            str(source_id).strip()
+            for source_id in payload.get("dropped_source_ids", [])
+            if str(source_id).strip()
+        ],
+        "prioritized_source_ids": [
+            str(source_id).strip()
+            for source_id in payload.get("prioritized_source_ids", [])
+            if str(source_id).strip()
+        ],
+        "recollect": {
+            "enabled": bool(recollect_payload.get("enabled")),
+            "need_primary_sources": bool(recollect_payload.get("need_primary_sources")),
+            "need_contradictions": bool(recollect_payload.get("need_contradictions")),
+            "guidance": str(recollect_payload.get("guidance") or "").strip(),
+        },
+    }
+
+
+def _apply_source_review_to_records(
+    *,
+    source_registry: list[dict[str, Any]],
+    evidence_notes: list[dict[str, Any]],
+    approved_sources: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    dropped_source_ids = set(approved_sources.get("dropped_source_ids", []))
+    prioritized_source_ids = list(approved_sources.get("prioritized_source_ids", []))
+    pinned_source_ids = list(approved_sources.get("pinned_source_ids", []))
+
+    filtered_sources = [
+        dict(record)
+        for record in source_registry
+        if str(record.get("source_id") or "").strip()
+        and str(record.get("source_id") or "").strip() not in dropped_source_ids
+    ]
+    filtered_notes = [
+        dict(record)
+        for record in evidence_notes
+        if str(record.get("source_id") or "").strip()
+        and str(record.get("source_id") or "").strip() not in dropped_source_ids
+    ]
+
+    if not filtered_sources:
+        return filtered_sources, filtered_notes
+
+    priority_order: dict[str, int] = {}
+    for index, source_id in enumerate(prioritized_source_ids):
+        priority_order[source_id] = index
+    next_index = len(priority_order)
+    for source_id in pinned_source_ids:
+        if source_id not in priority_order:
+            priority_order[source_id] = next_index
+            next_index += 1
+
+    def _sort_key(record: dict[str, Any]) -> tuple[int, int, str]:
+        source_id = str(record.get("source_id") or "").strip()
+        if source_id in priority_order:
+            return (0, priority_order[source_id], source_id)
+        return (1, len(priority_order), source_id)
+
+    filtered_sources.sort(key=_sort_key)
+    return filtered_sources, filtered_notes
+
+
 async def _handle_synthesizing_phase(
     *,
     session: Any,
     db: ResearchSessionsDB,
     artifact_store: ResearchArtifactStore,
     job_id: str | None,
+    approved_outline_locked: bool,
     synthesizer: ResearchSynthesizer,
 ) -> dict[str, Any]:
     halted = _halt_for_control_before_phase(db=db, session_id=session.id)
@@ -430,16 +567,30 @@ async def _handle_synthesizing_phase(
     if collection_summary is None:
         raise ValueError(f"missing collection summary artifact for session {session.id}")
 
+    approved_sources = _load_approved_sources(artifact_store=artifact_store, session=session)
+    source_registry_records, evidence_note_records = _apply_source_review_to_records(
+        source_registry=[
+            record
+            for record in source_registry_payload.get("sources", [])
+            if isinstance(record, dict)
+        ],
+        evidence_notes=[
+            record
+            for record in evidence_notes_payload
+            if isinstance(record, dict)
+        ],
+        approved_sources=approved_sources,
+    )
     source_registry = [
         ResearchSourceRecord(**record)
-        for record in source_registry_payload.get("sources", [])
-        if isinstance(record, dict)
+        for record in source_registry_records
     ]
     evidence_notes = [
         ResearchEvidenceNote(**record)
-        for record in evidence_notes_payload
-        if isinstance(record, dict)
+        for record in evidence_note_records
     ]
+    approved_outline = artifact_store.read_json(session_id=session.id, artifact_name="approved_outline.json")
+    outline_seed = approved_outline.get("sections") if isinstance(approved_outline, dict) else None
 
     result = await synthesizer.synthesize(
         plan=plan,
@@ -447,6 +598,8 @@ async def _handle_synthesizing_phase(
         evidence_notes=evidence_notes,
         collection_summary=collection_summary,
         provider_config=provider_config,
+        outline_seed=outline_seed if approved_outline_locked else None,
+        approved_outline_locked=approved_outline_locked,
     )
 
     outline_payload = {
@@ -495,7 +648,7 @@ async def _handle_synthesizing_phase(
     next_phase = "packaging"
     next_status = "queued"
     checkpoint_id: str | None = None
-    if session.autonomy_mode == "checkpointed":
+    if session.autonomy_mode == "checkpointed" and not approved_outline_locked:
         checkpoint = db.create_checkpoint(
             session_id=session.id,
             checkpoint_type="outline_review",
@@ -503,6 +656,7 @@ async def _handle_synthesizing_phase(
                 "outline": outline_payload,
                 "claim_count": len(result.claims),
                 "report_preview": "\n".join(result.report_markdown.splitlines()[:8]),
+                "focus_areas": list(plan.focus_areas),
             },
         )
         db.record_run_event(

@@ -621,6 +621,227 @@ async def test_collecting_job_records_lane_errors_and_still_advances_when_one_la
 
 
 @pytest.mark.asyncio
+async def test_collecting_job_recollects_with_pinned_and_dropped_source_directives(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+    from tldw_Server_API.app.core.Research.models import (
+        ResearchCollectionResult,
+        ResearchEvidenceNote,
+        ResearchSourceRecord,
+    )
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Refresh evidence coverage",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="collecting",
+        status="queued",
+    )
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="approved_plan.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["evidence alignment"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+        phase="collecting",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="source_registry.json",
+        payload={
+            "sources": [
+                {
+                    "source_id": "src_keep",
+                    "focus_area": "evidence alignment",
+                    "source_type": "local_document",
+                    "provider": "local_corpus",
+                    "title": "Pinned source",
+                    "url": None,
+                    "snippet": "Keep this source",
+                    "published_at": None,
+                    "retrieved_at": "2026-03-07T00:00:00+00:00",
+                    "fingerprint": "fp_keep",
+                    "trust_tier": "internal",
+                    "metadata": {},
+                },
+                {
+                    "source_id": "src_drop",
+                    "focus_area": "evidence alignment",
+                    "source_type": "web_result",
+                    "provider": "kagi",
+                    "title": "Dropped source",
+                    "url": "https://example.com/drop",
+                    "snippet": "Drop this source",
+                    "published_at": None,
+                    "retrieved_at": "2026-03-07T00:00:00+00:00",
+                    "fingerprint": "fp_drop",
+                    "trust_tier": "medium",
+                    "metadata": {},
+                },
+            ]
+        },
+        phase="collecting",
+        job_id=None,
+    )
+    store.write_jsonl(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="evidence_notes.jsonl",
+        records=[
+            {
+                "note_id": "note_keep",
+                "source_id": "src_keep",
+                "focus_area": "evidence alignment",
+                "kind": "summary",
+                "text": "Pinned evidence remains useful.",
+                "citation_locator": None,
+                "confidence": 0.8,
+                "metadata": {},
+            },
+            {
+                "note_id": "note_drop",
+                "source_id": "src_drop",
+                "focus_area": "evidence alignment",
+                "kind": "summary",
+                "text": "Dropped evidence should disappear.",
+                "citation_locator": None,
+                "confidence": 0.4,
+                "metadata": {},
+            },
+        ],
+        phase="collecting",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="approved_sources.json",
+        payload={
+            "pinned_source_ids": ["src_keep"],
+            "dropped_source_ids": ["src_drop"],
+            "prioritized_source_ids": ["src_keep"],
+            "recollect": {
+                "enabled": True,
+                "need_primary_sources": True,
+                "need_contradictions": True,
+                "guidance": "Refresh with contradictory primary sources.",
+            },
+        },
+        phase="collecting",
+        job_id=None,
+    )
+
+    class StubBroker:
+        def __init__(self):
+            self.calls: list[dict[str, object]] = []
+
+        async def collect_focus_area(self, **kwargs):
+            self.calls.append(kwargs)
+            return ResearchCollectionResult(
+                sources=[
+                    ResearchSourceRecord(
+                        source_id="src_new",
+                        focus_area="evidence alignment",
+                        source_type="academic_paper",
+                        provider="arxiv",
+                        title="New source",
+                        url="https://arxiv.org/abs/1234.5678",
+                        snippet="New source snippet",
+                        published_at=None,
+                        retrieved_at="2026-03-07T00:00:00+00:00",
+                        fingerprint="fp_new",
+                        trust_tier="high",
+                        metadata={},
+                    ),
+                    ResearchSourceRecord(
+                        source_id="src_drop",
+                        focus_area="evidence alignment",
+                        source_type="web_result",
+                        provider="kagi",
+                        title="Dropped source duplicate",
+                        url="https://example.com/drop",
+                        snippet="Should still be filtered",
+                        published_at=None,
+                        retrieved_at="2026-03-07T00:00:00+00:00",
+                        fingerprint="fp_drop_2",
+                        trust_tier="medium",
+                        metadata={},
+                    ),
+                ],
+                evidence_notes=[
+                    ResearchEvidenceNote(
+                        note_id="note_new",
+                        source_id="src_new",
+                        focus_area="evidence alignment",
+                        kind="summary",
+                        text="New contradictory evidence.",
+                        citation_locator=None,
+                        confidence=0.9,
+                        metadata={},
+                    ),
+                    ResearchEvidenceNote(
+                        note_id="note_drop_new",
+                        source_id="src_drop",
+                        focus_area="evidence alignment",
+                        kind="summary",
+                        text="Dropped evidence should remain filtered.",
+                        citation_locator=None,
+                        confidence=0.2,
+                        metadata={},
+                    ),
+                ],
+                collection_metrics={"lane_counts": {"local": 0, "academic": 1, "web": 0}, "deduped_sources": 0},
+                remaining_gaps=[],
+            )
+
+    broker = StubBroker()
+
+    result = await handle_research_phase_job(
+        {
+            "id": 72,
+            "payload": {
+                "session_id": session.id,
+                "phase": "collecting",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        broker=broker,
+    )
+
+    updated = db.get_session(session.id)
+    source_registry = store.read_json(session_id=session.id, artifact_name="source_registry.json")
+    evidence_notes = store.read_jsonl(session_id=session.id, artifact_name="evidence_notes.jsonl")
+    collection_summary = store.read_json(session_id=session.id, artifact_name="collection_summary.json")
+
+    assert updated is not None
+    assert updated.phase == "awaiting_source_review"
+    assert result["phase"] == "awaiting_source_review"
+    assert broker.calls[0]["context"]["recollect"]["enabled"] is True
+    assert broker.calls[0]["context"]["recollect"]["guidance"] == "Refresh with contradictory primary sources."
+    assert source_registry is not None
+    assert [item["source_id"] for item in source_registry["sources"]] == ["src_keep", "src_new"]
+    assert evidence_notes is not None
+    assert [item["note_id"] for item in evidence_notes] == ["note_keep", "note_new"]
+    assert collection_summary is not None
+    assert collection_summary["review_directives"]["recollect"]["need_primary_sources"] is True
+
+
+@pytest.mark.asyncio
 async def test_synthesizing_job_writes_artifacts_and_opens_outline_review(tmp_path):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
     from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
@@ -973,6 +1194,356 @@ async def test_synthesizing_job_uses_provider_config_and_writes_llm_backed_summa
     assert provider.calls[0]["config"] == {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2}
     assert summary is not None
     assert summary["mode"] == "llm_backed"
+
+
+@pytest.mark.asyncio
+async def test_synthesizing_job_filters_dropped_sources_before_provider_backed_synthesis(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+    from tldw_Server_API.app.core.Research.synthesizer import ResearchSynthesizer
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Curated synthesis",
+        source_policy="balanced",
+        autonomy_mode="autonomous",
+        limits_json={},
+        phase="synthesizing",
+        status="queued",
+    )
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="approved_plan.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["background"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="source_registry.json",
+        payload={
+            "sources": [
+                {
+                    "source_id": "src_keep",
+                    "focus_area": "background",
+                    "source_type": "local_document",
+                    "provider": "local_corpus",
+                    "title": "Pinned source",
+                    "url": None,
+                    "snippet": "Keep this source",
+                    "published_at": None,
+                    "retrieved_at": "2026-03-07T00:00:00+00:00",
+                    "fingerprint": "fp_keep",
+                    "trust_tier": "internal",
+                    "metadata": {},
+                },
+                {
+                    "source_id": "src_drop",
+                    "focus_area": "background",
+                    "source_type": "web_result",
+                    "provider": "kagi",
+                    "title": "Dropped source",
+                    "url": "https://example.com/drop",
+                    "snippet": "Drop this source",
+                    "published_at": None,
+                    "retrieved_at": "2026-03-07T00:00:00+00:00",
+                    "fingerprint": "fp_drop",
+                    "trust_tier": "medium",
+                    "metadata": {},
+                },
+            ]
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_jsonl(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="evidence_notes.jsonl",
+        records=[
+            {
+                "note_id": "note_keep",
+                "source_id": "src_keep",
+                "focus_area": "background",
+                "kind": "summary",
+                "text": "Grounded evidence.",
+                "citation_locator": None,
+                "confidence": 0.8,
+                "metadata": {},
+            },
+            {
+                "note_id": "note_drop",
+                "source_id": "src_drop",
+                "focus_area": "background",
+                "kind": "summary",
+                "text": "Dropped evidence should be filtered.",
+                "citation_locator": None,
+                "confidence": 0.4,
+                "metadata": {},
+            },
+        ],
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="collection_summary.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["background"],
+            "source_count": 2,
+            "evidence_note_count": 2,
+            "remaining_gaps": [],
+            "collection_metrics": {"lane_counts": {"local": 1, "academic": 0, "web": 1}, "deduped_sources": 0},
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="provider_config.json",
+        payload={"synthesis": {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.2}},
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="approved_sources.json",
+        payload={
+            "pinned_source_ids": ["src_keep"],
+            "dropped_source_ids": ["src_drop"],
+            "prioritized_source_ids": ["src_keep"],
+            "recollect": {
+                "enabled": False,
+                "need_primary_sources": False,
+                "need_contradictions": False,
+                "guidance": "",
+            },
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+
+    provider = _SynthesisProviderStub(
+        {
+            "outline_sections": [
+                {
+                    "title": "Background",
+                    "focus_area": "background",
+                    "source_ids": ["src_keep"],
+                    "note_ids": ["note_keep"],
+                }
+            ],
+            "claims": [
+                {
+                    "text": "Supported claim",
+                    "focus_area": "background",
+                    "source_ids": ["src_keep"],
+                    "citations": [{"source_id": "src_keep"}],
+                    "confidence": 0.9,
+                }
+            ],
+            "report_sections": [{"title": "Background", "markdown": "Evidence-backed."}],
+            "unresolved_questions": [],
+            "summary": {"mode": "llm_backed"},
+        }
+    )
+
+    await handle_research_phase_job(
+        {
+            "id": 90,
+            "payload": {
+                "session_id": session.id,
+                "phase": "synthesizing",
+                "checkpoint_id": None,
+                "policy_version": 1,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        synthesizer=ResearchSynthesizer(synthesis_provider=provider),
+    )
+
+    assert [source.source_id for source in provider.calls[0]["source_registry"]] == ["src_keep"]
+    assert [note.note_id for note in provider.calls[0]["evidence_notes"]] == ["note_keep"]
+
+
+@pytest.mark.asyncio
+async def test_synthesizing_job_with_locked_outline_skips_outline_review_and_uses_outline_seed(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="1",
+        query="Locked outline synthesis",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        phase="synthesizing",
+        status="queued",
+    )
+    store = ResearchArtifactStore(base_dir=tmp_path / "outputs", db=db)
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="approved_plan.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["background", "counterevidence"],
+            "source_policy": session.source_policy,
+            "autonomy_mode": session.autonomy_mode,
+            "stop_criteria": {"min_cited_sections": 1},
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="source_registry.json",
+        payload={
+            "sources": [
+                {
+                    "source_id": "src_background",
+                    "focus_area": "background",
+                    "source_type": "local_document",
+                    "provider": "local_corpus",
+                    "title": "Background source",
+                    "url": None,
+                    "snippet": "Background note",
+                    "published_at": None,
+                    "retrieved_at": "2026-03-07T00:00:00+00:00",
+                    "fingerprint": "fp_background",
+                    "trust_tier": "internal",
+                    "metadata": {},
+                },
+                {
+                    "source_id": "src_counter",
+                    "focus_area": "counterevidence",
+                    "source_type": "local_document",
+                    "provider": "local_corpus",
+                    "title": "Counter source",
+                    "url": None,
+                    "snippet": "Counter note",
+                    "published_at": None,
+                    "retrieved_at": "2026-03-07T00:00:00+00:00",
+                    "fingerprint": "fp_counter",
+                    "trust_tier": "internal",
+                    "metadata": {},
+                },
+            ]
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_jsonl(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="evidence_notes.jsonl",
+        records=[
+            {
+                "note_id": "note_background",
+                "source_id": "src_background",
+                "focus_area": "background",
+                "kind": "summary",
+                "text": "Background evidence.",
+                "citation_locator": None,
+                "confidence": 0.8,
+                "metadata": {},
+            },
+            {
+                "note_id": "note_counter",
+                "source_id": "src_counter",
+                "focus_area": "counterevidence",
+                "kind": "summary",
+                "text": "Counterevidence note.",
+                "citation_locator": None,
+                "confidence": 0.7,
+                "metadata": {},
+            },
+        ],
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="collection_summary.json",
+        payload={
+            "query": session.query,
+            "focus_areas": ["background", "counterevidence"],
+            "source_count": 2,
+            "evidence_note_count": 2,
+            "remaining_gaps": [],
+            "collection_metrics": {"lane_counts": {"local": 2, "academic": 0, "web": 0}, "deduped_sources": 0},
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+    store.write_json(
+        owner_user_id="1",
+        session_id=session.id,
+        artifact_name="approved_outline.json",
+        payload={
+            "sections": [
+                {"title": "Counterevidence First", "focus_area": "counterevidence"},
+                {"title": "Background Context", "focus_area": "background"},
+            ]
+        },
+        phase="synthesizing",
+        job_id=None,
+    )
+
+    result = await handle_research_phase_job(
+        {
+            "id": 91,
+            "payload": {
+                "session_id": session.id,
+                "phase": "synthesizing",
+                "checkpoint_id": None,
+                "policy_version": 1,
+                "approved_outline_locked": True,
+            },
+        },
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+    )
+
+    updated = db.get_session(session.id)
+    outline_payload = store.read_json(session_id=session.id, artifact_name="outline_v1.json")
+    report_markdown = store.read_text(session_id=session.id, artifact_name="report_v1.md")
+    synthesis_summary = store.read_json(session_id=session.id, artifact_name="synthesis_summary.json")
+
+    assert updated is not None
+    assert updated.phase == "packaging"
+    assert updated.latest_checkpoint_id is None
+    assert result["phase"] == "packaging"
+    assert outline_payload is not None
+    assert [section["title"] for section in outline_payload["sections"]] == [
+        "Counterevidence First",
+        "Background Context",
+    ]
+    assert report_markdown is not None
+    assert "## Counterevidence First" in report_markdown
+    assert "## Background Context" in report_markdown
+    assert synthesis_summary is not None
+    assert synthesis_summary["mode"] == "deterministic_outline_locked"
 
 
 @pytest.mark.asyncio

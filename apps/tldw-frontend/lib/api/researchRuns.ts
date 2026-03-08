@@ -35,6 +35,47 @@ export interface ResearchCheckpointSummary {
   resolution?: string | null;
 }
 
+export interface ResearchPlanCheckpointPayload {
+  query?: string;
+  focus_areas?: string[];
+  constraints?: string[];
+  open_questions?: string[];
+  source_policy?: string;
+  autonomy_mode?: string;
+  stop_criteria?: {
+    min_cited_sections?: number;
+    min_sources?: number;
+  };
+}
+
+export interface ResearchSourceInventoryItem {
+  source_id: string;
+  title?: string;
+  provider?: string;
+  focus_area?: string;
+}
+
+export interface ResearchSourcesCheckpointPayload {
+  query?: string;
+  focus_areas?: string[];
+  source_inventory?: ResearchSourceInventoryItem[];
+  collection_summary?: Record<string, unknown>;
+}
+
+export interface ResearchOutlineSeedSection {
+  title: string;
+  focus_area: string;
+}
+
+export interface ResearchOutlineCheckpointPayload {
+  outline?: {
+    sections?: ResearchOutlineSeedSection[];
+  };
+  claim_count?: number;
+  report_preview?: string;
+  focus_areas?: string[];
+}
+
 export interface ResearchArtifactManifestEntry {
   artifact_name: string;
   artifact_version: number;

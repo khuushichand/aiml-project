@@ -346,6 +346,334 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
     assert (outputs_dir / "research" / session_id / "bundle.json").exists()
 
 
+def test_deep_research_run_supports_recollection_loop_and_outline_resynthesis(tmp_path):
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.artifact_store import ResearchArtifactStore
+    from tldw_Server_API.app.core.Research.jobs import handle_research_phase_job
+    from tldw_Server_API.app.core.Research.models import (
+        ResearchCollectionResult,
+        ResearchEvidenceNote,
+        ResearchSourceRecord,
+    )
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    class DummyJobs:
+        def __init__(self):
+            self.created_jobs: list[dict[str, object]] = []
+
+        def create_job(self, **kwargs):
+            job = {"id": len(self.created_jobs) + 21, "uuid": f"job-{len(self.created_jobs) + 21}", "status": "queued", **kwargs}
+            self.created_jobs.append(job)
+            return job
+
+    class InitialBroker:
+        async def collect_focus_area(self, **kwargs):
+            focus_area = kwargs["focus_area"]
+            if focus_area == "background":
+                return ResearchCollectionResult(
+                    sources=[
+                        ResearchSourceRecord(
+                            source_id="src_keep",
+                            focus_area="background",
+                            source_type="local_document",
+                            provider="local_corpus",
+                            title="Pinned source",
+                            url=None,
+                            snippet="Pinned source snippet",
+                            published_at=None,
+                            retrieved_at="2026-03-07T00:00:00+00:00",
+                            fingerprint="fp_keep",
+                            trust_tier="internal",
+                            metadata={},
+                        )
+                    ],
+                    evidence_notes=[
+                        ResearchEvidenceNote(
+                            note_id="note_keep",
+                            source_id="src_keep",
+                            focus_area="background",
+                            kind="summary",
+                            text="Pinned evidence remains useful.",
+                            citation_locator=None,
+                            confidence=0.8,
+                            metadata={},
+                        )
+                    ],
+                    collection_metrics={"lane_counts": {"local": 1, "academic": 0, "web": 0}, "deduped_sources": 0},
+                    remaining_gaps=[],
+                )
+            return ResearchCollectionResult(
+                sources=[
+                    ResearchSourceRecord(
+                        source_id="src_drop",
+                        focus_area="counterevidence",
+                        source_type="web_result",
+                        provider="kagi",
+                        title="Dropped source",
+                        url="https://example.com/drop",
+                        snippet="Dropped source snippet",
+                        published_at=None,
+                        retrieved_at="2026-03-07T00:00:00+00:00",
+                        fingerprint="fp_drop",
+                        trust_tier="medium",
+                        metadata={},
+                    )
+                ],
+                evidence_notes=[
+                    ResearchEvidenceNote(
+                        note_id="note_drop",
+                        source_id="src_drop",
+                        focus_area="counterevidence",
+                        kind="summary",
+                        text="This source should be dropped before synthesis.",
+                        citation_locator=None,
+                        confidence=0.4,
+                        metadata={},
+                    )
+                ],
+                collection_metrics={"lane_counts": {"local": 0, "academic": 0, "web": 1}, "deduped_sources": 0},
+                remaining_gaps=[],
+            )
+
+    class RecollectBroker:
+        async def collect_focus_area(self, **kwargs):
+            focus_area = kwargs["focus_area"]
+            if focus_area != "background":
+                return ResearchCollectionResult(
+                    sources=[],
+                    evidence_notes=[],
+                    collection_metrics={"lane_counts": {"local": 0, "academic": 0, "web": 0}, "deduped_sources": 0},
+                    remaining_gaps=["missing evidence for focus area: counterevidence"],
+                )
+            return ResearchCollectionResult(
+                sources=[
+                    ResearchSourceRecord(
+                        source_id="src_new_background",
+                        focus_area=focus_area,
+                        source_type="academic_paper",
+                        provider="arxiv",
+                        title="New corroborating source",
+                        url="https://arxiv.org/abs/1234.5678",
+                        snippet="New source snippet",
+                        published_at=None,
+                        retrieved_at="2026-03-07T00:00:00+00:00",
+                        fingerprint="fp_new_background",
+                        trust_tier="high",
+                        metadata={},
+                    )
+                ],
+                evidence_notes=[
+                    ResearchEvidenceNote(
+                        note_id="note_new_background",
+                        source_id="src_new_background",
+                        focus_area=focus_area,
+                        kind="summary",
+                        text=f"New recollected evidence for {focus_area}.",
+                        citation_locator=None,
+                        confidence=0.9,
+                        metadata={},
+                    )
+                ],
+                collection_metrics={"lane_counts": {"local": 0, "academic": 1, "web": 0}, "deduped_sources": 0},
+                remaining_gaps=[],
+            )
+
+    jobs = DummyJobs()
+    research_db_path = tmp_path / "research.db"
+    outputs_dir = tmp_path / "outputs"
+    service = ResearchService(
+        research_db_path=research_db_path,
+        outputs_dir=outputs_dir,
+        job_manager=jobs,
+    )
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+    app.dependency_overrides[research_runs.get_research_service] = lambda: service
+
+    with TestClient(app) as client:
+        create_resp = client.post("/api/v1/research/runs", json={"query": "Edited checkpoint run"})
+        assert create_resp.status_code == 200
+        session_id = create_resp.json()["id"]
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 21,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "drafting_plan",
+                    "checkpoint_id": None,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+        )
+    )
+
+    db = ResearchSessionsDB(research_db_path)
+    store = ResearchArtifactStore(base_dir=outputs_dir, db=db)
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.latest_checkpoint_id is not None
+
+    with TestClient(app) as client:
+        approve_plan_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={"patch_payload": {"focus_areas": ["background", "counterevidence"]}},
+        )
+        assert approve_plan_resp.status_code == 200
+        assert approve_plan_resp.json()["phase"] == "collecting"
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 22,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "collecting",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+            broker=InitialBroker(),
+        )
+    )
+
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.phase == "awaiting_source_review"
+    assert session.latest_checkpoint_id is not None
+
+    with TestClient(app) as client:
+        recollect_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={
+                "patch_payload": {
+                    "pinned_source_ids": ["src_keep"],
+                    "dropped_source_ids": ["src_drop"],
+                    "prioritized_source_ids": ["src_keep"],
+                    "recollect": {
+                        "enabled": True,
+                        "need_primary_sources": True,
+                        "need_contradictions": True,
+                        "guidance": "Find better contradictory primary sources.",
+                    },
+                }
+            },
+        )
+        assert recollect_resp.status_code == 200
+        assert recollect_resp.json()["phase"] == "collecting"
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 23,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "collecting",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+            broker=RecollectBroker(),
+        )
+    )
+
+    session = db.get_session(session_id)
+    source_registry = store.read_json(session_id=session_id, artifact_name="source_registry.json")
+    assert session is not None
+    assert session.phase == "awaiting_source_review"
+    assert session.latest_checkpoint_id is not None
+    assert source_registry is not None
+    assert [item["source_id"] for item in source_registry["sources"]] == ["src_keep", "src_new_background"]
+
+    with TestClient(app) as client:
+        approve_sources_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={},
+        )
+        assert approve_sources_resp.status_code == 200
+        assert approve_sources_resp.json()["phase"] == "synthesizing"
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 24,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "synthesizing",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+        )
+    )
+
+    session = db.get_session(session_id)
+    assert session is not None
+    assert session.phase == "awaiting_outline_review"
+    assert session.latest_checkpoint_id is not None
+
+    with TestClient(app) as client:
+        approve_outline_resp = client.post(
+            f"/api/v1/research/runs/{session_id}/checkpoints/{session.latest_checkpoint_id}/patch-and-approve",
+            json={
+                "patch_payload": {
+                    "sections": [
+                        {"title": "Counterevidence First", "focus_area": "counterevidence"},
+                        {"title": "Background Context", "focus_area": "background"},
+                    ]
+                }
+            },
+        )
+        assert approve_outline_resp.status_code == 200
+        assert approve_outline_resp.json()["phase"] == "synthesizing"
+
+    asyncio.run(
+        handle_research_phase_job(
+            {
+                "id": 25,
+                "payload": {
+                    "session_id": session_id,
+                    "phase": "synthesizing",
+                    "checkpoint_id": session.latest_checkpoint_id,
+                    "policy_version": 1,
+                    "approved_outline_locked": True,
+                },
+            },
+            research_db_path=research_db_path,
+            outputs_dir=outputs_dir,
+        )
+    )
+
+    session = db.get_session(session_id)
+    outline = store.read_json(session_id=session_id, artifact_name="outline_v1.json")
+    report_markdown = store.read_text(session_id=session_id, artifact_name="report_v1.md")
+    synthesis_summary = store.read_json(session_id=session_id, artifact_name="synthesis_summary.json")
+
+    assert session is not None
+    assert session.phase == "packaging"
+    assert outline is not None
+    assert [section["title"] for section in outline["sections"]] == [
+        "Counterevidence First",
+        "Background Context",
+    ]
+    assert report_markdown is not None
+    assert "## Counterevidence First" in report_markdown
+    assert synthesis_summary is not None
+    assert "missing evidence for focus area: counterevidence" in synthesis_summary["unresolved_questions"]
+
+
 def test_deep_research_run_controls_support_pause_resume_cancel_and_progress_polling(tmp_path):
     from tldw_Server_API.app.api.v1.endpoints import research_runs
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB

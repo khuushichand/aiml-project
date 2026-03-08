@@ -15,10 +15,15 @@ import {
   subscribeResearchRunEvents,
   type ResearchArtifactManifestEntry,
   type ResearchCheckpointSummary,
+  type ResearchOutlineCheckpointPayload,
+  type ResearchOutlineSeedSection,
+  type ResearchPlanCheckpointPayload,
   type ResearchRun,
   type ResearchRunListItem,
   type ResearchRunSnapshot,
   type ResearchRunStreamEvent,
+  type ResearchSourceInventoryItem,
+  type ResearchSourcesCheckpointPayload,
 } from '@web/lib/api/researchRuns';
 
 type ConsoleState = {
@@ -232,12 +237,360 @@ function formatArtifactContent(content: unknown): string {
   return JSON.stringify(content, null, 2);
 }
 
+type PlanCheckpointEditorState = {
+  checkpointId: string;
+  checkpointType: 'plan_review';
+  querySummary: string;
+  original: {
+    focusAreas: string[];
+    constraints: string[];
+    openQuestions: string[];
+    minCitedSections: number | null;
+    minSources: number | null;
+  };
+  draft: {
+    focusAreasText: string;
+    constraintsText: string;
+    openQuestionsText: string;
+    minCitedSections: string;
+    minSources: string;
+  };
+};
+
+type SourcesCheckpointEditorState = {
+  checkpointId: string;
+  checkpointType: 'sources_review';
+  sourceInventory: ResearchSourceInventoryItem[];
+  draft: {
+    pinnedSourceIds: string[];
+    droppedSourceIds: string[];
+    prioritizedSourceIds: string[];
+    recollectEnabled: boolean;
+    needPrimarySources: boolean;
+    needContradictions: boolean;
+    guidance: string;
+  };
+};
+
+type OutlineCheckpointEditorState = {
+  checkpointId: string;
+  checkpointType: 'outline_review';
+  originalSections: ResearchOutlineSeedSection[];
+  availableFocusAreas: string[];
+  draft: {
+    sections: ResearchOutlineSeedSection[];
+  };
+};
+
+type CheckpointEditorState =
+  | PlanCheckpointEditorState
+  | SourcesCheckpointEditorState
+  | OutlineCheckpointEditorState;
+
+type CheckpointEditorEvaluation = {
+  patch: Record<string, unknown>;
+  errors: string[];
+};
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const normalized: string[] = [];
+  value.forEach((item) => {
+    const candidate = String(item ?? '').trim();
+    if (candidate && !normalized.includes(candidate)) {
+      normalized.push(candidate);
+    }
+  });
+  return normalized;
+}
+
+function stringListToText(items: string[]): string {
+  return items.join('\n');
+}
+
+function textToStringList(value: string): string[] {
+  return value
+    .split('\n')
+    .map((item) => item.trim())
+    .filter((item, index, all) => item.length > 0 && all.indexOf(item) === index);
+}
+
+function arraysEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+function parseOptionalNumber(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function asPlanPayload(payload: Record<string, unknown>): ResearchPlanCheckpointPayload {
+  const stopCriteria =
+    payload.stop_criteria && typeof payload.stop_criteria === 'object'
+      ? (payload.stop_criteria as ResearchPlanCheckpointPayload['stop_criteria'])
+      : undefined;
+  return {
+    query: typeof payload.query === 'string' ? payload.query : undefined,
+    focus_areas: normalizeStringList(payload.focus_areas),
+    constraints: normalizeStringList(payload.constraints),
+    open_questions: normalizeStringList(payload.open_questions),
+    source_policy: typeof payload.source_policy === 'string' ? payload.source_policy : undefined,
+    autonomy_mode: typeof payload.autonomy_mode === 'string' ? payload.autonomy_mode : undefined,
+    stop_criteria: {
+      min_cited_sections:
+        typeof stopCriteria?.min_cited_sections === 'number' ? stopCriteria.min_cited_sections : undefined,
+      min_sources: typeof stopCriteria?.min_sources === 'number' ? stopCriteria.min_sources : undefined,
+    },
+  };
+}
+
+function asSourcesPayload(payload: Record<string, unknown>): ResearchSourcesCheckpointPayload {
+  const sourceInventory = Array.isArray(payload.source_inventory)
+    ? payload.source_inventory
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+        .map((item) => ({
+          source_id: String(item.source_id ?? '').trim(),
+          title: typeof item.title === 'string' ? item.title : undefined,
+          provider: typeof item.provider === 'string' ? item.provider : undefined,
+          focus_area: typeof item.focus_area === 'string' ? item.focus_area : undefined,
+        }))
+        .filter((item) => item.source_id.length > 0)
+    : [];
+  return {
+    query: typeof payload.query === 'string' ? payload.query : undefined,
+    focus_areas: normalizeStringList(payload.focus_areas),
+    source_inventory: sourceInventory,
+    collection_summary:
+      payload.collection_summary && typeof payload.collection_summary === 'object'
+        ? (payload.collection_summary as Record<string, unknown>)
+        : undefined,
+  };
+}
+
+function asOutlinePayload(payload: Record<string, unknown>): ResearchOutlineCheckpointPayload {
+  const outline = payload.outline && typeof payload.outline === 'object' ? payload.outline : undefined;
+  const sections = Array.isArray((outline as { sections?: unknown[] } | undefined)?.sections)
+    ? ((outline as { sections?: unknown[] }).sections ?? [])
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+        .map((item) => ({
+          title: String(item.title ?? '').trim(),
+          focus_area: String(item.focus_area ?? '').trim(),
+        }))
+        .filter((item) => item.title.length > 0 && item.focus_area.length > 0)
+    : [];
+  return {
+    outline: { sections },
+    claim_count: typeof payload.claim_count === 'number' ? payload.claim_count : undefined,
+    report_preview: typeof payload.report_preview === 'string' ? payload.report_preview : undefined,
+    focus_areas: normalizeStringList(payload.focus_areas),
+  };
+}
+
+function buildCheckpointEditor(checkpoint: ResearchCheckpointSummary | null | undefined): CheckpointEditorState | null {
+  if (!checkpoint) {
+    return null;
+  }
+  const payload = checkpoint.proposed_payload ?? {};
+  if (checkpoint.checkpoint_type === 'plan_review') {
+    const plan = asPlanPayload(payload);
+    const minCitedSections = plan.stop_criteria?.min_cited_sections ?? null;
+    const minSources = plan.stop_criteria?.min_sources ?? null;
+    return {
+      checkpointId: checkpoint.checkpoint_id,
+      checkpointType: 'plan_review',
+      querySummary: plan.query ?? '',
+      original: {
+        focusAreas: plan.focus_areas ?? [],
+        constraints: plan.constraints ?? [],
+        openQuestions: plan.open_questions ?? [],
+        minCitedSections,
+        minSources,
+      },
+      draft: {
+        focusAreasText: stringListToText(plan.focus_areas ?? []),
+        constraintsText: stringListToText(plan.constraints ?? []),
+        openQuestionsText: stringListToText(plan.open_questions ?? []),
+        minCitedSections: minCitedSections === null ? '' : String(minCitedSections),
+        minSources: minSources === null ? '' : String(minSources),
+      },
+    };
+  }
+  if (checkpoint.checkpoint_type === 'sources_review') {
+    const sources = asSourcesPayload(payload);
+    return {
+      checkpointId: checkpoint.checkpoint_id,
+      checkpointType: 'sources_review',
+      sourceInventory: sources.source_inventory ?? [],
+      draft: {
+        pinnedSourceIds: [],
+        droppedSourceIds: [],
+        prioritizedSourceIds: [],
+        recollectEnabled: false,
+        needPrimarySources: false,
+        needContradictions: false,
+        guidance: '',
+      },
+    };
+  }
+  if (checkpoint.checkpoint_type === 'outline_review') {
+    const outline = asOutlinePayload(payload);
+    const sections = outline.outline?.sections ?? [];
+    const availableFocusAreas = outline.focus_areas?.length
+      ? outline.focus_areas
+      : sections.map((section) => section.focus_area);
+    return {
+      checkpointId: checkpoint.checkpoint_id,
+      checkpointType: 'outline_review',
+      originalSections: sections,
+      availableFocusAreas,
+      draft: {
+        sections,
+      },
+    };
+  }
+  return null;
+}
+
+function evaluateCheckpointEditor(editor: CheckpointEditorState | null): CheckpointEditorEvaluation {
+  if (!editor) {
+    return { patch: {}, errors: [] };
+  }
+
+  if (editor.checkpointType === 'plan_review') {
+    const focusAreas = textToStringList(editor.draft.focusAreasText);
+    const constraints = textToStringList(editor.draft.constraintsText);
+    const openQuestions = textToStringList(editor.draft.openQuestionsText);
+    const minCitedSections = parseOptionalNumber(editor.draft.minCitedSections);
+    const minSources = parseOptionalNumber(editor.draft.minSources);
+    const errors: string[] = [];
+    if (focusAreas.length === 0) {
+      errors.push('At least one focus area is required.');
+    }
+    if (minCitedSections !== null && minCitedSections < 0) {
+      errors.push('Minimum cited sections must be zero or greater.');
+    }
+    if (minSources !== null && minSources < 0) {
+      errors.push('Minimum sources must be zero or greater.');
+    }
+    const patch: Record<string, unknown> = {
+      focus_areas: focusAreas,
+      constraints,
+      open_questions: openQuestions,
+      stop_criteria: {
+        ...(minCitedSections !== null ? { min_cited_sections: minCitedSections } : {}),
+        ...(minSources !== null ? { min_sources: minSources } : {}),
+      },
+    };
+    const unchanged =
+      arraysEqual(focusAreas, editor.original.focusAreas) &&
+      arraysEqual(constraints, editor.original.constraints) &&
+      arraysEqual(openQuestions, editor.original.openQuestions) &&
+      minCitedSections === editor.original.minCitedSections &&
+      minSources === editor.original.minSources;
+    return {
+      patch: unchanged ? {} : patch,
+      errors,
+    };
+  }
+
+  if (editor.checkpointType === 'sources_review') {
+    const pinned = editor.draft.pinnedSourceIds;
+    const dropped = editor.draft.droppedSourceIds;
+    const prioritized = editor.draft.prioritizedSourceIds;
+    const errors: string[] = [];
+    const overlap = pinned.filter((sourceId) => dropped.includes(sourceId));
+    if (overlap.length > 0) {
+      errors.push('Pinned and dropped sources must be distinct.');
+    }
+    const invalidPrioritized = prioritized.filter((sourceId) => dropped.includes(sourceId));
+    if (invalidPrioritized.length > 0) {
+      errors.push('Prioritized sources cannot also be dropped.');
+    }
+    const patch: Record<string, unknown> = {
+      pinned_source_ids: pinned,
+      dropped_source_ids: dropped,
+      prioritized_source_ids: prioritized,
+      recollect: {
+        enabled: editor.draft.recollectEnabled,
+        need_primary_sources: editor.draft.needPrimarySources,
+        need_contradictions: editor.draft.needContradictions,
+        guidance: editor.draft.guidance.trim(),
+      },
+    };
+    const unchanged =
+      pinned.length === 0 &&
+      dropped.length === 0 &&
+      prioritized.length === 0 &&
+      !editor.draft.recollectEnabled &&
+      !editor.draft.needPrimarySources &&
+      !editor.draft.needContradictions &&
+      editor.draft.guidance.trim().length === 0;
+    return {
+      patch: unchanged ? {} : patch,
+      errors,
+    };
+  }
+
+  const sections = editor.draft.sections.map((section) => ({
+    title: section.title.trim(),
+    focus_area: section.focus_area.trim(),
+  }));
+  const errors: string[] = [];
+  if (sections.length === 0) {
+    errors.push('At least one section is required.');
+  }
+  if (sections.some((section) => !section.title || !section.focus_area)) {
+    errors.push('Every outline section needs a title and focus area.');
+  }
+  const focusAreas = sections.map((section) => section.focus_area);
+  if (new Set(focusAreas).size !== focusAreas.length) {
+    errors.push('Each focus area can only appear once.');
+  }
+  const patch = {
+    sections,
+  };
+  const unchanged =
+    sections.length === editor.originalSections.length &&
+    sections.every(
+      (section, index) =>
+        section.title === editor.originalSections[index]?.title &&
+        section.focus_area === editor.originalSections[index]?.focus_area
+    );
+  return {
+    patch: unchanged ? {} : patch,
+    errors,
+  };
+}
+
+function toggleItem(items: string[], value: string): string[] {
+  return items.includes(value) ? items.filter((item) => item !== value) : [...items, value];
+}
+
+function moveItem<T>(items: T[], fromIndex: number, direction: -1 | 1): T[] {
+  const toIndex = fromIndex + direction;
+  if (toIndex < 0 || toIndex >= items.length) {
+    return items;
+  }
+  const nextItems = [...items];
+  const [moved] = nextItems.splice(fromIndex, 1);
+  nextItems.splice(toIndex, 0, moved);
+  return nextItems;
+}
+
 export default function ResearchRunsPage() {
   const queryClient = useQueryClient();
   const { show } = useToast();
   const [question, setQuestion] = useState('');
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
+  const [checkpointEditor, setCheckpointEditor] = useState<CheckpointEditorState | null>(null);
+  const [isApprovingCheckpoint, setIsApprovingCheckpoint] = useState(false);
 
   const runsQuery = useQuery({
     queryKey: ['research-runs'],
@@ -294,11 +647,16 @@ export default function ResearchRunsPage() {
 
   const selectedSnapshot = state.snapshot;
   const selectedRun = selectedSnapshot?.run ?? selectedRunQuery.data ?? selectedListItem;
+  const checkpointEvaluation = evaluateCheckpointEditor(checkpointEditor);
   const selectedRunTitle =
     selectedListItem?.query ||
     (selectedSnapshot?.run as ResearchRun & { query?: string } | undefined)?.query ||
     selectedRun?.id ||
     'No run selected';
+
+  useEffect(() => {
+    setCheckpointEditor(buildCheckpointEditor(selectedSnapshot?.checkpoint));
+  }, [selectedSnapshot?.checkpoint]);
 
   async function handleCreateRun(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -362,15 +720,28 @@ export default function ResearchRunsPage() {
   }
 
   async function handleApproveCheckpoint() {
-    if (!effectiveSelectedRunId || !selectedSnapshot?.checkpoint) {
+    if (!effectiveSelectedRunId || !selectedSnapshot?.checkpoint || isApprovingCheckpoint) {
       return;
     }
-    const updated = await approveResearchCheckpoint(
-      effectiveSelectedRunId,
-      selectedSnapshot.checkpoint.checkpoint_id,
-      {}
-    );
-    dispatch({ type: 'replace-run', run: updated });
+    setIsApprovingCheckpoint(true);
+    try {
+      const updated = await approveResearchCheckpoint(
+        effectiveSelectedRunId,
+        selectedSnapshot.checkpoint.checkpoint_id,
+        checkpointEvaluation.patch
+      );
+      dispatch({ type: 'replace-run', run: updated });
+      await queryClient.invalidateQueries({ queryKey: ['research-runs'] });
+      await handleRefreshSelectedRun();
+    } catch (error) {
+      show({
+        title: 'Checkpoint approval failed',
+        description: error instanceof Error ? error.message : 'Unable to approve checkpoint',
+        variant: 'danger',
+      });
+    } finally {
+      setIsApprovingCheckpoint(false);
+    }
   }
 
   async function handleLoadArtifact(artifactName: string) {
@@ -400,6 +771,134 @@ export default function ResearchRunsPage() {
   const canResume = selectedRun?.control_state === 'paused';
   const canCancel = selectedRun && !['completed', 'failed', 'cancelled'].includes(selectedRun.status);
   const canLoadBundle = selectedRun?.status === 'completed';
+  const canApproveCheckpoint =
+    Boolean(selectedSnapshot?.checkpoint) &&
+    checkpointEvaluation.errors.length === 0 &&
+    !isApprovingCheckpoint;
+
+  function updatePlanDraft(
+    field: keyof PlanCheckpointEditorState['draft'],
+    value: string
+  ) {
+    setCheckpointEditor((current) => {
+      if (!current || current.checkpointType !== 'plan_review') {
+        return current;
+      }
+      return {
+        ...current,
+        draft: {
+          ...current.draft,
+          [field]: value,
+        },
+      };
+    });
+  }
+
+  function toggleSourceState(kind: 'pinnedSourceIds' | 'droppedSourceIds' | 'prioritizedSourceIds', sourceId: string) {
+    setCheckpointEditor((current) => {
+      if (!current || current.checkpointType !== 'sources_review') {
+        return current;
+      }
+      const nextItems = toggleItem(current.draft[kind], sourceId);
+      return {
+        ...current,
+        draft: {
+          ...current.draft,
+          [kind]: nextItems,
+        },
+      };
+    });
+  }
+
+  function updateSourcesDraft(
+    field:
+      | 'recollectEnabled'
+      | 'needPrimarySources'
+      | 'needContradictions'
+      | 'guidance',
+    value: boolean | string
+  ) {
+    setCheckpointEditor((current) => {
+      if (!current || current.checkpointType !== 'sources_review') {
+        return current;
+      }
+      return {
+        ...current,
+        draft: {
+          ...current.draft,
+          [field]: value,
+        },
+      };
+    });
+  }
+
+  function updateOutlineSectionTitle(index: number, title: string) {
+    setCheckpointEditor((current) => {
+      if (!current || current.checkpointType !== 'outline_review') {
+        return current;
+      }
+      const sections = current.draft.sections.map((section, sectionIndex) =>
+        sectionIndex === index ? { ...section, title } : section
+      );
+      return {
+        ...current,
+        draft: {
+          sections,
+        },
+      };
+    });
+  }
+
+  function moveOutlineSection(index: number, direction: -1 | 1) {
+    setCheckpointEditor((current) => {
+      if (!current || current.checkpointType !== 'outline_review') {
+        return current;
+      }
+      return {
+        ...current,
+        draft: {
+          sections: moveItem(current.draft.sections, index, direction),
+        },
+      };
+    });
+  }
+
+  function removeOutlineSection(index: number) {
+    setCheckpointEditor((current) => {
+      if (!current || current.checkpointType !== 'outline_review') {
+        return current;
+      }
+      return {
+        ...current,
+        draft: {
+          sections: current.draft.sections.filter((_, sectionIndex) => sectionIndex !== index),
+        },
+      };
+    });
+  }
+
+  function addOutlineFocusArea(focusArea: string) {
+    setCheckpointEditor((current) => {
+      if (!current || current.checkpointType !== 'outline_review') {
+        return current;
+      }
+      if (current.draft.sections.some((section) => section.focus_area === focusArea)) {
+        return current;
+      }
+      return {
+        ...current,
+        draft: {
+          sections: [
+            ...current.draft.sections,
+            {
+              title: focusArea.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+              focus_area: focusArea,
+            },
+          ],
+        },
+      };
+    });
+  }
 
   return (
     <div className="min-h-screen bg-bg text-foreground">
@@ -565,15 +1064,252 @@ export default function ResearchRunsPage() {
                     type="button"
                     className="rounded-full bg-primary px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={handleApproveCheckpoint}
-                    disabled={!selectedSnapshot?.checkpoint}
+                    disabled={!canApproveCheckpoint}
                   >
-                    Approve checkpoint
+                    {isApprovingCheckpoint ? 'Approving…' : 'Approve checkpoint'}
                   </button>
                 </div>
                 {selectedSnapshot?.checkpoint && (
-                  <pre className="mt-4 overflow-x-auto rounded-xl border border-border bg-card p-3 text-xs text-muted-foreground">
-                    {JSON.stringify(selectedSnapshot.checkpoint.proposed_payload, null, 2)}
-                  </pre>
+                  <div className="mt-4 space-y-4">
+                    {checkpointEvaluation.errors.length > 0 && (
+                      <div className="rounded-xl border border-danger/30 bg-danger/5 px-3 py-3 text-sm text-danger">
+                        {checkpointEvaluation.errors.map((error) => (
+                          <div key={error}>{error}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {checkpointEditor?.checkpointType === 'plan_review' && (
+                      <div className="space-y-4">
+                        <div className="rounded-xl border border-border bg-card px-3 py-3 text-sm text-muted-foreground">
+                          Query: {checkpointEditor.querySummary || 'No query summary'}
+                        </div>
+                        <label className="block text-sm font-medium" htmlFor="plan-focus-areas">
+                          Focus areas
+                        </label>
+                        <textarea
+                          id="plan-focus-areas"
+                          className="min-h-24 w-full rounded-xl border border-border bg-card px-3 py-2 text-sm outline-none transition focus:border-primary"
+                          value={checkpointEditor.draft.focusAreasText}
+                          onChange={(event) => updatePlanDraft('focusAreasText', event.target.value)}
+                        />
+                        <label className="block text-sm font-medium" htmlFor="plan-constraints">
+                          Constraints
+                        </label>
+                        <textarea
+                          id="plan-constraints"
+                          className="min-h-20 w-full rounded-xl border border-border bg-card px-3 py-2 text-sm outline-none transition focus:border-primary"
+                          value={checkpointEditor.draft.constraintsText}
+                          onChange={(event) => updatePlanDraft('constraintsText', event.target.value)}
+                        />
+                        <label className="block text-sm font-medium" htmlFor="plan-open-questions">
+                          Open questions
+                        </label>
+                        <textarea
+                          id="plan-open-questions"
+                          className="min-h-20 w-full rounded-xl border border-border bg-card px-3 py-2 text-sm outline-none transition focus:border-primary"
+                          value={checkpointEditor.draft.openQuestionsText}
+                          onChange={(event) => updatePlanDraft('openQuestionsText', event.target.value)}
+                        />
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <label className="block text-sm font-medium" htmlFor="plan-min-cited-sections">
+                            Minimum cited sections
+                          </label>
+                          <input
+                            id="plan-min-cited-sections"
+                            type="number"
+                            min={0}
+                            className="w-full rounded-xl border border-border bg-card px-3 py-2 text-sm outline-none transition focus:border-primary"
+                            value={checkpointEditor.draft.minCitedSections}
+                            onChange={(event) => updatePlanDraft('minCitedSections', event.target.value)}
+                          />
+                          <label className="block text-sm font-medium" htmlFor="plan-min-sources">
+                            Minimum sources
+                          </label>
+                          <input
+                            id="plan-min-sources"
+                            type="number"
+                            min={0}
+                            className="w-full rounded-xl border border-border bg-card px-3 py-2 text-sm outline-none transition focus:border-primary"
+                            value={checkpointEditor.draft.minSources}
+                            onChange={(event) => updatePlanDraft('minSources', event.target.value)}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {checkpointEditor?.checkpointType === 'sources_review' && (
+                      <div className="space-y-3">
+                        {checkpointEditor.sourceInventory.map((source) => {
+                          const pinned = checkpointEditor.draft.pinnedSourceIds.includes(source.source_id);
+                          const dropped = checkpointEditor.draft.droppedSourceIds.includes(source.source_id);
+                          const prioritized = checkpointEditor.draft.prioritizedSourceIds.includes(source.source_id);
+                          const sourceLabel = source.title || source.source_id;
+                          return (
+                            <div
+                              key={source.source_id}
+                              className="rounded-xl border border-border bg-card px-3 py-3"
+                            >
+                              <div className="text-sm font-medium">{sourceLabel}</div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {source.provider || 'unknown provider'}
+                                {source.focus_area ? ` · ${source.focus_area}` : ''}
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  className={`rounded-full border px-3 py-2 text-sm ${
+                                    pinned ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-muted'
+                                  }`}
+                                  onClick={() => toggleSourceState('pinnedSourceIds', source.source_id)}
+                                  aria-pressed={pinned}
+                                  aria-label={`Pin ${sourceLabel}`}
+                                >
+                                  Pin
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`rounded-full border px-3 py-2 text-sm ${
+                                    dropped ? 'border-danger/40 bg-danger/10 text-danger' : 'border-border hover:bg-muted'
+                                  }`}
+                                  onClick={() => toggleSourceState('droppedSourceIds', source.source_id)}
+                                  aria-pressed={dropped}
+                                  aria-label={`Drop ${sourceLabel}`}
+                                >
+                                  Drop
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`rounded-full border px-3 py-2 text-sm ${
+                                    prioritized
+                                      ? 'border-primary bg-primary/10 text-primary'
+                                      : 'border-border hover:bg-muted'
+                                  }`}
+                                  onClick={() => toggleSourceState('prioritizedSourceIds', source.source_id)}
+                                  aria-pressed={prioritized}
+                                  aria-label={`Prioritize ${sourceLabel}`}
+                                >
+                                  Prioritize
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        <label className="flex items-center gap-2 text-sm font-medium">
+                          <input
+                            type="checkbox"
+                            checked={checkpointEditor.draft.recollectEnabled}
+                            onChange={(event) => updateSourcesDraft('recollectEnabled', event.target.checked)}
+                          />
+                          Recollect sources
+                        </label>
+                        <label className="flex items-center gap-2 text-sm font-medium">
+                          <input
+                            type="checkbox"
+                            checked={checkpointEditor.draft.needPrimarySources}
+                            onChange={(event) => updateSourcesDraft('needPrimarySources', event.target.checked)}
+                          />
+                          Need more primary sources
+                        </label>
+                        <label className="flex items-center gap-2 text-sm font-medium">
+                          <input
+                            type="checkbox"
+                            checked={checkpointEditor.draft.needContradictions}
+                            onChange={(event) => updateSourcesDraft('needContradictions', event.target.checked)}
+                          />
+                          Need more contradictions
+                        </label>
+                        <label className="block text-sm font-medium" htmlFor="sources-guidance">
+                          Recollection guidance
+                        </label>
+                        <textarea
+                          id="sources-guidance"
+                          className="min-h-24 w-full rounded-xl border border-border bg-card px-3 py-2 text-sm outline-none transition focus:border-primary"
+                          value={checkpointEditor.draft.guidance}
+                          onChange={(event) => updateSourcesDraft('guidance', event.target.value)}
+                        />
+                      </div>
+                    )}
+
+                    {checkpointEditor?.checkpointType === 'outline_review' && (
+                      <div className="space-y-3">
+                        {checkpointEditor.draft.sections.map((section, index) => (
+                          <div
+                            key={`${section.focus_area}-${index}`}
+                            className="rounded-xl border border-border bg-card px-3 py-3"
+                          >
+                            <label
+                              className="block text-sm font-medium"
+                              htmlFor={`outline-section-title-${index}`}
+                            >
+                              Section title {index + 1}
+                            </label>
+                            <input
+                              id={`outline-section-title-${index}`}
+                              className="mt-2 w-full rounded-xl border border-border bg-bg px-3 py-2 text-sm outline-none transition focus:border-primary"
+                              value={section.title}
+                              onChange={(event) => updateOutlineSectionTitle(index, event.target.value)}
+                            />
+                            <div className="mt-2 text-xs text-muted-foreground">
+                              Focus area: {section.focus_area}
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                className="rounded-full border border-border px-3 py-2 text-sm hover:bg-muted"
+                                onClick={() => moveOutlineSection(index, -1)}
+                                aria-label={`Move section up: ${section.focus_area}`}
+                              >
+                                Move up
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-full border border-border px-3 py-2 text-sm hover:bg-muted"
+                                onClick={() => moveOutlineSection(index, 1)}
+                                aria-label={`Move section down: ${section.focus_area}`}
+                              >
+                                Move down
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-full border border-danger/30 px-3 py-2 text-sm text-danger hover:bg-danger/10"
+                                onClick={() => removeOutlineSection(index)}
+                                aria-label={`Remove section: ${section.focus_area}`}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                        <div className="flex flex-wrap gap-2">
+                          {checkpointEditor.availableFocusAreas
+                            .filter(
+                              (focusArea) =>
+                                !checkpointEditor.draft.sections.some(
+                                  (section) => section.focus_area === focusArea
+                                )
+                            )
+                            .map((focusArea) => (
+                              <button
+                                key={focusArea}
+                                type="button"
+                                className="rounded-full border border-border px-3 py-2 text-sm hover:bg-muted"
+                                onClick={() => addOutlineFocusArea(focusArea)}
+                                aria-label={`Add focus area: ${focusArea}`}
+                              >
+                                Add {focusArea}
+                              </button>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {!checkpointEditor && (
+                      <pre className="overflow-x-auto rounded-xl border border-border bg-card p-3 text-xs text-muted-foreground">
+                        {JSON.stringify(selectedSnapshot.checkpoint.proposed_payload, null, 2)}
+                      </pre>
+                    )}
+                  </div>
                 )}
               </section>
 
