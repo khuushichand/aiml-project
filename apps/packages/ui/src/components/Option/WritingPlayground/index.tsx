@@ -30,13 +30,17 @@ import {
   Download,
   Edit3,
   Eye,
+  Menu,
   MoreHorizontal,
   Pencil,
   Redo2,
   Search,
+  Settings,
+  Square,
   Trash2,
   Undo2,
-  X
+  X,
+  Zap
 } from "lucide-react"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useServerOnline } from "@/hooks/useServerOnline"
@@ -1258,6 +1262,10 @@ export const WritingPlayground = () => {
       rate: 1,
       voiceURI: null
     })
+  const [libraryOpen, setLibraryOpen] = React.useState(true)
+  const [inspectorOpen, setInspectorOpen] = React.useState(false)
+  const [generationElapsed, setGenerationElapsed] = React.useState(0)
+  const generationTimerRef = React.useRef<ReturnType<typeof setInterval> | null>(null)
   const [showPromptChunks, setShowPromptChunks] = React.useState(false)
   const [createModalOpen, setCreateModalOpen] = React.useState(false)
   const [newSessionName, setNewSessionName] = React.useState("")
@@ -2327,6 +2335,27 @@ export const WritingPlayground = () => {
     setIsSpeechPaused(false)
     window.speechSynthesis.speak(utterance)
   }, [editorText, speechRate, speechVoiceURI, speechVoices, t])
+
+  React.useEffect(() => {
+    if (isGenerating) {
+      setGenerationElapsed(0)
+      const start = Date.now()
+      generationTimerRef.current = setInterval(() => {
+        setGenerationElapsed(Math.floor((Date.now() - start) / 1000))
+      }, 1000)
+    } else {
+      if (generationTimerRef.current) {
+        clearInterval(generationTimerRef.current)
+        generationTimerRef.current = null
+      }
+    }
+    return () => {
+      if (generationTimerRef.current) {
+        clearInterval(generationTimerRef.current)
+        generationTimerRef.current = null
+      }
+    }
+  }, [isGenerating])
 
   React.useEffect(() => {
     return () => {
@@ -5111,6 +5140,18 @@ export const WritingPlayground = () => {
     Boolean(selectedModel) &&
     hasChat &&
     !isGenerating
+  const generateDisabledReason = React.useMemo(() => {
+    if (isGenerating) return null
+    if (!activeSessionDetail)
+      return t("option:writingPlayground.disabledNoSession", "Select a session first")
+    if (!selectedModel)
+      return t("option:writingPlayground.disabledNoModel", "Set a model to generate")
+    if (!isOnline)
+      return t("option:writingPlayground.disabledOffline", "Server is offline")
+    if (!hasChat)
+      return t("option:writingPlayground.disabledNoChat", "Chat completions unavailable")
+    return null
+  }, [activeSessionDetail, hasChat, isGenerating, isOnline, selectedModel, t])
   const settingsDisabled = isGenerating || !activeSessionDetail
   const serverSupportsTokenize = writingCaps?.server?.tokenize === true
   const serverSupportsTokenCount = writingCaps?.server?.token_count === true
@@ -5392,997 +5433,7 @@ export const WritingPlayground = () => {
     t
   ])
 
-  return (
-    <div
-      className={cn(
-        "writing-playground flex flex-col gap-6",
-        activeThemeClassName
-      )}>
-      {activeThemeCss ? <style>{activeThemeCss}</style> : null}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <Title level={2}>
-            {t("option:writingPlayground.title", "Writing Playground")}
-          </Title>
-        </div>
-      </div>
-      <div>
-        <Paragraph type="secondary">
-          {t(
-            "option:writingPlayground.subtitle",
-            "Draft long-form prompts, manage sessions, and generate with your tldw server."
-          )}
-        </Paragraph>
-      </div>
-
-      {showOffline && (
-        <Alert
-          type="warning"
-          showIcon
-          title={t("option:writingPlayground.offlineTitle", "Server required")}
-          description={t(
-            "option:writingPlayground.offlineBody",
-            "Connect to your tldw server to load writing sessions and generate."
-          )}
-        />
-      )}
-
-      {showUnsupported && (
-        <Alert
-          type="info"
-          showIcon
-          title={t(
-            "option:writingPlayground.unavailableTitle",
-            "Playground unavailable"
-          )}
-          description={t(
-            "option:writingPlayground.unavailableBody",
-            "This server does not advertise writing playground support yet."
-          )}
-        />
-      )}
-
-      {!showOffline && !showUnsupported && (
-        <WritingPlaygroundShell>
-          <div
-            data-testid="writing-playground-main-grid"
-            className="writing-playground-grid-main grid grid-cols-1 gap-6 lg:grid-cols-[320px_1fr]">
-            <WritingPlaygroundLibraryPanel
-            title={t("option:writingPlayground.sessionsTitle", "Sessions")}
-            extra={
-              <div className="flex items-center gap-2">
-                <Button type="primary" onClick={() => setCreateModalOpen(true)}>
-                  {t("option:writingPlayground.newSession", "New session")}
-                </Button>
-                <Button
-                  size="small"
-                  onClick={() => sessionFileInputRef.current?.click()}
-                  loading={sessionImporting}
-                  disabled={sessionImportDisabled}>
-                  {t("option:writingPlayground.importSession", "Import")}
-                </Button>
-                {hasSnapshots ? (
-                  <>
-                    <Button
-                      size="small"
-                      onClick={() => {
-                        void exportSnapshot()
-                      }}
-                      loading={snapshotExporting}
-                      disabled={snapshotExportDisabled}>
-                      {t(
-                        "option:writingPlayground.exportSnapshot",
-                        "Export all"
-                      )}
-                    </Button>
-                    <Button
-                      size="small"
-                      onClick={() => openSnapshotImportPicker("merge")}
-                      loading={snapshotImporting}
-                      disabled={snapshotImportDisabled}>
-                      {t(
-                        "option:writingPlayground.importSnapshot",
-                        "Import all"
-                      )}
-                    </Button>
-                    <Button
-                      size="small"
-                      danger
-                      onClick={() => openSnapshotImportPicker("replace")}
-                      loading={snapshotImporting}
-                      disabled={snapshotImportDisabled}>
-                      {t(
-                        "option:writingPlayground.replaceSnapshot",
-                        "Replace all"
-                      )}
-                    </Button>
-                  </>
-                ) : null}
-              </div>
-            }>
-            {sessionsLoading ? (
-              <Skeleton active />
-            ) : sessionsError ? (
-              <Alert
-                type="error"
-                showIcon
-                title={t(
-                  "option:writingPlayground.sessionsError",
-                  "Unable to load sessions."
-                )}
-              />
-            ) : sortedSessions.length === 0 ? (
-              <Empty
-                description={t(
-                  "option:writingPlayground.sessionsEmpty",
-                  "Create your first session to start writing."
-                )}
-              />
-            ) : (
-              <List
-                dataSource={sortedSessions}
-                rowKey={(item) => item.session.id}
-                renderItem={({ session, lastUsedAt }) => {
-                  const isActive = activeSessionId === session.id
-                  const lastUsedLabel = lastUsedAt
-                    ? t(
-                        "option:writingPlayground.lastOpenedLabel",
-                        "Last opened {{time}}",
-                        {
-                          time: formatRelativeTime(
-                            new Date(lastUsedAt).toISOString(),
-                            t
-                          )
-                        }
-                      )
-                    : t(
-                        "option:writingPlayground.notOpened",
-                        "Not opened yet"
-                      )
-                  const menuItems: MenuProps["items"] = [
-                    {
-                      key: "rename",
-                      icon: <Pencil className="h-4 w-4" />,
-                      label: t(
-                        "option:writingPlayground.renameSession",
-                        "Rename session"
-                      ),
-                      onClick: () => openRenameModal(session)
-                    },
-                    {
-                      key: "clone",
-                      icon: <Copy className="h-4 w-4" />,
-                      label: t(
-                        "option:writingPlayground.cloneSession",
-                        "Clone session"
-                      ),
-                      onClick: () => cloneSessionMutation.mutate({ session })
-                    },
-                    {
-                      key: "export",
-                      icon: <Download className="h-4 w-4" />,
-                      label: t(
-                        "option:writingPlayground.exportSession",
-                        "Export session"
-                      ),
-                      onClick: () => exportSession(session)
-                    },
-                    {
-                      type: "divider"
-                    },
-                    {
-                      key: "delete",
-                      icon: <Trash2 className="h-4 w-4" />,
-                      label: t(
-                        "option:writingPlayground.deleteSession",
-                        "Delete session"
-                      ),
-                      danger: true,
-                      onClick: () => confirmDeleteSession(session)
-                    }
-                  ]
-                  return (
-                    <List.Item
-                      className={`cursor-pointer rounded-md px-2 py-3 transition ${
-                        isActive ? "bg-surface-hover" : "hover:bg-surface-hover/60"
-                      }`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => handleSelectSession(session)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault()
-                          handleSelectSession(session)
-                        }
-                      }}>
-                      <div className="flex w-full items-center justify-between gap-3">
-                        <div className="flex flex-col">
-                          <span className="text-sm font-medium text-text">
-                            {session.name}
-                          </span>
-                          <span className="text-xs text-text-muted">
-                            {lastUsedLabel}
-                          </span>
-                        </div>
-                        <div
-                          className="flex items-center gap-2"
-                          onClick={(event) => event.stopPropagation()}>
-                          {isActive ? (
-                            <Tag color="blue">
-                              {t("option:writingPlayground.active", "Active")}
-                            </Tag>
-                          ) : null}
-                          <Dropdown menu={{ items: menuItems }} trigger={["click"]}>
-                            <Button
-                              type="text"
-                              size="small"
-                              aria-label={t(
-                                "option:writingPlayground.sessionActionsAria",
-                                "Session actions"
-                              )}
-                              icon={<MoreHorizontal className="h-4 w-4" />}
-                              loading={
-                                deleteSessionMutation.isPending ||
-                                renameSessionMutation.isPending ||
-                                cloneSessionMutation.isPending ||
-                                sessionImporting
-                              }
-                            />
-                          </Dropdown>
-                        </div>
-                      </div>
-                    </List.Item>
-                  )
-                }}
-              />
-            )}
-            </WritingPlaygroundLibraryPanel>
-
-            <div
-              data-testid="writing-playground-content-grid"
-              className="writing-playground-grid-side grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-              <WritingPlaygroundEditorPanel>
-              {activeSession ? (
-                activeSessionLoading ? (
-                  <Skeleton active />
-                ) : activeSessionError ? (
-                  <Alert
-                    type="error"
-                    showIcon
-                    title={t(
-                      "option:writingPlayground.editorError",
-                      "Unable to load this session."
-                    )}
-                  />
-                ) : (
-                  <div className="flex flex-col gap-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <Title level={4} className="!mb-1">
-                          {activeSession.name}
-                        </Title>
-                        <Paragraph type="secondary" className="!mb-0">
-                          {t(
-                            "option:writingPlayground.editorTitle",
-                            "Prompt editor"
-                          )}
-                        </Paragraph>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        {saveStatusLabel ? (
-                          <span className="text-xs text-text-muted">
-                            {saveStatusLabel}
-                          </span>
-                        ) : null}
-                        {generationTokenCount > 0 ? (
-                          <Tag color="blue">
-                            {t(
-                              "option:writingPlayground.generationTokensLabel",
-                              "{{count}} tokens",
-                              { count: generationTokenCount }
-                            )}
-                          </Tag>
-                        ) : null}
-                        {generationTokensPerSec > 0 ? (
-                          <Tag>
-                            {t(
-                              "option:writingPlayground.generationRateLabel",
-                              "{{rate}} tok/s",
-                              {
-                                rate:
-                                  generationTokensPerSec >= 10
-                                    ? generationTokensPerSec.toFixed(1)
-                                    : generationTokensPerSec.toFixed(2)
-                              }
-                            )}
-                          </Tag>
-                        ) : null}
-                        <Button
-                          size="small"
-                          icon={<Undo2 className="h-3.5 w-3.5" />}
-                          disabled={isGenerating || !canUndoGeneration}
-                          onClick={handleUndoGeneration}>
-                          {t("option:writingPlayground.undoGeneration", "Undo")}
-                        </Button>
-                        <Button
-                          size="small"
-                          icon={<Redo2 className="h-3.5 w-3.5" />}
-                          disabled={isGenerating || !canRedoGeneration}
-                          onClick={handleRedoGeneration}>
-                          {t("option:writingPlayground.redoGeneration", "Redo")}
-                        </Button>
-                        <Button
-                          size="small"
-                          icon={<Columns2 className="h-3.5 w-3.5" />}
-                          data-testid="writing-view-prompt-chunks"
-                          onClick={() => setShowPromptChunks((prev) => !prev)}>
-                          {showPromptChunks
-                            ? t("option:writingPlayground.hidePromptChunks", "Hide chunks")
-                            : t("option:writingPlayground.viewPromptChunks", "View chunks")}
-                        </Button>
-                        <Button
-                          size="small"
-                          disabled={isGenerating && !isSpeaking}
-                          onClick={() => {
-                            if (isSpeaking) {
-                              stopSpeech()
-                            } else {
-                              handleSpeakEditor()
-                            }
-                          }}>
-                          {isSpeaking
-                            ? t("option:writingPlayground.speechStopAction", "Stop reading")
-                            : t("option:writingPlayground.speechReadAction", "Read aloud")}
-                        </Button>
-                        {pauseResumeAction ? (
-                          <Button
-                            size="small"
-                            onClick={() => {
-                              if (pauseResumeAction === "pause") {
-                                pauseSpeech()
-                              } else {
-                                resumeSpeech()
-                              }
-                            }}>
-                            {pauseResumeAction === "pause"
-                              ? t("option:writingPlayground.speechPauseAction", "Pause")
-                              : t("option:writingPlayground.speechResumeAction", "Resume")}
-                          </Button>
-                        ) : null}
-                        <Dropdown
-                          menu={{ items: insertMenuItems }}
-                          trigger={["click"]}
-                          disabled={isGenerating}>
-                          <Button size="small">
-                            {t(
-                              "option:writingPlayground.templateInsertAction",
-                              "Insert"
-                            )}
-                          </Button>
-                        </Dropdown>
-                        <Segmented
-                          size="small"
-                          value={editorView}
-                          onChange={(value) =>
-                            setEditorView(value as EditorViewMode)
-                          }
-                          options={[
-                            {
-                              value: "edit",
-                              icon: <Edit3 className="h-3.5 w-3.5" />,
-                              label: t(
-                                "option:writingPlayground.editorModeEdit",
-                                "Edit"
-                              )
-                            },
-                            {
-                              value: "preview",
-                              icon: <Eye className="h-3.5 w-3.5" />,
-                              label: t(
-                                "option:writingPlayground.editorModePreview",
-                                "Preview"
-                              )
-                            },
-                            {
-                              value: "split",
-                              icon: <Columns2 className="h-3.5 w-3.5" />,
-                              label: t(
-                                "option:writingPlayground.editorModeSplit",
-                                "Split"
-                              )
-                            }
-                          ]}
-                        />
-                        <Button
-                          size="small"
-                          icon={
-                            searchOpen ? (
-                              <X className="h-3.5 w-3.5" />
-                            ) : (
-                              <Search className="h-3.5 w-3.5" />
-                            )
-                          }
-                          onClick={() => setSearchOpen((open) => !open)}>
-                          {searchOpen
-                            ? t("option:writingPlayground.searchClose", "Close")
-                            : t("option:writingPlayground.searchToggle", "Find")}
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="text-xs text-text-muted">
-                      {t(
-                        "option:writingPlayground.shortcutsHint",
-                        "Shortcuts: Ctrl/Cmd+Enter to generate, Esc to stop."
-                      )}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface p-2">
-                      <span className="text-xs text-text-muted">
-                        {t("option:writingPlayground.speechVoiceLabel", "Read voice")}
-                      </span>
-                      <Select
-                        size="small"
-                        value={speechVoiceURI ?? undefined}
-                        disabled={isGenerating || speechVoiceOptions.length === 0}
-                        options={speechVoiceOptions}
-                        placeholder={t(
-                          "option:writingPlayground.speechVoicePlaceholder",
-                          "Default voice"
-                        )}
-                        popupMatchSelectWidth={false}
-                        allowClear
-                        onChange={(value) =>
-                          updateSpeechPreferences({
-                            voiceURI: typeof value === "string" ? value : null
-                          })
-                        }
-                        className="min-w-[200px]"
-                      />
-                      <span className="text-xs text-text-muted">
-                        {t("option:writingPlayground.speechRateLabel", "Rate")}
-                      </span>
-                      <InputNumber
-                        size="small"
-                        min={0.5}
-                        max={2}
-                        step={0.1}
-                        value={speechRate}
-                        disabled={isGenerating}
-                        onChange={(value) =>
-                          updateSpeechPreferences({
-                            rate: clampSpeechRate(value == null ? 1 : value)
-                          })
-                        }
-                      />
-                    </div>
-                    {searchOpen && (
-                      <div className="rounded-md border border-border bg-surface p-3">
-                        <div className="flex flex-col gap-3">
-                          <div className="flex flex-wrap gap-2">
-                            <Input
-                              value={searchQuery}
-                              allowClear
-                              placeholder={t(
-                                "option:writingPlayground.searchPlaceholder",
-                                "Find text"
-                              )}
-                              onChange={(event) =>
-                                setSearchQuery(event.target.value)
-                              }
-                              className="min-w-[200px] flex-1"
-                            />
-                            <Input
-                              value={replaceQuery}
-                              allowClear
-                              placeholder={t(
-                                "option:writingPlayground.replacePlaceholder",
-                                "Replace with"
-                              )}
-                              onChange={(event) =>
-                                setReplaceQuery(event.target.value)
-                              }
-                              className="min-w-[200px] flex-1"
-                            />
-                            <div className="flex items-center gap-2">
-                              <Button
-                                size="small"
-                                onClick={() => navigateMatch("prev")}
-                                disabled={!searchMatches.length}>
-                                {t(
-                                  "option:writingPlayground.searchPrev",
-                                  "Prev"
-                                )}
-                              </Button>
-                              <Button
-                                size="small"
-                                onClick={() => navigateMatch("next")}
-                                disabled={!searchMatches.length}>
-                                {t(
-                                  "option:writingPlayground.searchNext",
-                                  "Next"
-                                )}
-                              </Button>
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-3">
-                              <Checkbox
-                                checked={matchCase}
-                                onChange={(event) =>
-                                  setMatchCase(event.target.checked)
-                                }>
-                                {t(
-                                  "option:writingPlayground.searchMatchCase",
-                                  "Match case"
-                                )}
-                              </Checkbox>
-                              <Checkbox
-                                checked={useRegex}
-                                onChange={(event) =>
-                                  setUseRegex(event.target.checked)
-                                }>
-                                {t(
-                                  "option:writingPlayground.searchRegex",
-                                  "Regex"
-                                )}
-                              </Checkbox>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                size="small"
-                                onClick={replaceCurrent}
-                                disabled={!searchMatches.length}>
-                                {t(
-                                  "option:writingPlayground.searchReplaceAction",
-                                  "Replace"
-                                )}
-                              </Button>
-                              <Button
-                                size="small"
-                                onClick={replaceAll}
-                                disabled={!searchQuery.trim()}>
-                                {t(
-                                  "option:writingPlayground.searchReplaceAll",
-                                  "Replace all"
-                                )}
-                              </Button>
-                            </div>
-                          </div>
-                          <div className="text-xs text-text-muted">
-                            {searchError
-                              ? searchError
-                              : searchQuery.trim()
-                              ? searchMatches.length
-                                ? t(
-                                    "option:writingPlayground.searchMatchCount",
-                                    "{{current}} of {{total}} matches",
-                                    {
-                                      current: Math.min(
-                                        activeMatchIndex + 1,
-                                        searchMatches.length
-                                      ),
-                                      total: searchMatches.length
-                                    }
-                                  )
-                                : t(
-                                    "option:writingPlayground.searchNoMatches",
-                                    "No matches"
-                                  )
-                              : t(
-                                  "option:writingPlayground.searchHint",
-                                  "Enter text to search"
-                                )}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  {editorView === "edit" && (
-                    <Dropdown
-                      menu={{ items: editorMenuItems }}
-                      trigger={["contextMenu"]}>
-                      <div>
-                          <Input.TextArea
-                            ref={editorRef}
-                            value={editorText}
-                            onChange={handlePromptChange}
-                            onScroll={() => syncScroll("editor")}
-                            placeholder={t(
-                              "option:writingPlayground.editorPlaceholder",
-                              "Start writing your prompt..."
-                            )}
-                            rows={18}
-                            disabled={isGenerating}
-                            className="min-h-[320px]"
-                          />
-                      </div>
-                    </Dropdown>
-                  )}
-                    {editorView === "preview" && (
-                      <div
-                        ref={previewRef}
-                        className="min-h-[320px] max-h-[600px] overflow-y-auto rounded-md border border-border bg-surface p-4"
-                        onScroll={() => syncScroll("preview")}>
-                        {editorText.trim() ? (
-                          <MarkdownPreview content={editorText} size="sm" />
-                        ) : (
-                          <Paragraph type="secondary" className="!mb-0 italic">
-                            {t(
-                              "option:writingPlayground.editorEmptyPreview",
-                              "Nothing to preview yet."
-                            )}
-                          </Paragraph>
-                        )}
-                      </div>
-                    )}
-                    {editorView === "split" && (
-                      <div className="flex flex-col gap-4 lg:flex-row">
-                        <div className="flex-1">
-                          <Dropdown
-                            menu={{ items: editorMenuItems }}
-                            trigger={["contextMenu"]}>
-                            <div>
-                              <Input.TextArea
-                                ref={editorRef}
-                                value={editorText}
-                                onChange={handlePromptChange}
-                                onScroll={() => syncScroll("editor")}
-                                placeholder={t(
-                                  "option:writingPlayground.editorPlaceholder",
-                                  "Start writing your prompt..."
-                                )}
-                                rows={18}
-                                disabled={isGenerating}
-                                className="min-h-[320px]"
-                              />
-                            </div>
-                          </Dropdown>
-                        </div>
-                        <div
-                          ref={previewRef}
-                          className="flex-1 min-h-[320px] max-h-[600px] overflow-y-auto rounded-md border border-border bg-surface p-4"
-                          onScroll={() => syncScroll("preview")}>
-                          {editorText.trim() ? (
-                            <MarkdownPreview content={editorText} size="sm" />
-                          ) : (
-                            <Paragraph type="secondary" className="!mb-0 italic">
-                              {t(
-                                "option:writingPlayground.editorEmptyPreview",
-                                "Nothing to preview yet."
-                              )}
-                            </Paragraph>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    {responseLogprobs.length > 0 ? (
-                      <div className="rounded-md border border-border bg-surface p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-xs text-text-muted">
-                            {t(
-                              "option:writingPlayground.inlineTokenInspectorHint",
-                              "Inline token probabilities: hover token chips to inspect alternatives, click a token or alternative to reroll from that point."
-                            )}
-                          </span>
-                          <Tag color="blue">
-                            {t(
-                              "option:writingPlayground.inlineTokenInspectorCount",
-                              "{{count}} tokens",
-                              { count: inlineResponseTokens.length }
-                            )}
-                          </Tag>
-                        </div>
-                        <div className="mt-2 max-h-40 overflow-y-auto rounded-md border border-border bg-background p-2">
-                          <div className="flex flex-wrap gap-1">
-                            {inlineResponseTokens.map((row) => (
-                              <Tooltip
-                                key={`inline-token-${row.sequence}`}
-                                placement="top"
-                                title={
-                                  <div className="flex max-w-[360px] flex-col gap-1">
-                                    <span className="text-[11px] text-text-muted">
-                                      {t(
-                                        "option:writingPlayground.inlineTokenAlternativesLabel",
-                                        "Top alternatives"
-                                      )}
-                                    </span>
-                                    {row.topLogprobs.length === 0 ? (
-                                      <span className="text-[11px] text-text-muted">
-                                        {t(
-                                          "option:writingPlayground.inlineTokenAlternativesEmpty",
-                                          "No alternatives."
-                                        )}
-                                      </span>
-                                    ) : (
-                                      row.topLogprobs.map((alt, idx) => (
-                                        <Button
-                                          key={`inline-alt-${row.sequence}-${idx}`}
-                                          size="small"
-                                          type="text"
-                                          className="!h-auto !justify-start !px-1.5 !py-0.5 font-mono text-[11px]"
-                                          onClick={(event) => {
-                                            event.preventDefault()
-                                            event.stopPropagation()
-                                            handleRerollFromResponseToken(
-                                              row.sequence,
-                                              alt.token
-                                            )
-                                          }}>
-                                          {`${alt.displayToken} (${alt.probability >= 0.001 ? alt.probability.toFixed(3) : alt.probability.toExponential(2)})`}
-                                        </Button>
-                                      ))
-                                    )}
-                                  </div>
-                                }>
-                                <button
-                                  type="button"
-                                  className="rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[11px] text-text transition hover:bg-surface-hover"
-                                  onClick={() =>
-                                    handleRerollFromResponseToken(row.sequence)
-                                  }>
-                                  {row.displayToken}
-                                </button>
-                              </Tooltip>
-                            ))}
-                          </div>
-                        </div>
-                        {inlineResponseTokensTruncated ? (
-                          <span className="mt-2 block text-xs text-text-muted">
-                            {t(
-                              "option:writingPlayground.inlineTokenInspectorTruncated",
-                              "Showing first {{count}} tokens.",
-                              { count: inlineResponseTokens.length }
-                            )}
-                          </span>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    {showPromptChunks ? (
-                      <div data-testid="writing-section-prompt-chunks">
-                        <Collapse
-                          ghost
-                          size="small"
-                          defaultActiveKey={["chunks"]}
-                          items={[
-                            {
-                              key: "chunks",
-                              label: t(
-                                "option:writingPlayground.promptChunksTitle",
-                                "Prompt chunks ({{count}})",
-                                { count: promptChunkData.total }
-                              ),
-                              children:
-                                promptChunkData.total === 0 ? (
-                                  <Paragraph type="secondary" className="!mb-0">
-                                    {t(
-                                      "option:writingPlayground.promptChunksEmpty",
-                                      "No chunks yet."
-                                    )}
-                                  </Paragraph>
-                                ) : (
-                                  <div className="flex flex-col gap-2">
-                                    {promptChunkData.chunks.map((chunk) => (
-                                      <div
-                                        key={chunk.key}
-                                        className="flex flex-col gap-1 rounded-md border border-border bg-surface p-2">
-                                        <Tag
-                                          className="mr-auto"
-                                          color={
-                                            chunk.type === "placeholder"
-                                              ? "gold"
-                                              : "default"
-                                          }>
-                                          {chunk.type === "placeholder"
-                                            ? t(
-                                                "option:writingPlayground.chunkPlaceholder",
-                                                "Placeholder"
-                                              )
-                                            : t(
-                                                "option:writingPlayground.chunkText",
-                                                "Text"
-                                              )}
-                                        </Tag>
-                                        <pre className="m-0 whitespace-pre-wrap break-words font-mono text-xs text-text">
-                                          {chunk.label}
-                                        </pre>
-                                      </div>
-                                    ))}
-                                    {promptChunkData.truncated ? (
-                                      <Paragraph type="secondary" className="!mb-0">
-                                        {t(
-                                          "option:writingPlayground.promptChunksTruncated",
-                                          "Showing first {{count}} chunks.",
-                                          { count: promptChunkData.chunks.length }
-                                        )}
-                                      </Paragraph>
-                                    ) : null}
-                                  </div>
-                                )
-                            }
-                          ]}
-                        />
-                      </div>
-                    ) : null}
-                  </div>
-                )
-              ) : (
-                <Empty
-                  description={t(
-                    "option:writingPlayground.selectSession",
-                    "Select a session to begin."
-                  )}
-                />
-              )}
-              </WritingPlaygroundEditorPanel>
-
-              <WritingPlaygroundInspectorPanel
-                activeTab={activeInspectorTab}
-                onTabChange={setActiveInspectorTab}
-                tabLabels={{
-                  sampling: t(
-                    "option:writingPlayground.sidebarSampling",
-                    "Sampling"
-                  ),
-                  context: t("option:writingPlayground.sidebarContext", "Context"),
-                  setup: t("option:writingPlayground.sidebarSetup", "Setup"),
-                  inspect: t(
-                    "option:writingPlayground.sidebarInspect",
-                    "Inspect"
-                  )
-                }}
-                tabBadges={{
-                  inspect: responseInspectorRowsAll.length > 0 ? (
-                    <Tag size="small" color="blue" className="!m-0 !px-1 !text-[10px]">
-                      {responseInspectorRowsAll.length}
-                    </Tag>
-                  ) : null
-                }}
-                essentialsStrip={(
-                  <Card
-                    data-testid="writing-playground-settings-card"
-                    size="small"
-                    className="!border-border">
-                    <div className="flex flex-col gap-2">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs text-text-muted">
-                          {t("option:writingPlayground.modelLabel", "Model")}
-                        </span>
-                        <Input
-                          size="small"
-                          value={selectedModel || ""}
-                          placeholder={t(
-                            "option:writingPlayground.modelPlaceholder",
-                            "e.g. gpt-4o"
-                          )}
-                          onChange={(event) => {
-                            void setSelectedModel(event.target.value)
-                          }}
-                          data-testid="writing-essentials-model"
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs text-text-muted">
-                          {t("option:writingPlayground.temperatureLabel", "Temperature")}
-                        </span>
-                        <InputNumber
-                          size="small"
-                          min={0}
-                          max={2}
-                          step={0.01}
-                          value={settings.temperature}
-                          disabled={settingsDisabled}
-                          onChange={(value) =>
-                            updateSetting({
-                              temperature:
-                                value == null
-                                  ? DEFAULT_SETTINGS.temperature
-                                  : value
-                            })
-                          }
-                          className="w-full"
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs text-text-muted">
-                          {t("option:writingPlayground.topPLabel", "Top P")}
-                        </span>
-                        <InputNumber
-                          size="small"
-                          min={0}
-                          max={1}
-                          step={0.01}
-                          value={settings.top_p}
-                          disabled={settingsDisabled}
-                          onChange={(value) =>
-                            updateSetting({
-                              top_p:
-                                value == null ? DEFAULT_SETTINGS.top_p : value
-                            })
-                          }
-                          className="w-full"
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs text-text-muted">
-                          {t("option:writingPlayground.maxTokensLabel", "Max tokens")}
-                        </span>
-                        <InputNumber
-                          size="small"
-                          min={1}
-                          max={8192}
-                          step={1}
-                          value={settings.max_tokens}
-                          disabled={settingsDisabled}
-                          onChange={(value) =>
-                            updateSetting({
-                              max_tokens:
-                                value == null
-                                  ? DEFAULT_SETTINGS.max_tokens
-                                  : Math.max(1, Math.round(value))
-                            })
-                          }
-                          className="w-full"
-                        />
-                      </div>
-                      <Checkbox
-                        checked={settings.token_streaming}
-                        disabled={settingsDisabled}
-                        onChange={(event) =>
-                          updateSetting({
-                            token_streaming: event.target.checked
-                          })
-                        }>
-                        {t(
-                          "option:writingPlayground.tokenStreamingLabel",
-                          "Streaming"
-                        )}
-                      </Checkbox>
-                      <Button
-                        type="primary"
-                        block
-                        onClick={() => {
-                          if (isGenerating && settings.token_streaming) {
-                            handleCancelGeneration()
-                          } else {
-                            void handleGenerate()
-                          }
-                        }}
-                        loading={isGenerating && !settings.token_streaming}
-                        disabled={isGenerating ? !settings.token_streaming : !canGenerate}
-                        data-testid="writing-essentials-generate">
-                        {isGenerating
-                          ? t("option:writingPlayground.stopAction", "Stop")
-                          : t("option:writingPlayground.generateAction", "Generate")}
-                      </Button>
-                      <div className="flex items-center gap-2 text-xs text-text-muted">
-                        <Tag
-                          color={
-                            diagnosticsSummary.status === "warning"
-                              ? "gold"
-                              : diagnosticsSummary.status === "busy"
-                                ? "blue"
-                                : "green"
-                          }
-                          className="!m-0">
-                          {diagnosticsSummary.status === "warning"
-                            ? t("option:writingPlayground.diagnosticsWarning", "Warning")
-                            : diagnosticsSummary.status === "busy"
-                              ? t("option:writingPlayground.diagnosticsBusy", "Busy")
-                              : t("option:writingPlayground.diagnosticsReady", "Ready")}
-                        </Tag>
-                        {selectedTemplateName ? (
-                          <button
-                            type="button"
-                            className="truncate text-xs text-text-muted hover:text-text transition-colors"
-                            onClick={() => setActiveInspectorTab("setup")}>
-                            {t("option:writingPlayground.essentialsTpl", "tpl: {{name}}", {
-                              name: selectedTemplateName
-                            })}
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  </Card>
-                )}
-                sampling={(
+  const samplingTabContent = (
                   <Card
                     title={t("option:writingPlayground.samplingTitle", "Sampling")}>
                     <WritingPlaygroundActiveSessionGuard
@@ -6492,7 +5543,7 @@ export const WritingPlayground = () => {
                           }>
                           {t(
                             "option:writingPlayground.basicStoppingModeLabel",
-                            "Use basic stopping mode"
+                            "Stop condition"
                           )}
                         </Checkbox>
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_180px]">
@@ -6978,8 +6029,9 @@ export const WritingPlayground = () => {
                       </div>
                     </WritingPlaygroundActiveSessionGuard>
                   </Card>
-                )}
-                context={(
+  )
+
+  const contextTabContent = (
                   <Card
                     title={t("option:writingPlayground.sidebarContext", "Context")}
                     extra={
@@ -7540,8 +6592,9 @@ export const WritingPlayground = () => {
                       </div>
                     </WritingPlaygroundActiveSessionGuard>
                   </Card>
-                )}
-                setup={(
+  )
+
+  const setupTabContent = (
                   <Card
                     title={t("option:writingPlayground.sidebarSetup", "Setup")}
                     extra={
@@ -7669,8 +6722,9 @@ export const WritingPlayground = () => {
                       </div>
                     </WritingPlaygroundActiveSessionGuard>
                   </Card>
-                )}
-                inspect={(
+  )
+
+  const inspectTabContent = (
                   <WritingPlaygroundDiagnosticsPanel
                     title={t("option:writingPlayground.sidebarInspect", "Inspect")}
                     t={t}
@@ -7723,12 +6777,928 @@ export const WritingPlayground = () => {
                       wordcloudWords
                     }}
                   />
-                )}
-              />
+  )
+  // === Library drawer content ===
+  const libraryDrawerContent = (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border">
+        <span className="text-sm font-medium">
+          {t("option:writingPlayground.sessionsTitle", "Sessions")}
+        </span>
+        <div className="flex items-center gap-1">
+          <Button size="small" type="primary" onClick={() => setCreateModalOpen(true)}>
+            {t("option:writingPlayground.newSession", "New session")}
+          </Button>
+          <Dropdown
+            menu={{
+              items: [
+                {
+                  key: "import",
+                  label: t("option:writingPlayground.importSession", "Import"),
+                  disabled: sessionImportDisabled,
+                  onClick: () => sessionFileInputRef.current?.click()
+                },
+                ...(hasSnapshots
+                  ? [
+                      { type: "divider" as const },
+                      {
+                        key: "export-all",
+                        label: t("option:writingPlayground.exportSnapshot", "Export all"),
+                        disabled: snapshotExportDisabled,
+                        onClick: () => { void exportSnapshot() }
+                      },
+                      {
+                        key: "import-all",
+                        label: t("option:writingPlayground.importSnapshot", "Import all"),
+                        disabled: snapshotImportDisabled,
+                        onClick: () => openSnapshotImportPicker("merge")
+                      },
+                      {
+                        key: "replace-all",
+                        label: t("option:writingPlayground.replaceSnapshot", "Replace all"),
+                        danger: true,
+                        disabled: snapshotImportDisabled,
+                        onClick: () => openSnapshotImportPicker("replace")
+                      }
+                    ]
+                  : [])
+              ]
+            }}
+            trigger={["click"]}>
+            <Button size="small" icon={<MoreHorizontal className="h-3.5 w-3.5" />} />
+          </Dropdown>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto px-2 py-1">
+        {sessionsLoading ? (
+          <Skeleton active />
+        ) : sessionsError ? (
+          <Alert
+            type="error"
+            showIcon
+            title={t("option:writingPlayground.sessionsError", "Unable to load sessions.")}
+          />
+        ) : sortedSessions.length === 0 ? (
+          <Empty
+            description={t("option:writingPlayground.sessionsEmpty", "Create your first session to start writing.")}
+          />
+        ) : (
+          <List
+            dataSource={sortedSessions}
+            rowKey={(item) => item.session.id}
+            renderItem={({ session, lastUsedAt }) => {
+              const isActive = activeSessionId === session.id
+              const lastUsedLabel = lastUsedAt
+                ? t("option:writingPlayground.lastOpenedLabel", "Last opened {{time}}", {
+                    time: formatRelativeTime(new Date(lastUsedAt).toISOString(), t)
+                  })
+                : t("option:writingPlayground.notOpened", "Not opened yet")
+              const menuItems: MenuProps["items"] = [
+                {
+                  key: "rename",
+                  icon: <Pencil className="h-4 w-4" />,
+                  label: t("option:writingPlayground.renameSession", "Rename session"),
+                  onClick: () => openRenameModal(session)
+                },
+                {
+                  key: "clone",
+                  icon: <Copy className="h-4 w-4" />,
+                  label: t("option:writingPlayground.cloneSession", "Clone session"),
+                  onClick: () => cloneSessionMutation.mutate({ session })
+                },
+                {
+                  key: "export",
+                  icon: <Download className="h-4 w-4" />,
+                  label: t("option:writingPlayground.exportSession", "Export session"),
+                  onClick: () => exportSession(session)
+                },
+                { type: "divider" },
+                {
+                  key: "delete",
+                  icon: <Trash2 className="h-4 w-4" />,
+                  label: t("option:writingPlayground.deleteSession", "Delete session"),
+                  danger: true,
+                  onClick: () => confirmDeleteSession(session)
+                }
+              ]
+              return (
+                <List.Item
+                  className={`cursor-pointer rounded-md px-2 py-3 transition ${
+                    isActive ? "bg-surface-hover" : "hover:bg-surface-hover/60"
+                  }`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleSelectSession(session)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault()
+                      handleSelectSession(session)
+                    }
+                  }}>
+                  <div className="flex w-full items-center justify-between gap-3">
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-text">{session.name}</span>
+                      <span className="text-xs text-text-muted">{lastUsedLabel}</span>
+                    </div>
+                    <div className="flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
+                      {isActive ? (
+                        <Tag color="blue">{t("option:writingPlayground.active", "Active")}</Tag>
+                      ) : null}
+                      <Dropdown menu={{ items: menuItems }} trigger={["click"]}>
+                        <Button
+                          type="text"
+                          size="small"
+                          aria-label={t("option:writingPlayground.sessionActionsAria", "Session actions")}
+                          icon={<MoreHorizontal className="h-4 w-4" />}
+                          loading={
+                            deleteSessionMutation.isPending ||
+                            renameSessionMutation.isPending ||
+                            cloneSessionMutation.isPending ||
+                            sessionImporting
+                          }
+                        />
+                      </Dropdown>
+                    </div>
+                  </div>
+                </List.Item>
+              )
+            }}
+          />
+        )}
+      </div>
+    </div>
+  )
+
+  // === Inspector drawer content ===
+  const inspectorDrawerContent = (
+    <div className="p-3">
+      <WritingPlaygroundInspectorPanel
+        activeTab={activeInspectorTab}
+        onTabChange={setActiveInspectorTab}
+        tabLabels={{
+          sampling: t("option:writingPlayground.sidebarSampling", "Sampling"),
+          context: t("option:writingPlayground.sidebarContext", "Context"),
+          setup: t("option:writingPlayground.sidebarSetup", "Setup"),
+          inspect: t("option:writingPlayground.sidebarInspect", "Analysis")
+        }}
+        tabBadges={{
+          inspect: responseInspectorRowsAll.length > 0 ? (
+            <Tag size="small" color="blue" className="!m-0 !px-1 !text-[10px]">
+              {responseInspectorRowsAll.length}
+            </Tag>
+          ) : null
+        }}
+        essentialsStrip={(
+          <Card
+            data-testid="writing-playground-settings-card"
+            size="small"
+            className="!border-border">
+            <div className="flex flex-col gap-2">
+              <Tooltip title={t("option:writingPlayground.temperatureTooltip", "Controls randomness. Higher = more creative, lower = more focused. Typical range: 0.1-1.0")}>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-text-muted">
+                    {t("option:writingPlayground.temperatureLabel", "Temperature")}
+                  </span>
+                  <InputNumber
+                    size="small"
+                    min={0}
+                    max={2}
+                    step={0.01}
+                    value={settings.temperature}
+                    disabled={settingsDisabled}
+                    onChange={(value) =>
+                      updateSetting({
+                        temperature: value == null ? DEFAULT_SETTINGS.temperature : value
+                      })
+                    }
+                    className="w-full"
+                  />
+                </div>
+              </Tooltip>
+              <Tooltip title={t("option:writingPlayground.topPTooltip", "Nucleus sampling. Only consider tokens with cumulative probability above this threshold. Typical: 0.9-1.0")}>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-text-muted">
+                    {t("option:writingPlayground.topPLabel", "Top P")}
+                  </span>
+                  <InputNumber
+                    size="small"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={settings.top_p}
+                    disabled={settingsDisabled}
+                    onChange={(value) =>
+                      updateSetting({
+                        top_p: value == null ? DEFAULT_SETTINGS.top_p : value
+                      })
+                    }
+                    className="w-full"
+                  />
+                </div>
+              </Tooltip>
+              <Tooltip title={t("option:writingPlayground.maxTokensTooltip", "Maximum number of tokens to generate in the response")}>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-text-muted">
+                    {t("option:writingPlayground.maxTokensLabel", "Max tokens")}
+                  </span>
+                  <InputNumber
+                    size="small"
+                    min={1}
+                    max={8192}
+                    step={1}
+                    value={settings.max_tokens}
+                    disabled={settingsDisabled}
+                    onChange={(value) =>
+                      updateSetting({
+                        max_tokens: value == null ? DEFAULT_SETTINGS.max_tokens : Math.max(1, Math.round(value))
+                      })
+                    }
+                    className="w-full"
+                  />
+                </div>
+              </Tooltip>
+              <Checkbox
+                checked={settings.token_streaming}
+                disabled={settingsDisabled}
+                onChange={(event) =>
+                  updateSetting({ token_streaming: event.target.checked })
+                }>
+                {t("option:writingPlayground.tokenStreamingLabel", "Streaming")}
+              </Checkbox>
+              {selectedTemplateName ? (
+                <button
+                  type="button"
+                  className="truncate text-xs text-text-muted hover:text-text transition-colors text-left"
+                  onClick={() => setActiveInspectorTab("setup")}>
+                  {t("option:writingPlayground.essentialsTpl", "tpl: {{name}}", {
+                    name: selectedTemplateName
+                  })}
+                </button>
+              ) : null}
             </div>
+          </Card>
+        )}
+        sampling={samplingTabContent}
+        context={contextTabContent}
+        setup={setupTabContent}
+        inspect={inspectTabContent}
+      />
+    </div>
+  )
+
+  return (
+    <div
+      className={cn(
+        "writing-playground flex flex-col h-full",
+        activeThemeClassName
+      )}>
+      {activeThemeCss ? <style>{activeThemeCss}</style> : null}
+
+      {showOffline && (
+        <div className="p-4">
+          <Alert
+            type="warning"
+            showIcon
+            title={t("option:writingPlayground.offlineTitle", "Server required")}
+            description={t(
+              "option:writingPlayground.offlineBody",
+              "Connect to your tldw server to load writing sessions and generate."
+            )}
+          />
+        </div>
+      )}
+
+      {showUnsupported && (
+        <div className="p-4">
+          <Alert
+            type="info"
+            showIcon
+            title={t(
+              "option:writingPlayground.unavailableTitle",
+              "Playground unavailable"
+            )}
+            description={t(
+              "option:writingPlayground.unavailableBody",
+              "This server does not advertise writing playground support yet."
+            )}
+          />
+        </div>
+      )}
+
+      {!showOffline && !showUnsupported && (
+        <WritingPlaygroundShell
+          libraryOpen={libraryOpen}
+          inspectorOpen={inspectorOpen}
+          onLibraryToggle={() => setLibraryOpen((prev) => !prev)}
+          onInspectorToggle={() => setInspectorOpen((prev) => !prev)}
+          libraryContent={libraryDrawerContent}
+          inspectorContent={inspectorDrawerContent}>
+
+          {/* ===== Top Bar ===== */}
+          <div
+            data-testid="writing-playground-topbar"
+            className="flex items-center gap-3 px-4 py-2 border-b border-border bg-surface flex-shrink-0">
+            <Button
+              type="text"
+              size="small"
+              icon={<Menu className="h-4 w-4" />}
+              onClick={() => setLibraryOpen((prev) => !prev)}
+              aria-label={t("option:writingPlayground.toggleLibrary", "Toggle sessions")}
+              className={libraryOpen ? "text-primary" : ""}
+            />
+            <span className="text-sm font-medium truncate max-w-[200px]">
+              {activeSessionName ||
+                t("option:writingPlayground.noSession", "No session")}
+            </span>
+            <div className="flex-1" />
+            <Input
+              size="small"
+              value={selectedModel || ""}
+              placeholder={t(
+                "option:writingPlayground.modelPlaceholder",
+                "e.g. gpt-4o"
+              )}
+              onChange={(event) => {
+                void setSelectedModel(event.target.value)
+              }}
+              data-testid="writing-topbar-model"
+              className="!w-[200px]"
+            />
+            <Tooltip title={generateDisabledReason}>
+              <Button
+                type="primary"
+                icon={isGenerating ? <Square className="h-3.5 w-3.5" /> : <Zap className="h-3.5 w-3.5" />}
+                onClick={() => {
+                  if (isGenerating && settings.token_streaming) {
+                    handleCancelGeneration()
+                  } else {
+                    void handleGenerate()
+                  }
+                }}
+                loading={isGenerating && !settings.token_streaming}
+                disabled={isGenerating ? !settings.token_streaming : !canGenerate}
+                data-testid="writing-topbar-generate">
+                {isGenerating
+                  ? t("option:writingPlayground.stopAction", "Stop")
+                  : t("option:writingPlayground.generateAction", "Generate")}
+              </Button>
+            </Tooltip>
+            <Tag
+              color={
+                diagnosticsSummary.status === "warning"
+                  ? "gold"
+                  : diagnosticsSummary.status === "busy"
+                    ? "blue"
+                    : "green"
+              }
+              className="!m-0">
+              {diagnosticsSummary.status === "warning"
+                ? t("option:writingPlayground.diagnosticsWarning", "Warning")
+                : diagnosticsSummary.status === "busy"
+                  ? t("option:writingPlayground.diagnosticsBusy", "Busy")
+                  : t("option:writingPlayground.diagnosticsReady", "Ready")}
+            </Tag>
+            <Button
+              type="text"
+              size="small"
+              icon={<Settings className="h-4 w-4" />}
+              onClick={() => setInspectorOpen((prev) => !prev)}
+              aria-label={t("option:writingPlayground.toggleInspector", "Toggle settings")}
+              className={inspectorOpen ? "text-primary" : ""}
+            />
+          </div>
+
+          {/* ===== Main Editor Area ===== */}
+          <div className="flex-1 min-h-0">
+          <div
+            data-testid="writing-playground-main-grid"
+            className="flex flex-col h-full">
+            <div className="flex-1 overflow-y-auto px-4 py-3">
+              <WritingPlaygroundEditorPanel>
+              {activeSession ? (
+                activeSessionLoading ? (
+                  <Skeleton active />
+                ) : activeSessionError ? (
+                  <Alert
+                    type="error"
+                    showIcon
+                    title={t(
+                      "option:writingPlayground.editorError",
+                      "Unable to load this session."
+                    )}
+                  />
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {/* Compact toolbar */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="small"
+                          icon={<Undo2 className="h-3.5 w-3.5" />}
+                          disabled={isGenerating || !canUndoGeneration}
+                          onClick={handleUndoGeneration}
+                          title={t("option:writingPlayground.undoGeneration", "Undo generation")}
+                        />
+                        <Button
+                          size="small"
+                          icon={<Redo2 className="h-3.5 w-3.5" />}
+                          disabled={isGenerating || !canRedoGeneration}
+                          onClick={handleRedoGeneration}
+                          title={t("option:writingPlayground.redoGeneration", "Redo generation")}
+                        />
+                      </div>
+                      <div className="h-4 w-px bg-border" />
+                      <Segmented
+                        size="small"
+                        value={editorView}
+                        onChange={(value) =>
+                          setEditorView(value as EditorViewMode)
+                        }
+                        options={[
+                          {
+                            value: "edit",
+                            icon: <Edit3 className="h-3.5 w-3.5" />,
+                            label: t(
+                              "option:writingPlayground.editorModeEdit",
+                              "Edit"
+                            )
+                          },
+                          {
+                            value: "preview",
+                            icon: <Eye className="h-3.5 w-3.5" />,
+                            label: t(
+                              "option:writingPlayground.editorModePreview",
+                              "Preview"
+                            )
+                          },
+                          {
+                            value: "split",
+                            icon: <Columns2 className="h-3.5 w-3.5" />,
+                            label: t(
+                              "option:writingPlayground.editorModeSplit",
+                              "Split"
+                            )
+                          }
+                        ]}
+                      />
+                      <div className="h-4 w-px bg-border" />
+                      <Dropdown
+                        menu={{
+                          items: [
+                            {
+                              key: "read-aloud",
+                              label: isSpeaking
+                                ? t("option:writingPlayground.speechStopAction", "Stop reading")
+                                : t("option:writingPlayground.speechReadAction", "Read aloud"),
+                              disabled: isGenerating && !isSpeaking,
+                              onClick: () => {
+                                if (isSpeaking) { stopSpeech() } else { handleSpeakEditor() }
+                              }
+                            },
+                            ...(pauseResumeAction
+                              ? [{
+                                  key: "pause-resume",
+                                  label: pauseResumeAction === "pause"
+                                    ? t("option:writingPlayground.speechPauseAction", "Pause")
+                                    : t("option:writingPlayground.speechResumeAction", "Resume"),
+                                  onClick: () => {
+                                    if (pauseResumeAction === "pause") { pauseSpeech() } else { resumeSpeech() }
+                                  }
+                                }]
+                              : []),
+                            { type: "divider" as const },
+                            {
+                              key: "chunks",
+                              label: showPromptChunks
+                                ? t("option:writingPlayground.hidePromptChunks", "Hide chunks")
+                                : t("option:writingPlayground.viewPromptChunks", "View chunks"),
+                              onClick: () => setShowPromptChunks((prev) => !prev)
+                            },
+                            ...insertMenuItems
+                          ]
+                        }}
+                        trigger={["click"]}
+                        disabled={isGenerating}>
+                        <Button size="small" icon={<MoreHorizontal className="h-3.5 w-3.5" />}>
+                          {t("option:writingPlayground.moreActions", "More")}
+                        </Button>
+                      </Dropdown>
+                      <Button
+                        size="small"
+                        icon={
+                          searchOpen ? (
+                            <X className="h-3.5 w-3.5" />
+                          ) : (
+                            <Search className="h-3.5 w-3.5" />
+                          )
+                        }
+                        onClick={() => setSearchOpen((open) => !open)}
+                        title={searchOpen
+                          ? t("option:writingPlayground.searchClose", "Close search")
+                          : t("option:writingPlayground.searchToggle", "Find")}
+                      />
+                    </div>
+                    {searchOpen && (
+                      <div className="rounded-md border border-border bg-surface p-3">
+                        <div className="flex flex-col gap-3">
+                          <div className="flex flex-wrap gap-2">
+                            <Input
+                              value={searchQuery}
+                              allowClear
+                              placeholder={t(
+                                "option:writingPlayground.searchPlaceholder",
+                                "Find text"
+                              )}
+                              onChange={(event) =>
+                                setSearchQuery(event.target.value)
+                              }
+                              className="min-w-[200px] flex-1"
+                            />
+                            <Input
+                              value={replaceQuery}
+                              allowClear
+                              placeholder={t(
+                                "option:writingPlayground.replacePlaceholder",
+                                "Replace with"
+                              )}
+                              onChange={(event) =>
+                                setReplaceQuery(event.target.value)
+                              }
+                              className="min-w-[200px] flex-1"
+                            />
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="small"
+                                onClick={() => navigateMatch("prev")}
+                                disabled={!searchMatches.length}>
+                                {t(
+                                  "option:writingPlayground.searchPrev",
+                                  "Prev"
+                                )}
+                              </Button>
+                              <Button
+                                size="small"
+                                onClick={() => navigateMatch("next")}
+                                disabled={!searchMatches.length}>
+                                {t(
+                                  "option:writingPlayground.searchNext",
+                                  "Next"
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-3">
+                              <Checkbox
+                                checked={matchCase}
+                                onChange={(event) =>
+                                  setMatchCase(event.target.checked)
+                                }>
+                                {t(
+                                  "option:writingPlayground.searchMatchCase",
+                                  "Match case"
+                                )}
+                              </Checkbox>
+                              <Checkbox
+                                checked={useRegex}
+                                onChange={(event) =>
+                                  setUseRegex(event.target.checked)
+                                }>
+                                {t(
+                                  "option:writingPlayground.searchRegex",
+                                  "Regex"
+                                )}
+                              </Checkbox>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="small"
+                                onClick={replaceCurrent}
+                                disabled={!searchMatches.length}>
+                                {t(
+                                  "option:writingPlayground.searchReplaceAction",
+                                  "Replace"
+                                )}
+                              </Button>
+                              <Button
+                                size="small"
+                                onClick={replaceAll}
+                                disabled={!searchQuery.trim()}>
+                                {t(
+                                  "option:writingPlayground.searchReplaceAll",
+                                  "Replace all"
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="text-xs text-text-muted">
+                            {searchError
+                              ? searchError
+                              : searchQuery.trim()
+                              ? searchMatches.length
+                                ? t(
+                                    "option:writingPlayground.searchMatchCount",
+                                    "{{current}} of {{total}} matches",
+                                    {
+                                      current: Math.min(
+                                        activeMatchIndex + 1,
+                                        searchMatches.length
+                                      ),
+                                      total: searchMatches.length
+                                    }
+                                  )
+                                : t(
+                                    "option:writingPlayground.searchNoMatches",
+                                    "No matches"
+                                  )
+                              : t(
+                                  "option:writingPlayground.searchHint",
+                                  "Enter text to search"
+                                )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  {editorView === "edit" && (
+                    <Dropdown
+                      menu={{ items: editorMenuItems }}
+                      trigger={["contextMenu"]}>
+                      <div className={cn(
+                        "flex-1 transition-all",
+                        isGenerating && "ring-2 ring-primary/50 ring-offset-1 animate-pulse rounded-md"
+                      )}>
+                          <Input.TextArea
+                            ref={editorRef}
+                            value={editorText}
+                            onChange={handlePromptChange}
+                            onScroll={() => syncScroll("editor")}
+                            placeholder={t(
+                              "option:writingPlayground.editorPlaceholder",
+                              "Start writing your prompt..."
+                            )}
+                            autoSize={{ minRows: 12 }}
+                            disabled={isGenerating}
+                            className="!resize-y"
+                          />
+                      </div>
+                    </Dropdown>
+                  )}
+                    {editorView === "preview" && (
+                      <div
+                        ref={previewRef}
+                        className="flex-1 overflow-y-auto rounded-md border border-border bg-surface p-4"
+                        onScroll={() => syncScroll("preview")}>
+                        {editorText.trim() ? (
+                          <MarkdownPreview content={editorText} size="sm" />
+                        ) : (
+                          <Paragraph type="secondary" className="!mb-0 italic">
+                            {t(
+                              "option:writingPlayground.editorEmptyPreview",
+                              "Nothing to preview yet."
+                            )}
+                          </Paragraph>
+                        )}
+                      </div>
+                    )}
+                    {editorView === "split" && (
+                      <div className="flex flex-1 flex-col gap-4 lg:flex-row">
+                        <div className={cn(
+                          "flex-1",
+                          isGenerating && "ring-2 ring-primary/50 ring-offset-1 animate-pulse rounded-md"
+                        )}>
+                          <Dropdown
+                            menu={{ items: editorMenuItems }}
+                            trigger={["contextMenu"]}>
+                            <div>
+                              <Input.TextArea
+                                ref={editorRef}
+                                value={editorText}
+                                onChange={handlePromptChange}
+                                onScroll={() => syncScroll("editor")}
+                                placeholder={t(
+                                  "option:writingPlayground.editorPlaceholder",
+                                  "Start writing your prompt..."
+                                )}
+                                autoSize={{ minRows: 12 }}
+                                disabled={isGenerating}
+                                className="!resize-y"
+                              />
+                            </div>
+                          </Dropdown>
+                        </div>
+                        <div
+                          ref={previewRef}
+                          className="flex-1 overflow-y-auto rounded-md border border-border bg-surface p-4"
+                          onScroll={() => syncScroll("preview")}>
+                          {editorText.trim() ? (
+                            <MarkdownPreview content={editorText} size="sm" />
+                          ) : (
+                            <Paragraph type="secondary" className="!mb-0 italic">
+                              {t(
+                                "option:writingPlayground.editorEmptyPreview",
+                                "Nothing to preview yet."
+                              )}
+                            </Paragraph>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {responseLogprobs.length > 0 ? (
+                      <div className="rounded-md border border-border bg-surface p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs text-text-muted">
+                            {t(
+                              "option:writingPlayground.inlineTokenInspectorHint",
+                              "Inline token probabilities: hover token chips to inspect alternatives, click a token or alternative to reroll from that point."
+                            )}
+                          </span>
+                          <Tag color="blue">
+                            {t(
+                              "option:writingPlayground.inlineTokenInspectorCount",
+                              "{{count}} tokens",
+                              { count: inlineResponseTokens.length }
+                            )}
+                          </Tag>
+                        </div>
+                        <div className="mt-2 max-h-40 overflow-y-auto rounded-md border border-border bg-background p-2">
+                          <div className="flex flex-wrap gap-1">
+                            {inlineResponseTokens.map((row) => (
+                              <Tooltip
+                                key={`inline-token-${row.sequence}`}
+                                placement="top"
+                                title={
+                                  <div className="flex max-w-[360px] flex-col gap-1">
+                                    <span className="text-[11px] text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.inlineTokenAlternativesLabel",
+                                        "Top alternatives"
+                                      )}
+                                    </span>
+                                    {row.topLogprobs.length === 0 ? (
+                                      <span className="text-[11px] text-text-muted">
+                                        {t(
+                                          "option:writingPlayground.inlineTokenAlternativesEmpty",
+                                          "No alternatives."
+                                        )}
+                                      </span>
+                                    ) : (
+                                      row.topLogprobs.map((alt, idx) => (
+                                        <Button
+                                          key={`inline-alt-${row.sequence}-${idx}`}
+                                          size="small"
+                                          type="text"
+                                          className="!h-auto !justify-start !px-1.5 !py-0.5 font-mono text-[11px]"
+                                          onClick={(event) => {
+                                            event.preventDefault()
+                                            event.stopPropagation()
+                                            handleRerollFromResponseToken(
+                                              row.sequence,
+                                              alt.token
+                                            )
+                                          }}>
+                                          {`${alt.displayToken} (${alt.probability >= 0.001 ? alt.probability.toFixed(3) : alt.probability.toExponential(2)})`}
+                                        </Button>
+                                      ))
+                                    )}
+                                  </div>
+                                }>
+                                <button
+                                  type="button"
+                                  className="rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[11px] text-text transition hover:bg-surface-hover"
+                                  onClick={() =>
+                                    handleRerollFromResponseToken(row.sequence)
+                                  }>
+                                  {row.displayToken}
+                                </button>
+                              </Tooltip>
+                            ))}
+                          </div>
+                        </div>
+                        {inlineResponseTokensTruncated ? (
+                          <span className="mt-2 block text-xs text-text-muted">
+                            {t(
+                              "option:writingPlayground.inlineTokenInspectorTruncated",
+                              "Showing first {{count}} tokens.",
+                              { count: inlineResponseTokens.length }
+                            )}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {showPromptChunks ? (
+                      <div data-testid="writing-section-prompt-chunks">
+                        <Collapse
+                          ghost
+                          size="small"
+                          defaultActiveKey={["chunks"]}
+                          items={[
+                            {
+                              key: "chunks",
+                              label: t(
+                                "option:writingPlayground.promptChunksTitle",
+                                "Prompt chunks ({{count}})",
+                                { count: promptChunkData.total }
+                              ),
+                              children:
+                                promptChunkData.total === 0 ? (
+                                  <Paragraph type="secondary" className="!mb-0">
+                                    {t(
+                                      "option:writingPlayground.promptChunksEmpty",
+                                      "No chunks yet."
+                                    )}
+                                  </Paragraph>
+                                ) : (
+                                  <div className="flex flex-col gap-2">
+                                    {promptChunkData.chunks.map((chunk) => (
+                                      <div
+                                        key={chunk.key}
+                                        className="flex flex-col gap-1 rounded-md border border-border bg-surface p-2">
+                                        <Tag
+                                          className="mr-auto"
+                                          color={
+                                            chunk.type === "placeholder"
+                                              ? "gold"
+                                              : "default"
+                                          }>
+                                          {chunk.type === "placeholder"
+                                            ? t(
+                                                "option:writingPlayground.chunkPlaceholder",
+                                                "Placeholder"
+                                              )
+                                            : t(
+                                                "option:writingPlayground.chunkText",
+                                                "Text"
+                                              )}
+                                        </Tag>
+                                        <pre className="m-0 whitespace-pre-wrap break-words font-mono text-xs text-text">
+                                          {chunk.label}
+                                        </pre>
+                                      </div>
+                                    ))}
+                                    {promptChunkData.truncated ? (
+                                      <Paragraph type="secondary" className="!mb-0">
+                                        {t(
+                                          "option:writingPlayground.promptChunksTruncated",
+                                          "Showing first {{count}} chunks.",
+                                          { count: promptChunkData.chunks.length }
+                                        )}
+                                      </Paragraph>
+                                    ) : null}
+                                  </div>
+                                )
+                            }
+                          ]}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                )
+              ) : (
+                <Empty
+                  description={t(
+                    "option:writingPlayground.selectSession",
+                    "Select a session to begin."
+                  )}
+                />
+              )}
+              </WritingPlaygroundEditorPanel>
+            </div>
+
+            {/* ===== Status Bar ===== */}
+            <div
+              data-testid="writing-playground-statusbar"
+              className="flex items-center gap-3 px-4 py-1.5 border-t border-border bg-surface text-xs text-text-muted flex-shrink-0">
+              {generationTokenCount > 0 && (
+                <span>{t("option:writingPlayground.generationTokensLabel", "{{count}} tokens", { count: generationTokenCount })}</span>
+              )}
+              {generationTokensPerSec > 0 && (
+                <span>
+                  {t("option:writingPlayground.generationRateLabel", "{{rate}} tok/s", {
+                    rate: generationTokensPerSec >= 10
+                      ? generationTokensPerSec.toFixed(1)
+                      : generationTokensPerSec.toFixed(2)
+                  })}
+                </span>
+              )}
+              {isGenerating && generationElapsed > 0 && (
+                <span>{generationElapsed}s</span>
+              )}
+              <div className="flex-1" />
+              {saveStatusLabel && (
+                <span>{saveStatusLabel}</span>
+              )}
+              <span className="text-text-muted/60">
+                {t(
+                  "option:writingPlayground.shortcutsHint",
+                  "Ctrl+Enter to generate"
+                )}
+              </span>
+            </div>
+          </div>
           </div>
         </WritingPlaygroundShell>
       )}
+
 
       <Modal
         title={t(

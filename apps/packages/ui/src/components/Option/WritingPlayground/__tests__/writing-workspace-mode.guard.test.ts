@@ -8,6 +8,6 @@ describe("writing workspace mode guard", () => {
     expect(source).not.toContain("writing-workspace-mode-switch")
     expect(source).not.toContain("writing-mode-draft")
     expect(source).not.toContain("writing-mode-manage")
-    expect(source).toContain("writing-view-prompt-chunks")
+    expect(source).toContain("writing-section-prompt-chunks")
   })
 })
