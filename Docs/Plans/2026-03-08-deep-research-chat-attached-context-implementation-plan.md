@@ -430,11 +430,13 @@ Run:
 ```bash
 cd /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr
 bunx vitest run \
-  apps/packages/ui/src/components/Option/Playground/__tests__/research-chat-context.test.ts \
+  apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/Playground.search.integration.test.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts \
-  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.research-context.integration.test.tsx
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.image-refine.integration.test.tsx \
+  apps/packages/ui/src/services/__tests__/tldw-chat.message-sanitization.test.ts
 ```
 
 Expected:
@@ -474,3 +476,24 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
   Docs/Plans/2026-03-08-deep-research-chat-attached-context-implementation-plan.md
 git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr commit -m "docs(research): finalize chat attached-context plan"
 ```
+
+## Execution Record
+
+- Task 5 status: Complete
+- Task 6 status: Complete
+
+### Verification
+
+- Frontend attached-context seam:
+  - `bunx vitest run src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts src/services/__tests__/tldw-chat.message-sanitization.test.ts`
+  - Result: `11/11` passed
+- Adjacent chat/research surfaces:
+  - `bunx vitest run src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx src/components/Option/Playground/__tests__/Playground.search.integration.test.tsx src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts src/services/__tests__/tldw-chat.message-sanitization.test.ts`
+  - Result: `24/24` passed
+- Real composer regression check:
+  - `bunx vitest run src/components/Option/Playground/__tests__/PlaygroundForm.image-refine.integration.test.tsx`
+  - Result: `6/6` passed
+
+### Notes
+
+- This slice only changed frontend TypeScript/TSX and client-side request typing. Bandit was not applicable because no Python files changed in this execution slice.
