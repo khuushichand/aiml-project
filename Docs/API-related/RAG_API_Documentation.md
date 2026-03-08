@@ -182,6 +182,7 @@ Key requests and responses (summarized):
   - Required: `query`
   - Sources: `sources` one or more of `media_db`, `notes`, `characters`, `chats`, `sql` (aliases: `media` → `media_db`, `character_cards` → `characters`)
   - SQL source selector: `sql_target_id` (default `media_db`) used when `sources` includes `sql`
+  - SQL authorization: SQL retrieval requires `sql.read` and a matching target ACL claim (`sql.target:*` or `sql.target:<target_id>`)
   - Search config: `search_mode` (`fts`|`vector`|`hybrid`), `fts_level` (`media`|`chunk`), `hybrid_alpha`, `top_k`, `min_score`, `enable_intent_routing`
   - Expansion & caching: `expand_query`, `expansion_strategies`, `spell_check`, `enable_cache`, `cache_threshold`, `adaptive_cache`
   - Filtering: `keyword_filter`, `include_media_ids`, `include_note_ids`
@@ -313,3 +314,4 @@ From legacy RAG docs to the unified pipeline
 - Reranking: use `reranking_strategy` among `flashrank`, `cross_encoder`, `hybrid`, `llama_cpp`, `llm_scoring`, `two_tier`, or `none`.
 - Sources: valid values are `media_db`, `notes`, `characters`, `chats`, `sql` (aliases handled as noted above).
 - SQL source: set `sources=["sql"]` (or include `sql` in mixed sources) and optionally set `sql_target_id` (currently `media_db`).
+- SQL authz: ensure principal permissions include `sql.read` and `sql.target:*` or `sql.target:<sql_target_id>`.

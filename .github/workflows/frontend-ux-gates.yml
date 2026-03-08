@@ -140,7 +140,7 @@ jobs:
       TLDW_API_KEY: smoke-ci-key-12345
       TLDW_WEB_URL: http://localhost:8080
       TLDW_WEB_AUTOSTART: 'true'
-      TLDW_WEB_CMD: 'env NEXT_DISABLE_MEM_OVERRIDE=1 NODE_OPTIONS=--max-old-space-size=5120 bun run dev -- --webpack -p 8080'
+      TLDW_WEB_CMD: 'env NODE_OPTIONS=--max-old-space-size=4096 bun run start -- -p 8080'
       TLDW_SMOKE_HARD_GATE: '1'
 
     steps:
@@ -162,6 +162,10 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps
         run: bun install
+
+      - name: Build frontend production bundle for smoke gate
+        working-directory: apps/tldw-frontend
+        run: bun run build
 
       - name: Install Playwright Chromium
         run: bunx playwright install --with-deps chromium

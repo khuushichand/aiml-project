@@ -1,4 +1,8 @@
 import type { StoreSlice } from "@/store/option/slices/types"
+import {
+  buildQueuedRequest,
+  normalizeQueuedRequests
+} from "@/utils/chat-request-queue"
 import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
 
 export const createCoreSlice: StoreSlice<
@@ -141,9 +145,16 @@ export const createCoreSlice: StoreSlice<
   queuedMessages: [],
   addQueuedMessage: (payload) =>
     set((state) => ({
-      queuedMessages: [...state.queuedMessages, payload]
+      queuedMessages: [...state.queuedMessages, buildQueuedRequest(payload)]
     })),
-  setQueuedMessages: (queuedMessages) => set({ queuedMessages }),
+  setQueuedMessages: (queuedMessagesOrUpdater) =>
+    set((state) => ({
+      queuedMessages: normalizeQueuedRequests(
+        typeof queuedMessagesOrUpdater === "function"
+          ? queuedMessagesOrUpdater(state.queuedMessages)
+          : queuedMessagesOrUpdater
+      )
+    })),
   clearQueuedMessages: () => set({ queuedMessages: [] }),
   selectedKnowledge: null,
   setSelectedKnowledge: (selectedKnowledge) => set({ selectedKnowledge }),

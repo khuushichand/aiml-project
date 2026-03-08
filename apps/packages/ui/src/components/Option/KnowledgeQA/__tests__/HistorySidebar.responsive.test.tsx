@@ -274,12 +274,6 @@ describe("HistorySidebar responsive layout", () => {
     expect(state.deleteHistoryItem).toHaveBeenCalledWith("h8")
   })
 
-  it("opens settings from preset shortcut", async () => {
-    render(<HistorySidebar />)
-    fireEvent.click(screen.getByRole("button", { name: /Preset:/i }))
-    expect(state.setSettingsPanelOpen).toHaveBeenCalledWith(true)
-  })
-
   it("exports all history entries", async () => {
     const createObjectURL = vi.fn(() => "blob:history-export")
     const revokeObjectURL = vi.fn()

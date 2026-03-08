@@ -20,6 +20,8 @@ MONITORED_FILES = [
     Path("Docs/Published/User_Guides/WebUI_Extension/TTS_Getting_Started.md"),
     Path("Docs/User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md"),
     Path("Docs/Published/User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md"),
+]
+
 MONITORED_ENTRYPOINTS = [
     Path("README.md"),
 ]

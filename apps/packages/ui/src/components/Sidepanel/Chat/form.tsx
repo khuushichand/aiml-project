@@ -72,7 +72,7 @@ import { useSlashCommands, type SlashCommandItem } from "@/hooks/useSlashCommand
 import { useTabMentions, type TabInfo } from "~/hooks/useTabMentions"
 import { useDeferredComposerInput } from "@/hooks/playground"
 import { KnowledgePanel } from "@/components/Knowledge"
-import { QueuedMessagesBanner } from "@/components/Sidepanel/Chat/QueuedMessagesBanner"
+import { ChatQueuePanel } from "@/components/Common/ChatQueuePanel"
 import { ConnectionStatusIndicator } from "@/components/Sidepanel/Chat/ConnectionStatusIndicator"
 import { ControlRow } from "@/components/Sidepanel/Chat/ControlRow"
 import { ContextChips } from "@/components/Sidepanel/Chat/ContextChips"
@@ -82,7 +82,7 @@ import { ModelParamsPanel } from "@/components/Sidepanel/Chat/ModelParamsPanel"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { ActorPopout } from "@/components/Common/Settings/ActorPopout"
 import { DocumentGeneratorDrawer } from "@/components/Common/Playground/DocumentGeneratorDrawer"
-import QuickIngestModal from "@/components/Common/QuickIngestModal"
+import { QuickIngestWizardModal as QuickIngestModal } from "@/components/Common/QuickIngestWizardModal"
 import {
   useConnectionState,
   useConnectionUxState
@@ -104,10 +104,12 @@ import { Button } from "@/components/Common/Button"
 import { useSimpleForm } from "@/hooks/useSimpleForm"
 import { generateID } from "@/db/dexie/helpers"
 import type { UploadedFile } from "@/db/dexie/types"
+import type { ChatDocuments } from "@/models/ChatTypes"
 import { formatFileSize } from "@/utils/format"
 import { formatPinnedResults } from "@/utils/rag-format"
 import { emitDictationDiagnostics } from "@/utils/dictation-diagnostics"
 import { createRenderPerfTracker } from "@/utils/perf/render-profiler"
+import { useQueuedRequests } from "@/hooks/chat/useQueuedRequests"
 import {
   buildAvailableChatModelIds,
   findUnavailableChatModel,
@@ -124,6 +126,7 @@ import {
 import { CONTEXT_FILE_SIZE_MB_SETTING } from "@/services/settings/ui-settings"
 import { browser } from "wxt/browser"
 import type { Character } from "@/types/character"
+import type { QueuedRequest } from "@/utils/chat-request-queue"
 
 type Props = {
   dropedFile: File | undefined
@@ -134,6 +137,12 @@ type Props = {
 
 type DefaultCharacterPreferenceQueryResult = {
   defaultCharacterId: string | null
+}
+
+type SidepanelQueuedSourceContext = {
+  documents?: ChatDocuments
+  imageBackendOverride?: string
+  isImageCommand?: boolean
 }
 
 export const SidepanelForm = ({
@@ -484,7 +493,6 @@ export const SidepanelForm = ({
     }
   })
 
-  const [isFlushingQueue, setIsFlushingQueue] = React.useState(false)
   const [debouncedPlaceholder, setDebouncedPlaceholder] = React.useState<string>(
     t("form.textarea.placeholder")
   )
@@ -492,6 +500,7 @@ export const SidepanelForm = ({
   const {
     onSubmit,
     selectedModel,
+    setSelectedModel,
     chatMode,
     stopStreamingRequest,
     streaming,
@@ -511,6 +520,7 @@ export const SidepanelForm = ({
     setTemporaryChat,
     toolChoice,
     setToolChoice,
+    historyId,
     chatLoopState = {
       status: "idle",
       pendingApprovals: [],
@@ -519,8 +529,7 @@ export const SidepanelForm = ({
     messages,
     clearChat,
     queuedMessages,
-    addQueuedMessage,
-    clearQueuedMessages,
+    setQueuedMessages,
     serverChatId
   } = useMessage()
   const previousServerChatIdRef = React.useRef<string | null | undefined>(
@@ -1554,38 +1563,7 @@ export const SidepanelForm = ({
     if (!isConnectionReady) {
       if (e.key === "Enter") {
         e.preventDefault()
-        form.onSubmit(async (value) => {
-          const slashResult = applySlashCommand(value.message)
-          if (slashResult.handled) {
-            form.setFieldValue("message", slashResult.message)
-          }
-          const nextMessage = slashResult.handled
-            ? slashResult.message
-            : value.message
-          const trimmed = nextMessage.trim()
-          if (
-            trimmed.length === 0 &&
-            value.image.length === 0 &&
-            selectedDocuments.length === 0 &&
-            contextFiles.length === 0
-          ) {
-            return
-          }
-          if (selectedDocuments.length > 0 || contextFiles.length > 0) {
-            notification.info({
-              message: t(
-                "sidepanel:composer.attachmentsRequireConnection",
-                "Connect to send attachments"
-              )
-            })
-            return
-          }
-          addQueuedMessage({
-            message: trimmed,
-            image: value.image
-          })
-          form.reset()
-        })()
+        void submitForm()
       }
       return
     }
@@ -1595,13 +1573,11 @@ export const SidepanelForm = ({
         e,
         sendWhenEnter,
         typing,
-        isSending
+        isSending: false
       })
     ) {
       e.preventDefault()
-      form.onSubmit(async (value) => {
-        await sendCurrentFormMessage(value.message, value.image)
-      })()
+      void submitForm()
     }
   }
 
@@ -1637,28 +1613,15 @@ export const SidepanelForm = ({
     [form.setFieldValue, textareaRef]
   )
 
-  const handleKnowledgeAsk = React.useCallback(
-    async (text: string, options?: { ignorePinnedResults?: boolean }) => {
-      const trimmed = text.trim()
-      if (!trimmed) return
-      form.setFieldValue("message", text)
-      if (!isConnectionReady) {
-        addQueuedMessage({
-          message: trimmed,
-          image: imageValueRef.current
-        })
-        form.reset()
-        return
-      }
-      await sendCurrentFormMessageRef.current(trimmed, "", options)
-    },
-    [
-      addQueuedMessage,
-      form.reset,
-      form.setFieldValue,
-      isConnectionReady
-    ]
-  )
+  async function handleKnowledgeAsk(
+    text: string,
+    options?: { ignorePinnedResults?: boolean }
+  ) {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    form.setFieldValue("message", text)
+    await submitCurrentRequest(trimmed, "", options)
+  }
   const handleKnowledgePanelOpenChange = React.useCallback(
     (nextOpen: boolean) => {
       setKnowledgePanelOpen(nextOpen)
@@ -1999,74 +1962,439 @@ export const SidepanelForm = ({
     }
   })
 
-  const submitQueuedInSidepanel = async (message: string, image: string) => {
-    if (!isConnectionReady) return
-    await stopListening()
-    stopServerDictation()
-    const normalizedSelectedModel = normalizeChatModelId(selectedModel)
-    if (!normalizedSelectedModel) {
-      form.setFieldError("message", t("formError.noModel"))
-      return
-    }
-    const unavailableModel = findUnavailableChatModel(
-      [normalizedSelectedModel],
-      availableChatModelIds
-    )
-    if (unavailableModel) {
-      form.setFieldError(
-        "message",
-        t(
-          "playground:composer.validationModelUnavailableInline",
-          "Selected model is not available on this server. Refresh models or choose a different model."
-        )
-      )
-      return
-    }
-    await sendMessage({
-      image,
-      message
-    })
-  }
+  const buildQueuedDocuments = React.useCallback(
+    (): ChatDocuments =>
+      selectedDocuments.map((doc) => ({
+        type: "tab",
+        tabId: doc.id,
+        title: doc.title,
+        url: doc.url,
+        favIconUrl: doc.favIconUrl
+      })),
+    [selectedDocuments]
+  )
 
-  const handleFlushQueue = React.useCallback(async () => {
-    if (!isConnectionReady || isFlushingQueue) return
-    setIsFlushingQueue(true)
-    try {
-      const hasEmbedding = await ensureEmbeddingModelAvailable()
-      if (!hasEmbedding) {
+  const buildQueuedRequestSnapshot = React.useCallback(
+    () => ({
+      selectedModel,
+      chatMode,
+      webSearch,
+      compareMode: false,
+      compareSelectedModels: [],
+      selectedSystemPrompt,
+      selectedQuickPrompt,
+      toolChoice,
+      useOCR
+    }),
+    [
+      chatMode,
+      selectedModel,
+      selectedQuickPrompt,
+      selectedSystemPrompt,
+      toolChoice,
+      useOCR,
+      webSearch
+    ]
+  )
+
+  const isQueuedDispatchBlockedByComposerState = React.useMemo(
+    () => contextFiles.length > 0,
+    [contextFiles.length]
+  )
+
+  const validateQueuedRequest = React.useCallback(
+    (item: QueuedRequest) => {
+      if (isQueuedDispatchBlockedByComposerState) {
+        return t(
+          "playground:composer.queue.currentDraftAttachmentConflict",
+          "Clear the current draft attachments/context before sending queued requests."
+        )
+      }
+
+      const sourceContext = (item.sourceContext ??
+        null) as SidepanelQueuedSourceContext | null
+
+      if (sourceContext?.isImageCommand && item.promptText.trim().length === 0) {
+        return t(
+          "imageCommand.missingPrompt",
+          "Image prompt is required."
+        )
+      }
+
+      if (!sourceContext?.isImageCommand) {
+        const normalizedSelectedModel = normalizeChatModelId(
+          item.snapshot.selectedModel
+        )
+        if (!normalizedSelectedModel) {
+          return t("formError.noModel")
+        }
+        const unavailableModel = findUnavailableChatModel(
+          [normalizedSelectedModel],
+          availableChatModelIds
+        )
+        if (unavailableModel) {
+          return t(
+            "playground:composer.validationModelUnavailableInline",
+            "Selected model is not available on this server. Refresh models or choose a different model."
+          )
+        }
+      }
+
+      return null
+    },
+    [availableChatModelIds, isQueuedDispatchBlockedByComposerState, t]
+  )
+
+  const sendQueuedRequest = React.useCallback(
+    async (item: QueuedRequest) => {
+      const validationError = validateQueuedRequest(item)
+      if (validationError) {
+        form.setFieldError("message", validationError)
+        throw new Error(validationError)
+      }
+
+      setSelectedModel(item.snapshot.selectedModel)
+      setChatMode(item.snapshot.chatMode)
+      setWebSearch(item.snapshot.webSearch)
+      setSelectedSystemPrompt(item.snapshot.selectedSystemPrompt ?? "")
+      setSelectedQuickPrompt(item.snapshot.selectedQuickPrompt ?? "")
+      if (
+        item.snapshot.toolChoice === "auto" ||
+        item.snapshot.toolChoice === "required" ||
+        item.snapshot.toolChoice === "none"
+      ) {
+        setToolChoice(item.snapshot.toolChoice)
+      }
+      setUseOCR(item.snapshot.useOCR)
+
+      await stopListening()
+      stopServerDictation()
+
+      const sourceContext = (item.sourceContext ??
+        null) as SidepanelQueuedSourceContext | null
+      const documents = Array.isArray(sourceContext?.documents)
+        ? sourceContext.documents
+        : []
+
+      await sendMessage({
+        image: sourceContext?.isImageCommand ? "" : item.image,
+        message: item.promptText,
+        docs: sourceContext?.isImageCommand ? [] : documents,
+        requestOverrides: {
+          chatMode: item.snapshot.chatMode,
+          selectedModel: item.snapshot.selectedModel,
+          selectedSystemPrompt: item.snapshot.selectedSystemPrompt,
+          toolChoice:
+            item.snapshot.toolChoice === "auto" ||
+            item.snapshot.toolChoice === "required" ||
+            item.snapshot.toolChoice === "none"
+              ? item.snapshot.toolChoice
+              : undefined,
+          useOCR: item.snapshot.useOCR,
+          webSearch: item.snapshot.webSearch
+        },
+        imageBackendOverride: sourceContext?.isImageCommand
+          ? sourceContext.imageBackendOverride
+          : undefined
+      })
+    },
+    [
+      form,
+      sendMessage,
+      setChatMode,
+      setSelectedModel,
+      setSelectedQuickPrompt,
+      setSelectedSystemPrompt,
+      setToolChoice,
+      setUseOCR,
+      setWebSearch,
+      stopListening,
+      stopServerDictation,
+      validateQueuedRequest
+    ]
+  )
+
+  const queuedRequestActions = useQueuedRequests({
+    isConnectionReady,
+    isStreaming: isSending,
+    queue: queuedMessages,
+    setQueue: setQueuedMessages,
+    sendQueuedRequest,
+    stopStreamingRequest
+  })
+
+  const queueSubmission = React.useCallback(
+    ({
+      promptText,
+      image,
+      intent
+    }: {
+      promptText: string
+      image: string
+      intent: ReturnType<typeof resolveSubmissionIntent>
+    }) => {
+      if (isQueuedDispatchBlockedByComposerState) {
+        notification.warning({
+          message: t(
+            "playground:composer.queue.attachmentsNeedManualRepairTitle",
+            "Queue needs a simpler draft"
+          ),
+          description: t(
+            "playground:composer.queue.attachmentsNeedManualRepairBody",
+            "Queued requests currently support text, images, and selected tabs. Clear attached files/context before queueing this draft."
+          )
+        })
+        return null
+      }
+
+      const documents = buildQueuedDocuments()
+      const queuedItem = queuedRequestActions.enqueue({
+        conversationId: historyId ?? serverChatId ?? null,
+        promptText,
+        image: intent.isImageCommand ? "" : image,
+        attachments: documents,
+        sourceContext: {
+          documents,
+          imageBackendOverride: intent.isImageCommand
+            ? intent.imageBackendOverride
+            : undefined,
+          isImageCommand: intent.isImageCommand
+        },
+        snapshot: buildQueuedRequestSnapshot()
+      })
+
+      form.reset()
+      clearSelectedDocuments()
+      setContextFiles([])
+      setKnowledgeMentionActive(false)
+      textAreaFocus()
+      notification.info({
+        message: t("playground:composer.queue.requestQueued", "Request queued"),
+        description: isSending
+          ? t(
+              "playground:composer.queue.requestQueuedWhileBusy",
+              "We'll run it after the current response finishes."
+            )
+          : t(
+              "playground:composer.queue.requestQueuedWhileOffline",
+              "We'll send it when your tldw server reconnects."
+            )
+      })
+      return queuedItem
+    },
+    [
+      buildQueuedDocuments,
+      buildQueuedRequestSnapshot,
+      clearSelectedDocuments,
+      form,
+      historyId,
+      isQueuedDispatchBlockedByComposerState,
+      isSending,
+      notification,
+      queuedRequestActions,
+      serverChatId,
+      setContextFiles,
+      t,
+      textAreaFocus
+    ]
+  )
+
+  const cancelCurrentAndRunDisabledReason =
+    isSending && serverChatId
+      ? t(
+          "playground:composer.queue.cancelAndRunDisabled",
+          "Cancel current & run now is not available for server-backed turns yet."
+        )
+      : null
+
+  const handleRunQueuedRequest = React.useCallback(
+    async (requestId: string) => {
+      if (isSending && cancelCurrentAndRunDisabledReason) {
         return
       }
-      const successfullySentIndices = new Set<number>()
-      for (const [index, item] of queuedMessages.entries()) {
-        try {
-          await submitQueuedInSidepanel(item.message, item.image)
-          successfullySentIndices.add(index)
-        } catch (error) {
-          console.error("Failed to send queued sidepanel message", error)
+      await queuedRequestActions.runNow(requestId)
+      if (!isSending && isConnectionReady) {
+        await queuedRequestActions.flushNext()
+      }
+    },
+    [
+      cancelCurrentAndRunDisabledReason,
+      isConnectionReady,
+      isSending,
+      queuedRequestActions
+    ]
+  )
+
+  const handleRunNextQueuedRequest = React.useCallback(async () => {
+    const next = queuedMessages[0]
+    if (!next) return
+    if (isSending && cancelCurrentAndRunDisabledReason) {
+      return
+    }
+    if (next.status === "blocked") {
+      await handleRunQueuedRequest(next.id)
+      return
+    }
+    await queuedRequestActions.flushNext()
+  }, [
+    cancelCurrentAndRunDisabledReason,
+    handleRunQueuedRequest,
+    isSending,
+    queuedMessages,
+    queuedRequestActions
+  ])
+
+  const autoDrainingQueuedRequestsRef = React.useRef(false)
+  React.useEffect(() => {
+    const next = queuedMessages[0]
+    if (
+      autoDrainingQueuedRequestsRef.current ||
+      !next ||
+      !isConnectionReady ||
+      isSending ||
+      next.status !== "queued" ||
+      isQueuedDispatchBlockedByComposerState
+    ) {
+      return
+    }
+
+    autoDrainingQueuedRequestsRef.current = true
+    void queuedRequestActions.flushNext().finally(() => {
+      autoDrainingQueuedRequestsRef.current = false
+    })
+  }, [
+    isConnectionReady,
+    isQueuedDispatchBlockedByComposerState,
+    isSending,
+    queuedMessages,
+    queuedRequestActions
+  ])
+
+  const submitCurrentRequest = React.useCallback(
+    async (
+      rawMessage: string,
+      image: string,
+      options?: { ignorePinnedResults?: boolean }
+    ) => {
+      const intent = resolveSubmissionIntent(rawMessage, options)
+      if (intent.invalidImageCommand) {
+        notification.error({
+          message: t("error", { defaultValue: "Error" }),
+          description: intent.imageCommandMissingProvider
+            ? t(
+                "imageCommand.missingProvider",
+                "Pick an Image provider in More tools or use /generate-image:<provider> <prompt>."
+              )
+            : t(
+                "imageCommand.invalidUsage",
+                "Use /generate-image:<provider> <prompt>."
+              )
+        })
+        return
+      }
+
+      const trimmed = intent.combinedMessage.trim()
+      if (
+        !intent.isImageCommand &&
+        trimmed.length === 0 &&
+        image.length === 0 &&
+        selectedDocuments.length === 0 &&
+        contextFiles.length === 0
+      ) {
+        return
+      }
+
+      if (intent.isImageCommand && trimmed.length === 0) {
+        notification.error({
+          message: t("error", { defaultValue: "Error" }),
+          description: t(
+            "imageCommand.missingPrompt",
+            "Image prompt is required."
+          )
+        })
+        return
+      }
+
+      if (!intent.isImageCommand) {
+        const normalizedSelectedModel = normalizeChatModelId(selectedModel)
+        if (!normalizedSelectedModel) {
+          form.setFieldError("message", t("formError.noModel"))
+          return
+        }
+        const unavailableModel = findUnavailableChatModel(
+          [normalizedSelectedModel],
+          availableChatModelIds
+        )
+        if (unavailableModel) {
+          form.setFieldError(
+            "message",
+            t(
+              "playground:composer.validationModelUnavailableInline",
+              "Selected model is not available on this server. Refresh models or choose a different model."
+            )
+          )
+          return
         }
       }
 
-      if (successfullySentIndices.size > 0) {
-        const remainingQueued = queuedMessages.filter(
-          (_, index) => !successfullySentIndices.has(index)
-        )
-        clearQueuedMessages()
-        for (const item of remainingQueued) {
-          addQueuedMessage(item)
-        }
+      const shouldQueueInsteadOfSend = isSending || !isConnectionReady
+      if (shouldQueueInsteadOfSend) {
+        await stopListening()
+        stopServerDictation()
+        queueSubmission({
+          promptText: trimmed,
+          image,
+          intent
+        })
+        return
       }
-    } finally {
-      setIsFlushingQueue(false)
-    }
-  }, [
-    isConnectionReady,
-    isFlushingQueue,
-    queuedMessages,
-    ensureEmbeddingModelAvailable,
-    submitQueuedInSidepanel,
-    clearQueuedMessages,
-    addQueuedMessage
-  ])
+
+      await sendCurrentFormMessageRef.current(rawMessage, image, options)
+    },
+    [
+      availableChatModelIds,
+      contextFiles.length,
+      form,
+      isConnectionReady,
+      isSending,
+      notification,
+      queueSubmission,
+      resolveSubmissionIntent,
+      selectedDocuments.length,
+      selectedModel,
+      stopListening,
+      stopServerDictation,
+      t
+    ]
+  )
+
+  const submitForm = React.useCallback(
+    (options?: { ignorePinnedResults?: boolean }) => {
+      form.onSubmit(async (value) => {
+        await submitCurrentRequest(value.message, value.image, options)
+      })()
+    },
+    [form, submitCurrentRequest]
+  )
+
+  const shouldQueuePrimaryAction = isSending || !isConnectionReady
+  const primaryActionLabel = shouldQueuePrimaryAction
+    ? t("common:queue", "Queue")
+    : t("common:send", "Send")
+  const primaryActionTitle = shouldQueuePrimaryAction
+    ? (isSending
+        ? t(
+            "playground:composer.queue.primaryWhileBusy",
+            "Queue this request to run after the current response."
+          )
+        : t(
+            "playground:composer.queue.primaryWhileOffline",
+            "Queue this request until your tldw server reconnects."
+          )) as string
+    : sendButtonTitle
+  const primaryActionAriaLabel = shouldQueuePrimaryAction
+    ? (t("playground:composer.queue.primaryAria", "Queue request") as string)
+    : (t("playground:composer.submitAria", "Send message") as string)
 
   React.useEffect(() => {
     const handleDrop = (e: DragEvent) => {
@@ -2205,9 +2533,10 @@ export const SidepanelForm = ({
               )}
               <div className="flex">
                 <form
-                  onSubmit={form.onSubmit(async (value) => {
-                    await sendCurrentFormMessage(value.message, value.image)
-                  })}
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void submitForm()
+                  }}
                   className="shrink-0 flex-grow  flex flex-col items-center ">
                   <input
                     id="file-upload"
@@ -2276,13 +2605,18 @@ export const SidepanelForm = ({
                     {/* Queued messages banner - shown above input area */}
                     {wrapComposerProfile(
                       "sidepanel-queued-banner",
-                      <QueuedMessagesBanner
-                        queuedMessages={queuedMessages}
+                      <ChatQueuePanel
+                        queue={queuedMessages}
                         isConnectionReady={isConnectionReady}
-                        isFlushingQueue={isFlushingQueue}
-                        onFlushQueue={handleFlushQueue}
-                        onClearQueue={clearQueuedMessages}
+                        isStreaming={isSending}
+                        onRunNext={handleRunNextQueuedRequest}
+                        onRunNow={handleRunQueuedRequest}
+                        onDelete={queuedRequestActions.remove}
+                        onMove={queuedRequestActions.move}
+                        onUpdate={queuedRequestActions.update}
+                        onClearAll={queuedRequestActions.clear}
                         onOpenDiagnostics={openDiagnostics}
+                        forceRunDisabledReason={cancelCurrentAndRunDisabledReason}
                       />
                     )}
                     {contextChips.length > 0 && (
@@ -2492,266 +2826,108 @@ export const SidepanelForm = ({
                               )}
                               className="flex items-center gap-2">
                               {/* L15: gap-2 provides visual separation */}
-                              {!streaming ? (
-                                <>
-                                  <div className="flex items-center gap-1">
-                                    <Tooltip
-                                      title={
-                                        voiceChatAvailable
-                                          ? voiceChatStatusLabel
-                                          : t(
-                                              "playground:voiceChat.unavailableTitle",
-                                              "Voice chat unavailable"
-                                            )
-                                      }
-                                    >
-                                      <button
-                                        type="button"
-                                        onClick={handleVoiceChatToggle}
-                                        disabled={!voiceChatAvailable || streaming}
-                                        className={`rounded-md border p-1 transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${voiceChatToneClass}`}
-                                        aria-label={voiceChatStatusLabel}
-                                      >
-                                        <Headphones className="h-4 w-4" />
-                                      </button>
-                                    </Tooltip>
-                                    <Popover content={voiceChatSettingsContent} trigger="click">
-                                      <button
-                                        type="button"
-                                        className="rounded-md border border-border p-1 text-text-muted hover:bg-surface2 hover:text-text"
-                                        aria-label={t(
-                                          "playground:voiceChat.settingsButton",
-                                          "Voice chat settings"
-                                        )}
-                                      >
-                                        <Settings2 className="h-3.5 w-3.5" />
-                                      </button>
-                                    </Popover>
-                                  </div>
-                                  {hasVoiceInputControls && (
-                                    <Tooltip
-                                      title={
-                                        !speechAvailable
-                                          ? t(
-                                              "playground:actions.speechUnavailableBody",
-                                              "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
-                                            )
-                                          : speechUsesServer
-                                            ? t(
-                                                "playground:tooltip.speechToTextServer",
-                                                "Dictation via your tldw server"
-                                              )
+                              <>
+                                {!streaming ? (
+                                  <>
+                                    <div className="flex items-center gap-1">
+                                      <Tooltip
+                                        title={
+                                          voiceChatAvailable
+                                            ? voiceChatStatusLabel
                                             : t(
-                                                "playground:tooltip.speechToTextBrowser",
-                                                "Dictation via browser speech recognition"
+                                                "playground:voiceChat.unavailableTitle",
+                                                "Voice chat unavailable"
                                               )
-                                      }
-                                    >
-                                      <button
-                                        type="button"
-                                        onClick={handleDictationToggle}
-                                        disabled={!speechAvailable || voiceChatEnabled}
-                                        className={`rounded-md border border-border p-1 text-text-muted hover:bg-surface2 hover:text-text disabled:cursor-not-allowed disabled:opacity-50 ${
-                                          speechAvailable &&
-                                          ((speechUsesServer && isServerDictating) ||
-                                            (!speechUsesServer && isListening))
-                                            ? "border-primary text-primaryStrong"
-                                            : ""
-                                        }`}
-                                        aria-label={
-                                          !speechAvailable
-                                            ? (t(
-                                                "playground:actions.speechUnavailableTitle",
-                                                "Dictation unavailable"
-                                              ) as string)
-                                            : speechUsesServer
-                                              ? (isServerDictating
-                                                  ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                                  : (t("playground:actions.speechStart", "Start dictation") as string))
-                                            : (isListening
-                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                                : (t("playground:actions.speechStart", "Start dictation") as string))
-                                        }
-                                        title={
-                                          !speechAvailable
-                                            ? (t(
-                                                "playground:actions.speechUnavailableTitle",
-                                                "Dictation unavailable"
-                                              ) as string)
-                                            : speechUsesServer
-                                              ? (isServerDictating
-                                                  ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                                  : (t("playground:actions.speechStart", "Start dictation") as string))
-                                              : (isListening
-                                                  ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                                  : (t("playground:actions.speechStart", "Start dictation") as string))
                                         }
                                       >
-                                        <MicIcon className="h-4 w-4" />
-                                      </button>
-                                    </Tooltip>
-                                  )}
-                                  <Space.Compact>
-                                    <button
-                                      aria-label={t(
-                                        "playground:composer.submitAria",
-                                        "Send message"
-                                      )}
-                                      data-testid="chat-send"
-                                      title={sendButtonTitle}
-                                      type="submit"
-                                      disabled={isSending || !isConnectionReady}
-                                      className="inline-flex min-h-[44px] items-center gap-2 rounded-l-md border border-border bg-surface px-3 text-sm text-text transition-colors hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                      {sendWhenEnter ? (
-                                        <svg
-                                          xmlns="http://www.w3.org/2000/svg"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          strokeLinecap="round"
-                                          strokeLinejoin="round"
-                                          strokeWidth="2"
-                                          className="h-4 w-4"
-                                          viewBox="0 0 24 24"
+                                        <button
+                                          type="button"
+                                          onClick={handleVoiceChatToggle}
+                                          disabled={!voiceChatAvailable || streaming}
+                                          className={`rounded-md border p-1 transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${voiceChatToneClass}`}
+                                          aria-label={voiceChatStatusLabel}
                                         >
-                                          <path d="M9 10L4 15 9 20"></path>
-                                          <path d="M20 4v7a4 4 0 01-4 4H4"></path>
-                                        </svg>
-                                      ) : null}
-                                      {t("common:send", "Send")}
-                                    </button>
-                                    <Dropdown
-                                      disabled={isSending || !isConnectionReady}
-                                      trigger={["click"]}
-                                      menu={{
-                                        items: [
-                                          {
-                                            key: "send-section",
-                                            type: "group",
-                                            label: t(
-                                              "playground:composer.actions",
-                                              "Send options"
-                                            ),
-                                            children: [
-                                              {
-                                                key: 1,
-                                                label: (
-                                                  <Checkbox
-                                                    checked={sendWhenEnter}
-                                                    onChange={(e) =>
-                                                      setSendWhenEnter(e.target.checked)
-                                                    }>
-                                                    {t("sendWhenEnter")}
-                                                  </Checkbox>
+                                          <Headphones className="h-4 w-4" />
+                                        </button>
+                                      </Tooltip>
+                                      <Popover content={voiceChatSettingsContent} trigger="click">
+                                        <button
+                                          type="button"
+                                          className="rounded-md border border-border p-1 text-text-muted hover:bg-surface2 hover:text-text"
+                                          aria-label={t(
+                                            "playground:voiceChat.settingsButton",
+                                            "Voice chat settings"
+                                          )}
+                                        >
+                                          <Settings2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      </Popover>
+                                    </div>
+                                    {hasVoiceInputControls && (
+                                      <Tooltip
+                                        title={
+                                          !speechAvailable
+                                            ? t(
+                                                "playground:actions.speechUnavailableBody",
+                                                "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
+                                              )
+                                            : speechUsesServer
+                                              ? t(
+                                                  "playground:tooltip.speechToTextServer",
+                                                  "Dictation via your tldw server"
                                                 )
-                                              }
-                                            ]
-                                          },
-                                          {
-                                            type: "divider",
-                                            key: "divider-1"
-                                          },
-                                          {
-                                            key: "context-section",
-                                            type: "group",
-                                            label: t(
-                                              "playground:composer.coreTools",
-                                              "Conversation options"
-                                            ),
-                                            children: [
-                                              {
-                                                key: 2,
-                                                label: (
-                                                  <Checkbox
-                                                    checked={chatMode === "rag"}
-                                                    onChange={(e) => {
-                                                      setChatMode(
-                                                        e.target.checked
-                                                          ? "rag"
-                                                          : "normal"
-                                                      )
-                                                    }}>
-                                                    {t("common:chatWithCurrentPage")}
-                                                  </Checkbox>
+                                              : t(
+                                                  "playground:tooltip.speechToTextBrowser",
+                                                  "Dictation via browser speech recognition"
                                                 )
-                                              },
-                                              {
-                                                key: 3,
-                                                label: (
-                                                  <Checkbox
-                                                    checked={useOCR}
-                                                    onChange={(e) =>
-                                                      setUseOCR(e.target.checked)
-                                                    }>
-                                                    {t("useOCR")}
-                                                  </Checkbox>
-                                                )
-                                              }
-                                            ]
+                                        }
+                                      >
+                                        <button
+                                          type="button"
+                                          onClick={handleDictationToggle}
+                                          disabled={!speechAvailable || voiceChatEnabled}
+                                          className={`rounded-md border border-border p-1 text-text-muted hover:bg-surface2 hover:text-text disabled:cursor-not-allowed disabled:opacity-50 ${
+                                            speechAvailable &&
+                                            ((speechUsesServer && isServerDictating) ||
+                                              (!speechUsesServer && isListening))
+                                              ? "border-primary text-primaryStrong"
+                                              : ""
+                                          }`}
+                                          aria-label={
+                                            !speechAvailable
+                                              ? (t(
+                                                  "playground:actions.speechUnavailableTitle",
+                                                  "Dictation unavailable"
+                                                ) as string)
+                                              : speechUsesServer
+                                                ? (isServerDictating
+                                                    ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                    : (t("playground:actions.speechStart", "Start dictation") as string))
+                                                : (isListening
+                                                    ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                    : (t("playground:actions.speechStart", "Start dictation") as string))
                                           }
-                                        ]
-                                      }}
-                                    >
-                                      <button
-                                        type="button"
-                                        aria-label={
-                                          t(
-                                            "playground:composer.sendOptions",
-                                            "Open send options"
-                                          ) as string
-                                        }
-                                        title={
-                                          t(
-                                            "playground:composer.sendOptions",
-                                            "Open send options"
-                                          ) as string
-                                        }
-                                        disabled={isSending || !isConnectionReady}
-                                        className="inline-flex min-h-[44px] items-center rounded-r-md border border-l-0 border-border bg-surface px-2 text-text transition-colors hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
-                                      >
-                                        <svg
-                                          xmlns="http://www.w3.org/2000/svg"
-                                          fill="none"
-                                          viewBox="0 0 24 24"
-                                          strokeWidth={1.5}
-                                          stroke="currentColor"
-                                          className="w-4 h-4"
+                                          title={
+                                            !speechAvailable
+                                              ? (t(
+                                                  "playground:actions.speechUnavailableTitle",
+                                                  "Dictation unavailable"
+                                                ) as string)
+                                              : speechUsesServer
+                                                ? (isServerDictating
+                                                    ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                    : (t("playground:actions.speechStart", "Start dictation") as string))
+                                                : (isListening
+                                                    ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                    : (t("playground:actions.speechStart", "Start dictation") as string))
+                                          }
                                         >
-                                          <path
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            d="m19.5 8.25-7.5 7.5-7.5-7.5"
-                                          />
-                                        </svg>
-                                      </button>
-                                    </Dropdown>
-                                  </Space.Compact>
-                                  {/* Current Conversation Settings button to the right of submit */}
-                                  <Tooltip
-                                    title={
-                                      t("common:currentChatModelSettings") as string
-                                    }>
-                                    <button
-                                      type="button"
-                                      onClick={() => setOpenModelSettings(true)}
-                                      className="rounded-md p-1 text-text-muted hover:bg-surface2 hover:text-text"
-                                      title={t(
-                                        "playground:composer.openModelSettings",
-                                        "Open current chat settings"
-                                      )}
-                                    >
-                                      <Gauge className="h-5 w-5" />
-                                      <span className="sr-only">
-                                        {t(
-                                          "playground:composer.openModelSettings",
-                                          "Open current chat settings"
-                                        )}
-                                      </span>
-                                    </button>
-                                  </Tooltip>
-                                </>
-                              ) : (
-                                <>
+                                          <MicIcon className="h-4 w-4" />
+                                        </button>
+                                      </Tooltip>
+                                    )}
+                                  </>
+                                ) : (
                                   <Tooltip title={t("tooltip.stopStreaming")}>
                                     <button
                                       type="button"
@@ -2772,31 +2948,168 @@ export const SidepanelForm = ({
                                       </span>
                                     </button>
                                   </Tooltip>
-                                  {/* L15: Visual separator between Stop and settings buttons */}
-                                  <Tooltip
-                                    title={
-                                      t("common:currentChatModelSettings") as string
-                                    }>
+                                )}
+                                <Space.Compact>
+                                  <button
+                                    aria-label={primaryActionAriaLabel}
+                                    data-testid="chat-send"
+                                    title={primaryActionTitle}
+                                    type={shouldQueuePrimaryAction ? "button" : "submit"}
+                                    onClick={
+                                      shouldQueuePrimaryAction
+                                        ? () => {
+                                            void submitForm()
+                                          }
+                                        : undefined
+                                    }
+                                    className="inline-flex min-h-[44px] items-center gap-2 rounded-l-md border border-border bg-surface px-3 text-sm text-text transition-colors hover:bg-surface2"
+                                  >
+                                    {!shouldQueuePrimaryAction && sendWhenEnter ? (
+                                      <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth="2"
+                                        className="h-4 w-4"
+                                        viewBox="0 0 24 24"
+                                      >
+                                        <path d="M9 10L4 15 9 20"></path>
+                                        <path d="M20 4v7a4 4 0 01-4 4H4"></path>
+                                      </svg>
+                                    ) : null}
+                                    {primaryActionLabel}
+                                  </button>
+                                  <Dropdown
+                                    trigger={["click"]}
+                                    menu={{
+                                      items: [
+                                        {
+                                          key: "send-section",
+                                          type: "group",
+                                          label: t(
+                                            "playground:composer.actions",
+                                            "Send options"
+                                          ),
+                                          children: [
+                                            {
+                                              key: 1,
+                                              label: (
+                                                <Checkbox
+                                                  checked={sendWhenEnter}
+                                                  onChange={(e) =>
+                                                    setSendWhenEnter(e.target.checked)
+                                                  }>
+                                                  {t("sendWhenEnter")}
+                                                </Checkbox>
+                                              )
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          type: "divider",
+                                          key: "divider-1"
+                                        },
+                                        {
+                                          key: "context-section",
+                                          type: "group",
+                                          label: t(
+                                            "playground:composer.coreTools",
+                                            "Conversation options"
+                                          ),
+                                          children: [
+                                            {
+                                              key: 2,
+                                              label: (
+                                                <Checkbox
+                                                  checked={chatMode === "rag"}
+                                                  onChange={(e) => {
+                                                    setChatMode(
+                                                      e.target.checked
+                                                        ? "rag"
+                                                        : "normal"
+                                                    )
+                                                  }}>
+                                                  {t("common:chatWithCurrentPage")}
+                                                </Checkbox>
+                                              )
+                                            },
+                                            {
+                                              key: 3,
+                                              label: (
+                                                <Checkbox
+                                                  checked={useOCR}
+                                                  onChange={(e) =>
+                                                    setUseOCR(e.target.checked)
+                                                  }>
+                                                  {t("useOCR")}
+                                                </Checkbox>
+                                              )
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }}
+                                  >
                                     <button
                                       type="button"
-                                      onClick={() => setOpenModelSettings(true)}
-                                      className="rounded-md border border-border p-1 text-text-muted hover:bg-surface2 hover:text-text"
-                                      title={t(
+                                      aria-label={
+                                        t(
+                                          "playground:composer.sendOptions",
+                                          "Open send options"
+                                        ) as string
+                                      }
+                                      title={
+                                        t(
+                                          "playground:composer.sendOptions",
+                                          "Open send options"
+                                        ) as string
+                                      }
+                                      className="inline-flex min-h-[44px] items-center rounded-r-md border border-l-0 border-border bg-surface px-2 text-text transition-colors hover:bg-surface2"
+                                    >
+                                      <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        fill="none"
+                                        viewBox="0 0 24 24"
+                                        strokeWidth={1.5}
+                                        stroke="currentColor"
+                                        className="w-4 h-4"
+                                      >
+                                        <path
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                          d="m19.5 8.25-7.5 7.5-7.5-7.5"
+                                        />
+                                      </svg>
+                                    </button>
+                                  </Dropdown>
+                                </Space.Compact>
+                                <Tooltip
+                                  title={
+                                    t("common:currentChatModelSettings") as string
+                                  }>
+                                  <button
+                                    type="button"
+                                    onClick={() => setOpenModelSettings(true)}
+                                    className={`rounded-md p-1 text-text-muted hover:bg-surface2 hover:text-text ${
+                                      streaming ? "border border-border" : ""
+                                    }`}
+                                    title={t(
+                                      "playground:composer.openModelSettings",
+                                      "Open current chat settings"
+                                    )}
+                                  >
+                                    <Gauge className="h-5 w-5" />
+                                    <span className="sr-only">
+                                      {t(
                                         "playground:composer.openModelSettings",
                                         "Open current chat settings"
                                       )}
-                                    >
-                                      <Gauge className="h-5 w-5" />
-                                      <span className="sr-only">
-                                        {t(
-                                          "playground:composer.openModelSettings",
-                                          "Open current chat settings"
-                                        )}
-                                      </span>
-                                    </button>
-                                  </Tooltip>
-                                </>
-                              )}
+                                    </span>
+                                  </button>
+                                </Tooltip>
+                              </>
                             </div>
                           </div>
                         </>
@@ -2941,22 +3254,7 @@ export const SidepanelForm = ({
                             )}
                           </div>
                           <div className="flex items-end gap-2">
-                            {!streaming ? (
-                              <Button
-                                type="submit"
-                                variant="primary"
-                                size="sm"
-                                disabled={isSending || !isConnectionReady}
-                                ariaLabel={t(
-                                  "playground:composer.submitAria",
-                                  "Send message"
-                                )}
-                                title={sendButtonTitle}
-                                className="min-h-[44px] rounded-full px-4 text-[11px] font-semibold uppercase tracking-[0.12em]"
-                              >
-                                {t("common:send", "Send")}
-                              </Button>
-                            ) : (
+                            {streaming && (
                               <div className="flex flex-col items-center gap-1">
                                 <Tooltip title={t("tooltip.stopStreaming")}>
                                   <button
@@ -2981,6 +3279,23 @@ export const SidepanelForm = ({
                                 </span>
                               </div>
                             )}
+                            <Button
+                              type={shouldQueuePrimaryAction ? "button" : "submit"}
+                              onClick={
+                                shouldQueuePrimaryAction
+                                  ? () => {
+                                      void submitForm()
+                                    }
+                                  : undefined
+                              }
+                              variant="primary"
+                              size="sm"
+                              ariaLabel={primaryActionAriaLabel}
+                              title={primaryActionTitle}
+                              className="min-h-[44px] rounded-full px-4 text-[11px] font-semibold uppercase tracking-[0.12em]"
+                            >
+                              {primaryActionLabel}
+                            </Button>
                           </div>
                         </>
                       )}

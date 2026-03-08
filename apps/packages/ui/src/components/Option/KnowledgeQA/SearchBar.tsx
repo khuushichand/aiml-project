@@ -3,7 +3,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { CloudOff, Search, Sparkles, Square, X } from "lucide-react"
+import { CloudOff, Globe, Search, Sparkles, Square, X } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
 import { cn } from "@/libs/utils"
 import { trackKnowledgeQaSearchMetric } from "@/utils/knowledge-qa-search-metrics"
@@ -370,8 +370,8 @@ export function SearchBar({
         )}
       >
         <span className="truncate">
-          Press <kbd className="px-1.5 py-0.5 bg-bg-subtle text-text rounded font-mono">/</kbd> to focus,{" "}
-          <kbd className="px-1.5 py-0.5 bg-bg-subtle text-text rounded font-mono">Cmd+K</kbd> for new search
+          Press <kbd className="px-1.5 py-0.5 rounded font-mono text-text bg-gray-100 dark:bg-gray-800 border border-border/60">/</kbd> to focus,{" "}
+          <kbd className="px-1.5 py-0.5 rounded font-mono text-text bg-gray-100 dark:bg-gray-800 border border-border/60">Cmd+K</kbd> for new search
         </span>
         <div className="flex items-center gap-2">
           {isLocalOnlyThread && (
@@ -411,15 +411,17 @@ export function SearchBar({
                 updateSetting("enable_web_fallback", !settings.enable_web_fallback)
               }
               className={cn(
-                "px-2 py-1 rounded-md border transition-colors whitespace-nowrap",
+                "inline-flex items-center gap-1 px-2 py-1 rounded-full border transition-colors whitespace-nowrap",
                 settings.enable_web_fallback
                   ? "border-primary/40 bg-primary/10 text-primary"
                   : "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
               )}
               aria-pressed={settings.enable_web_fallback}
               title="Falls back to web search when local source relevance is below threshold (configurable in settings)."
+              aria-label={`Web fallback is currently ${settings.enable_web_fallback ? "enabled" : "disabled"}. Click to toggle.`}
             >
-              Web search {settings.enable_web_fallback ? "on" : "off"}
+              <Globe className="w-3.5 h-3.5" />
+              Web
             </button>
           ) : null}
         </div>

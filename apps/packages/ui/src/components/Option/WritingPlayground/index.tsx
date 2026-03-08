@@ -134,6 +134,7 @@ import {
   estimateTokenCountFromText
 } from "./writing-generation-stats-utils"
 import { buildDiagnosticsSummary } from "./writing-diagnostics-utils"
+import { WritingPlaygroundActiveSessionGuard } from "./WritingPlaygroundActiveSessionGuard"
 import { WritingPlaygroundShell } from "./WritingPlaygroundShell"
 import { WritingPlaygroundLibraryPanel } from "./WritingPlaygroundLibraryPanel"
 import { WritingPlaygroundEditorPanel } from "./WritingPlaygroundEditorPanel"
@@ -176,14 +177,6 @@ import {
   DEFAULT_THEME_CATALOG,
   buildDuplicateName
 } from "./writing-template-theme-utils"
-import {
-  DEFAULT_WRITING_WORKSPACE_MODE,
-  type WritingWorkspaceMode
-} from "./writing-workspace-mode-utils"
-import {
-  WRITING_WORKSPACE_MODE_STORAGE_KEY,
-  resolveInitialWorkspaceMode
-} from "./writing-workspace-mode-prefs"
 
 const { Title, Paragraph } = Typography
 
@@ -1248,15 +1241,9 @@ export const WritingPlayground = () => {
   const {
     activeSessionId,
     activeSessionName,
-    workspaceMode,
     setActiveSessionId,
-    setActiveSessionName,
-    setWorkspaceMode
+    setActiveSessionName
   } = useWritingPlaygroundStore()
-  const [storedWorkspaceMode, setStoredWorkspaceMode] = useStorage<string>(
-    WRITING_WORKSPACE_MODE_STORAGE_KEY,
-    DEFAULT_WRITING_WORKSPACE_MODE
-  )
   const [selectedModel, setSelectedModel] = useStorage<string>("selectedModel")
   const apiProviderOverride = useStoreChatModelSettings(
     (state) => state.apiProvider
@@ -1271,22 +1258,7 @@ export const WritingPlayground = () => {
       rate: 1,
       voiceURI: null
     })
-  const resolvedWorkspaceMode = React.useMemo(
-    () => resolveInitialWorkspaceMode(storedWorkspaceMode),
-    [storedWorkspaceMode]
-  )
-  React.useEffect(() => {
-    if (workspaceMode === resolvedWorkspaceMode) return
-    setWorkspaceMode(resolvedWorkspaceMode)
-  }, [resolvedWorkspaceMode, setWorkspaceMode, workspaceMode])
-  const handleWorkspaceModeChange = React.useCallback(
-    (nextMode: WritingWorkspaceMode) => {
-      if (workspaceMode === nextMode) return
-      setWorkspaceMode(nextMode)
-      void setStoredWorkspaceMode(nextMode)
-    },
-    [setStoredWorkspaceMode, setWorkspaceMode, workspaceMode]
-  )
+  const [showPromptChunks, setShowPromptChunks] = React.useState(false)
   const [createModalOpen, setCreateModalOpen] = React.useState(false)
   const [newSessionName, setNewSessionName] = React.useState("")
   const [sessionImporting, setSessionImporting] = React.useState(false)
@@ -1301,7 +1273,7 @@ export const WritingPlayground = () => {
   const [editorText, setEditorText] = React.useState("")
   const [editorView, setEditorView] = React.useState<EditorViewMode>("edit")
   const [activeInspectorTab, setActiveInspectorTab] =
-    React.useState<InspectorTabKey>("generation")
+    React.useState<InspectorTabKey>("sampling")
   const [settings, setSettings] =
     React.useState<WritingSessionSettings>(() => cloneDefaultSettings())
   const [stopStringsInput, setStopStringsInput] = React.useState("")
@@ -5139,7 +5111,7 @@ export const WritingPlayground = () => {
     Boolean(selectedModel) &&
     hasChat &&
     !isGenerating
-  const settingsDisabled = isGenerating
+  const settingsDisabled = isGenerating || !activeSessionDetail
   const serverSupportsTokenize = writingCaps?.server?.tokenize === true
   const serverSupportsTokenCount = writingCaps?.server?.token_count === true
   const serverSupportsWordclouds = writingCaps?.server?.wordclouds === true
@@ -5433,45 +5405,6 @@ export const WritingPlayground = () => {
             {t("option:writingPlayground.title", "Writing Playground")}
           </Title>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-text-muted">
-            {t("option:writingPlayground.workspaceModeLabel", "Workspace mode")}
-          </span>
-          <Segmented
-            data-testid="writing-workspace-mode-switch"
-            size="small"
-            value={workspaceMode}
-            onChange={(value) => {
-              handleWorkspaceModeChange(String(value) as WritingWorkspaceMode)
-            }}
-            options={[
-              {
-                value: "draft",
-                label: (
-                  <span data-testid="writing-mode-draft">
-                    {t("option:writingPlayground.modeDraft", "Draft")}
-                  </span>
-                )
-              },
-              {
-                value: "manage",
-                label: (
-                  <span data-testid="writing-mode-manage">
-                    {t("option:writingPlayground.modeManage", "Manage")}
-                  </span>
-                )
-              }
-            ]}
-          />
-          <span
-            aria-live="polite"
-            className="sr-only"
-            data-testid="writing-mode-live-region">
-            {workspaceMode === "draft"
-              ? t("option:writingPlayground.modeDraft", "Draft")
-              : t("option:writingPlayground.modeManage", "Manage")}
-          </span>
-        </div>
       </div>
       <div>
         <Paragraph type="secondary">
@@ -5707,7 +5640,7 @@ export const WritingPlayground = () => {
 
             <div
               data-testid="writing-playground-content-grid"
-              className="writing-playground-grid-side grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+              className="writing-playground-grid-side grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
               <WritingPlaygroundEditorPanel>
               {activeSession ? (
                 activeSessionLoading ? (
@@ -5764,42 +5697,6 @@ export const WritingPlayground = () => {
                             )}
                           </Tag>
                         ) : null}
-                        <Tooltip
-                          title={t(
-                            "option:writingPlayground.generateShortcutTooltip",
-                            "Ctrl/Cmd+Enter to generate"
-                          )}>
-                          <Button
-                            type="primary"
-                            size="small"
-                            onClick={() => {
-                              void handleGenerate()
-                            }}
-                            loading={isGenerating}
-                            disabled={!canGenerate}>
-                            {t(
-                              "option:writingPlayground.generateAction",
-                              "Generate"
-                            )}
-                          </Button>
-                        </Tooltip>
-                        {isGenerating && settings.token_streaming ? (
-                          <Tooltip
-                            title={t(
-                              "option:writingPlayground.stopShortcutTooltip",
-                              "Esc to stop"
-                            )}>
-                            <Button
-                              size="small"
-                              onClick={handleCancelGeneration}
-                              danger>
-                              {t(
-                                "option:writingPlayground.stopAction",
-                                "Stop"
-                              )}
-                            </Button>
-                          </Tooltip>
-                        ) : null}
                         <Button
                           size="small"
                           icon={<Undo2 className="h-3.5 w-3.5" />}
@@ -5813,6 +5710,15 @@ export const WritingPlayground = () => {
                           disabled={isGenerating || !canRedoGeneration}
                           onClick={handleRedoGeneration}>
                           {t("option:writingPlayground.redoGeneration", "Redo")}
+                        </Button>
+                        <Button
+                          size="small"
+                          icon={<Columns2 className="h-3.5 w-3.5" />}
+                          data-testid="writing-view-prompt-chunks"
+                          onClick={() => setShowPromptChunks((prev) => !prev)}>
+                          {showPromptChunks
+                            ? t("option:writingPlayground.hidePromptChunks", "Hide chunks")
+                            : t("option:writingPlayground.viewPromptChunks", "View chunks")}
                         </Button>
                         <Button
                           size="small"
@@ -6229,8 +6135,8 @@ export const WritingPlayground = () => {
                         ) : null}
                       </div>
                     ) : null}
-                    {workspaceMode === "manage" ? (
-                      <div data-testid="writing-section-manage-analysis">
+                    {showPromptChunks ? (
+                      <div data-testid="writing-section-prompt-chunks">
                         <Collapse
                           ghost
                           size="small"
@@ -6311,41 +6217,50 @@ export const WritingPlayground = () => {
                 activeTab={activeInspectorTab}
                 onTabChange={setActiveInspectorTab}
                 tabLabels={{
-                  generation: t(
-                    "option:writingPlayground.sidebarGeneration",
-                    "Generation"
+                  sampling: t(
+                    "option:writingPlayground.sidebarSampling",
+                    "Sampling"
                   ),
-                  planning: t("option:writingPlayground.sidebarPlanning", "Planning"),
-                  diagnostics: t(
-                    "option:writingPlayground.sidebarDiagnostics",
-                    "Diagnostics"
+                  context: t("option:writingPlayground.sidebarContext", "Context"),
+                  setup: t("option:writingPlayground.sidebarSetup", "Setup"),
+                  inspect: t(
+                    "option:writingPlayground.sidebarInspect",
+                    "Inspect"
                   )
                 }}
-                generation={(
+                tabBadges={{
+                  inspect: responseInspectorRowsAll.length > 0 ? (
+                    <Tag size="small" color="blue" className="!m-0 !px-1 !text-[10px]">
+                      {responseInspectorRowsAll.length}
+                    </Tag>
+                  ) : null
+                }}
+                essentialsStrip={(
                   <Card
                     data-testid="writing-playground-settings-card"
-                    title={t("option:writingPlayground.settingsTitle", "Settings")}>
-              {activeSession ? (
-                activeSessionLoading ? (
-                  <Skeleton active />
-                ) : activeSessionError ? (
-                  <Alert
-                    type="error"
-                    showIcon
-                    title={t(
-                      "option:writingPlayground.settingsError",
-                      "Unable to load session settings."
-                    )}
-                  />
-                ) : (
-                  <div className="flex flex-col gap-4">
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    size="small"
+                    className="!border-border">
+                    <div className="flex flex-col gap-2">
                       <div className="flex flex-col gap-1">
                         <span className="text-xs text-text-muted">
-                          {t(
-                            "option:writingPlayground.temperatureLabel",
-                            "Temperature"
+                          {t("option:writingPlayground.modelLabel", "Model")}
+                        </span>
+                        <Input
+                          size="small"
+                          value={selectedModel || ""}
+                          placeholder={t(
+                            "option:writingPlayground.modelPlaceholder",
+                            "e.g. gpt-4o"
                           )}
+                          onChange={(event) => {
+                            void setSelectedModel(event.target.value)
+                          }}
+                          data-testid="writing-essentials-model"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs text-text-muted">
+                          {t("option:writingPlayground.temperatureLabel", "Temperature")}
                         </span>
                         <InputNumber
                           size="small"
@@ -6387,30 +6302,7 @@ export const WritingPlayground = () => {
                       </div>
                       <div className="flex flex-col gap-1">
                         <span className="text-xs text-text-muted">
-                          {t("option:writingPlayground.topKLabel", "Top K")}
-                        </span>
-                        <InputNumber
-                          size="small"
-                          min={0}
-                          max={2048}
-                          step={1}
-                          value={settings.top_k}
-                          disabled={settingsDisabled}
-                          onChange={(value) =>
-                            updateSetting({
-                              top_k:
-                                value == null ? DEFAULT_SETTINGS.top_k : value
-                            })
-                          }
-                          className="w-full"
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs text-text-muted">
-                          {t(
-                            "option:writingPlayground.maxTokensLabel",
-                            "Max tokens"
-                          )}
+                          {t("option:writingPlayground.maxTokensLabel", "Max tokens")}
                         </span>
                         <InputNumber
                           size="small"
@@ -6425,6 +6317,96 @@ export const WritingPlayground = () => {
                                 value == null
                                   ? DEFAULT_SETTINGS.max_tokens
                                   : Math.max(1, Math.round(value))
+                            })
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                      <Checkbox
+                        checked={settings.token_streaming}
+                        disabled={settingsDisabled}
+                        onChange={(event) =>
+                          updateSetting({
+                            token_streaming: event.target.checked
+                          })
+                        }>
+                        {t(
+                          "option:writingPlayground.tokenStreamingLabel",
+                          "Streaming"
+                        )}
+                      </Checkbox>
+                      <Button
+                        type="primary"
+                        block
+                        onClick={() => {
+                          if (isGenerating && settings.token_streaming) {
+                            handleCancelGeneration()
+                          } else {
+                            void handleGenerate()
+                          }
+                        }}
+                        loading={isGenerating && !settings.token_streaming}
+                        disabled={isGenerating ? !settings.token_streaming : !canGenerate}
+                        data-testid="writing-essentials-generate">
+                        {isGenerating
+                          ? t("option:writingPlayground.stopAction", "Stop")
+                          : t("option:writingPlayground.generateAction", "Generate")}
+                      </Button>
+                      <div className="flex items-center gap-2 text-xs text-text-muted">
+                        <Tag
+                          color={
+                            diagnosticsSummary.status === "warning"
+                              ? "gold"
+                              : diagnosticsSummary.status === "busy"
+                                ? "blue"
+                                : "green"
+                          }
+                          className="!m-0">
+                          {diagnosticsSummary.status === "warning"
+                            ? t("option:writingPlayground.diagnosticsWarning", "Warning")
+                            : diagnosticsSummary.status === "busy"
+                              ? t("option:writingPlayground.diagnosticsBusy", "Busy")
+                              : t("option:writingPlayground.diagnosticsReady", "Ready")}
+                        </Tag>
+                        {selectedTemplateName ? (
+                          <button
+                            type="button"
+                            className="truncate text-xs text-text-muted hover:text-text transition-colors"
+                            onClick={() => setActiveInspectorTab("setup")}>
+                            {t("option:writingPlayground.essentialsTpl", "tpl: {{name}}", {
+                              name: selectedTemplateName
+                            })}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </Card>
+                )}
+                sampling={(
+                  <Card
+                    title={t("option:writingPlayground.samplingTitle", "Sampling")}>
+                    <WritingPlaygroundActiveSessionGuard
+                      hasActiveSession={Boolean(activeSession)}
+                      isLoading={activeSessionLoading}
+                      hasError={Boolean(activeSessionError)}
+                      t={t}>
+                      <div className="flex flex-col gap-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs text-text-muted">
+                          {t("option:writingPlayground.topKLabel", "Top K")}
+                        </span>
+                        <InputNumber
+                          size="small"
+                          min={0}
+                          max={2048}
+                          step={1}
+                          value={settings.top_k}
+                          disabled={settingsDisabled}
+                          onChange={(value) =>
+                            updateSetting({
+                              top_k:
+                                value == null ? DEFAULT_SETTINGS.top_k : value
                             })
                           }
                           className="w-full"
@@ -6498,27 +6480,6 @@ export const WritingPlayground = () => {
                           }
                           className="w-full"
                         />
-                      </div>
-                      <div className="flex flex-col gap-2 sm:col-span-2">
-                        <Checkbox
-                          checked={settings.token_streaming}
-                          disabled={settingsDisabled}
-                          onChange={(event) =>
-                            updateSetting({
-                              token_streaming: event.target.checked
-                            })
-                          }>
-                          {t(
-                            "option:writingPlayground.tokenStreamingLabel",
-                            "Token streaming"
-                          )}
-                        </Checkbox>
-                        <span className="text-xs text-text-muted">
-                          {t(
-                            "option:writingPlayground.tokenStreamingHint",
-                            "Stream tokens as they arrive. Disable for one-shot generation."
-                          )}
-                        </span>
                       </div>
                       <div className="flex flex-col gap-2 sm:col-span-2">
                         <Checkbox
@@ -7014,177 +6975,30 @@ export const WritingPlayground = () => {
                         ]}
                       />
                     )}
-                  </div>
-                )
-              ) : (
-                <Empty
-                  description={t(
-                    "option:writingPlayground.settingsEmpty",
-                    "Select a session to edit settings."
-                  )}
-                />
-              )}
+                      </div>
+                    </WritingPlaygroundActiveSessionGuard>
                   </Card>
                 )}
-                planning={(
+                context={(
                   <Card
-                    title={t("option:writingPlayground.sidebarPlanning", "Planning")}
+                    title={t("option:writingPlayground.sidebarContext", "Context")}
                     extra={
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="small"
-                          onClick={handleOpenTemplatesModal}
-                          disabled={templateSelectDisabled}>
-                          {t(
-                            "option:writingPlayground.manageTemplates",
-                            "Manage templates"
-                          )}
-                        </Button>
-                        <Button
-                          size="small"
-                          onClick={handleOpenThemesModal}
-                          disabled={themeSelectDisabled}>
-                          {t(
-                            "option:writingPlayground.manageThemes",
-                            "Manage themes"
-                          )}
-                        </Button>
-                      </div>
+                      <Button
+                        size="small"
+                        disabled={settingsDisabled}
+                        onClick={() => setContextPreviewModalOpen(true)}>
+                        {t(
+                          "option:writingPlayground.contextPreviewAction",
+                          "Preview"
+                        )}
+                      </Button>
                     }>
-                    {activeSession ? (
-                      activeSessionLoading ? (
-                        <Skeleton active />
-                      ) : activeSessionError ? (
-                        <Alert
-                          type="error"
-                          showIcon
-                          title={t(
-                            "option:writingPlayground.settingsError",
-                            "Unable to load session settings."
-                          )}
-                        />
-                      ) : (
-                        <div className="flex flex-col gap-4">
-                          <div className="flex flex-col gap-3">
-                            <div className="flex flex-col gap-1">
-                              <span className="text-xs text-text-muted">
-                                {t(
-                                  "option:writingPlayground.templateLabel",
-                                  "Template"
-                                )}
-                              </span>
-                              <Select
-                                allowClear
-                                size="small"
-                                options={templateOptions}
-                                loading={templatesLoading}
-                                value={selectedTemplateName ?? undefined}
-                                disabled={templateSelectDisabled}
-                                placeholder={t(
-                                  "option:writingPlayground.templatePlaceholder",
-                                  "Server default"
-                                )}
-                                onChange={(value) =>
-                                  handleTemplateChange(value ? String(value) : null)
-                                }
-                              />
-                              <span className="text-xs text-text-muted">
-                                {templatesError
-                                  ? t(
-                                      "option:writingPlayground.templateError",
-                                      "Unable to load templates."
-                                    )
-                                  : !hasTemplates
-                                    ? t(
-                                        "option:writingPlayground.templateUnavailable",
-                                        "Templates unavailable."
-                                      )
-                                    : t(
-                                        "option:writingPlayground.templateHint",
-                                        "Choose an instruct template for chat parsing and FIM."
-                                      )}
-                              </span>
-                            </div>
-                            <div className="flex flex-col gap-1">
-                              <span className="text-xs text-text-muted">
-                                {t("option:writingPlayground.themeLabel", "Theme")}
-                              </span>
-                              <Select
-                                allowClear
-                                size="small"
-                                options={themeOptions}
-                                loading={themesLoading}
-                                value={selectedThemeName ?? undefined}
-                                disabled={themeSelectDisabled}
-                                placeholder={t(
-                                  "option:writingPlayground.themePlaceholder",
-                                  "Server default"
-                                )}
-                                onChange={(value) =>
-                                  handleThemeChange(value ? String(value) : null)
-                                }
-                              />
-                              <span className="text-xs text-text-muted">
-                                {themesError
-                                  ? t(
-                                      "option:writingPlayground.themeError",
-                                      "Unable to load themes."
-                                    )
-                                  : !hasThemes
-                                    ? t(
-                                        "option:writingPlayground.themeUnavailable",
-                                        "Themes unavailable."
-                                      )
-                                    : t(
-                                        "option:writingPlayground.themeHint",
-                                        "Apply a theme to style the editor."
-                                      )}
-                              </span>
-                            </div>
-                            <div className="flex flex-col gap-1">
-                              <Checkbox
-                                checked={chatMode}
-                                disabled={settingsDisabled}
-                                onChange={(event) =>
-                                  handleChatModeChange(event.target.checked)
-                                }>
-                                {t(
-                                  "option:writingPlayground.chatModeLabel",
-                                  "Chat mode"
-                                )}
-                              </Checkbox>
-                              <span className="text-xs text-text-muted">
-                                {t(
-                                  "option:writingPlayground.chatModeHint",
-                                  "Parse prompt text into messages using the selected template."
-                                )}
-                              </span>
-                            </div>
-                          </div>
-                          <Collapse
-                            ghost
-                            size="small"
-                            defaultActiveKey={[]}
-                            items={[
-                              {
-                                key: "context-controls",
-                                label: t(
-                                  "option:writingPlayground.contextControlsLabel",
-                                  "Context controls"
-                                ),
-                                children: (
-                                  <div className="flex flex-col gap-4">
-                                    <div className="flex items-center justify-end">
-                                      <Button
-                                        size="small"
-                                        disabled={settingsDisabled}
-                                        onClick={() => setContextPreviewModalOpen(true)}>
-                                        {t(
-                                          "option:writingPlayground.contextPreviewAction",
-                                          "Show context preview"
-                                        )}
-                                      </Button>
-                                    </div>
+                    <WritingPlaygroundActiveSessionGuard
+                      hasActiveSession={Boolean(activeSession)}
+                      isLoading={activeSessionLoading}
+                      hasError={Boolean(activeSessionError)}
+                      t={t}>
+                      <div className="flex flex-col gap-4">
                                     <div className="rounded-md border border-border bg-surface p-3">
                                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                                         <div className="flex flex-col gap-1">
@@ -7723,25 +7537,142 @@ export const WritingPlayground = () => {
                                         )}
                                       </div>
                                     </div>
-                                  </div>
-                                )
-                              }
-                            ]}
-                          />
-                        </div>
-                      )
-                    ) : (
-                      <Empty
-                        description={t(
-                          "option:writingPlayground.settingsEmpty",
-                          "Select a session to edit settings."
-                        )}
-                      />
-                    )}
+                      </div>
+                    </WritingPlaygroundActiveSessionGuard>
                   </Card>
                 )}
-                diagnostics={(
+                setup={(
+                  <Card
+                    title={t("option:writingPlayground.sidebarSetup", "Setup")}
+                    extra={
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="small"
+                          onClick={handleOpenTemplatesModal}
+                          disabled={templateSelectDisabled}>
+                          {t(
+                            "option:writingPlayground.manageTemplates",
+                            "Manage templates"
+                          )}
+                        </Button>
+                        <Button
+                          size="small"
+                          onClick={handleOpenThemesModal}
+                          disabled={themeSelectDisabled}>
+                          {t(
+                            "option:writingPlayground.manageThemes",
+                            "Manage themes"
+                          )}
+                        </Button>
+                      </div>
+                    }>
+                    <WritingPlaygroundActiveSessionGuard
+                      hasActiveSession={Boolean(activeSession)}
+                      isLoading={activeSessionLoading}
+                      hasError={Boolean(activeSessionError)}
+                      t={t}>
+                      <div className="flex flex-col gap-3">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-xs text-text-muted">
+                              {t(
+                                "option:writingPlayground.templateLabel",
+                                "Template"
+                              )}
+                            </span>
+                            <Select
+                              allowClear
+                              size="small"
+                              options={templateOptions}
+                              loading={templatesLoading}
+                              value={selectedTemplateName ?? undefined}
+                              disabled={templateSelectDisabled}
+                              placeholder={t(
+                                "option:writingPlayground.templatePlaceholder",
+                                "Server default"
+                              )}
+                              onChange={(value) =>
+                                handleTemplateChange(value ? String(value) : null)
+                              }
+                            />
+                            <span className="text-xs text-text-muted">
+                              {templatesError
+                                ? t(
+                                    "option:writingPlayground.templateError",
+                                    "Unable to load templates."
+                                  )
+                                : !hasTemplates
+                                  ? t(
+                                      "option:writingPlayground.templateUnavailable",
+                                      "Templates unavailable."
+                                    )
+                                  : t(
+                                      "option:writingPlayground.templateHint",
+                                      "Choose an instruct template for chat parsing and FIM."
+                                    )}
+                            </span>
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <span className="text-xs text-text-muted">
+                              {t("option:writingPlayground.themeLabel", "Theme")}
+                            </span>
+                            <Select
+                              allowClear
+                              size="small"
+                              options={themeOptions}
+                              loading={themesLoading}
+                              value={selectedThemeName ?? undefined}
+                              disabled={themeSelectDisabled}
+                              placeholder={t(
+                                "option:writingPlayground.themePlaceholder",
+                                "Server default"
+                              )}
+                              onChange={(value) =>
+                                handleThemeChange(value ? String(value) : null)
+                              }
+                            />
+                            <span className="text-xs text-text-muted">
+                              {themesError
+                                ? t(
+                                    "option:writingPlayground.themeError",
+                                    "Unable to load themes."
+                                  )
+                                : !hasThemes
+                                  ? t(
+                                      "option:writingPlayground.themeUnavailable",
+                                      "Themes unavailable."
+                                    )
+                                  : t(
+                                      "option:writingPlayground.themeHint",
+                                      "Apply a theme to style the editor."
+                                    )}
+                            </span>
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <Checkbox
+                              checked={chatMode}
+                              disabled={settingsDisabled}
+                              onChange={(event) =>
+                                handleChatModeChange(event.target.checked)
+                              }>
+                              {t(
+                                "option:writingPlayground.chatModeLabel",
+                                "Chat mode"
+                              )}
+                            </Checkbox>
+                            <span className="text-xs text-text-muted">
+                              {t(
+                                "option:writingPlayground.chatModeHint",
+                                "Parse prompt text into messages using the selected template."
+                              )}
+                            </span>
+                          </div>
+                      </div>
+                    </WritingPlaygroundActiveSessionGuard>
+                  </Card>
+                )}
+                inspect={(
                   <WritingPlaygroundDiagnosticsPanel
+                    title={t("option:writingPlayground.sidebarInspect", "Inspect")}
                     t={t}
                     status={diagnosticsSummary.status}
                     showOffline={showOffline}

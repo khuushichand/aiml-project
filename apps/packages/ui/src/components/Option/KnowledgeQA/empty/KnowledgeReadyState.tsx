@@ -1,5 +1,5 @@
-import React from "react"
-import { BookOpen, Clock3, SlidersHorizontal } from "lucide-react"
+import React, { useState, useEffect } from "react"
+import { BookOpen, ChevronDown, ChevronUp, Clock3, SlidersHorizontal } from "lucide-react"
 import { cn } from "@/libs/utils"
 
 type KnowledgeReadyStateProps = {
@@ -21,32 +21,55 @@ export function KnowledgeReadyState({
   hasRecentSession,
   className,
 }: KnowledgeReadyStateProps) {
+  const isReturningUser = hasRecentSession
+  const [guideExpanded, setGuideExpanded] = useState(!isReturningUser)
+
+  // Collapse guide when history finishes loading and reveals a returning user
+  useEffect(() => {
+    if (isReturningUser) {
+      setGuideExpanded(false)
+    }
+  }, [isReturningUser])
+
   return (
     <div className={cn("space-y-5 text-center", className)}>
       <div className="mx-auto max-w-2xl">
         <BookOpen className="mx-auto mb-3 h-12 w-12 text-primary" />
-        <h1 className="text-3xl font-bold">Knowledge QA</h1>
-        <p className="mt-1 text-base font-medium">Ask your knowledge base</p>
+        <h1 className="text-3xl font-bold">Ask Your Library</h1>
+        <p className="mt-1 text-base font-medium">Search your documents and get cited answers</p>
         <p className="mt-2 text-sm text-text-muted">
           Get grounded answers with citations from your selected sources.
         </p>
       </div>
 
+      {/* How it works - collapsible for returning users */}
       <div className="mx-auto max-w-2xl rounded-lg border border-border/80 bg-surface2/60 px-4 py-3 text-left">
-        <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-          How it works
-        </p>
-        <ol className="mt-2 grid gap-1 text-sm text-text-muted sm:grid-cols-3 sm:gap-3">
-          <li>
-            <span className="font-medium text-text">1.</span> Select sources
-          </li>
-          <li>
-            <span className="font-medium text-text">2.</span> Ask a question
-          </li>
-          <li>
-            <span className="font-medium text-text">3.</span> Review cited answer
-          </li>
-        </ol>
+        <button
+          type="button"
+          onClick={() => setGuideExpanded((prev) => !prev)}
+          className="flex w-full items-center justify-between text-xs font-semibold uppercase tracking-wide text-text-muted"
+          aria-expanded={guideExpanded}
+        >
+          <span>How it works</span>
+          {isReturningUser && (
+            guideExpanded
+              ? <ChevronUp className="h-3.5 w-3.5" />
+              : <ChevronDown className="h-3.5 w-3.5" />
+          )}
+        </button>
+        {guideExpanded && (
+          <ol className="mt-2 grid gap-1 text-sm text-text-muted sm:grid-cols-3 sm:gap-3">
+            <li>
+              <span className="font-medium text-text">1.</span> Select sources
+            </li>
+            <li>
+              <span className="font-medium text-text">2.</span> Ask a question
+            </li>
+            <li>
+              <span className="font-medium text-text">3.</span> Review cited answer
+            </li>
+          </ol>
+        )}
       </div>
 
       <div className="mx-auto flex max-w-2xl flex-wrap items-center justify-center gap-2">

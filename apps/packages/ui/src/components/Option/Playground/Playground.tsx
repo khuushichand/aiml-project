@@ -14,7 +14,7 @@ import {
 } from "@/db/dexie/helpers"
 import { useStoreChatModelSettings } from "@/store/model"
 import { useSmartScroll } from "@/hooks/useSmartScroll"
-import { ChevronDown, Keyboard, Search, X } from "lucide-react"
+import { ChevronDown, ClipboardList, Keyboard, Search, X } from "lucide-react"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 import { otherUnsupportedTypes } from "../Knowledge/utils/unsupported-types"
 import { useTranslation } from "react-i18next"
@@ -43,6 +43,7 @@ import {
   SETTINGS_HISTORY_ID_PARAM,
   SETTINGS_SERVER_CHAT_ID_PARAM
 } from "@/utils/settings-return"
+import { useNavigate } from "react-router-dom"
 export const Playground = () => {
   const drop = React.useRef<HTMLDivElement>(null)
   const artifactsTriggerRef = React.useRef<HTMLButtonElement>(null)
@@ -51,6 +52,7 @@ export const Playground = () => {
   const shortcutsCloseRef = React.useRef<HTMLButtonElement>(null)
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([])
   const { t } = useTranslation(["playground", "common"])
+  const navigate = useNavigate()
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const [stickyChatInput] = useStorage(
     "stickyChatInput",
@@ -940,6 +942,21 @@ export const Playground = () => {
                 {t("playground:regions.timeline", "Conversation timeline")}
               </span>
               <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  data-testid="playground-chat-workflows-trigger"
+                  onClick={() => navigate("/chat-workflows")}
+                  title={
+                    t(
+                      "playground:shortcuts.openChatWorkflows",
+                      "Open structured chat workflows"
+                    ) as string
+                  }
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface2 px-2 py-0.5 text-text hover:bg-surface"
+                >
+                  <ClipboardList className="h-3 w-3" aria-hidden="true" />
+                  {t("playground:toolbar.chatWorkflows", "Chat Workflows")}
+                </button>
                 <button
                   ref={shortcutsTriggerRef}
                   type="button"

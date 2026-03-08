@@ -75,6 +75,7 @@ class _StubSessionRecord:
         self.workspace_id = "ws-1"
         self.workspace_group_id = "wsg-2"
         self.scope_snapshot_id = "scope-3"
+        self.forked_from = "session-root"
         self.cwd = "/tmp/test-project"
         self.messages = [
             {"role": "user", "content": {"text": "hi"}, "timestamp": "2026-02-26T00:00:01+00:00"},
@@ -108,6 +109,7 @@ class _StubSessionRecord:
             "workspace_id": self.workspace_id,
             "workspace_group_id": self.workspace_group_id,
             "scope_snapshot_id": self.scope_snapshot_id,
+            "forked_from": self.forked_from,
         }
 
     def to_detail_dict(self, *, has_websocket: bool = False) -> dict:
@@ -178,6 +180,7 @@ def test_acp_list_sessions_status_schema_includes_tenancy(client_user_only, stub
     assert session["workspace_id"] == "ws-1"
     assert session["workspace_group_id"] == "wsg-2"
     assert session["scope_snapshot_id"] == "scope-3"
+    assert session["forked_from"] == "session-root"
     assert session["usage"]["total_tokens"] == 30
 
 
@@ -193,6 +196,7 @@ def test_acp_session_detail_status_schema_includes_tenancy(client_user_only, stu
     assert payload["workspace_id"] == "ws-1"
     assert payload["workspace_group_id"] == "wsg-2"
     assert payload["scope_snapshot_id"] == "scope-3"
+    assert payload["forked_from"] == "session-root"
 
 
 def test_acp_session_usage_schema(client_user_only, stub_acp_store):

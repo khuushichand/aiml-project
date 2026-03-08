@@ -110,7 +110,7 @@ describe("SearchBar behavior", () => {
   it("uses descriptive web fallback tooltip text", () => {
     render(<SearchBar autoFocus={false} />)
 
-    const toggle = screen.getByRole("button", { name: /Web search on/i })
+    const toggle = screen.getByRole("button", { name: /Web fallback is currently enabled/i })
     expect(toggle).toHaveAttribute(
       "title",
       "Falls back to web search when local source relevance is below threshold (configurable in settings)."

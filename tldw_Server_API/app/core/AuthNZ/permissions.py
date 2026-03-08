@@ -271,6 +271,11 @@ MEDIA_DELETE = "media.delete"
 MEDIA_TRANSCRIBE = "media.transcribe"
 MEDIA_EXPORT = "media.export"
 
+# SQL retrieval permissions
+SQL_READ = "sql.read"
+SQL_TARGET_ANY = "sql.target:*"
+SQL_TARGET_MEDIA_DB = "sql.target:media_db"
+
 # User permissions
 USERS_CREATE = "users.create"
 USERS_READ = "users.read"
@@ -295,6 +300,11 @@ API_RATE_LIMIT_OVERRIDE = "api.rate_limit_override"
 WORKFLOWS_RUNS_READ = "workflows.runs.read"
 WORKFLOWS_RUNS_CONTROL = "workflows.runs.control"
 WORKFLOWS_ADMIN = "workflows.admin"
+
+# Chat workflows permissions
+CHAT_WORKFLOWS_READ = "chat_workflows.read"
+CHAT_WORKFLOWS_WRITE = "chat_workflows.write"
+CHAT_WORKFLOWS_RUN = "chat_workflows.run"
 
 # Notes / graph permissions
 NOTES_GRAPH_READ = "notes.graph.read"

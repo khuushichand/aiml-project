@@ -195,6 +195,10 @@ export interface CreateSessionOptions {
   agentType?: ACPAgentType
   tags?: string[]
   mcpServers?: ACPMCPServerConfig[]
+  personaId?: string | null
+  workspaceId?: string | null
+  workspaceGroupId?: string | null
+  scopeSnapshotId?: string | null
 }
 
 interface SessionsActions {
@@ -293,10 +297,14 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
               id: serverSessionId,
               cwd: "/",
               name: serverSession.name || "Session",
-              forkParentSessionId: null,
+              forkParentSessionId: serverSession.forked_from ?? null,
               agentType: serverSession.agent_type,
               tags: serverSession.tags ?? [],
               mcpServers: undefined,
+              personaId: serverSession.persona_id ?? null,
+              workspaceId: serverSession.workspace_id ?? null,
+              workspaceGroupId: serverSession.workspace_group_id ?? null,
+              scopeSnapshotId: serverSession.scope_snapshot_id ?? null,
               state: fallbackState,
               capabilities: undefined,
               sandboxSessionId: null,
@@ -325,8 +333,13 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
               ...baseSession,
               id: serverSessionId,
               name: serverSession.name || baseSession.name,
+              forkParentSessionId: serverSession.forked_from ?? baseSession.forkParentSessionId ?? null,
               agentType: serverSession.agent_type || baseSession.agentType,
               tags: serverSession.tags ?? baseSession.tags,
+              personaId: serverSession.persona_id ?? baseSession.personaId ?? null,
+              workspaceId: serverSession.workspace_id ?? baseSession.workspaceId ?? null,
+              workspaceGroupId: serverSession.workspace_group_id ?? baseSession.workspaceGroupId ?? null,
+              scopeSnapshotId: serverSession.scope_snapshot_id ?? baseSession.scopeSnapshotId ?? null,
               backendStatus,
               messageCount: Math.max(baseSession.messageCount ?? 0, serverSession.message_count),
               usage: mergedUsage,
@@ -362,10 +375,14 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
             id: sessionId,
             cwd: detail.cwd || "/",
             name: detail.name || "Session",
-            forkParentSessionId: null,
+            forkParentSessionId: detail.forked_from ?? null,
             agentType: detail.agent_type,
             tags: detail.tags ?? [],
             mcpServers: undefined,
+            personaId: detail.persona_id ?? null,
+            workspaceId: detail.workspace_id ?? null,
+            workspaceGroupId: detail.workspace_group_id ?? null,
+            scopeSnapshotId: detail.scope_snapshot_id ?? null,
             state: nextState,
             capabilities: undefined,
             sandboxSessionId: null,
@@ -389,8 +406,13 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
                 ...baseSession,
                 name: detail.name || baseSession.name,
                 cwd: detail.cwd || baseSession.cwd,
+                forkParentSessionId: detail.forked_from ?? baseSession.forkParentSessionId ?? null,
                 agentType: detail.agent_type || baseSession.agentType,
                 tags: detail.tags ?? baseSession.tags,
+                personaId: detail.persona_id ?? baseSession.personaId ?? null,
+                workspaceId: detail.workspace_id ?? baseSession.workspaceId ?? null,
+                workspaceGroupId: detail.workspace_group_id ?? baseSession.workspaceGroupId ?? null,
+                scopeSnapshotId: detail.scope_snapshot_id ?? baseSession.scopeSnapshotId ?? null,
                 backendStatus,
                 messageCount: Math.max(baseSession.messageCount ?? 0, detail.message_count),
                 usage: mergeUsage(baseSession.usage, detail.usage),
@@ -451,6 +473,10 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
           agentType: options.agentType,
           tags: options.tags,
           mcpServers: options.mcpServers,
+          personaId: options.personaId ?? null,
+          workspaceId: options.workspaceId ?? null,
+          workspaceGroupId: options.workspaceGroupId ?? null,
+          scopeSnapshotId: options.scopeSnapshotId ?? null,
           state: "disconnected",
           capabilities: undefined,
           sandboxSessionId: null,
@@ -556,6 +582,7 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
             ...session,
             ...updates,
             id: serverSessionId,
+            backendStatus: updates?.backendStatus ?? session.backendStatus ?? "active",
             updatedAt: new Date(),
           }
 

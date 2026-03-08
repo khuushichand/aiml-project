@@ -19,6 +19,7 @@ class FileAdapterRegistry:
         "xlsx": "tldw_Server_API.app.core.File_Artifacts.adapters.xlsx_adapter.XlsxAdapter",
         "data_table": "tldw_Server_API.app.core.File_Artifacts.adapters.data_table_adapter.DataTableAdapter",
         "image": "tldw_Server_API.app.core.File_Artifacts.adapters.image_adapter.ImageAdapter",
+        "research_package": "tldw_Server_API.app.core.File_Artifacts.adapters.research_package_adapter.ResearchPackageAdapter",
     }
 
     def __init__(self) -> None:

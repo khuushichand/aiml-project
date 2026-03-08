@@ -390,4 +390,35 @@ describe("PlaygroundMessage routing fallback integration", () => {
     expect(moodBadge).toHaveTextContent("Mood: neutral")
     expect(moodBadge).not.toHaveTextContent("(73%)")
   })
+
+  it("renders lightweight plain text while active assistant stream is running", () => {
+    render(
+      <PlaygroundMessage
+        {...baseProps}
+        isStreaming
+        message={"streaming response▋"}
+      />
+    )
+
+    expect(
+      screen.getByTestId("playground-streaming-plain-text")
+    ).toHaveTextContent("streaming response▋")
+    expect(screen.queryByTestId("mock-markdown")).toBeNull()
+  })
+
+  it("renders markdown when stream is not active", async () => {
+    render(
+      <PlaygroundMessage
+        {...baseProps}
+        isStreaming={false}
+        isProcessing={false}
+        message={"final response"}
+      />
+    )
+
+    expect(await screen.findByTestId("mock-markdown")).toHaveTextContent(
+      "final response"
+    )
+    expect(screen.queryByTestId("playground-streaming-plain-text")).toBeNull()
+  })
 })

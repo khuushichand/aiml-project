@@ -1,5 +1,6 @@
 import { createWithEqualityFn } from "zustand/traditional"
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware"
+import type { QueuedRequest } from "@/utils/chat-request-queue"
 
 const STORAGE_KEY = "tldw-playground-session"
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000 // 24 hours
@@ -27,6 +28,7 @@ export interface PlaygroundSessionData {
   ragTopK: number | null
   ragEnableGeneration: boolean
   ragEnableCitations: boolean
+  queuedMessages: QueuedRequest[]
 
   // Metadata
   lastUpdated: number
@@ -52,6 +54,7 @@ const initialState: PlaygroundSessionData = {
   ragTopK: null,
   ragEnableGeneration: true,
   ragEnableCitations: true,
+  queuedMessages: [],
   lastUpdated: 0
 }
 
@@ -76,11 +79,14 @@ export const usePlaygroundSessionStore = createWithEqualityFn<PlaygroundSessionS
       },
 
       isSessionValid: () => {
-        const { historyId, serverChatId, lastUpdated } = get()
-        // Session is valid if we have an ID and it's not stale
-        const hasId = historyId !== null || serverChatId !== null
+        const { historyId, serverChatId, queuedMessages, lastUpdated } = get()
+        // Session is valid if we have a conversation or queued work and it's not stale.
+        const hasConversationOrQueue =
+          historyId !== null ||
+          serverChatId !== null ||
+          queuedMessages.length > 0
         const isNotStale = lastUpdated > 0 && Date.now() - lastUpdated <= STALE_THRESHOLD_MS
-        return hasId && isNotStale
+        return hasConversationOrQueue && isNotStale
       }
     }),
     {
@@ -100,6 +106,7 @@ export const usePlaygroundSessionStore = createWithEqualityFn<PlaygroundSessionS
         ragTopK: state.ragTopK,
         ragEnableGeneration: state.ragEnableGeneration,
         ragEnableCitations: state.ragEnableCitations,
+        queuedMessages: state.queuedMessages,
         lastUpdated: state.lastUpdated
       })
     }

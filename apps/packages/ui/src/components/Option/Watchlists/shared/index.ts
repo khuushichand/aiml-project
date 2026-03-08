@@ -1,4 +1,6 @@
 export { StatusTag } from "./StatusTag"
 export { CronDisplay } from "./CronDisplay"
 export { WatchlistsHelpTooltip } from "./WatchlistsHelpTooltip"
+export { WatchlistsHealthBar } from "./WatchlistsHealthBar"
+export { WatchlistsEmptyState } from "./WatchlistsEmptyState"
 export { mapWatchlistsError } from "./watchlists-error"

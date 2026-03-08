@@ -2,14 +2,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { downloadExportFile, getFilenameFromDisposition } from './export-download';
 
-vi.mock('@/lib/api-config', () => ({
-  buildApiUrl: (endpoint: string) => `https://api.example.test${endpoint}`,
+const { buildProxyUrl, buildAuthHeaders } = vi.hoisted(() => ({
+  buildProxyUrl: vi.fn((endpoint: string) => `/api/proxy${endpoint}`),
+  buildAuthHeaders: vi.fn(() => ({
+    'X-API-KEY': 'test-key',
+  })),
 }));
 
 vi.mock('@/lib/http', () => ({
-  buildAuthHeaders: () => ({
-    Authorization: 'Bearer test-token',
-  }),
+  buildAuthHeaders,
+  buildProxyUrl,
 }));
 
 describe('export-download', () => {
@@ -56,11 +58,13 @@ describe('export-download', () => {
       fallbackFilename: 'fallback.csv',
     });
 
+    expect(buildProxyUrl).toHaveBeenCalledWith('/admin/usage/daily/export.csv?start=2026-02-01&end=2026-02-15');
+    expect(buildAuthHeaders).toHaveBeenCalledWith();
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.example.test/admin/usage/daily/export.csv?start=2026-02-01&end=2026-02-15',
+      '/api/proxy/admin/usage/daily/export.csv?start=2026-02-01&end=2026-02-15',
       expect.objectContaining({
         credentials: 'include',
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { 'X-API-KEY': 'test-key' },
       }),
     );
     expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledTimes(1);

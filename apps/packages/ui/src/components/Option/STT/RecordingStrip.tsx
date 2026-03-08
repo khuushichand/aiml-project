@@ -118,8 +118,8 @@ export const RecordingStrip: React.FC<RecordingStripProps> = ({
             danger={isRecording}
             aria-label={
               isRecording
-                ? t("playground:stt.stopRecording", "Stop recording")
-                : t("playground:stt.startRecording", "Start recording")
+                ? t("playground:stt.stopRecording", "Stop recording (Space)")
+                : t("playground:stt.startRecording", "Start recording (Space)")
             }
             icon={
               isRecording ? (
