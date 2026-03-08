@@ -87,10 +87,10 @@ export const WorkspaceStatusBar: React.FC<WorkspaceStatusBarProps> = ({
         try {
           const parsed = JSON.parse(value)
           if (parsed?.state?.workspaceName) label = parsed.state.workspaceName
-        } catch { /* ignore */ }
+        } catch (err) { console.warn("WorkspaceStatusBar: localStorage error", err) }
         items.push({ key, label, bytes })
       }
-    } catch { /* ignore */ }
+    } catch (err) { console.warn("WorkspaceStatusBar: localStorage error", err) }
     return items.sort((a, b) => b.bytes - a.bytes)
   }, [storageModalOpen])
 
@@ -99,7 +99,7 @@ export const WorkspaceStatusBar: React.FC<WorkspaceStatusBarProps> = ({
       localStorage.removeItem(key)
       setStorageModalOpen(false)
       setTimeout(() => setStorageModalOpen(true), 50)
-    } catch { /* ignore */ }
+    } catch (err) { console.warn("WorkspaceStatusBar: localStorage error", err) }
   }, [])
 
   const storageBar = React.useMemo(() => {

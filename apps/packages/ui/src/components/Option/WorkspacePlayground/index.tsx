@@ -573,9 +573,8 @@ class WorkspacePlaygroundErrorBoundary extends React.Component<
 
   handleExportData = () => {
     try {
-      const raw = localStorage.getItem("workspace-playground-state")
-      if (!raw) return
-      const blob = new Blob([raw], { type: "application/json" })
+      const state = useWorkspaceStore.getState()
+      const blob = new Blob([JSON.stringify(state)], { type: "application/json" })
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement("a")
       anchor.href = url
@@ -589,7 +588,7 @@ class WorkspacePlaygroundErrorBoundary extends React.Component<
 
   handleClearCache = () => {
     try {
-      localStorage.removeItem("workspace-playground-state")
+      useWorkspaceStore.persist.clearStorage()
     } catch {
       // Ignore — reload will still work.
     }
@@ -598,18 +597,9 @@ class WorkspacePlaygroundErrorBoundary extends React.Component<
 
   handleSwitchWorkspace = () => {
     try {
-      // Clear current workspace ID so the store will fall back to the default/new workspace on reload.
-      const raw = localStorage.getItem("workspace-playground-state")
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        if (parsed?.state) {
-          parsed.state.workspaceId = null
-        }
-        localStorage.setItem(
-          "workspace-playground-state",
-          JSON.stringify(parsed)
-        )
-      }
+      // Use the Zustand store API directly to clear the workspace ID.
+      // This avoids coupling to the internal shape of the persisted state.
+      useWorkspaceStore.setState({ workspaceId: null })
     } catch {
       // Ignore — reload will still work.
     }

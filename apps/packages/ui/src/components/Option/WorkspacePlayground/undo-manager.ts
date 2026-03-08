@@ -67,12 +67,17 @@ export const scheduleWorkspaceUndoAction = ({
     action.finalize()
   }, timeoutMs)
 
-  // Evict oldest entry when at capacity
+  // Evict oldest entry when at capacity — use shift() directly to avoid
+  // the redundant indexOf scan that clearPendingWorkspaceUndoAction performs.
   if (undoStack.length >= WORKSPACE_UNDO_MAX_STACK_SIZE) {
-    const oldestId = undoStack[0]
+    const oldestId = undoStack.shift()
     if (oldestId) {
-      const evicted = clearPendingWorkspaceUndoAction(oldestId)
-      if (evicted) evicted.finalize()
+      const evicted = pendingWorkspaceUndoActions.get(oldestId)
+      if (evicted) {
+        clearTimeout(evicted.timer)
+        pendingWorkspaceUndoActions.delete(oldestId)
+        evicted.finalize()
+      }
     }
   }
 
@@ -111,6 +116,19 @@ export const undoLatestWorkspaceAction = (): boolean => {
 
 export const getWorkspaceUndoPendingCount = (): number =>
   pendingWorkspaceUndoActions.size
+
+/**
+ * Finalize and discard all pending undo actions.
+ * Call on workspace switch to prevent cross-workspace undo.
+ */
+export const clearAllPendingUndoActions = (): void => {
+  for (const action of pendingWorkspaceUndoActions.values()) {
+    clearTimeout(action.timer)
+    action.finalize()
+  }
+  pendingWorkspaceUndoActions.clear()
+  undoStack.length = 0
+}
 
 export const clearWorkspaceUndoActionsForTests = (): void => {
   for (const action of pendingWorkspaceUndoActions.values()) {

@@ -68,7 +68,8 @@ import {
 import {
   WORKSPACE_UNDO_WINDOW_MS,
   scheduleWorkspaceUndoAction,
-  undoWorkspaceAction
+  undoWorkspaceAction,
+  clearAllPendingUndoActions
 } from "./undo-manager"
 import { useTutorialStore } from "@/store/tutorials"
 import {
@@ -498,6 +499,8 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   }
 
   const handleSwitchWorkspace = (id: string) => {
+    // Finalize and discard pending undo actions to prevent cross-workspace undo
+    clearAllPendingUndoActions()
     if (currentNote?.isDirty) {
       Modal.confirm({
         title: t(
