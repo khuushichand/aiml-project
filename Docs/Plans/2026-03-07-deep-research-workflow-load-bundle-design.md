@@ -78,10 +78,11 @@ Execution path:
 3. load the research session via `ResearchService.get_session(...)`
 4. fail unless the session is `completed`
 5. load the final bundle via `ResearchService.get_bundle(...)`
-6. load the artifact manifest via existing research service methods
-7. derive a compact summary object from the bundle
-8. optionally write `deep_research_bundle_ref.json` into the workflow step artifact directory and register it
-9. return a lightweight result object
+6. load the reconnect-safe snapshot via `ResearchService.get_stream_snapshot(...)`
+7. reuse its compact artifact manifest entries directly
+8. derive a compact summary object from the bundle
+9. optionally write `deep_research_bundle_ref.json` into the workflow step artifact directory and register it
+10. return a lightweight result object
 
 This step should call the research core directly and never call the HTTP research endpoints.
 
@@ -98,7 +99,7 @@ This step should call the research core directly and never call the HTTP researc
 
 ### Validation Rules
 
-- exactly one usable run reference must resolve
+- at least one usable run reference must resolve
 - if both `run_id` and `run` are provided, `run_id` wins
 - resolved `run_id` must be non-empty
 - the research session must exist and be owned by the workflow user
@@ -113,17 +114,18 @@ This step should call the research core directly and never call the HTTP researc
 - `completed_at`
 - `bundle_url`
 - `bundle_summary`
-  - `concise_answer`
+  - `question`
   - `outline_titles`
   - `claim_count`
   - `source_count`
   - `unresolved_question_count`
 - `artifacts`
-  - compact manifest entries containing only:
-    - `name`
-    - `version`
+  - compact manifest entries reusing the existing research snapshot contract:
+    - `artifact_name`
+    - `artifact_version`
     - `content_type`
     - `phase`
+    - `job_id`
 
 The full `bundle` object should not be returned in normal workflow outputs.
 
@@ -201,7 +203,7 @@ If the bundle evolves, a brittle summary extractor could break.
 
 Mitigation:
 
-- keep summary derivation defensive and minimal
+- keep summary derivation defensive, minimal, and strictly canonical to existing bundle fields
 - prefer optional access with sane defaults
 
 ### Hidden Bundle Growth
@@ -212,6 +214,7 @@ Mitigation:
 
 - make the normal return contract reference-oriented
 - test explicitly that only summary fields are returned
+- make launch-wait-load workflow coverage set `deep_research_wait.include_bundle = false`
 
 ### Misuse On In-Progress Runs
 

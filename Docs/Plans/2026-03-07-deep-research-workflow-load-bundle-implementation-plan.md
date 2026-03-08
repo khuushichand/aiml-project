@@ -37,6 +37,7 @@ Add failing coverage that asserts:
 - the schema includes `run_id`, `run`, and `save_artifact`
 - the description makes completed-run bundle loading explicit
 - workflow definition validation rejects malformed config
+- save-time validation still rejects malformed `deep_research_load_bundle` config when `jsonschema` is unavailable
 
 **Step 3: Add a workflow runtime integration test**
 
@@ -98,7 +99,8 @@ The adapter should:
 - load the session with `ResearchService.get_session(...)`
 - fail unless `session.status == "completed"`
 - load the final bundle with `ResearchService.get_bundle(...)`
-- load the artifact manifest through research service methods
+- load the reconnect-safe snapshot with `ResearchService.get_stream_snapshot(...)`
+- reuse its compact artifact manifest directly
 - derive:
 
 ```python
@@ -110,7 +112,7 @@ The adapter should:
     "completed_at": session.completed_at,
     "bundle_url": f"/api/v1/research/runs/{session.id}/bundle",
     "bundle_summary": {
-        "concise_answer": ...,
+        "question": ...,
         "outline_titles": [...],
         "claim_count": ...,
         "source_count": ...,
@@ -122,10 +124,11 @@ The adapter should:
 
 The `artifacts` entries should be compact and include only:
 
-- `name`
-- `version`
+- `artifact_name`
+- `artifact_version`
 - `content_type`
 - `phase`
+- `job_id`
 
 **Step 3: Persist the reference artifact**
 
@@ -169,7 +172,7 @@ In `workflows.py`, add:
 
 The explicit validator should enforce:
 
-- one usable run reference exists
+- at least one usable run reference exists
 - `run_id` wins when both are present
 - `run` only counts when it is an object with a non-empty `run_id`
 
@@ -283,6 +286,10 @@ Add or extend integration coverage so a workflow can:
 - launch a deep research session
 - wait for completion
 - load the resulting bundle references
+
+The chain should set:
+
+- `deep_research_wait.include_bundle = false`
 
 The final step output should prove:
 
