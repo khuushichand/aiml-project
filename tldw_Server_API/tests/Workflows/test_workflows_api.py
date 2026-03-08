@@ -781,6 +781,365 @@ def test_run_workflow_waits_for_deep_research_completion(monkeypatch, client_wit
     }
 
 
+def test_run_workflow_pauses_for_deep_research_checkpoint(monkeypatch, client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+
+    class _LaunchSession:
+        id = "research-session-12"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _CheckpointSession:
+        id = "research-session-12"
+        status = "waiting_human"
+        phase = "awaiting_source_review"
+        control_state = "running"
+        completed_at = None
+        latest_checkpoint_id = "checkpoint-6"
+
+    class _CheckpointSnapshot:
+        checkpoint = {
+            "checkpoint_id": "checkpoint-6",
+            "checkpoint_type": "sources_review",
+        }
+
+    class _LaunchResearchService:
+        def create_session(self, **kwargs):
+            return _LaunchSession()
+
+    class _WaitResearchService:
+        def get_session(self, **kwargs):
+            return _CheckpointSession()
+
+        def get_stream_snapshot(self, **kwargs):
+            return _CheckpointSnapshot()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _LaunchResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _WaitResearchService(),
+    )
+
+    definition = {
+        "name": "launch-and-pause-on-deep-research-checkpoint",
+        "version": 1,
+        "steps": [
+            {
+                "id": "launch",
+                "type": "deep_research",
+                "config": {
+                    "query": "{{ inputs.topic }}",
+                },
+            },
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {
+                    "run_id": "{{ launch.run_id }}",
+                    "include_bundle": False,
+                    "poll_interval_seconds": 0.1,
+                    "timeout_seconds": 1,
+                },
+            },
+        ],
+    }
+
+    create = client.post("/api/v1/workflows", json=definition)
+    assert create.status_code == 201, create.text
+    wid = create.json()["id"]
+
+    run_id = client.post(
+        f"/api/v1/workflows/{wid}/run",
+        json={"inputs": {"topic": "evidence-backed forecasting"}},
+    ).json()["run_id"]
+
+    deadline = time.time() + 3
+    data = {}
+    while time.time() < deadline:
+        data = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if data["status"] in ("waiting_human", "waiting_approval", "failed", "cancelled", "succeeded"):
+            break
+        time.sleep(0.05)
+
+    assert data["status"] == "waiting_human"
+    assert (data.get("outputs") or {}) == {
+        "__status__": "waiting_human",
+        "reason": "research_checkpoint",
+        "run_id": "research-session-12",
+        "research_phase": "awaiting_source_review",
+        "research_control_state": "running",
+        "research_checkpoint_id": "checkpoint-6",
+        "research_checkpoint_type": "sources_review",
+        "research_console_url": "/research?run=research-session-12",
+        "active_poll_seconds": pytest.approx(0.0, rel=0.5),
+    }
+
+
+@pytest.mark.asyncio
+async def test_resume_workflows_waiting_on_research_checkpoint_resumes_only_matching_links(
+    tmp_path,
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.Workflows import research_wait_bridge
+
+    db = WorkflowsDatabase(str(tmp_path / "workflow-research-waits.db"))
+
+    definition = {
+        "name": "resume-bridge",
+        "version": 1,
+        "steps": [
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {"run_id": "{{ inputs.run_id }}"},
+            }
+        ],
+    }
+
+    def _seed_waiting_run(run_id: str, research_run_id: str, checkpoint_id: str) -> None:
+        db.create_run(
+            run_id=run_id,
+            tenant_id="default",
+            user_id="1",
+            inputs={"run_id": research_run_id},
+            workflow_id=None,
+            definition_version=1,
+            definition_snapshot=definition,
+        )
+        db.update_run_status(run_id, status="waiting_human", status_reason="awaiting_review")
+        step_run_id = f"{run_id}:wait:1"
+        db.create_step_run(
+            step_run_id=step_run_id,
+            tenant_id="default",
+            run_id=run_id,
+            step_id="wait",
+            name="wait",
+            step_type="deep_research_wait",
+        )
+        wait_payload = {
+            "__status__": "waiting_human",
+            "reason": "research_checkpoint",
+            "run_id": research_run_id,
+            "research_checkpoint_id": checkpoint_id,
+            "research_checkpoint_type": "sources_review",
+            "active_poll_seconds": 1.25,
+        }
+        db.complete_step_run(
+            step_run_id=step_run_id,
+            status="waiting_human",
+            outputs=wait_payload,
+        )
+        db.update_run_status(
+            run_id,
+            status="waiting_human",
+            status_reason="awaiting_review",
+            outputs=wait_payload,
+        )
+        db.upsert_research_wait_link(
+            wait_id=f"{run_id}:wait",
+            tenant_id="default",
+            workflow_run_id=run_id,
+            step_id="wait",
+            research_run_id=research_run_id,
+            checkpoint_id=checkpoint_id,
+            checkpoint_type="sources_review",
+            wait_status="waiting",
+            wait_payload=wait_payload,
+            active_poll_seconds=1.25,
+        )
+
+    _seed_waiting_run("wf-match", "research-session-21", "checkpoint-21")
+    _seed_waiting_run("wf-other", "research-session-22", "checkpoint-22")
+
+    scheduled: list[dict[str, object]] = []
+
+    monkeypatch.setattr(research_wait_bridge, "_build_workflows_db", lambda: db)
+    monkeypatch.setattr(
+        research_wait_bridge,
+        "_schedule_resume",
+        lambda **kwargs: scheduled.append(kwargs),
+    )
+
+    resumed = await research_wait_bridge.resume_workflows_waiting_on_research_checkpoint(
+        research_run_id="research-session-21",
+        checkpoint_id="checkpoint-21",
+    )
+
+    assert resumed == 1
+    assert len(scheduled) == 1
+    assert scheduled[0]["workflow_run_id"] == "wf-match"
+    assert scheduled[0]["step_id"] == "wait"
+    assert scheduled[0]["wait_payload"]["research_checkpoint_id"] == "checkpoint-21"
+
+    matched_link = db.get_research_wait_link(workflow_run_id="wf-match", step_id="wait")
+    other_link = db.get_research_wait_link(workflow_run_id="wf-other", step_id="wait")
+    assert matched_link is not None
+    assert matched_link["wait_status"] == "resumed"
+    assert other_link is not None
+    assert other_link["wait_status"] == "waiting"
+
+
+def test_research_checkpoint_approval_auto_resumes_waiting_workflow(
+    monkeypatch,
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+    from tldw_Server_API.app.core.Workflows import research_wait_bridge
+
+    db = client.app.dependency_overrides[wf_mod._get_db]()
+    state = {"approved": False}
+
+    class _LaunchSession:
+        id = "research-session-31"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _CheckpointSession:
+        id = "research-session-31"
+        status = "waiting_human"
+        phase = "awaiting_source_review"
+        control_state = "running"
+        completed_at = None
+        latest_checkpoint_id = "checkpoint-31"
+
+    class _CompletedSession:
+        id = "research-session-31"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-07T16:00:00+00:00"
+        latest_checkpoint_id = "checkpoint-31"
+
+    class _CheckpointSnapshot:
+        checkpoint = {
+            "checkpoint_id": "checkpoint-31",
+            "checkpoint_type": "sources_review",
+        }
+
+    class _LaunchResearchService:
+        def create_session(self, **kwargs):
+            return _LaunchSession()
+
+    class _WaitResearchService:
+        def get_session(self, **kwargs):
+            if state["approved"]:
+                return _CompletedSession()
+            return _CheckpointSession()
+
+        def get_stream_snapshot(self, **kwargs):
+            return _CheckpointSnapshot()
+
+    class _ApproveResearchService:
+        def approve_checkpoint(self, **kwargs):
+            state["approved"] = True
+            return {
+                "id": kwargs["session_id"],
+                "status": "queued",
+                "phase": "collecting",
+                "control_state": "running",
+                "progress_percent": 45.0,
+                "progress_message": "collecting sources",
+                "active_job_id": "job-31",
+                "latest_checkpoint_id": kwargs["checkpoint_id"],
+            }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _LaunchResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _WaitResearchService(),
+    )
+    monkeypatch.setattr(research_wait_bridge, "_build_workflows_db", lambda: db)
+    client.app.dependency_overrides[research_runs.get_research_service] = (
+        lambda: _ApproveResearchService()
+    )
+
+    definition = {
+        "name": "launch-pause-resume-deep-research",
+        "version": 1,
+        "steps": [
+            {
+                "id": "launch",
+                "type": "deep_research",
+                "config": {
+                    "query": "{{ inputs.topic }}",
+                },
+            },
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {
+                    "run_id": "{{ launch.run_id }}",
+                    "include_bundle": False,
+                    "poll_interval_seconds": 0.1,
+                    "timeout_seconds": 2,
+                },
+            },
+            {
+                "id": "prompt",
+                "type": "prompt",
+                "config": {
+                    "template": "checkpoint cleared",
+                },
+            },
+        ],
+    }
+
+    create = client.post("/api/v1/workflows", json=definition)
+    assert create.status_code == 201, create.text
+    workflow_id = create.json()["id"]
+
+    run_id = client.post(
+        f"/api/v1/workflows/{workflow_id}/run",
+        json={"inputs": {"topic": "checkpoint-aware waiting"}},
+    ).json()["run_id"]
+
+    deadline = time.time() + 3
+    data = {}
+    while time.time() < deadline:
+        data = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if data["status"] in ("waiting_human", "failed", "cancelled", "succeeded"):
+            break
+        time.sleep(0.05)
+
+    assert data["status"] == "waiting_human"
+
+    approve_resp = client.post(
+        "/api/v1/research/runs/research-session-31/checkpoints/checkpoint-31/patch-and-approve",
+        json={},
+    )
+    assert approve_resp.status_code == 200, approve_resp.text
+
+    deadline = time.time() + 5
+    resumed = {}
+    while time.time() < deadline:
+        resumed = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if resumed["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.05)
+
+    assert resumed["status"] == "succeeded"
+    assert (resumed.get("outputs") or {}) == {"text": "checkpoint cleared"}
+
+    wait_link = db.get_research_wait_link(workflow_run_id=run_id, step_id="wait")
+    assert wait_link is not None
+    assert wait_link["wait_status"] == "resumed"
+    wait_step = db.get_latest_step_run(run_id=run_id, step_id="wait")
+    assert wait_step is not None
+    assert wait_step["status"] == "succeeded"
+    wait_outputs = json.loads(wait_step["outputs_json"] or "{}")
+    assert wait_outputs["run_id"] == "research-session-31"
+    assert wait_outputs["status"] == "completed"
+
+
 def test_run_workflow_loads_bundle_refs_after_wait(monkeypatch, client_with_workflows_db: TestClient):
     client = client_with_workflows_db
     captured: dict[str, object] = {}

@@ -669,15 +669,22 @@ class WorkflowEngine:
                     # If adapter returned special status
                     status_flag = last_outputs.get("__status__") if isinstance(last_outputs, dict) else None
                     if status_flag in {"waiting_human", "waiting_approval"}:
-                        with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
-                            self.db.complete_step_run(step_run_id=step_run_id, status="waiting_human", outputs=last_outputs)
+                        on_timeout = None
+                        timeout_cfg = None
                         try:
                             on_timeout = str(step.get("on_timeout") or "").strip() or None
                             timeout_cfg = step_cfg.get("timeout_seconds") if isinstance(step_cfg, dict) else None
-                            if timeout_cfg is not None:
-                                self._schedule_human_timeout(run_id, step_id, timeout_cfg, on_timeout)
                         except _WF_NONCRITICAL_EXCEPTIONS:
-                            pass
+                            on_timeout = None
+                            timeout_cfg = None
+                        self._handle_adapter_wait_state(
+                            run_id=run_id,
+                            step_id=step_id,
+                            step_run_id=step_run_id,
+                            wait_payload=last_outputs,
+                            timeout_seconds=timeout_cfg,
+                            on_timeout=on_timeout,
+                        )
                         keep_secrets = True
                         _finalize(True)
                         finalized = True
@@ -786,6 +793,64 @@ class WorkflowEngine:
             if not finalized:
                 _finalize(keep_secrets)
                 finalized = True
+
+    def _handle_adapter_wait_state(
+        self,
+        *,
+        run_id: str,
+        step_id: str,
+        step_run_id: str,
+        wait_payload: dict[str, Any],
+        timeout_seconds: int | float | None,
+        on_timeout: str | None,
+    ) -> None:
+        wait_status = "waiting_human" if wait_payload.get("__status__") == "waiting_human" else "waiting_approval"
+        reason = str(wait_payload.get("reason") or "").strip() or None
+
+        with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
+            self.db.complete_step_run(step_run_id=step_run_id, status=wait_status, outputs=wait_payload)
+        with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
+            self.db.update_run_status(
+                run_id,
+                status=wait_status,
+                status_reason=reason or "awaiting_review",
+                outputs=wait_payload,
+            )
+
+        if reason == "research_checkpoint":
+            with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
+                self.db.upsert_research_wait_link(
+                    wait_id=f"{run_id}:{step_id}",
+                    tenant_id=self._tenant_for_run(run_id),
+                    workflow_run_id=run_id,
+                    step_id=step_id,
+                    research_run_id=str(wait_payload.get("run_id") or ""),
+                    checkpoint_id=str(wait_payload.get("research_checkpoint_id") or ""),
+                    checkpoint_type=str(wait_payload.get("research_checkpoint_type") or ""),
+                    wait_status="waiting",
+                    wait_payload=wait_payload,
+                    active_poll_seconds=float(wait_payload.get("active_poll_seconds") or 0.0),
+                )
+            with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
+                self._append_event(
+                    run_id,
+                    wait_status,
+                    {
+                        "step_id": step_id,
+                        "reason": reason,
+                        "research_run_id": wait_payload.get("run_id"),
+                        "research_checkpoint_id": wait_payload.get("research_checkpoint_id"),
+                        "research_checkpoint_type": wait_payload.get("research_checkpoint_type"),
+                    },
+                    step_run_id=step_run_id,
+                )
+            return
+
+        try:
+            if timeout_seconds is not None:
+                self._schedule_human_timeout(run_id, step_id, timeout_seconds, on_timeout)
+        except _WF_NONCRITICAL_EXCEPTIONS:
+            pass
 
     async def continue_run(
         self,
@@ -1017,15 +1082,22 @@ class WorkflowEngine:
             last = outputs or {}
             context.update({"last": last})
             if last.get("__status__") in {"waiting_human", "waiting_approval"}:
-                with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
-                    self.db.complete_step_run(step_run_id=step_run_id, status="waiting_human", outputs=last)
+                on_timeout = None
+                timeout_cfg = None
                 try:
                     on_timeout = str(step.get("on_timeout") or "").strip() or None
                     timeout_cfg = scfg.get("timeout_seconds") if isinstance(scfg, dict) else None
-                    if timeout_cfg is not None:
-                        self._schedule_human_timeout(run_id, sid, timeout_cfg, on_timeout)
                 except _WF_NONCRITICAL_EXCEPTIONS:
-                    pass
+                    on_timeout = None
+                    timeout_cfg = None
+                self._handle_adapter_wait_state(
+                    run_id=run_id,
+                    step_id=sid,
+                    step_run_id=step_run_id,
+                    wait_payload=last,
+                    timeout_seconds=timeout_cfg,
+                    on_timeout=on_timeout,
+                )
                 keep_secrets = True
                 _finalize(True)
                 finalized = True

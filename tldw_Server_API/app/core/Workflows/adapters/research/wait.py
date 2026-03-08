@@ -18,6 +18,11 @@ from tldw_Server_API.app.core.Workflows.adapters.research._config import (
 )
 
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+_CHECKPOINT_PHASES = {
+    "awaiting_plan_review",
+    "awaiting_source_review",
+    "awaiting_outline_review",
+}
 
 
 def _build_research_service():
@@ -95,7 +100,8 @@ async def run_deep_research_wait_adapter(config: dict[str, Any], context: dict[s
 
     run_id = _resolve_run_id(validated, context)
     timeout_seconds = int(validated.timeout_seconds or 300)
-    deadline = _now() + timeout_seconds
+    prev = context.get("prev") if isinstance(context.get("prev"), dict) else {}
+    elapsed_poll_seconds = float(prev.get("active_poll_seconds") or 0.0)
     service = _build_research_service()
 
     while True:
@@ -136,6 +142,37 @@ async def run_deep_research_wait_adapter(config: dict[str, Any], context: dict[s
                 _write_wait_artifact(result=result, context=context)
             return result
 
-        if _now() >= deadline:
+        if session.status == "waiting_human" and session.phase in _CHECKPOINT_PHASES:
+            checkpoint_id = str(getattr(session, "latest_checkpoint_id", "") or "").strip() or None
+            checkpoint_type = None
+            try:
+                snapshot = service.get_stream_snapshot(
+                    owner_user_id=owner_user_id,
+                    session_id=run_id,
+                )
+                checkpoint = getattr(snapshot, "checkpoint", None)
+                if isinstance(checkpoint, dict):
+                    checkpoint_type = str(checkpoint.get("checkpoint_type") or "").strip() or None
+                elif checkpoint is not None:
+                    checkpoint_type = str(getattr(checkpoint, "checkpoint_type", "") or "").strip() or None
+                    checkpoint_id = checkpoint_id or str(getattr(checkpoint, "checkpoint_id", "") or "").strip() or None
+            except (AttributeError, KeyError, TypeError, ValueError):
+                checkpoint_type = None
+
+            return {
+                "__status__": "waiting_human",
+                "reason": "research_checkpoint",
+                "run_id": session.id,
+                "research_phase": session.phase,
+                "research_control_state": session.control_state,
+                "research_checkpoint_id": checkpoint_id,
+                "research_checkpoint_type": checkpoint_type,
+                "research_console_url": f"/research?run={session.id}",
+                "active_poll_seconds": elapsed_poll_seconds,
+            }
+
+        if elapsed_poll_seconds >= timeout_seconds:
             raise TimeoutError("deep_research_wait_timed_out")
+        before_sleep = _now()
         await _sleep(validated.poll_interval_seconds)
+        elapsed_poll_seconds += max(0.0, _now() - before_sleep)

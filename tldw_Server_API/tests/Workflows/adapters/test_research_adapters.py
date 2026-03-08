@@ -290,7 +290,7 @@ async def test_deep_research_wait_adapter_times_out_for_nonterminal_run(monkeypa
         def get_session(self, **kwargs):
             return _FakeSession()
 
-    times = iter([0.0, 0.0, 2.5])
+    times = iter([0.0, 2.5])
 
     async def _fake_sleep(_seconds: float) -> None:
         return None
@@ -317,6 +317,149 @@ async def test_deep_research_wait_adapter_times_out_for_nonterminal_run(monkeypa
             },
             {"user_id": "84"},
         )
+
+
+@pytest.mark.asyncio
+async def test_deep_research_wait_adapter_returns_waiting_human_for_research_checkpoint(monkeypatch):
+    """Test deep research wait adapter yields a workflow wait payload for research checkpoints."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_wait_adapter,
+    )
+
+    class _CheckpointSession:
+        id = "research-session-6"
+        status = "waiting_human"
+        phase = "awaiting_source_review"
+        control_state = "running"
+        completed_at = None
+        latest_checkpoint_id = "checkpoint-1"
+
+    class _CheckpointSnapshot:
+        checkpoint = {
+            "checkpoint_id": "checkpoint-1",
+            "checkpoint_type": "sources_review",
+        }
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            assert kwargs["owner_user_id"] == "42"
+            assert kwargs["session_id"] == "research-session-6"
+            return _CheckpointSession()
+
+        def get_stream_snapshot(self, **kwargs):
+            assert kwargs["owner_user_id"] == "42"
+            assert kwargs["session_id"] == "research-session-6"
+            return _CheckpointSnapshot()
+
+    times = iter([0.0, 0.0, 2.5])
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._now",
+        lambda: next(times),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._sleep",
+        _fake_sleep,
+    )
+
+    result = await run_deep_research_wait_adapter(
+        {
+            "run_id": "research-session-6",
+            "poll_interval_seconds": 0.1,
+            "timeout_seconds": 2,
+            "include_bundle": False,
+            "save_artifact": False,
+        },
+        {"user_id": "42"},
+    )
+
+    assert result == {
+        "__status__": "waiting_human",
+        "reason": "research_checkpoint",
+        "run_id": "research-session-6",
+        "research_phase": "awaiting_source_review",
+        "research_control_state": "running",
+        "research_checkpoint_id": "checkpoint-1",
+        "research_checkpoint_type": "sources_review",
+        "research_console_url": "/research?run=research-session-6",
+        "active_poll_seconds": pytest.approx(0.0, rel=0.1),
+    }
+
+
+@pytest.mark.asyncio
+async def test_deep_research_wait_adapter_reuses_active_poll_seconds_after_resume(monkeypatch):
+    """Test deep research wait adapter restores active polling time from prior workflow wait output."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_wait_adapter,
+    )
+
+    class _CheckpointSession:
+        id = "research-session-7"
+        status = "waiting_human"
+        phase = "awaiting_outline_review"
+        control_state = "running"
+        completed_at = None
+        latest_checkpoint_id = "checkpoint-2"
+
+    class _CheckpointSnapshot:
+        checkpoint = {
+            "checkpoint_id": "checkpoint-2",
+            "checkpoint_type": "outline_review",
+        }
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            return _CheckpointSession()
+
+        def get_stream_snapshot(self, **kwargs):
+            return _CheckpointSnapshot()
+
+    times = iter([0.0, 0.0, 2.5])
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._now",
+        lambda: next(times),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._sleep",
+        _fake_sleep,
+    )
+
+    result = await run_deep_research_wait_adapter(
+        {
+            "run_id": "research-session-7",
+            "poll_interval_seconds": 0.1,
+            "timeout_seconds": 2,
+            "include_bundle": False,
+            "save_artifact": False,
+        },
+        {
+            "user_id": "42",
+            "prev": {"active_poll_seconds": 1.5},
+        },
+    )
+
+    assert result["__status__"] == "waiting_human"
+    assert result["research_checkpoint_type"] == "outline_review"
+    assert result["active_poll_seconds"] == pytest.approx(1.5, rel=0.1)
 
 
 @pytest.mark.asyncio

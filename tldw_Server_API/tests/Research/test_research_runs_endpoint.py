@@ -60,6 +60,59 @@ def test_create_and_approve_research_run():
         assert approve_resp.json()["phase"] == "collecting"
 
 
+def test_patch_and_approve_research_run_triggers_research_checkpoint_workflow_resume_bridge(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    bridge_calls: list[dict[str, str]] = []
+
+    async def _fake_bridge(*, research_run_id: str, checkpoint_id: str) -> None:
+        bridge_calls.append(
+            {
+                "research_run_id": research_run_id,
+                "checkpoint_id": checkpoint_id,
+            }
+        )
+
+    class StubService:
+        def approve_checkpoint(self, **kwargs):
+            return {
+                "id": kwargs["session_id"],
+                "phase": "collecting",
+                "status": "queued",
+                "control_state": "running",
+                "progress_percent": 10.0,
+                "progress_message": "planning research",
+                "active_job_id": "10",
+                "latest_checkpoint_id": kwargs["checkpoint_id"],
+            }
+
+    monkeypatch.setattr(
+        research_runs,
+        "resume_workflows_waiting_on_research_checkpoint",
+        _fake_bridge,
+        raising=False,
+    )
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        approve_resp = client.post(
+            "/api/v1/research/runs/rs_1/checkpoints/cp_1/patch-and-approve",
+            json={},
+        )
+
+    assert approve_resp.status_code == 200
+    assert bridge_calls == [
+        {
+            "research_run_id": "rs_1",
+            "checkpoint_id": "cp_1",
+        }
+    ]
+
+
 def test_patch_and_approve_research_run_returns_400_for_invalid_checkpoint_patch():
     from tldw_Server_API.app.api.v1.endpoints import research_runs
 

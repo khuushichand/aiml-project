@@ -60,3 +60,88 @@ def test_workflows_db_crud(tmp_path):
     assert [e["event_type"] for e in events] == ["run_started", "step_completed"]
     events_since = db.get_events(run_id, since=1)
     assert len(events_since) == 1 and events_since[0]["event_seq"] == 2
+
+
+def test_workflow_research_wait_db_tracks_links(tmp_path):
+    db_path = tmp_path / "workflows.db"
+    db = WorkflowsDatabase(str(db_path))
+
+    db.create_run(
+        run_id="wf-run-1",
+        tenant_id="tenant",
+        user_id="user",
+        inputs={},
+        workflow_id=None,
+        definition_version=1,
+        definition_snapshot={"name": "wait-link", "steps": []},
+    )
+
+    db.upsert_research_wait_link(
+        wait_id="rw-1",
+        tenant_id="tenant",
+        workflow_run_id="wf-run-1",
+        step_id="wait",
+        research_run_id="research-session-10",
+        checkpoint_id="checkpoint-4",
+        checkpoint_type="sources_review",
+        wait_status="waiting",
+        wait_payload={
+            "__status__": "waiting_human",
+            "reason": "research_checkpoint",
+            "run_id": "research-session-10",
+        },
+        active_poll_seconds=1.25,
+    )
+
+    link = db.get_research_wait_link(workflow_run_id="wf-run-1", step_id="wait")
+    assert link is not None
+    assert link["research_run_id"] == "research-session-10"
+    assert link["checkpoint_id"] == "checkpoint-4"
+    assert link["wait_status"] == "waiting"
+    assert json.loads(link["wait_payload_json"])["reason"] == "research_checkpoint"
+
+
+def test_workflow_research_wait_db_claims_links_for_resume_once(tmp_path):
+    db_path = tmp_path / "workflows.db"
+    db = WorkflowsDatabase(str(db_path))
+
+    db.create_run(
+        run_id="wf-run-2",
+        tenant_id="tenant",
+        user_id="user",
+        inputs={},
+        workflow_id=None,
+        definition_version=1,
+        definition_snapshot={"name": "wait-claim", "steps": []},
+    )
+
+    db.upsert_research_wait_link(
+        wait_id="rw-2",
+        tenant_id="tenant",
+        workflow_run_id="wf-run-2",
+        step_id="wait",
+        research_run_id="research-session-11",
+        checkpoint_id="checkpoint-5",
+        checkpoint_type="outline_review",
+        wait_status="waiting",
+        wait_payload={
+            "__status__": "waiting_human",
+            "reason": "research_checkpoint",
+            "run_id": "research-session-11",
+        },
+        active_poll_seconds=2.0,
+    )
+
+    claimed = db.claim_research_waits_for_resume(
+        research_run_id="research-session-11",
+        checkpoint_id="checkpoint-5",
+    )
+    assert len(claimed) == 1
+    assert claimed[0]["workflow_run_id"] == "wf-run-2"
+    assert claimed[0]["step_id"] == "wait"
+
+    claimed_again = db.claim_research_waits_for_resume(
+        research_run_id="research-session-11",
+        checkpoint_id="checkpoint-5",
+    )
+    assert claimed_again == []

@@ -27,6 +27,9 @@ from tldw_Server_API.app.core.Research.streaming import (
 from tldw_Server_API.app.core.Research.service import ResearchService
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.testing import is_test_mode
+from tldw_Server_API.app.core.Workflows.research_wait_bridge import (
+    resume_workflows_waiting_on_research_checkpoint,
+)
 
 router = APIRouter(prefix="/research", tags=["research-runs"])
 _RESEARCH_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
@@ -384,4 +387,12 @@ async def patch_and_approve_research_checkpoint(
         )
     except (KeyError, ValueError) as exc:
         _raise_research_http_error(exc)
+    with contextlib.suppress(Exception):
+        asyncio.create_task(
+            resume_workflows_waiting_on_research_checkpoint(
+                research_run_id=session_id,
+                checkpoint_id=checkpoint_id,
+            )
+        )
+        await asyncio.sleep(0)
     return ResearchRunResponse.model_validate(session)
