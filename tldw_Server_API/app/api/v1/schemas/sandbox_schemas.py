@@ -4,6 +4,10 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
+try:
+    from pydantic import model_validator
+except ImportError:  # pragma: no cover - pydantic v1 fallback
+    from pydantic import root_validator as model_validator  # type: ignore
 
 RuntimeType = Literal["docker", "firecracker", "lima"]
 TrustLevelType = Literal["trusted", "standard", "untrusted"]
@@ -60,6 +64,13 @@ class SandboxSession(BaseModel):
     id: str
     runtime: RuntimeType
     base_image: str | None = None
+    cpu_limit: float | None = None
+    memory_mb: int | None = None
+    timeout_sec: int | None = None
+    network_policy: Literal["deny_all", "allowlist"] | None = None
+    env: dict[str, str] | None = None
+    labels: dict[str, str] | None = None
+    trust_level: TrustLevelType | None = None
     expires_at: datetime | None = None
     policy_hash: str | None = None
     persona_id: str | None = None
@@ -114,6 +125,14 @@ class SandboxRunCreateRequest(BaseModel):
     workspace_id: str | None = Field(default=None, description="Optional workspace identifier bound to this run")
     workspace_group_id: str | None = Field(default=None, description="Optional workspace-group identifier bound to this run")
     scope_snapshot_id: str | None = Field(default=None, description="Optional scope snapshot identifier bound to this run")
+
+    @model_validator(mode="after")
+    def validate_session_or_base_image(self):
+        has_session = isinstance(self.session_id, str) and bool(self.session_id.strip())
+        has_image = isinstance(self.base_image, str) and bool(self.base_image.strip())
+        if has_session == has_image:
+            raise ValueError("Provide exactly one of session_id or base_image")
+        return self
 
 
 class SandboxRun(BaseModel):

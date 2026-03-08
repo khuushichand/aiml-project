@@ -18,7 +18,7 @@ from loguru import logger
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.testing import is_truthy
 
-from .models import RunPhase, RunSpec, RunStatus, RuntimeType, Session, SessionSpec
+from .models import RunPhase, RunSpec, RunStatus, RuntimeType, Session, SessionSpec, TrustLevel
 from .policy import SandboxPolicy, SandboxPolicyConfig
 from .store import IdempotencyConflict as StoreIdemConflict
 from .store import get_store
@@ -211,11 +211,51 @@ class SandboxOrchestrator:
                 expires_at = datetime.fromisoformat(str(expires_raw))
             except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
                 expires_at = None
+        cpu_limit = None
+        if record.get("cpu_limit") is not None:
+            try:
+                cpu_limit = float(record.get("cpu_limit"))
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                cpu_limit = None
+        memory_mb = None
+        if record.get("memory_mb") is not None:
+            try:
+                memory_mb = int(record.get("memory_mb"))
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                memory_mb = None
+        timeout_sec = 300
+        if record.get("timeout_sec") is not None:
+            try:
+                timeout_sec = int(record.get("timeout_sec"))
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                timeout_sec = 300
+        trust_level = None
+        trust_raw = record.get("trust_level")
+        if trust_raw:
+            try:
+                trust_level = TrustLevel(str(trust_raw))
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                trust_level = None
         return Session(
             id=sid,
             runtime=runtime,
             base_image=(str(record.get("base_image")) if record.get("base_image") is not None else None),
             expires_at=expires_at,
+            cpu_limit=cpu_limit,
+            memory_mb=memory_mb,
+            timeout_sec=timeout_sec,
+            network_policy=(str(record.get("network_policy") or "deny_all")),
+            env=(
+                {str(k): str(v) for k, v in (record.get("env") or {}).items()}
+                if isinstance(record.get("env"), dict)
+                else {}
+            ),
+            labels=(
+                {str(k): str(v) for k, v in (record.get("labels") or {}).items()}
+                if isinstance(record.get("labels"), dict)
+                else {}
+            ),
+            trust_level=trust_level,
             persona_id=(str(record.get("persona_id")) if record.get("persona_id") is not None else None),
             workspace_id=(str(record.get("workspace_id")) if record.get("workspace_id") is not None else None),
             workspace_group_id=(str(record.get("workspace_group_id")) if record.get("workspace_group_id") is not None else None),
@@ -301,6 +341,41 @@ class SandboxOrchestrator:
                 runtime=runtime,
                 base_image=(stored.get("base_image") if stored.get("base_image") is not None else spec.base_image),
                 expires_at=expires_at,
+                cpu_limit=(
+                    float(stored.get("cpu_limit"))
+                    if stored.get("cpu_limit") is not None
+                    else spec.cpu_limit
+                ),
+                memory_mb=(
+                    int(stored.get("memory_mb"))
+                    if stored.get("memory_mb") is not None
+                    else spec.memory_mb
+                ),
+                timeout_sec=(
+                    int(stored.get("timeout_sec"))
+                    if stored.get("timeout_sec") is not None
+                    else spec.timeout_sec
+                ),
+                network_policy=(
+                    str(stored.get("network_policy"))
+                    if stored.get("network_policy") is not None
+                    else spec.network_policy
+                ),
+                env=(
+                    {str(k): str(v) for k, v in (stored.get("env") or {}).items()}
+                    if isinstance(stored.get("env"), dict)
+                    else dict(spec.env or {})
+                ),
+                labels=(
+                    {str(k): str(v) for k, v in (stored.get("labels") or {}).items()}
+                    if isinstance(stored.get("labels"), dict)
+                    else dict(spec.labels or {})
+                ),
+                trust_level=(
+                    TrustLevel(str(stored.get("trust_level")))
+                    if stored.get("trust_level") is not None
+                    else spec.trust_level
+                ),
                 persona_id=(
                     str(stored.get("persona_id"))
                     if stored.get("persona_id") is not None
@@ -332,6 +407,13 @@ class SandboxOrchestrator:
                     session_id=sid_str,
                     runtime=sess.runtime.value if sess.runtime else None,
                     base_image=sess.base_image,
+                    cpu_limit=sess.cpu_limit,
+                    memory_mb=sess.memory_mb,
+                    timeout_sec=sess.timeout_sec,
+                    network_policy=sess.network_policy,
+                    env=sess.env,
+                    labels=sess.labels,
+                    trust_level=(sess.trust_level.value if sess.trust_level else None),
                     expires_at_iso=(sess.expires_at.isoformat() if sess.expires_at else None),
                     workspace_path=ws_path,
                     persona_id=sess.persona_id,
@@ -357,6 +439,13 @@ class SandboxOrchestrator:
             runtime=spec.runtime or self.policy.cfg.default_runtime,
             base_image=spec.base_image,
             expires_at=expires_at,
+            cpu_limit=spec.cpu_limit,
+            memory_mb=spec.memory_mb,
+            timeout_sec=spec.timeout_sec,
+            network_policy=spec.network_policy,
+            env=dict(spec.env or {}),
+            labels=dict(spec.labels or {}),
+            trust_level=spec.trust_level,
             persona_id=spec.persona_id,
             workspace_id=spec.workspace_id,
             workspace_group_id=spec.workspace_group_id,
@@ -372,6 +461,13 @@ class SandboxOrchestrator:
                 session_id=sid,
                 runtime=sess.runtime.value if sess.runtime else None,
                 base_image=sess.base_image,
+                cpu_limit=sess.cpu_limit,
+                memory_mb=sess.memory_mb,
+                timeout_sec=sess.timeout_sec,
+                network_policy=sess.network_policy,
+                env=sess.env,
+                labels=sess.labels,
+                trust_level=(sess.trust_level.value if sess.trust_level else None),
                 expires_at_iso=(sess.expires_at.isoformat() if sess.expires_at else None),
                 workspace_path=ws_path,
                 persona_id=sess.persona_id,
@@ -386,6 +482,13 @@ class SandboxOrchestrator:
             "id": sid,
             "runtime": sess.runtime.value,
             "base_image": sess.base_image,
+            "cpu_limit": sess.cpu_limit,
+            "memory_mb": sess.memory_mb,
+            "timeout_sec": sess.timeout_sec,
+            "network_policy": sess.network_policy,
+            "env": dict(sess.env or {}),
+            "labels": dict(sess.labels or {}),
+            "trust_level": (sess.trust_level.value if sess.trust_level else None),
             "expires_at": (sess.expires_at.isoformat() if sess.expires_at else None),
             "persona_id": sess.persona_id,
             "workspace_id": sess.workspace_id,
@@ -1175,6 +1278,23 @@ class SandboxOrchestrator:
         with self._lock:
             mapping = self._artifacts.get(run_id) or {}
             return mapping.get(path)
+
+    def get_artifact_path(self, run_id: str, path: str) -> Path | None:
+        self._maybe_prune_expired_artifacts()
+        owner = None
+        try:
+            owner = self._store.get_run_owner(run_id)
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+            owner = None
+        art_dir = self._artifact_dir((owner or "unknown"), run_id)
+        rel = self._safe_rel(path)
+        full = art_dir / rel
+        try:
+            if full.exists() and full.is_file():
+                return full
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+            return None
+        return None
 
     # -----------------
     # Workspaces

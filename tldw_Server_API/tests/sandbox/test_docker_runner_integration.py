@@ -90,13 +90,12 @@ def test_full_lifecycle(sandbox_client):
         "session_id": session_id,
         "spec_version": "1.0",
         "runtime": "docker",
-        "base_image": "python:3.11-slim",
         "command": ["python", "/workspace/hello.py"],
-        "files_inline": [
-            [
-                "hello.py",
-                "aW1wb3J0IHN5cwpwcmludCgiSGVsbG8gZnJvbSBzYW5kYm94ISIpCnN5cy5leGl0KDAp",
-            ]
+        "files": [
+            {
+                "path": "hello.py",
+                "content_b64": "aW1wb3J0IHN5cwpwcmludCgiSGVsbG8gZnJvbSBzYW5kYm94ISIpCnN5cy5leGl0KDAp",
+            }
         ],
         "capture_patterns": ["*.py"],
         "timeout_sec": 30,

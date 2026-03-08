@@ -46,6 +46,13 @@ class Session:
     runtime: RuntimeType
     base_image: str | None
     expires_at: datetime | None
+    cpu_limit: float | None = None
+    memory_mb: int | None = None
+    timeout_sec: int = 300
+    network_policy: str = "deny_all"
+    env: dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
+    trust_level: TrustLevel | None = None
     persona_id: str | None = None
     workspace_id: str | None = None
     workspace_group_id: str | None = None

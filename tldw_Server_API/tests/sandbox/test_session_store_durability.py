@@ -102,7 +102,7 @@ def test_session_execution_defaults_roundtrip_and_clone(monkeypatch, tmp_path: P
         network_policy="deny_all",
         env={"SESSION_TOKEN": "present"},
         labels={"team": "sandbox"},
-        trust_level=TrustLevel.untrusted,
+        trust_level=TrustLevel.trusted,
         persona_id="persona-77",
         workspace_id="workspace-77",
         workspace_group_id="wg-77",
@@ -126,7 +126,7 @@ def test_session_execution_defaults_roundtrip_and_clone(monkeypatch, tmp_path: P
     assert restored.network_policy == "deny_all"
     assert restored.env == {"SESSION_TOKEN": "present"}
     assert restored.labels == {"team": "sandbox"}
-    assert restored.trust_level == TrustLevel.untrusted
+    assert restored.trust_level == TrustLevel.trusted
 
     cloned = restarted_service.clone_session(source.id)
     assert cloned.base_image == "python:3.12-slim"
@@ -136,7 +136,7 @@ def test_session_execution_defaults_roundtrip_and_clone(monkeypatch, tmp_path: P
     assert cloned.network_policy == "deny_all"
     assert cloned.env == {"SESSION_TOKEN": "present"}
     assert cloned.labels == {"team": "sandbox"}
-    assert cloned.trust_level == TrustLevel.untrusted
+    assert cloned.trust_level == TrustLevel.trusted
 
 
 def test_cross_node_delete_invalidates_cached_session_state(monkeypatch, tmp_path: Path) -> None:
