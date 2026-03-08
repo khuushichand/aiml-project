@@ -24,6 +24,7 @@ import { Breadcrumbs } from '@/components/Breadcrumbs';
 import { OrgContextSwitcher } from '@/components/OrgContextSwitcher';
 import { usePermissions } from '@/components/PermissionGuard';
 import { useToast } from '@/components/ui/toast';
+import { isBillingEnabled } from '@/lib/billing';
 import {
   buildBreadcrumbs,
   getPageTitleForPath,
@@ -99,8 +100,10 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     if (onNavigate) onNavigate();
   };
 
-  // Filter items based on permissions
+  // Filter items based on permissions and billing
   const isItemVisible = useCallback((item: NavigationItem) => {
+    // Filter out billing-only items when billing is disabled
+    if (item.billingOnly && !isBillingEnabled()) return false;
     if (!item.permission && !item.role) return true;
     if (permLoading) return false;
     if (item.permission && hasPermission(item.permission)) return true;

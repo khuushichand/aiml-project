@@ -37,7 +37,7 @@ export function PlanGuard({ requiredPlan, featureName, fallback, children }: Pla
         setAllowed(meetsRequirement);
       })
       .catch(() => {
-        if (!cancelled) setAllowed(true); // fail open — backend enforces
+        if (!cancelled) setAllowed(false);
       });
     return () => { cancelled = true; };
   }, [selectedOrg, orgLoading, requiredPlan]);
