@@ -95,6 +95,8 @@ def test_manual_sync_endpoint_enqueues_job(ingestion_sources_client, monkeypatch
 @pytest.mark.integration
 def test_archive_upload_endpoint_stages_snapshot_and_enqueues_job(tmp_path, ingestion_sources_client, monkeypatch):
     client, auth_headers = ingestion_sources_client
+    os.environ["USER_DB_BASE_DIR"] = str(tmp_path / "user_dbs")
+    os.environ["TEST_MODE"] = "true"
 
     import aiosqlite
     import tldw_Server_API.app.api.v1.endpoints.ingestion_sources as ep
@@ -158,11 +160,12 @@ def test_archive_upload_endpoint_stages_snapshot_and_enqueues_job(tmp_path, inge
             archive_buffer = io.BytesIO()
             with zipfile.ZipFile(archive_buffer, "w") as archive:
                 archive.writestr("export/alpha.md", "# Alpha\n\nzip body\n")
+            archive_bytes = archive_buffer.getvalue()
 
             response = client.post(
                 f"/api/v1/ingestion-sources/{int(source['id'])}/archive",
                 headers={"X-API-KEY": auth_headers["X-API-KEY"]},
-                files={"archive": ("notes.zip", archive_buffer.getvalue(), "application/zip")},
+                files={"archive": ("notes.zip", archive_bytes, "application/zip")},
             )
 
             assert response.status_code == 202, response.text
@@ -173,13 +176,36 @@ def test_archive_upload_endpoint_stages_snapshot_and_enqueues_job(tmp_path, inge
             assert payload["snapshot_status"] == "staged"
 
             snapshot_cur = await db.execute(
-                "SELECT status, snapshot_kind, summary_json FROM ingestion_source_snapshots WHERE source_id = ?",
+                "SELECT id, status, snapshot_kind, summary_json FROM ingestion_source_snapshots WHERE source_id = ?",
                 (int(source["id"]),),
             )
             snapshot_row = await snapshot_cur.fetchone()
+            snapshot_summary = json.loads(snapshot_row["summary_json"])
             assert snapshot_row["status"] == "staged"
             assert snapshot_row["snapshot_kind"] == "archive_snapshot"
-            assert "notes.zip" in snapshot_row["summary_json"]
+            assert snapshot_summary["filename"] == "notes.zip"
+            assert snapshot_summary["item_count"] == 1
+            assert "artifact_id" in snapshot_summary
+            assert "items" not in snapshot_summary
+
+            artifact_cur = await db.execute(
+                "SELECT snapshot_id, artifact_kind, status, storage_path, metadata_json "
+                "FROM ingestion_source_artifacts WHERE source_id = ?",
+                (int(source["id"]),),
+            )
+            artifact_row = await artifact_cur.fetchone()
+            assert artifact_row is not None
+            assert artifact_row["snapshot_id"] == int(snapshot_row["id"])
+            assert artifact_row["artifact_kind"] == "archive_upload"
+            assert artifact_row["status"] == "staged"
+            artifact_metadata = json.loads(artifact_row["metadata_json"])
+            assert artifact_metadata["filename"] == "notes.zip"
+            assert artifact_metadata["byte_size"] == len(archive_bytes)
+            artifact_path = artifact_row["storage_path"]
+            assert artifact_path is not None
+            assert os.path.exists(artifact_path)
+            with open(artifact_path, "rb") as stored_handle:
+                assert stored_handle.read() == archive_bytes
             assert queued_jobs[0]["source_id"] == int(source["id"])
 
     import asyncio

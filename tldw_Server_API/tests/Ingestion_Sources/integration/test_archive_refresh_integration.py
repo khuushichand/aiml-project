@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import io
+import json
 
 import aiosqlite
 import pytest
+import zipfile
 
 
 class _FakeJobManager:
@@ -206,3 +209,112 @@ async def test_archive_sync_failure_marks_staged_snapshot_failed_and_preserves_p
         updated_note = notes_db.get_note_by_id(note_id=note_id)
         assert updated_note is not None
         assert updated_note["content"] == "previous body"
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_archive_sync_rebuilds_items_from_persisted_artifact_when_snapshot_summary_has_no_items(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+
+    import tldw_Server_API.app.services.ingestion_sources_worker as worker
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import persist_archive_artifact
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        create_source_snapshot,
+        ensure_ingestion_sources_schema,
+        get_source_snapshot_by_id,
+    )
+
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("export/alpha.md", "# Alpha\n\nfrom artifact\n")
+    archive_bytes = archive_buffer.getvalue()
+
+    meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+    async with aiosqlite.connect(str(meta_db_path)) as db:
+        db.row_factory = aiosqlite.Row
+        await ensure_ingestion_sources_schema(db)
+        source = await create_source(
+            db,
+            user_id=1,
+            payload={
+                "source_type": "archive_snapshot",
+                "sink_type": "notes",
+                "policy": "canonical",
+                "config": {},
+            },
+        )
+        staged_snapshot = await create_source_snapshot(
+            db,
+            source_id=int(source["id"]),
+            snapshot_kind="archive_snapshot",
+            status="staged",
+            summary={"filename": "notes-v1.zip"},
+        )
+        artifact = await persist_archive_artifact(
+            db,
+            user_id=1,
+            source_id=int(source["id"]),
+            snapshot_id=int(staged_snapshot["id"]),
+            filename="notes-v1.zip",
+            archive_bytes=archive_bytes,
+        )
+        await db.execute(
+            "UPDATE ingestion_source_snapshots SET summary_json = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {
+                        "filename": "notes-v1.zip",
+                        "artifact_id": int(artifact["id"]),
+                        "item_count": 1,
+                    }
+                ),
+                int(staged_snapshot["id"]),
+            ),
+        )
+
+        async def _fake_get_db_pool():
+            return _SQLitePool(db)
+
+        monkeypatch.setattr(worker, "get_db_pool", _fake_get_db_pool, raising=False)
+
+        jm = _FakeJobManager()
+        await worker._process_sync_job(
+            jm,
+            jid=92,
+            lease_id="lease-92",
+            worker_id="worker-1",
+            source_id=int(source["id"]),
+            user_id=1,
+        )
+
+        assert jm.failed is None
+        assert jm.completed is not None
+        assert jm.completed["result"]["processed"] == 1
+
+        notes_db = CharactersRAGDB(
+            db_path=str(DatabasePaths.get_chacha_db_path(1)),
+            client_id="1",
+        )
+        notes = notes_db.list_notes(limit=10, offset=0)
+        assert len(notes) == 1
+        assert notes[0]["title"] == "Alpha"
+        assert str(notes[0]["content"]).rstrip("\n") == "# Alpha\n\nfrom artifact"
+
+        updated_snapshot = await get_source_snapshot_by_id(db, snapshot_id=int(staged_snapshot["id"]))
+        assert updated_snapshot is not None
+        assert updated_snapshot["status"] == "success"
+
+        artifact_cur = await db.execute(
+            "SELECT status FROM ingestion_source_artifacts WHERE id = ?",
+            (int(artifact["id"]),),
+        )
+        artifact_row = await artifact_cur.fetchone()
+        assert artifact_row is not None
+        assert artifact_row["status"] == "active"

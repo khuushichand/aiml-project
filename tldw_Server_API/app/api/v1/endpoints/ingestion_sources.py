@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -16,7 +18,10 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import apply_archive_candidate
+from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import (
+    apply_archive_candidate,
+    persist_archive_artifact,
+)
 from tldw_Server_API.app.core.Ingestion_Sources.jobs import enqueue_ingestion_source_job
 from tldw_Server_API.app.core.Ingestion_Sources.local_directory import validate_local_directory_source
 from tldw_Server_API.app.core.Ingestion_Sources.service import (
@@ -29,6 +34,7 @@ from tldw_Server_API.app.core.Ingestion_Sources.service import (
     list_source_items,
     update_source,
     update_source_item_state,
+    update_source_snapshot,
 )
 from tldw_Server_API.app.core.exceptions import IngestionSourceValidationError
 
@@ -158,41 +164,67 @@ async def upload_ingestion_source_archive(
     current_user: User = Depends(get_request_user),
 ):
     archive_bytes = await archive.read()
+    artifact_storage_path: str | None = None
     db_pool = await get_db_pool()
-    async with db_pool.transaction() as db:
-        await ensure_ingestion_sources_schema(db)
-        row = await get_source_by_id(db, source_id=source_id, user_id=int(current_user.id))
-        if not row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion source not found")
-        if str(row.get("source_type") or "").strip().lower() != "archive_snapshot":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Archive upload is only supported for archive_snapshot sources",
-            )
-        current_snapshot = None
-        if row.get("last_successful_snapshot_id") is not None:
-            current_snapshot = {"id": int(row["last_successful_snapshot_id"])}
-        try:
-            staged = await apply_archive_candidate(
-                source_id=source_id,
-                archive_bytes=archive_bytes,
-                filename=archive.filename or "archive.zip",
-                current_snapshot=current_snapshot,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    try:
+        async with db_pool.transaction() as db:
+            await ensure_ingestion_sources_schema(db)
+            row = await get_source_by_id(db, source_id=source_id, user_id=int(current_user.id))
+            if not row:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion source not found")
+            if str(row.get("source_type") or "").strip().lower() != "archive_snapshot":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Archive upload is only supported for archive_snapshot sources",
+                )
+            current_snapshot = None
+            if row.get("last_successful_snapshot_id") is not None:
+                current_snapshot = {"id": int(row["last_successful_snapshot_id"])}
+            try:
+                staged = await apply_archive_candidate(
+                    source_id=source_id,
+                    archive_bytes=archive_bytes,
+                    filename=archive.filename or "archive.zip",
+                    current_snapshot=current_snapshot,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-        await create_source_snapshot(
-            db,
-            source_id=source_id,
-            snapshot_kind="archive_snapshot",
-            status="staged",
-            summary={
-                "filename": archive.filename or "archive.zip",
-                "items": staged["items"],
-                "previous_snapshot_id": staged["candidate_snapshot"].get("previous_snapshot_id"),
-            },
-        )
+            snapshot = await create_source_snapshot(
+                db,
+                source_id=source_id,
+                snapshot_kind="archive_snapshot",
+                status="staged",
+                summary={
+                    "filename": archive.filename or "archive.zip",
+                    "previous_snapshot_id": staged["candidate_snapshot"].get("previous_snapshot_id"),
+                    "item_count": len(staged["items"]),
+                },
+            )
+            artifact = await persist_archive_artifact(
+                db,
+                user_id=int(current_user.id),
+                source_id=source_id,
+                snapshot_id=int(snapshot["id"]),
+                filename=archive.filename or "archive.zip",
+                archive_bytes=archive_bytes,
+            )
+            artifact_storage_path = str(artifact.get("storage_path") or "")
+            await update_source_snapshot(
+                db,
+                snapshot_id=int(snapshot["id"]),
+                summary={"artifact_id": int(artifact["id"])},
+            )
+    except HTTPException:
+        if artifact_storage_path:
+            with contextlib.suppress(FileNotFoundError, OSError):
+                Path(artifact_storage_path).unlink()
+        raise
+    except Exception:
+        if artifact_storage_path:
+            with contextlib.suppress(FileNotFoundError, OSError):
+                Path(artifact_storage_path).unlink()
+        raise
 
     job = await asyncio.to_thread(
         enqueue_ingestion_source_job,

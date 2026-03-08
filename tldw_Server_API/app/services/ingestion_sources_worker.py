@@ -7,6 +7,10 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import (
+    build_archive_snapshot_from_bytes,
+    load_archive_artifact_bytes,
+)
 from tldw_Server_API.app.core.Ingestion_Sources.diffing import diff_snapshots
 from tldw_Server_API.app.core.Ingestion_Sources.jobs import DOMAIN, ingestion_sources_queue
 from tldw_Server_API.app.core.Ingestion_Sources.local_directory import build_local_directory_snapshot
@@ -14,11 +18,13 @@ from tldw_Server_API.app.core.Ingestion_Sources.service import (
     create_source_snapshot,
     ensure_ingestion_sources_schema,
     finish_source_sync_job,
+    get_source_artifact_by_id,
     get_source_by_id,
     get_latest_source_snapshot,
     list_source_items,
     record_ingestion_item_event,
     start_source_sync_job,
+    update_source_artifact,
     update_source_snapshot,
     upsert_source_item,
 )
@@ -186,6 +192,7 @@ async def _process_sync_job(
 
     pool = await get_db_pool()
     staged_snapshot: dict[str, Any] | None = None
+    staged_artifact: dict[str, Any] | None = None
 
     async with pool.transaction() as db:
         await ensure_ingestion_sources_schema(db)
@@ -223,10 +230,32 @@ async def _process_sync_job(
                 )
             if not staged_snapshot:
                 raise ValueError(f"No staged archive snapshot is available for source {source_id}.")
-            current_items = {
-                str(path): dict(item)
-                for path, item in (staged_snapshot.get("summary") or {}).get("items", {}).items()
-            }
+            snapshot_summary = staged_snapshot.get("summary") or {}
+            artifact_id = snapshot_summary.get("artifact_id")
+            if artifact_id is not None:
+                async with pool.transaction() as db:
+                    staged_artifact = await get_source_artifact_by_id(
+                        db,
+                        artifact_id=int(artifact_id),
+                    )
+                if not staged_artifact:
+                    raise ValueError(
+                        f"Archive artifact {artifact_id} is not available for source {source_id}."
+                    )
+                archive_bytes = load_archive_artifact_bytes(staged_artifact)
+                current_items = build_archive_snapshot_from_bytes(
+                    archive_bytes=archive_bytes,
+                    filename=str(
+                        (staged_artifact.get("metadata") or {}).get("filename")
+                        or snapshot_summary.get("filename")
+                        or "archive.zip"
+                    ),
+                )
+            else:
+                current_items = {
+                    str(path): dict(item)
+                    for path, item in snapshot_summary.get("items", {}).items()
+                }
         else:
             raise NotImplementedError(f"Sync execution not implemented for source type '{source_type}'.")
         sink_db = _create_sink_db(sink_type=sink_type, user_id=user_id)
@@ -317,6 +346,12 @@ async def _process_sync_job(
                     status="success",
                     summary=result_summary,
                 )
+                if staged_artifact:
+                    await update_source_artifact(
+                        db,
+                        artifact_id=int(staged_artifact["id"]),
+                        status="active",
+                    )
             else:
                 snapshot = await create_source_snapshot(
                     db,
@@ -352,6 +387,13 @@ async def _process_sync_job(
                             "status": "failed",
                             "error": str(exc),
                         },
+                    )
+                if staged_artifact:
+                    await update_source_artifact(
+                        db,
+                        artifact_id=int(staged_artifact["id"]),
+                        status="failed",
+                        metadata={"error": str(exc)},
                     )
                 await finish_source_sync_job(
                     db,

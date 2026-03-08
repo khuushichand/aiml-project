@@ -11,11 +11,16 @@ from pathlib import PurePosixPath
 from typing import Any
 from uuid import uuid4
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import (
+    DatabasePaths,
+    normalize_output_storage_filename,
+)
 from tldw_Server_API.app.core.Ingestion_Sources.diffing import normalize_archive_members
 from tldw_Server_API.app.core.Ingestion_Sources.local_directory import (
     MEDIA_SUPPORTED_SUFFIXES,
     NOTES_SUPPORTED_SUFFIXES,
 )
+from tldw_Server_API.app.core.Ingestion_Sources.service import create_source_artifact
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files import (
     convert_document_to_text,
 )
@@ -147,6 +152,80 @@ def _member_content_to_text(
         if temp_path is not None:
             with contextlib.suppress(FileNotFoundError, OSError):
                 temp_path.unlink()
+
+
+def _archive_artifact_dir(*, user_id: int, source_id: int) -> Path:
+    base_dir = DatabasePaths.get_user_base_directory(user_id)
+    artifact_dir = base_dir / "ingestion_sources" / str(int(source_id)) / "archives"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    return artifact_dir
+
+
+def _archive_artifact_path(*, user_id: int, source_id: int, filename: str) -> Path:
+    safe_name = normalize_output_storage_filename(
+        filename or "archive.zip",
+        allow_absolute=False,
+        reject_relative_with_separators=True,
+        expand_user=False,
+    )
+    return _archive_artifact_dir(user_id=user_id, source_id=source_id) / f"{uuid4().hex}-{safe_name}"
+
+
+async def persist_archive_artifact(
+    db,
+    *,
+    user_id: int,
+    source_id: int,
+    snapshot_id: int,
+    filename: str,
+    archive_bytes: bytes,
+) -> dict[str, Any]:
+    storage_path = _archive_artifact_path(
+        user_id=user_id,
+        source_id=source_id,
+        filename=filename,
+    )
+    temp_path = storage_path.with_suffix(f"{storage_path.suffix}.tmp")
+    temp_path.write_bytes(archive_bytes)
+    temp_path.replace(storage_path)
+    try:
+        artifact = await create_source_artifact(
+            db,
+            source_id=source_id,
+            snapshot_id=snapshot_id,
+            artifact_kind="archive_upload",
+            status="staged",
+            storage_path=str(storage_path),
+            metadata={
+                "filename": filename or "archive.zip",
+                "byte_size": len(archive_bytes),
+                "checksum": hashlib.sha256(archive_bytes).hexdigest(),
+            },
+        )
+    except Exception:
+        with contextlib.suppress(FileNotFoundError, OSError):
+            storage_path.unlink()
+        raise
+    return artifact
+
+
+def load_archive_artifact_bytes(artifact: dict[str, Any]) -> bytes:
+    storage_path = str(artifact.get("storage_path") or "").strip()
+    if not storage_path:
+        raise ValueError("Archive artifact is missing a storage_path.")
+    path = Path(storage_path)
+    if not path.exists():
+        raise ValueError(f"Archive artifact is missing from storage: {path}")
+    return path.read_bytes()
+
+
+def build_archive_snapshot_from_bytes(
+    *,
+    archive_bytes: bytes,
+    filename: str,
+) -> dict[str, dict[str, Any]]:
+    members = validate_archive_members(archive_bytes, filename=filename)
+    return build_archive_snapshot(members)
 
 
 async def apply_archive_candidate(

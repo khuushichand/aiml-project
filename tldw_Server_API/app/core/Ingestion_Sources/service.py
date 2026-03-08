@@ -293,6 +293,14 @@ def _deserialize_source_item_row(row: Any) -> dict[str, Any]:
     return result
 
 
+def _deserialize_source_artifact_row(row: Any) -> dict[str, Any]:
+    result = _row_to_dict(row)
+    if not result:
+        return result
+    result["metadata"] = _json_loads(result.pop("metadata_json", None), {})
+    return result
+
+
 async def get_source_by_id(db, *, source_id: int, user_id: int | None = None) -> dict[str, Any]:
     query = """
         SELECT
@@ -579,6 +587,150 @@ async def update_source_snapshot(
         ),
     )
     updated = await get_source_snapshot_by_id(db, snapshot_id=snapshot_id)
+    return updated or {}
+
+
+async def create_source_artifact(
+    db,
+    *,
+    source_id: int,
+    snapshot_id: int | None,
+    artifact_kind: str,
+    status: str,
+    storage_path: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    now = _utc_now_text()
+    cursor = await db.execute(
+        """
+        INSERT INTO ingestion_source_artifacts (
+            source_id,
+            snapshot_id,
+            artifact_kind,
+            status,
+            storage_path,
+            metadata_json,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(source_id),
+            None if snapshot_id is None else int(snapshot_id),
+            str(artifact_kind),
+            str(status),
+            None if storage_path is None else str(storage_path),
+            _json_dumps(metadata or {}),
+            now,
+        ),
+    )
+    artifact_id = int(cursor.lastrowid)
+    artifact = await get_source_artifact_by_id(db, artifact_id=artifact_id)
+    return artifact or {}
+
+
+async def get_source_artifact_by_id(
+    db,
+    *,
+    artifact_id: int,
+) -> dict[str, Any] | None:
+    cursor = await db.execute(
+        """
+        SELECT
+            id,
+            source_id,
+            snapshot_id,
+            artifact_kind,
+            status,
+            storage_path,
+            metadata_json,
+            created_at
+        FROM ingestion_source_artifacts
+        WHERE id = ?
+        """,
+        (int(artifact_id),),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return _deserialize_source_artifact_row(row)
+
+
+async def get_latest_source_artifact(
+    db,
+    *,
+    source_id: int,
+    snapshot_id: int | None = None,
+    artifact_kind: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any] | None:
+    query = """
+        SELECT
+            id,
+            source_id,
+            snapshot_id,
+            artifact_kind,
+            status,
+            storage_path,
+            metadata_json,
+            created_at
+        FROM ingestion_source_artifacts
+        WHERE source_id = ?
+    """
+    params: list[Any] = [int(source_id)]
+    if snapshot_id is not None:
+        query += " AND snapshot_id = ?"
+        params.append(int(snapshot_id))
+    if artifact_kind is not None:
+        query += " AND artifact_kind = ?"
+        params.append(str(artifact_kind))
+    if status is not None:
+        query += " AND status = ?"
+        params.append(str(status))
+    query += " ORDER BY id DESC LIMIT 1"
+    cursor = await db.execute(query, tuple(params))
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return _deserialize_source_artifact_row(row)
+
+
+async def update_source_artifact(
+    db,
+    *,
+    artifact_id: int,
+    snapshot_id: int | None = None,
+    status: str | None = None,
+    storage_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    existing = await get_source_artifact_by_id(db, artifact_id=artifact_id)
+    if not existing:
+        raise ValueError(f"Artifact not found: {artifact_id}")
+    merged_metadata = dict(existing.get("metadata") or {})
+    if metadata is not None:
+        merged_metadata.update(metadata)
+    await db.execute(
+        """
+        UPDATE ingestion_source_artifacts
+        SET snapshot_id = ?,
+            status = ?,
+            storage_path = ?,
+            metadata_json = ?
+        WHERE id = ?
+        """,
+        (
+            int(snapshot_id) if snapshot_id is not None else existing.get("snapshot_id"),
+            str(status or existing.get("status") or "pending"),
+            (
+                str(storage_path)
+                if storage_path is not None
+                else existing.get("storage_path")
+            ),
+            _json_dumps(merged_metadata),
+            int(artifact_id),
+        ),
+    )
+    updated = await get_source_artifact_by_id(db, artifact_id=artifact_id)
     return updated or {}
 
 
