@@ -46,24 +46,28 @@ vi.mock("antd", async () => {
   }
 })
 
-const setupStore = (schema: WorkflowStepSchema) => {
+const setupStore = (
+  stepType: string,
+  schema: WorkflowStepSchema,
+  config: Record<string, unknown> = {}
+) => {
   useWorkflowEditorStore.setState({
     nodes: [
       {
         id: "node-1",
-        type: "llm",
+        type: stepType,
         position: { x: 0, y: 0 },
         data: {
-          label: "LLM",
-          stepType: "llm",
-          config: {}
+          label: stepType,
+          stepType,
+          config
         }
       }
     ],
     edges: [],
     selectedNodeIds: ["node-1"],
     stepRegistry: buildStepRegistry([]),
-    stepSchemas: { llm: schema }
+    stepSchemas: { [stepType]: schema }
   })
 }
 
@@ -87,7 +91,7 @@ describe("NodeConfigPanel selectors", () => {
         model: { type: "string" }
       }
     }
-    setupStore(schema)
+    setupStore("llm", schema)
 
     vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
       optionsByKey: {},
@@ -109,7 +113,7 @@ describe("NodeConfigPanel selectors", () => {
         model: { type: "string" }
       }
     }
-    setupStore(schema)
+    setupStore("llm", schema)
 
     vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
       optionsByKey: {
@@ -137,7 +141,7 @@ describe("NodeConfigPanel selectors", () => {
         model: { type: "string" }
       }
     }
-    setupStore(schema)
+    setupStore("llm", schema)
 
     vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
       optionsByKey: {},
@@ -152,5 +156,44 @@ describe("NodeConfigPanel selectors", () => {
     expect(
       screen.getByRole("button", { name: "Delete node" })
     ).toBeInTheDocument()
+  })
+
+  it("merges deep research metadata with server schema fields", () => {
+    const schema: WorkflowStepSchema = {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Templated research query resolved from workflow context" },
+        source_policy: {
+          type: "string",
+          enum: ["balanced", "local_first", "external_first", "local_only", "external_only"]
+        },
+        autonomy_mode: {
+          type: "string",
+          enum: ["checkpointed", "autonomous"]
+        },
+        save_artifact: { type: "boolean", default: true }
+      },
+      required: ["query"]
+    }
+    setupStore("deep_research", schema, {
+      query: "{{ inputs.topic }}",
+      source_policy: "balanced",
+      autonomy_mode: "checkpointed",
+      save_artifact: true
+    })
+
+    vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
+      optionsByKey: {},
+      loadingByKey: {}
+    })
+
+    render(<NodeConfigPanel />)
+
+    expect(
+      screen.getByText("Use {{variable}} for template placeholders")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Balanced")).toBeInTheDocument()
+    expect(screen.getByText("Checkpointed")).toBeInTheDocument()
+    expect(screen.getByText("Save Artifact")).toBeInTheDocument()
   })
 })

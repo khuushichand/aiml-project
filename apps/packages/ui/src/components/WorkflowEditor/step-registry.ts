@@ -540,6 +540,78 @@ export const BASE_STEP_REGISTRY: StepRegistry = {
     ]
   },
 
+  deep_research: {
+    type: "deep_research",
+    label: "Deep Research Run",
+    description:
+      "Launch a deep research session and return its run reference without waiting for completion",
+    category: "research",
+    icon: "FileSearch",
+    color: "bg-violet-600",
+    inputs: [{ id: "query", label: "Query", dataType: "string", required: true }],
+    outputs: [{ id: "run", label: "Run", dataType: "object" }],
+    configSchema: [
+      {
+        key: "query",
+        type: "template-editor",
+        label: "Query",
+        description: "Templated research query resolved from workflow context",
+        required: true
+      },
+      {
+        key: "source_policy",
+        type: "select",
+        label: "Source Policy",
+        description: "How local and external sources should be balanced",
+        default: "balanced",
+        options: [
+          { value: "balanced", label: "Balanced" },
+          { value: "local_first", label: "Local First" },
+          { value: "external_first", label: "External First" },
+          { value: "local_only", label: "Local Only" },
+          { value: "external_only", label: "External Only" }
+        ]
+      },
+      {
+        key: "autonomy_mode",
+        type: "select",
+        label: "Autonomy Mode",
+        description: "Whether the run pauses at checkpoints or runs autonomously",
+        default: "checkpointed",
+        options: [
+          { value: "checkpointed", label: "Checkpointed" },
+          { value: "autonomous", label: "Autonomous" }
+        ]
+      },
+      {
+        key: "limits_json",
+        type: "json-editor",
+        label: "Limits",
+        description: "Optional run limits for the launched research session"
+      },
+      {
+        key: "provider_overrides",
+        type: "json-editor",
+        label: "Provider Overrides",
+        description: "Optional per-run provider override configuration"
+      },
+      {
+        key: "save_artifact",
+        type: "checkbox",
+        label: "Save Artifact",
+        description: "Persist deep_research_launch.json as a workflow artifact",
+        default: true
+      },
+      {
+        key: "timeout_seconds",
+        type: "number",
+        label: "Launch Timeout",
+        description: "Bounds only the launch step, not the research session lifetime",
+        validation: { min: 1 }
+      }
+    ]
+  },
+
   // ─── Utility Steps ───────────────────────────────────────────────────────
 
   delay: {
@@ -763,6 +835,10 @@ const PORT_OVERRIDES: Record<
       { id: "rejected", label: "Rejected", dataType: "any" }
     ]
   },
+  deep_research: {
+    inputs: [{ id: "query", label: "Query", dataType: "string", required: true }],
+    outputs: [{ id: "run", label: "Run", dataType: "object" }]
+  },
   // Audio
   tts: {
     inputs: [{ id: "text", label: "Text", dataType: "string", required: true }],
@@ -964,7 +1040,8 @@ export const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
   entity_extract: "text",
   context_build: "text",
 
-  // Research & Academic (9 types)
+  // Research & Academic (10 types)
+  deep_research: "research",
   arxiv_search: "research",
   arxiv_download: "research",
   pubmed_search: "research",
@@ -999,6 +1076,7 @@ export const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
   subtitle_burn: "video",
 
   // Control Flow (10 types)
+  acp_stage: "control",
   branch: "control",
   map: "control",
   batch: "control",
@@ -1112,6 +1190,7 @@ export const ICON_OVERRIDES: Record<string, string> = {
   context_build: "Layers",
 
   // Research & Academic
+  deep_research: "FileSearch",
   arxiv_search: "GraduationCap",
   arxiv_download: "Download",
   pubmed_search: "FlaskConical",
@@ -1146,6 +1225,7 @@ export const ICON_OVERRIDES: Record<string, string> = {
   subtitle_burn: "Captions",
 
   // Control Flow
+  acp_stage: "Bot",
   branch: "GitBranch",
   map: "Layers",
   batch: "Layers",

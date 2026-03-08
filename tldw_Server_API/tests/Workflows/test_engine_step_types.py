@@ -116,6 +116,24 @@ def test_log_only_outputs_shape(client_with_wf: TestClient):
     assert out.get("message", "").endswith("Bob")
 
 
+def test_step_types_include_deep_research(client_with_wf: TestClient):
+    client = client_with_wf
+    r = client.get("/api/v1/workflows/step-types")
+    assert r.status_code == 200
+    payload = r.json()
+    deep_research = next((item for item in payload if item.get("name") == "deep_research"), None)
+    assert deep_research is not None
+    assert "does not wait for completion" in (deep_research.get("description") or "")
+    schema = deep_research.get("schema") or {}
+    properties = schema.get("properties") or {}
+    assert "query" in properties
+    assert "source_policy" in properties
+    assert "autonomy_mode" in properties
+    assert "limits_json" in properties
+    assert "provider_overrides" in properties
+    assert "save_artifact" in properties
+
+
 def test_on_failure_routing_to_log(client_with_wf: TestClient):
     client = client_with_wf
     # First step intentionally fails; on_failure routes to log step

@@ -124,3 +124,32 @@ class LiteratureReviewConfig(BaseAdapterConfig):
     )
     provider: str | None = Field(None, description="LLM provider for generation")
     model: str | None = Field(None, description="Model for generation")
+
+
+class DeepResearchConfig(BaseAdapterConfig):
+    """Config for launching a deep research session from workflows."""
+
+    query: str = Field(..., description="Research query (templated)")
+    source_policy: Literal[
+        "balanced",
+        "local_first",
+        "external_first",
+        "local_only",
+        "external_only",
+    ] = Field("balanced", description="How local and external sources should be balanced")
+    autonomy_mode: Literal["checkpointed", "autonomous"] = Field(
+        "checkpointed",
+        description="Whether the session pauses at review checkpoints or runs autonomously",
+    )
+    limits_json: dict[str, Any] | None = Field(
+        None,
+        description="Optional run limits passed through to the research session",
+    )
+    provider_overrides: dict[str, Any] | None = Field(
+        None,
+        description="Optional per-run provider override configuration",
+    )
+    save_artifact: bool | None = Field(
+        True,
+        description="Whether to persist the launch payload as a workflow artifact",
+    )

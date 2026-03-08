@@ -1,6 +1,6 @@
 """Comprehensive tests for research and bibliography adapters.
 
-This module tests all 10 research adapters:
+This module tests all 11 research adapters:
 1. run_arxiv_search_adapter - Search arXiv
 2. run_arxiv_download_adapter - Download arXiv papers
 3. run_pubmed_search_adapter - Search PubMed
@@ -11,13 +11,115 @@ This module tests all 10 research adapters:
 8. run_reference_parse_adapter - Parse reference strings
 9. run_bibtex_generate_adapter - Generate BibTeX
 10. run_literature_review_adapter - Generate literature review
+11. run_deep_research_adapter - Launch a deep research session
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 pytestmark = pytest.mark.unit
+
+
+# =============================================================================
+# Deep Research Launch Adapter Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_deep_research_adapter_launches_session_and_records_artifact(monkeypatch, tmp_path):
+    """Test deep research workflow adapter launches a session and persists a JSON launch artifact."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_adapter,
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        id = "research-session-1"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _FakeResearchService:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def create_session(self, **kwargs):
+            captured["create_session_kwargs"] = kwargs
+            return _FakeSession()
+
+    added_artifacts: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    context = {
+        "user_id": "42",
+        "tenant_id": "default",
+        "step_run_id": "wf-step-1",
+        "inputs": {"topic": "federated learning"},
+        "add_artifact": lambda **kwargs: added_artifacts.append(kwargs),
+    }
+    config = {
+        "query": "{{ inputs.topic }}",
+        "source_policy": "balanced",
+        "autonomy_mode": "checkpointed",
+        "save_artifact": True,
+    }
+
+    result = await run_deep_research_adapter(config, context)
+
+    assert result == {
+        "run_id": "research-session-1",
+        "status": "queued",
+        "phase": "drafting_plan",
+        "control_state": "running",
+        "console_url": "/research?run=research-session-1",
+        "bundle_url": "/api/v1/research/runs/research-session-1/bundle",
+        "query": "federated learning",
+        "source_policy": "balanced",
+        "autonomy_mode": "checkpointed",
+    }
+    assert captured["create_session_kwargs"] == {
+        "owner_user_id": "42",
+        "query": "federated learning",
+        "source_policy": "balanced",
+        "autonomy_mode": "checkpointed",
+        "limits_json": None,
+        "provider_overrides": None,
+    }
+    assert len(added_artifacts) == 1
+    assert added_artifacts[0]["type"] == "deep_research_launch"
+    assert added_artifacts[0]["mime_type"] == "application/json"
+    artifact_uri = str(added_artifacts[0]["uri"])
+    assert artifact_uri.startswith("file://")
+    artifact_path = Path(artifact_uri.removeprefix("file://"))
+    assert artifact_path.name == "deep_research_launch.json"
+    assert json.loads(artifact_path.read_text(encoding="utf-8")) == result
+
+
+@pytest.mark.asyncio
+async def test_deep_research_adapter_rejects_empty_rendered_query(monkeypatch):
+    """Test deep research workflow adapter rejects an empty templated query."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_adapter,
+    )
+
+    with pytest.raises(ValueError, match="query"):
+        await run_deep_research_adapter(
+            {"query": "{{ inputs.topic }}"},
+            {"user_id": "7", "inputs": {"topic": ""}},
+        )
 
 
 # =============================================================================

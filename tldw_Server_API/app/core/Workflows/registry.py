@@ -150,6 +150,7 @@ class StepTypeRegistry:
             "reference_parse": StepType("reference_parse", "Parse citation string to structured"),
             "bibtex_generate": StepType("bibtex_generate", "Generate BibTeX entry"),
             "literature_review": StepType("literature_review", "Generate literature review summary"),
+            "deep_research": StepType("deep_research", "Launch a deep research session and return its run reference; does not wait for completion"),
         }
 
     def list(self) -> builtins.list[StepType]:

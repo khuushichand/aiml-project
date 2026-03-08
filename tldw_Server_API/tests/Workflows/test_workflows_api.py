@@ -185,6 +185,7 @@ def test_step_types_and_runs_listing(client_with_workflows_db: TestClient):
     items = st.json()
     names = [i.get("name") for i in items]
     assert "prompt" in names and "rag_search" in names
+    assert "deep_research" in names
 
     # Create two definitions: one succeeds, one fails
     ok_def = {
@@ -469,6 +470,101 @@ def test_create_workflow_accepts_acp_stage_definition(client_with_workflows_db: 
     }
     resp = client.post("/api/v1/workflows", json=definition)
     assert resp.status_code in (200, 201), resp.text
+
+
+def test_create_workflow_rejects_invalid_deep_research_definition(client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+    definition = {
+        "name": "invalid-deep-research-definition",
+        "version": 1,
+        "steps": [
+            {
+                "id": "r1",
+                "type": "deep_research",
+                "config": {
+                    "query": "launch research",
+                    "source_policy": "unsupported_policy",
+                },
+            }
+        ],
+    }
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_run_workflow_launches_deep_research_session(monkeypatch, client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        id = "research-session-1"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _FakeResearchService:
+        def create_session(self, **kwargs):
+            captured["create_session_kwargs"] = kwargs
+            return _FakeSession()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    definition = {
+        "name": "launch-deep-research",
+        "version": 1,
+        "steps": [
+            {
+                "id": "r1",
+                "type": "deep_research",
+                "config": {
+                    "query": "{{ inputs.topic }}",
+                    "source_policy": "balanced",
+                    "autonomy_mode": "checkpointed",
+                },
+            }
+        ],
+    }
+
+    create = client.post("/api/v1/workflows", json=definition)
+    assert create.status_code == 201, create.text
+    wid = create.json()["id"]
+
+    run_id = client.post(
+        f"/api/v1/workflows/{wid}/run",
+        json={"inputs": {"topic": "evidence-backed forecasting"}},
+    ).json()["run_id"]
+
+    deadline = time.time() + 5
+    data = {}
+    while time.time() < deadline:
+        data = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if data["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.05)
+
+    assert data["status"] == "succeeded"
+    assert (data.get("outputs") or {}) == {
+        "run_id": "research-session-1",
+        "status": "queued",
+        "phase": "drafting_plan",
+        "control_state": "running",
+        "console_url": "/research?run=research-session-1",
+        "bundle_url": "/api/v1/research/runs/research-session-1/bundle",
+        "query": "evidence-backed forecasting",
+        "source_policy": "balanced",
+        "autonomy_mode": "checkpointed",
+    }
+    assert captured["create_session_kwargs"] == {
+        "owner_user_id": "1",
+        "query": "evidence-backed forecasting",
+        "source_policy": "balanced",
+        "autonomy_mode": "checkpointed",
+        "limits_json": None,
+        "provider_overrides": None,
+    }
 
 
 def test_artifact_manifest_verify_mismatch(monkeypatch, client_with_workflows_db: TestClient):
