@@ -14,7 +14,6 @@ imported from ``app.core.exceptions``.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -24,10 +23,6 @@ from tldw_Server_API.app.core.exceptions import (
     StructuredOutputParseError,
     StructuredOutputSchemaError,
 )
-
-_THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.IGNORECASE)
-_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
-
 
 @dataclass(frozen=True)
 class StructuredOutputOptions:
@@ -69,7 +64,57 @@ class StructuredOutputOptions:
 
 def _strip_think_tags(text: str) -> str:
     """Remove `<think>...</think>` spans and surrounding whitespace."""
-    return _THINK_TAG_RE.sub("", text).strip()
+    if not text:
+        return ""
+
+    opening = "<think>"
+    closing = "</think>"
+    lowered = text.lower()
+    cursor = 0
+    fragments: list[str] = []
+
+    while True:
+        start = lowered.find(opening, cursor)
+        if start < 0:
+            fragments.append(text[cursor:])
+            break
+
+        fragments.append(text[cursor:start])
+        end = lowered.find(closing, start + len(opening))
+        if end < 0:
+            fragments.append(text[start:])
+            break
+
+        cursor = end + len(closing)
+        while cursor < len(text) and text[cursor].isspace():
+            cursor += 1
+
+    return "".join(fragments).strip()
+
+
+def _extract_fenced_blocks(text: str) -> list[str]:
+    """Extract triple-backtick fenced blocks without regex backtracking."""
+    if not text:
+        return []
+
+    blocks: list[str] = []
+    cursor = 0
+
+    while True:
+        start = text.find("```", cursor)
+        if start < 0:
+            break
+        end = text.find("```", start + 3)
+        if end < 0:
+            break
+
+        payload = text[start + 3 : end]
+        if payload.lower().startswith("json") and (len(payload) == 4 or payload[4].isspace()):
+            payload = payload[4:]
+        blocks.append(payload.lstrip())
+        cursor = end + 3
+
+    return blocks
 
 
 def _extract_balanced_json_fragments(
@@ -151,7 +196,7 @@ def _build_parse_candidates(text: str, *, options: StructuredOutputOptions) -> l
         seen.add(value)
         candidates.append(value)
 
-    for block in _FENCE_RE.findall(raw) or []:
+    for block in _extract_fenced_blocks(raw):
         _push(block)
         if options.strip_think_tags and not options.strict:
             _push(_strip_think_tags(block))
