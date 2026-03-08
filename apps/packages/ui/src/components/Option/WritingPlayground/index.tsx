@@ -6726,7 +6726,7 @@ export const WritingPlayground = () => {
 
   const inspectTabContent = (
                   <WritingPlaygroundDiagnosticsPanel
-                    title={t("option:writingPlayground.sidebarInspect", "Inspect")}
+                    title={t("option:writingPlayground.sidebarInspect", "Analysis")}
                     t={t}
                     status={diagnosticsSummary.status}
                     showOffline={showOffline}

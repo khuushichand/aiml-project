@@ -275,7 +275,7 @@ describe("WritingPlayground inspector tabs", () => {
 
     expect(
       within(screen.getByTestId("writing-playground-diagnostics-card")).getByText(
-        "Inspect"
+        "Analysis"
       )
     ).toBeInTheDocument()
   })

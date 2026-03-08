@@ -5,6 +5,11 @@ import {
   type WritingLayoutMode
 } from "./writing-layout-utils"
 
+const LIBRARY_SIDEBAR_WIDTH_PX = 280
+const LIBRARY_DRAWER_WIDTH_PX = 320
+const INSPECTOR_SIDEBAR_WIDTH_PX = 320
+const INSPECTOR_DRAWER_WIDTH_PX = 360
+
 type WritingPlaygroundShellProps = {
   children: ReactNode
   libraryOpen: boolean
@@ -49,7 +54,8 @@ export const WritingPlaygroundShell: FC<WritingPlaygroundShellProps> = ({
       {!isCompact && libraryOpen && (
         <div
           data-testid="writing-library-sidebar"
-          className="w-[280px] flex-shrink-0 border-r border-border overflow-y-auto bg-surface">
+          style={{ width: LIBRARY_SIDEBAR_WIDTH_PX }}
+          className="flex-shrink-0 border-r border-border overflow-y-auto bg-surface">
           {libraryContent}
         </div>
       )}
@@ -61,7 +67,7 @@ export const WritingPlaygroundShell: FC<WritingPlaygroundShellProps> = ({
           placement="left"
           open={libraryOpen}
           onClose={onLibraryToggle}
-          width={320}
+          width={LIBRARY_DRAWER_WIDTH_PX}
           styles={{ body: { padding: 0 } }}>
           {libraryContent}
         </Drawer>
@@ -76,7 +82,8 @@ export const WritingPlaygroundShell: FC<WritingPlaygroundShellProps> = ({
       {!isCompact && inspectorOpen && (
         <div
           data-testid="writing-inspector-sidebar"
-          className="w-[320px] flex-shrink-0 border-l border-border overflow-y-auto bg-surface">
+          style={{ width: INSPECTOR_SIDEBAR_WIDTH_PX }}
+          className="flex-shrink-0 border-l border-border overflow-y-auto bg-surface">
           {inspectorContent}
         </div>
       )}
@@ -88,7 +95,7 @@ export const WritingPlaygroundShell: FC<WritingPlaygroundShellProps> = ({
           placement="right"
           open={inspectorOpen}
           onClose={onInspectorToggle}
-          width={360}
+          width={INSPECTOR_DRAWER_WIDTH_PX}
           styles={{ body: { padding: 0 } }}>
           {inspectorContent}
         </Drawer>
