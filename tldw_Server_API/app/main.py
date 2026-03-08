@@ -3073,6 +3073,27 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Kanban activity cleanup scheduler: {e}")
 
+    # Start ingestion source archive cleanup scheduler (retention cleanup)
+    try:
+        _enable_ingestion_sources_cleanup = _shared_is_truthy(
+            _env_os.getenv("INGESTION_SOURCES_CLEANUP_ENABLED", "false")
+        )
+        if not _enable_ingestion_sources_cleanup:
+            logger.info(
+                "Ingestion source archive cleanup scheduler disabled "
+                "(INGESTION_SOURCES_CLEANUP_ENABLED != true)"
+            )
+        else:
+            from tldw_Server_API.app.services.ingestion_sources_cleanup_service import (
+                start_ingestion_sources_cleanup_scheduler,
+            )
+
+            _ingestion_sources_cleanup_task = await start_ingestion_sources_cleanup_scheduler()
+            if _ingestion_sources_cleanup_task:
+                logger.info("Ingestion source archive cleanup scheduler started")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start ingestion source archive cleanup scheduler: {e}")
+
     # Start Kanban soft-delete purge scheduler
     try:
         _enable_kanban_purge = _shared_is_truthy(_env_os.getenv("KANBAN_PURGE_ENABLED", "false"))
