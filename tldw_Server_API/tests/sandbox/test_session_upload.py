@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 import tarfile
@@ -199,6 +200,74 @@ async def test_upload_files_enforces_cap_against_existing_workspace_bytes(monkey
         )
 
     assert exc_info.value.status_code == 413
+    assert (tmp_path / "first.bin").exists()
+    assert not (tmp_path / "second.bin").exists()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_uploads_are_serialized_per_session(monkeypatch, tmp_path) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
+
+    monkeypatch.setattr(sb, "_require_session_owner", lambda session_id, current_user: "1")
+    monkeypatch.setattr(sb._service, "get_session_workspace_path", lambda session_id: str(tmp_path))
+    monkeypatch.setenv("SANDBOX_WORKSPACE_CAP_MB", "1")
+
+    first = UploadFile(filename="first.bin", file=io.BytesIO(b"a" * (700 * 1024)))
+    second = UploadFile(filename="second.bin", file=io.BytesIO(b"b" * (700 * 1024)))
+
+    first_entered = asyncio.Event()
+    release_first = asyncio.Event()
+    second_entered = asyncio.Event()
+
+    original_first_read = first.read
+    original_second_read = second.read
+
+    async def _first_read(size: int = -1):
+        if not first_entered.is_set():
+            first_entered.set()
+            await release_first.wait()
+        return await original_first_read(size)
+
+    async def _second_read(size: int = -1):
+        second_entered.set()
+        return await original_second_read(size)
+
+    first.read = _first_read  # type: ignore[assignment]
+    second.read = _second_read  # type: ignore[assignment]
+
+    first_task = asyncio.create_task(
+        sb.upload_files(
+            request=None,  # type: ignore[arg-type]
+            session_id="sess-concurrent",
+            files=[first],
+            current_user=_user(1),
+            audit_service=None,
+        )
+    )
+    await asyncio.wait_for(first_entered.wait(), timeout=1.0)
+
+    second_task = asyncio.create_task(
+        sb.upload_files(
+            request=None,  # type: ignore[arg-type]
+            session_id="sess-concurrent",
+            files=[second],
+            current_user=_user(1),
+            audit_service=None,
+        )
+    )
+
+    await asyncio.sleep(0.05)
+    assert not second_entered.is_set(), "second upload should wait for the session lock"
+
+    release_first.set()
+    first_response = await asyncio.wait_for(first_task, timeout=2.0)
+    assert first_response.file_count == 1
+
+    with pytest.raises(HTTPException) as exc_info:
+        await asyncio.wait_for(second_task, timeout=2.0)
+
+    assert exc_info.value.status_code == 413
+    assert second_entered.is_set()
     assert (tmp_path / "first.bin").exists()
     assert not (tmp_path / "second.bin").exists()
 

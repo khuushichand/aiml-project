@@ -155,6 +155,18 @@ router = APIRouter(prefix="/sandbox", tags=["sandbox"], route_class=SandboxArtif
 
 _service = SandboxService(enable_background_tasks=False)
 
+try:
+    import fcntl  # type: ignore
+    _SANDBOX_HAS_FCNTL = True
+except Exception:
+    _SANDBOX_HAS_FCNTL = False
+
+try:
+    import msvcrt  # type: ignore
+    _SANDBOX_HAS_MSVCRT = True
+except Exception:
+    _SANDBOX_HAS_MSVCRT = False
+
 
 @router.on_event("startup")
 async def _sandbox_startup() -> None:
@@ -173,6 +185,71 @@ _SANDBOX_WS_ACTIVE_BY_USER: dict[str, int] = {}
 _SANDBOX_WS_ACTIVE_BY_PERSONA: dict[str, int] = {}
 _SANDBOX_WS_ACTIVE_BY_SESSION: dict[str, int] = {}
 _SANDBOX_WS_ACTIVE_BY_RUN: dict[str, int] = {}
+_SANDBOX_UPLOAD_FALLBACK_LOCKS: dict[str, threading.Lock] = {}
+_SANDBOX_UPLOAD_FALLBACK_LOCKS_GUARD = threading.Lock()
+
+
+def _sandbox_upload_lock_path(workspace_root: str) -> str:
+    return os.path.join(workspace_root, ".sandbox-upload.lock")
+
+
+def _get_sandbox_upload_thread_lock(lock_path: str) -> threading.Lock:
+    key = str(os.path.abspath(lock_path))
+    with _SANDBOX_UPLOAD_FALLBACK_LOCKS_GUARD:
+        lock = _SANDBOX_UPLOAD_FALLBACK_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _SANDBOX_UPLOAD_FALLBACK_LOCKS[key] = lock
+    return lock
+
+
+@contextlib.asynccontextmanager
+async def _sandbox_session_upload_lock(workspace_root: str):
+    os.makedirs(workspace_root, exist_ok=True)
+    lock_path = _sandbox_upload_lock_path(workspace_root)
+
+    if _SANDBOX_HAS_FCNTL:
+        def _open_and_lock():
+            handle = open(lock_path, "a", encoding="utf-8")
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            return handle
+
+        handle = await asyncio.to_thread(_open_and_lock)
+        try:
+            yield
+        finally:
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                await asyncio.to_thread(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                await asyncio.to_thread(handle.close)
+        return
+
+    if _SANDBOX_HAS_MSVCRT:
+        def _open_and_lock():
+            handle = open(lock_path, "a+b")
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            return handle
+
+        handle = await asyncio.to_thread(_open_and_lock)
+        try:
+            yield
+        finally:
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                await asyncio.to_thread(handle.seek, 0)
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                await asyncio.to_thread(msvcrt.locking, handle.fileno(), msvcrt.LK_UNLCK, 1)
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                await asyncio.to_thread(handle.close)
+        return
+
+    lock = _get_sandbox_upload_thread_lock(lock_path)
+    await asyncio.to_thread(lock.acquire)
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def _sandbox_ws_limit(env_key: str, settings_attr: str, default: int) -> int:
@@ -910,183 +987,184 @@ async def upload_files(
     if not ws_root:
         raise HTTPException(status_code=404, detail="session_not_found")
 
-    try:
-        cap_mb = int(os.getenv("SANDBOX_WORKSPACE_CAP_MB") or 256)
-    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-        cap_mb = 256
-    cap_bytes = cap_mb * 1024 * 1024
-    chunk_size = 64 * 1024
-    written = 0
-    count = 0
-
-    import tarfile
-    import zipfile
-    def _workspace_usage_bytes(root: str) -> int:
-        total = 0
-        for dirpath, _dirnames, filenames in os.walk(root):
-            for filename in filenames:
-                full_path = os.path.join(dirpath, filename)
-                with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                    if os.path.isfile(full_path):
-                        total += int(os.path.getsize(full_path))
-        return total
-
-    def _existing_file_size(target: str) -> int:
+    async with _sandbox_session_upload_lock(ws_root):
         try:
-            if os.path.isfile(target):
-                return int(os.path.getsize(target))
+            cap_mb = int(os.getenv("SANDBOX_WORKSPACE_CAP_MB") or 256)
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+            cap_mb = 256
+        cap_bytes = cap_mb * 1024 * 1024
+        chunk_size = 64 * 1024
+        written = 0
+        count = 0
+
+        import tarfile
+        import zipfile
+        def _workspace_usage_bytes(root: str) -> int:
+            total = 0
+            for dirpath, _dirnames, filenames in os.walk(root):
+                for filename in filenames:
+                    full_path = os.path.join(dirpath, filename)
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                        if os.path.isfile(full_path):
+                            total += int(os.path.getsize(full_path))
+            return total
+
+        def _existing_file_size(target: str) -> int:
+            try:
+                if os.path.isfile(target):
+                    return int(os.path.getsize(target))
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+                return 0
             return 0
-        return 0
 
-    def _stream_reader_to_target(
-        target: str,
-        read_chunk,
-        *,
-        workspace_used: int,
-    ) -> tuple[int, int]:
-        parent = os.path.dirname(target)
-        os.makedirs(parent, exist_ok=True)
-        existing_size = _existing_file_size(target)
-        fd, temp_path = tempfile.mkstemp(
-            dir=parent,
-            prefix=f".{os.path.basename(target)}.",
-            suffix=".upload",
-        )
-        os.close(fd)
-        file_bytes = 0
-        try:
-            with open(temp_path, "wb") as out:
-                while True:
-                    chunk = read_chunk(chunk_size)
-                    if not chunk:
-                        break
-                    next_total = workspace_used - existing_size + file_bytes + len(chunk)
-                    if next_total > cap_bytes:
-                        raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
-                    out.write(chunk)
-                    file_bytes += len(chunk)
-            os.replace(temp_path, target)
-            return file_bytes, workspace_used - existing_size + file_bytes
-        except Exception:
-            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                os.unlink(temp_path)
-            raise
-
-    async def _stream_upload_to_target(
-        upload: UploadFile,
-        target: str,
-        *,
-        workspace_used: int,
-    ) -> tuple[int, int]:
-        parent = os.path.dirname(target)
-        os.makedirs(parent, exist_ok=True)
-        existing_size = _existing_file_size(target)
-        fd, temp_path = tempfile.mkstemp(
-            dir=parent,
-            prefix=f".{os.path.basename(target)}.",
-            suffix=".upload",
-        )
-        os.close(fd)
-        file_bytes = 0
-        try:
-            with open(temp_path, "wb") as out:
-                while True:
-                    chunk = await upload.read(chunk_size)
-                    if not chunk:
-                        break
-                    next_total = workspace_used - existing_size + file_bytes + len(chunk)
-                    if next_total > cap_bytes:
-                        raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
-                    out.write(chunk)
-                    file_bytes += len(chunk)
-            os.replace(temp_path, target)
-            return file_bytes, workspace_used - existing_size + file_bytes
-        except Exception:
-            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                os.unlink(temp_path)
-            raise
-
-    workspace_used = _workspace_usage_bytes(ws_root)
-
-    for up in files:
-        lower = (up.filename or "").lower()
-        if lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2")):
+        def _stream_reader_to_target(
+            target: str,
+            read_chunk,
+            *,
+            workspace_used: int,
+        ) -> tuple[int, int]:
+            parent = os.path.dirname(target)
+            os.makedirs(parent, exist_ok=True)
+            existing_size = _existing_file_size(target)
+            fd, temp_path = tempfile.mkstemp(
+                dir=parent,
+                prefix=f".{os.path.basename(target)}.",
+                suffix=".upload",
+            )
+            os.close(fd)
+            file_bytes = 0
             try:
+                with open(temp_path, "wb") as out:
+                    while True:
+                        chunk = read_chunk(chunk_size)
+                        if not chunk:
+                            break
+                        next_total = workspace_used - existing_size + file_bytes + len(chunk)
+                        if next_total > cap_bytes:
+                            raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
+                        out.write(chunk)
+                        file_bytes += len(chunk)
+                os.replace(temp_path, target)
+                return file_bytes, workspace_used - existing_size + file_bytes
+            except Exception:
                 with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                    await up.seek(0)
-                with tarfile.open(fileobj=up.file, mode="r:*") as tf:
-                    for member in tf.getmembers():
-                        if member.isdev() or member.issym() or member.islnk():
-                            continue
-                        target = safe_join(ws_root, member.name)
-                        if target is None:
-                            continue
-                        if member.isdir():
-                            os.makedirs(target, exist_ok=True)
-                            continue
-                        fileobj = tf.extractfile(member)
-                        if fileobj is None:
-                            continue
-                        try:
-                            file_bytes, workspace_used = _stream_reader_to_target(
-                                target,
-                                fileobj.read,
-                                workspace_used=workspace_used,
-                            )
-                        finally:
-                            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                                fileobj.close()
-                        written += file_bytes
-                        count += 1
-            except HTTPException:
+                    os.unlink(temp_path)
                 raise
-            except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"Failed to extract tar: {e}")
-        elif lower.endswith(".zip"):
+
+        async def _stream_upload_to_target(
+            upload: UploadFile,
+            target: str,
+            *,
+            workspace_used: int,
+        ) -> tuple[int, int]:
+            parent = os.path.dirname(target)
+            os.makedirs(parent, exist_ok=True)
+            existing_size = _existing_file_size(target)
+            fd, temp_path = tempfile.mkstemp(
+                dir=parent,
+                prefix=f".{os.path.basename(target)}.",
+                suffix=".upload",
+            )
+            os.close(fd)
+            file_bytes = 0
             try:
+                with open(temp_path, "wb") as out:
+                    while True:
+                        chunk = await upload.read(chunk_size)
+                        if not chunk:
+                            break
+                        next_total = workspace_used - existing_size + file_bytes + len(chunk)
+                        if next_total > cap_bytes:
+                            raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
+                        out.write(chunk)
+                        file_bytes += len(chunk)
+                os.replace(temp_path, target)
+                return file_bytes, workspace_used - existing_size + file_bytes
+            except Exception:
                 with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                    await up.seek(0)
-                with zipfile.ZipFile(up.file) as zf:
-                    for member in zf.infolist():
-                        if member.is_dir():
-                            continue
-                        if (member.external_attr >> 16) & 0xF000 == 0xA000:
-                            continue
-                        target = safe_join(ws_root, member.filename)
-                        if target is None:
-                            continue
-                        with zf.open(member) as fileobj:
-                            file_bytes, workspace_used = _stream_reader_to_target(
-                                target,
-                                fileobj.read,
-                                workspace_used=workspace_used,
-                            )
-                        written += file_bytes
-                        count += 1
-            except HTTPException:
+                    os.unlink(temp_path)
                 raise
-            except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"Failed to extract zip: {e}")
-        else:
-            target = safe_join(ws_root, up.filename or f"file_{count}")
-            if target is None:
-                continue
-            try:
-                with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                    await up.seek(0)
-                file_bytes, workspace_used = await _stream_upload_to_target(
-                    up,
-                    target,
-                    workspace_used=workspace_used,
-                )
-            except HTTPException:
-                raise
-            except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"Failed reading upload file {up.filename}: {e}")
-                continue
-            written += file_bytes
-            count += 1
+
+        workspace_used = _workspace_usage_bytes(ws_root)
+
+        for up in files:
+            lower = (up.filename or "").lower()
+            if lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2")):
+                try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                        await up.seek(0)
+                    with tarfile.open(fileobj=up.file, mode="r:*") as tf:
+                        for member in tf.getmembers():
+                            if member.isdev() or member.issym() or member.islnk():
+                                continue
+                            target = safe_join(ws_root, member.name)
+                            if target is None:
+                                continue
+                            if member.isdir():
+                                os.makedirs(target, exist_ok=True)
+                                continue
+                            fileobj = tf.extractfile(member)
+                            if fileobj is None:
+                                continue
+                            try:
+                                file_bytes, workspace_used = _stream_reader_to_target(
+                                    target,
+                                    fileobj.read,
+                                    workspace_used=workspace_used,
+                                )
+                            finally:
+                                with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                                    fileobj.close()
+                            written += file_bytes
+                            count += 1
+                except HTTPException:
+                    raise
+                except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+                    logger.warning(f"Failed to extract tar: {e}")
+            elif lower.endswith(".zip"):
+                try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                        await up.seek(0)
+                    with zipfile.ZipFile(up.file) as zf:
+                        for member in zf.infolist():
+                            if member.is_dir():
+                                continue
+                            if (member.external_attr >> 16) & 0xF000 == 0xA000:
+                                continue
+                            target = safe_join(ws_root, member.filename)
+                            if target is None:
+                                continue
+                            with zf.open(member) as fileobj:
+                                file_bytes, workspace_used = _stream_reader_to_target(
+                                    target,
+                                    fileobj.read,
+                                    workspace_used=workspace_used,
+                                )
+                            written += file_bytes
+                            count += 1
+                except HTTPException:
+                    raise
+                except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+                    logger.warning(f"Failed to extract zip: {e}")
+            else:
+                target = safe_join(ws_root, up.filename or f"file_{count}")
+                if target is None:
+                    continue
+                try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                        await up.seek(0)
+                    file_bytes, workspace_used = await _stream_upload_to_target(
+                        up,
+                        target,
+                        workspace_used=workspace_used,
+                    )
+                except HTTPException:
+                    raise
+                except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+                    logger.warning(f"Failed reading upload file {up.filename}: {e}")
+                    continue
+                written += file_bytes
+                count += 1
 
     # Metrics
     try:

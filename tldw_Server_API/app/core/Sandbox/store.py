@@ -201,6 +201,16 @@ class SandboxStore:
     def get_user_artifact_bytes(self, user_id: str) -> int:
         return 0
 
+    def try_reserve_user_artifact_bytes(self, user_id: str, delta: int, cap_bytes: int) -> bool:
+        if int(delta or 0) <= 0:
+            self.increment_user_artifact_bytes(user_id, int(delta or 0))
+            return True
+        current = int(self.get_user_artifact_bytes(user_id))
+        if current + int(delta) > int(cap_bytes):
+            return False
+        self.increment_user_artifact_bytes(user_id, int(delta))
+        return True
+
     def increment_user_artifact_bytes(self, user_id: str, delta: int) -> None:
         pass
 
@@ -638,6 +648,18 @@ class InMemoryStore(SandboxStore):
         with self._lock:
             cur = int(self._user_bytes.get(user_id, 0))
             self._user_bytes[user_id] = max(0, cur + int(delta))
+
+    def try_reserve_user_artifact_bytes(self, user_id: str, delta: int, cap_bytes: int) -> bool:
+        d = int(delta or 0)
+        if d <= 0:
+            self.increment_user_artifact_bytes(user_id, d)
+            return True
+        with self._lock:
+            cur = int(self._user_bytes.get(user_id, 0))
+            if cur + d > int(cap_bytes):
+                return False
+            self._user_bytes[user_id] = cur + d
+            return True
 
     def list_runs(
         self,
@@ -1676,6 +1698,25 @@ class SQLiteStore(SandboxStore):
                 "REPLACE INTO sandbox_usage(user_id, artifact_bytes) VALUES (?,?)",
                 (user_id, new_val),
             )
+
+    def try_reserve_user_artifact_bytes(self, user_id: str, delta: int, cap_bytes: int) -> bool:
+        d = int(delta or 0)
+        if d <= 0:
+            self.increment_user_artifact_bytes(user_id, d)
+            return True
+        with self._lock, self._conn() as con:
+            con.execute("BEGIN IMMEDIATE")
+            cur = con.execute("SELECT artifact_bytes FROM sandbox_usage WHERE user_id=?", (user_id,))
+            row = cur.fetchone()
+            cur_val = int(row["artifact_bytes"]) if row and row["artifact_bytes"] is not None else 0
+            if cur_val + d > int(cap_bytes):
+                con.rollback()
+                return False
+            con.execute(
+                "REPLACE INTO sandbox_usage(user_id, artifact_bytes) VALUES (?,?)",
+                (user_id, cur_val + d),
+            )
+            return True
 
     def list_runs(
         self,
@@ -2793,6 +2834,29 @@ class PostgresStore(SandboxStore):
                     """,
                     (user_id, d),
                 )
+
+    def try_reserve_user_artifact_bytes(self, user_id: str, delta: int, cap_bytes: int) -> bool:
+        if not user_id:
+            return False
+        d = int(delta or 0)
+        if d <= 0:
+            self.increment_user_artifact_bytes(user_id, d)
+            return True
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO sandbox_usage(user_id, artifact_bytes)
+                    SELECT %s, %s
+                    WHERE %s <= %s
+                    ON CONFLICT (user_id) DO UPDATE
+                    SET artifact_bytes = COALESCE(sandbox_usage.artifact_bytes, 0) + EXCLUDED.artifact_bytes
+                    WHERE COALESCE(sandbox_usage.artifact_bytes, 0) + EXCLUDED.artifact_bytes <= %s
+                    RETURNING artifact_bytes
+                    """,
+                    (user_id, d, d, int(cap_bytes), int(cap_bytes)),
+                )
+                return cur.fetchone() is not None
 
     def list_runs(
         self,

@@ -1194,12 +1194,6 @@ class SandboxOrchestrator:
         except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
             cap_user = 128 * 1024 * 1024
 
-        # Determine remaining budget
-        try:
-            current_user_bytes = int(self._store.get_user_artifact_bytes(owner))
-        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
-            current_user_bytes = 0
-
         selected: dict[str, bytes] = {}
         total_run = 0
         # Deterministic order
@@ -1208,16 +1202,20 @@ class SandboxOrchestrator:
             sz = len(data)
             if total_run + sz > cap_run:
                 break
-            if current_user_bytes + sz > cap_user:
+            try:
+                admitted = bool(self._store.try_reserve_user_artifact_bytes(owner, sz, cap_user))
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                admitted = False
+            if not admitted:
                 break
             selected[path] = data
             total_run += sz
-            current_user_bytes += sz
 
         # Persist selected to FS and memory map for backward compatibility
         art_dir = self._artifact_dir(owner, run_id)
         with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
             art_dir.mkdir(parents=True, exist_ok=True)
+        persisted: dict[str, bytes] = {}
         for path, data in selected.items():
             rel = self._safe_rel(path)
             full = art_dir / rel
@@ -1227,11 +1225,13 @@ class SandboxOrchestrator:
                     f.write(data)
             except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to persist artifact {rel}: {e}")
+                with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
+                    self._store.increment_user_artifact_bytes(owner, -len(data))
+                continue
+            persisted[path] = data
 
         with self._lock:
-            self._artifacts[run_id] = selected
-        with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
-            self._store.increment_user_artifact_bytes(owner, int(total_run))
+            self._artifacts[run_id] = persisted
 
     def list_artifacts(self, run_id: str) -> dict[str, int]:
         self._maybe_prune_expired_artifacts()

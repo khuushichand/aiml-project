@@ -223,10 +223,20 @@ class SandboxModule(BaseModule):
         try:
             if bool(getattr(context, "is_admin", False)):
                 return True
-            roles = (getattr(context, "metadata", {}) or {}).get("roles")
+            metadata = getattr(context, "metadata", {}) or {}
+            roles = metadata.get("roles")
             if isinstance(roles, str):
                 roles = [roles]
-            return isinstance(roles, list) and any(str(r).lower() == "admin" for r in roles)
+            if isinstance(roles, list) and any(str(r).strip().lower() == "admin" for r in roles):
+                return True
+            permissions = metadata.get("permissions")
+            if isinstance(permissions, str):
+                permissions = [permissions]
+            if isinstance(permissions, list):
+                normalized = {str(permission).strip().lower() for permission in permissions if str(permission).strip()}
+                if "*" in normalized or "system.configure" in normalized:
+                    return True
+            return False
         except Exception:
             return False
 

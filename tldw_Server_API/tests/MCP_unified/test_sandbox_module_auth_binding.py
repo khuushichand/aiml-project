@@ -164,3 +164,35 @@ async def test_sandbox_run_inherits_owned_session_defaults() -> None:
     assert spec.network_policy == "deny_all"
     assert spec.env == {"SESSION_TOKEN": "present"}
     assert spec.trust_level == TrustLevel.untrusted
+
+
+@pytest.mark.asyncio
+async def test_sandbox_run_allows_permission_based_admin_override() -> None:
+    module = SandboxModule(ModuleConfig(name="sandbox"))
+    module._svc = _FakeSandboxService()
+    module._svc.sessions["sess-admin"] = Session(
+        id="sess-admin",
+        runtime=RuntimeType.docker,
+        base_image="python:3.11-slim",
+        expires_at=None,
+    )
+    module._svc.session_owners["sess-admin"] = "88"
+    ctx = RequestContext(
+        request_id="req-admin-1",
+        user_id="77",
+        client_id="test-client",
+        session_id=None,
+        metadata={"permissions": ["system.configure"]},
+    )
+
+    result = await module.execute_tool(
+        "sandbox.run",
+        {
+            "session_id": "sess-admin",
+            "command": ["python", "-c", "print('ok')"],
+        },
+        context=ctx,
+    )
+
+    assert result["id"] == "run-test-1"
+    assert module._svc.user_ids == ["77"]
