@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.35] 2026-03-08
+
+### Added
+
+- Chat Workflows web-shell regression coverage:
+  - Added `apps/tldw-frontend/__tests__/pages/chat-workflows-route.test.tsx` to verify the Next.js page shim exists and still lazy-loads `@/routes/option-chat-workflows`.
+  - Tightened `apps/packages/ui/src/routes/__tests__/chat-workflows-route.test.tsx` to keep the `/chat-workflows` workspace navigation metadata aligned with the shared route registry.
+
+### Fixed
+
+- Restored Chat Workflows route exposure in the Next.js web app:
+  - Added `apps/tldw-frontend/pages/chat-workflows.tsx` so `/chat-workflows` resolves instead of falling through to a missing-page state.
+  - Preserved discoverability through existing launcher coverage targeting `/chat-workflows`.
+
 ## [0.1.34] 2026-03-07
 
 ### Added

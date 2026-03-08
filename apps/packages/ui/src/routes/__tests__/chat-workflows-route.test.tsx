@@ -23,5 +23,8 @@ describe("chat workflows route wiring", () => {
     expect(routeRegistrySource).toMatch(
       /const OptionChatWorkflows = lazy\(\(\) => import\("\.\/option-chat-workflows"\)\)/
     )
+    expect(routeRegistrySource).toMatch(
+      /path:\s*"\/chat-workflows"[\s\S]*?group:\s*"workspace"[\s\S]*?labelToken:\s*"option:header.chatWorkflows"[\s\S]*?order:\s*10\.5/
+    )
   })
 })
