@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
 ## [0.1.30] 2026-03-06
+- **Document Workspace UX/UI Audit** — Comprehensive improvements across accessibility, keyboard navigation, mobile responsiveness, and user control, based on Nielsen's 10 Usability Heuristics:
+  - **Accessibility (WCAG)**: `aria-label` on all 5 TextSelectionPopover buttons (Copy, Highlight, Translate, Ask AI, Listen), `group-focus-within:opacity-100` on annotation edit/delete actions for keyboard discoverability, `aria-label` on chat textarea
+  - **Keyboard shortcuts**: Cmd+G (go to page), Cmd+[/] (toggle panels), Cmd+/ (focus chat), Cmd+=/- /0 (zoom in/out/reset), F (fullscreen toggle), Escape to dismiss text selection popover
+  - **Mobile bottom navigation bar**: Fixed 48px bottom nav with Sidebar/Document/Chat icons replacing Ant Design top tabs, proper `role="tablist"` and `aria-selected` semantics
+  - **Mobile text selection bottom sheet**: Touch-friendly slide-up sheet with backdrop, safe area inset padding, drag handle, and text preview replacing floating popover on mobile
+  - **Ask AI prompt templates**: Dropdown submenu with Explain, Summarize, Define terms, and Simplify options replacing single hardcoded prompt
+  - **Drag-and-drop document upload**: `onDragOver`/`onDragLeave`/`onDrop` handlers with visual feedback and client-side file type validation (PDF/EPUB only)
+  - **Recent documents in picker**: Last 5 opened documents shown above search results, persisted in localStorage
+  - **Per-tab reading progress bar**: Thin progress indicator under each document tab driven by page/percentage
+  - **Onboarding feature cards**: 4 dismissible cards (Highlight, Chat, Insights, Quiz) in empty viewer state, localStorage-gated
+  - **Chat clear confirmation**: Popconfirm dialog before clearing chat history
+  - **Sync recovery animation**: Pulse animation on sync indicator for 2 seconds after error-to-synced recovery
+  - **Quiz preference persistence**: Question count, type, and difficulty saved to localStorage across sessions
+  - **Expanded server-required guidance**: Setup instructions in server-offline state
+  - **EPUB chapter title in toolbar**: Shows current chapter name on left side of viewer toolbar
+  - **Tablet drawer decoupling**: Toggle buttons always visible on tablet; drawer state independent from desktop pane state
+  - **Responsive drawer width**: `Math.min(360, window.innerWidth * 0.85)` instead of fixed pixel width
+  - **Text2SQL security hardening**:
+    - Added dedicated `sql.read` RBAC permission constant and seeded baseline grants for default `user`/`admin` roles
+    - Added connector ACL enforcement for `POST /api/v1/text2sql/query` with explicit `403 unauthorized_target` response on denied targets
+    - Added security regression tests for RBAC and ACL behavior (`test_text2sql_rbac_and_acl.py`)
+    - Updated API docs for standalone Text2SQL and unified RAG SQL source usage (`sources=["sql"]`, `sql_target_id`)
+
+### Changed
+
+- Default sidebar tab changed from "toc" to "insights" for better first-impression content
+- Tab label font size increased from 10px to 11px for readability
+- "Fit width" button renamed to "Reset zoom" with `RotateCcw` icon for accuracy
+- Keyboard shortcuts modal updated to list only implemented shortcuts
+
+### Fixed
+
+- **Annotation undo ID preservation**: Undo now restores the original annotation object with its server-synced ID via direct `setState`, instead of calling `addAnnotation()` which generated a new ID causing server/client state divergence and duplicates
+- **Removed Cmd+W shortcut**: Conflicted with browser tab close; removed from both handler and shortcuts modal
+- **Stable DOM selectors**: Fullscreen toggle and go-to-page shortcuts now use `data-testid` attributes instead of fragile CSS class substring matching and Ant Design internal class selectors
+- **Quiz preferences render performance**: Moved `localStorage` read + `JSON.parse` into `useState` initializer to avoid re-parsing on every render
+
 
 ### Added
 
