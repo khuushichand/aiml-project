@@ -8,13 +8,15 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import (
-    build_archive_snapshot_from_bytes,
+    build_archive_snapshot_from_bytes_with_failures,
     load_archive_artifact_bytes,
     prune_archive_source_retention,
 )
 from tldw_Server_API.app.core.Ingestion_Sources.diffing import diff_snapshots
 from tldw_Server_API.app.core.Ingestion_Sources.jobs import DOMAIN, ingestion_sources_queue
-from tldw_Server_API.app.core.Ingestion_Sources.local_directory import build_local_directory_snapshot
+from tldw_Server_API.app.core.Ingestion_Sources.local_directory import (
+    build_local_directory_snapshot_with_failures,
+)
 from tldw_Server_API.app.core.Ingestion_Sources.service import (
     create_source_snapshot,
     ensure_ingestion_sources_schema,
@@ -220,8 +222,12 @@ async def _process_sync_job(
         source_type = str(source.get("source_type") or "").strip().lower()
         sink_type = str(source.get("sink_type") or "").strip().lower()
         policy = str(source.get("policy") or "canonical").strip().lower()
+        extraction_failures: dict[str, dict[str, Any]] = {}
         if source_type == "local_directory":
-            current_items = build_local_directory_snapshot(source.get("config") or {}, sink_type=sink_type)
+            current_items, extraction_failures = build_local_directory_snapshot_with_failures(
+                source.get("config") or {},
+                sink_type=sink_type,
+            )
         elif source_type == "archive_snapshot":
             async with pool.transaction() as db:
                 staged_snapshot = await get_latest_source_snapshot(
@@ -244,13 +250,14 @@ async def _process_sync_job(
                         f"Archive artifact {artifact_id} is not available for source {source_id}."
                     )
                 archive_bytes = load_archive_artifact_bytes(staged_artifact)
-                current_items = build_archive_snapshot_from_bytes(
+                current_items, extraction_failures = build_archive_snapshot_from_bytes_with_failures(
                     archive_bytes=archive_bytes,
                     filename=str(
                         (staged_artifact.get("metadata") or {}).get("filename")
                         or snapshot_summary.get("filename")
                         or "archive.zip"
                     ),
+                    sink_type=sink_type,
                 )
             else:
                 current_items = {
@@ -272,6 +279,13 @@ async def _process_sync_job(
             }
 
             diff_result = diff_snapshots(previous=previous_map, current=current_items)
+            failed_paths = set(extraction_failures)
+            if failed_paths:
+                diff_result["deleted"] = [
+                    item
+                    for item in diff_result.get("deleted", [])
+                    if str(item.get("relative_path") or "") not in failed_paths
+                ]
             result_summary: dict[str, Any] = {
                 "status": "completed",
                 "source_id": source_id,
@@ -281,7 +295,8 @@ async def _process_sync_job(
                 "deleted": len(diff_result.get("deleted", [])),
                 "unchanged": len(diff_result.get("unchanged", [])),
                 "detached_conflicts": 0,
-                "current_item_count": len(current_items),
+                "degraded_items": len(extraction_failures),
+                "current_item_count": len(current_items) + len(extraction_failures),
             }
 
             for event_type, raw_change in _iter_changes(diff_result):
@@ -339,6 +354,34 @@ async def _process_sync_job(
                     },
                 )
                 result_summary["processed"] += 1
+
+            for relative_path in sorted(failed_paths):
+                failure = extraction_failures[relative_path]
+                existing_row = all_rows_map.get(relative_path)
+                existing_binding = dict(existing_row.get("binding") or {}) if existing_row else {}
+                preserved_content_hash = None if existing_row is None else existing_row.get("content_hash")
+                updated_row = await upsert_source_item(
+                    db,
+                    source_id=source_id,
+                    normalized_relative_path=relative_path,
+                    content_hash=None if preserved_content_hash is None else str(preserved_content_hash),
+                    sync_status="degraded_ingestion_error",
+                    binding=existing_binding,
+                    present_in_source=True,
+                )
+                all_rows_map[relative_path] = updated_row
+                await record_ingestion_item_event(
+                    db,
+                    source_id=source_id,
+                    item_path=relative_path,
+                    event_type="ingestion_failed",
+                    payload={
+                        "action": "ingestion_failed",
+                        "job_id": str(jid),
+                        "sync_status": "degraded_ingestion_error",
+                        "error": str(failure.get("error") or ""),
+                    },
+                )
 
             if staged_snapshot:
                 snapshot = await update_source_snapshot(

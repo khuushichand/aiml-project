@@ -38,6 +38,22 @@ SUPPORTED_ARCHIVE_SUFFIXES: frozenset[str] = frozenset(
 )
 
 
+def process_pdf(file_input, *, filename: str, **kwargs):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import (
+        process_pdf as _process_pdf,
+    )
+
+    return _process_pdf(file_input, filename=filename, **kwargs)
+
+
+def process_epub(file_path, **kwargs):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import (
+        process_epub as _process_epub,
+    )
+
+    return _process_epub(file_path, **kwargs)
+
+
 def _is_safe_archive_member_name(member_name: str) -> bool:
     if not member_name:
         return False
@@ -98,24 +114,130 @@ def validate_archive_members(
 def build_archive_snapshot(
     members: list[tuple[zipfile.ZipInfo, bytes]],
 ) -> dict[str, dict[str, Any]]:
+    items, failures = build_archive_snapshot_with_failures(members, sink_type="notes")
+    if failures:
+        first_failure = next(iter(failures.values()))
+        raise ValueError(str(first_failure.get("error") or "Archive member ingestion failed."))
+    return items
+
+
+def _supported_archive_suffixes_for_sink(sink_type: str) -> frozenset[str]:
+    if str(sink_type or "").strip().lower() == "media":
+        return MEDIA_SUPPORTED_SUFFIXES
+    return NOTES_SUPPORTED_SUFFIXES
+
+
+def _raw_metadata_from_processing_result(
+    result: dict[str, Any],
+    *,
+    source_format: str,
+) -> dict[str, Any]:
+    raw_metadata: dict[str, Any] = {"source_format": source_format}
+    metadata = result.get("metadata")
+    if isinstance(metadata, dict):
+        raw_metadata.update(metadata)
+        title = metadata.get("title")
+        author = metadata.get("author")
+        if title and "extracted_title" not in raw_metadata:
+            raw_metadata["extracted_title"] = title
+        if author and "extracted_author" not in raw_metadata:
+            raw_metadata["extracted_author"] = author
+    parser_used = result.get("parser_used")
+    if parser_used:
+        raw_metadata["parser_used"] = parser_used
+    return raw_metadata
+
+
+def _media_member_content_to_text(
+    *,
+    member_name: str,
+    content: bytes,
+) -> tuple[str, str, dict[str, Any]]:
+    suffix = PurePosixPath(member_name).suffix.lower()
+    filename = PurePosixPath(member_name).name or member_name
+    if suffix == ".pdf":
+        result = process_pdf(
+            content,
+            filename=filename,
+            perform_chunking=False,
+            perform_analysis=False,
+        )
+        if not isinstance(result, dict) or str(result.get("status") or "").strip().lower() == "error":
+            raise ValueError(str((result or {}).get("error") or f"Failed to process PDF '{filename}'"))
+        return (
+            str(result.get("content") or ""),
+            "pdf",
+            _raw_metadata_from_processing_result(result, source_format="pdf"),
+        )
+
+    if suffix == ".epub":
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
+                handle.write(content)
+                temp_path = Path(handle.name)
+            result = process_epub(
+                str(temp_path),
+                perform_chunking=False,
+                perform_analysis=False,
+            )
+        finally:
+            if temp_path is not None:
+                with contextlib.suppress(FileNotFoundError, OSError):
+                    temp_path.unlink()
+        if not isinstance(result, dict) or str(result.get("status") or "").strip().lower() == "error":
+            raise ValueError(str((result or {}).get("error") or f"Failed to process EPUB '{filename}'"))
+        return (
+            str(result.get("content") or ""),
+            "epub",
+            _raw_metadata_from_processing_result(result, source_format="epub"),
+        )
+
+    return _member_content_to_text(member_name=member_name, content=content, sink_type="notes")
+
+
+def build_archive_snapshot_with_failures(
+    members: list[tuple[zipfile.ZipInfo, bytes]],
+    *,
+    sink_type: str,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    supported_suffixes = _supported_archive_suffixes_for_sink(sink_type)
     hashes: dict[str, str] = {}
     member_names: list[str] = []
     raw_contents: dict[str, bytes] = {}
     for member, content in members:
         suffix = PurePosixPath(member.filename).suffix.lower()
-        if suffix not in SUPPORTED_ARCHIVE_SUFFIXES:
+        if suffix not in supported_suffixes:
             continue
         member_names.append(member.filename)
         raw_contents[member.filename] = content
         hashes[member.filename] = hashlib.sha256(content).hexdigest()
 
     items = normalize_archive_members(member_names, hashes)
+    failed_items: dict[str, dict[str, Any]] = {}
     for member_name in member_names:
         relative_path = str(items[_normalized_relative_path(items, member_name)]["relative_path"])
-        text_content, source_format, raw_metadata = _member_content_to_text(
-            member_name=member_name,
-            content=raw_contents[member_name],
-        )
+        try:
+            if str(sink_type or "").strip().lower() == "media" and PurePosixPath(member_name).suffix.lower() in {".epub", ".pdf"}:
+                text_content, source_format, raw_metadata = _media_member_content_to_text(
+                    member_name=member_name,
+                    content=raw_contents[member_name],
+                )
+            else:
+                text_content, source_format, raw_metadata = _member_content_to_text(
+                    member_name=member_name,
+                    content=raw_contents[member_name],
+                    sink_type=sink_type,
+                )
+        except (AttributeError, LookupError, OSError, RuntimeError, TimeoutError, TypeError, ValueError) as exc:
+            items.pop(relative_path, None)
+            failed_items[relative_path] = {
+                "relative_path": relative_path,
+                "source_format": PurePosixPath(member_name).suffix.lower().lstrip(".") or "unknown",
+                "size": len(raw_contents[member_name]),
+                "error": str(exc),
+            }
+            continue
         items[relative_path].update(
             {
                 "text": text_content,
@@ -125,7 +247,7 @@ def build_archive_snapshot(
                 "content_hash": hashlib.sha256(text_content.encode("utf-8")).hexdigest(),
             }
         )
-    return items
+    return items, failed_items
 
 
 def _normalized_relative_path(items: dict[str, dict[str, Any]], member_name: str) -> str:
@@ -141,6 +263,7 @@ def _member_content_to_text(
     *,
     member_name: str,
     content: bytes,
+    sink_type: str,
 ) -> tuple[str, str, dict[str, Any]]:
     suffix = PurePosixPath(member_name).suffix.lower()
     if suffix == ".markdown":
@@ -155,6 +278,8 @@ def _member_content_to_text(
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
             handle.write(content)
             temp_path = Path(handle.name)
+        if str(sink_type or "").strip().lower() == "media" and suffix in {".epub", ".pdf"}:
+            return _media_member_content_to_text(member_name=member_name, content=content)
         return convert_document_to_text(temp_path)
     finally:
         if temp_path is not None:
@@ -234,6 +359,16 @@ def build_archive_snapshot_from_bytes(
 ) -> dict[str, dict[str, Any]]:
     members = validate_archive_members(archive_bytes, filename=filename)
     return build_archive_snapshot(members)
+
+
+def build_archive_snapshot_from_bytes_with_failures(
+    *,
+    archive_bytes: bytes,
+    filename: str,
+    sink_type: str,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    members = validate_archive_members(archive_bytes, filename=filename)
+    return build_archive_snapshot_with_failures(members, sink_type=sink_type)
 
 
 def _utc_now() -> datetime:

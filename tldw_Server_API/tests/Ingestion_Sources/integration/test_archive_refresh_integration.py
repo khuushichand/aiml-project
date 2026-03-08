@@ -66,6 +66,25 @@ class _SQLitePool:
         yield self._db
 
 
+class _FakeMediaDB:
+    def __init__(self) -> None:
+        self.created: list[dict[str, object]] = []
+        self.updated: list[dict[str, object]] = []
+        self.trashed: list[int] = []
+
+    def add_media_with_keywords(self, **kwargs):
+        self.created.append(kwargs)
+        return (500 + len(self.created), None, "created")
+
+    def apply_synced_document_content_update(self, **kwargs):
+        self.updated.append(kwargs)
+        return {"document_version_number": len(self.updated) + 1}
+
+    def mark_as_trash(self, media_id: int) -> bool:
+        self.trashed.append(int(media_id))
+        return True
+
+
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_archive_sync_failure_marks_staged_snapshot_failed_and_preserves_previous_success(
@@ -210,6 +229,150 @@ async def test_archive_sync_failure_marks_staged_snapshot_failed_and_preserves_p
         updated_note = notes_db.get_note_by_id(note_id=note_id)
         assert updated_note is not None
         assert updated_note["content"] == "previous body"
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_archive_media_sync_marks_failed_member_degraded_without_false_delete(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+
+    import hashlib
+
+    import tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot as archive_snapshot
+    import tldw_Server_API.app.services.ingestion_sources_worker as worker
+    from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import persist_archive_artifact
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        create_source_snapshot,
+        ensure_ingestion_sources_schema,
+        upsert_source_item,
+    )
+
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("export/good.md", "# Good\n\nfresh body\n")
+        archive.writestr("export/broken.pdf", b"%PDF-1.4 broken\n")
+    archive_bytes = archive_buffer.getvalue()
+
+    meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+    async with aiosqlite.connect(str(meta_db_path)) as db:
+        db.row_factory = aiosqlite.Row
+        await ensure_ingestion_sources_schema(db)
+        source = await create_source(
+            db,
+            user_id=1,
+            payload={
+                "source_type": "archive_snapshot",
+                "sink_type": "media",
+                "policy": "canonical",
+                "config": {},
+            },
+        )
+        await upsert_source_item(
+            db,
+            source_id=int(source["id"]),
+            normalized_relative_path="broken.pdf",
+            content_hash=hashlib.sha256(b"previous synced pdf body").hexdigest(),
+            sync_status="active",
+            binding={"media_id": 77},
+            present_in_source=True,
+        )
+
+        staged_snapshot = await create_source_snapshot(
+            db,
+            source_id=int(source["id"]),
+            snapshot_kind="archive_snapshot",
+            status="staged",
+            summary={"filename": "docs-v2.zip"},
+        )
+        artifact = await persist_archive_artifact(
+            db,
+            user_id=1,
+            source_id=int(source["id"]),
+            snapshot_id=int(staged_snapshot["id"]),
+            filename="docs-v2.zip",
+            archive_bytes=archive_bytes,
+        )
+        await db.execute(
+            "UPDATE ingestion_source_snapshots SET summary_json = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {
+                        "filename": "docs-v2.zip",
+                        "artifact_id": int(artifact["id"]),
+                        "item_count": 2,
+                    }
+                ),
+                int(staged_snapshot["id"]),
+            ),
+        )
+
+        async def _fake_get_db_pool():
+            return _SQLitePool(db)
+
+        fake_media_db = _FakeMediaDB()
+
+        def _fake_create_sink_db(*, sink_type: str, user_id: int):
+            assert sink_type == "media"
+            assert user_id == 1
+            return fake_media_db
+
+        def _fake_process_pdf(file_input, *, filename, **kwargs):
+            del file_input, kwargs
+            if filename == "broken.pdf":
+                return {
+                    "status": "Error",
+                    "error": "pdf parse failed",
+                    "warnings": ["pdf parse failed"],
+                }
+            raise AssertionError("Unexpected PDF extraction request")
+
+        monkeypatch.setattr(worker, "get_db_pool", _fake_get_db_pool, raising=False)
+        monkeypatch.setattr(worker, "_create_sink_db", _fake_create_sink_db)
+        monkeypatch.setattr(archive_snapshot, "process_pdf", _fake_process_pdf)
+
+        jm = _FakeJobManager()
+        await worker._process_sync_job(
+            jm,
+            jid=93,
+            lease_id="lease-93",
+            worker_id="worker-1",
+            source_id=int(source["id"]),
+            user_id=1,
+        )
+
+        assert jm.failed is None
+        assert jm.completed is not None
+        assert jm.completed["result"]["status"] == "completed"
+        assert jm.completed["result"]["created"] == 1
+        assert jm.completed["result"]["deleted"] == 0
+        assert jm.completed["result"]["degraded_items"] == 1
+        assert len(fake_media_db.created) == 1
+        assert fake_media_db.trashed == []
+
+        broken_cur = await db.execute(
+            "SELECT sync_status, binding_json, present_in_source "
+            "FROM ingestion_source_items WHERE source_id = ? AND normalized_relative_path = ?",
+            (int(source["id"]), "broken.pdf"),
+        )
+        broken_row = await broken_cur.fetchone()
+        assert broken_row["sync_status"] == "degraded_ingestion_error"
+        assert json.loads(broken_row["binding_json"])["media_id"] == 77
+        assert broken_row["present_in_source"] == 1
+
+        good_cur = await db.execute(
+            "SELECT sync_status, binding_json, present_in_source "
+            "FROM ingestion_source_items WHERE source_id = ? AND normalized_relative_path = ?",
+            (int(source["id"]), "good.md"),
+        )
+        good_row = await good_cur.fetchone()
+        assert good_row["sync_status"] == "active"
+        assert json.loads(good_row["binding_json"])["media_id"] == 501
+        assert good_row["present_in_source"] == 1
 
 
 @pytest.mark.asyncio

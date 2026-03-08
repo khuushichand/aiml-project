@@ -25,7 +25,25 @@ NOTES_SUPPORTED_SUFFIXES: frozenset[str] = frozenset(
         ".xml",
     }
 )
-MEDIA_SUPPORTED_SUFFIXES: frozenset[str] = frozenset(NOTES_SUPPORTED_SUFFIXES)
+MEDIA_SUPPORTED_SUFFIXES: frozenset[str] = frozenset(
+    NOTES_SUPPORTED_SUFFIXES | {".epub", ".pdf"}
+)
+
+
+def process_pdf(file_input, *, filename: str, **kwargs):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import (
+        process_pdf as _process_pdf,
+    )
+
+    return _process_pdf(file_input, filename=filename, **kwargs)
+
+
+def process_epub(file_path, **kwargs):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import (
+        process_epub as _process_epub,
+    )
+
+    return _process_epub(file_path, **kwargs)
 
 
 def validate_local_directory_source(config: dict[str, Any]) -> Path:
@@ -78,14 +96,76 @@ def _read_markdown_alias(path: Path, base_dir: Path) -> str:
         return data.decode("latin-1")
 
 
-def build_local_directory_snapshot(
+def _raw_metadata_from_processing_result(
+    result: dict[str, Any],
+    *,
+    source_format: str,
+) -> dict[str, Any]:
+    raw_metadata: dict[str, Any] = {"source_format": source_format}
+    metadata = result.get("metadata")
+    if isinstance(metadata, dict):
+        raw_metadata.update(metadata)
+        title = metadata.get("title")
+        author = metadata.get("author")
+        if title and "extracted_title" not in raw_metadata:
+            raw_metadata["extracted_title"] = title
+        if author and "extracted_author" not in raw_metadata:
+            raw_metadata["extracted_author"] = author
+    parser_used = result.get("parser_used")
+    if parser_used:
+        raw_metadata["parser_used"] = parser_used
+    return raw_metadata
+
+
+def _media_document_to_text(
+    path: Path,
+    *,
+    base_dir: Path,
+) -> tuple[str, str, dict[str, Any]]:
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        result = process_pdf(
+            path,
+            filename=path.name,
+            perform_chunking=False,
+            perform_analysis=False,
+            base_dir=base_dir,
+        )
+        if not isinstance(result, dict) or str(result.get("status") or "").strip().lower() == "error":
+            raise ValueError(str((result or {}).get("error") or f"Failed to process PDF '{path.name}'"))
+        return (
+            str(result.get("content") or ""),
+            "pdf",
+            _raw_metadata_from_processing_result(result, source_format="pdf"),
+        )
+
+    if suffix == ".epub":
+        result = process_epub(
+            str(path),
+            perform_chunking=False,
+            perform_analysis=False,
+            base_dir=base_dir,
+        )
+        if not isinstance(result, dict) or str(result.get("status") or "").strip().lower() == "error":
+            raise ValueError(str((result or {}).get("error") or f"Failed to process EPUB '{path.name}'"))
+        return (
+            str(result.get("content") or ""),
+            "epub",
+            _raw_metadata_from_processing_result(result, source_format="epub"),
+        )
+
+    return convert_document_to_text(path, base_dir=base_dir)
+
+
+def build_local_directory_snapshot_with_failures(
     config: dict[str, Any],
     *,
     sink_type: str,
-) -> dict[str, dict[str, Any]]:
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     source_root = validate_local_directory_source(config)
     supported_suffixes = _supported_suffixes_for_sink(sink_type)
     snapshot_items: dict[str, dict[str, Any]] = {}
+    failed_items: dict[str, dict[str, Any]] = {}
 
     for candidate in sorted(source_root.rglob("*")):
         if not candidate.is_file() or candidate.is_symlink():
@@ -97,18 +177,36 @@ def build_local_directory_snapshot(
         if suffix not in supported_suffixes:
             continue
 
-        if suffix == ".markdown":
-            text_content = _read_markdown_alias(safe_path, source_root)
-            source_format = "markdown"
-            raw_metadata: dict[str, Any] = {}
-        else:
-            text_content, source_format, raw_metadata = convert_document_to_text(
-                safe_path,
-                base_dir=source_root,
-            )
-
         stat = safe_path.stat()
         relative_path = safe_path.relative_to(source_root).as_posix()
+        try:
+            if suffix == ".markdown":
+                text_content = _read_markdown_alias(safe_path, source_root)
+                source_format = "markdown"
+                raw_metadata: dict[str, Any] = {}
+            elif str(sink_type or "").strip().lower() == "media" and suffix in {".epub", ".pdf"}:
+                text_content, source_format, raw_metadata = _media_document_to_text(
+                    safe_path,
+                    base_dir=source_root,
+                )
+            else:
+                text_content, source_format, raw_metadata = convert_document_to_text(
+                    safe_path,
+                    base_dir=source_root,
+                )
+        except (AttributeError, LookupError, OSError, RuntimeError, TimeoutError, TypeError, ValueError) as exc:
+            failed_items[relative_path] = {
+                "relative_path": relative_path,
+                "source_format": suffix.lstrip(".") or "unknown",
+                "size": int(stat.st_size),
+                "modified_at": datetime.fromtimestamp(
+                    stat.st_mtime,
+                    tz=timezone.utc,
+                ).strftime("%Y-%m-%d %H:%M:%S"),
+                "error": str(exc),
+            }
+            continue
+
         snapshot_items[relative_path] = {
             "relative_path": relative_path,
             "absolute_path": str(safe_path),
@@ -123,4 +221,19 @@ def build_local_directory_snapshot(
             "text": text_content,
         }
 
+    return snapshot_items, failed_items
+
+
+def build_local_directory_snapshot(
+    config: dict[str, Any],
+    *,
+    sink_type: str,
+) -> dict[str, dict[str, Any]]:
+    snapshot_items, failed_items = build_local_directory_snapshot_with_failures(
+        config,
+        sink_type=sink_type,
+    )
+    if failed_items:
+        first_failure = next(iter(failed_items.values()))
+        raise ValueError(str(first_failure.get("error") or "Local directory source ingestion failed."))
     return snapshot_items
