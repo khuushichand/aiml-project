@@ -10,70 +10,23 @@
 
 ---
 
-### Task 1: Extend Frontend Trust Types
+### Task 1: Add Failing Trust Console Tests
 
 **Files:**
-- Modify: `apps/tldw-frontend/lib/api/researchRuns.ts`
 - Test: `apps/tldw-frontend/__tests__/pages/research-run-console.test.tsx`
 
 **Step 1: Write the failing test**
-
-Add or update a page-level fixture in `research-run-console.test.tsx` that includes trust fields in a loaded bundle payload and expects the page to render from typed trust data instead of generic bundle JSON.
-
-Example assertion shape:
-
-```ts
-expect(screen.getByText('Supported claims: 2')).toBeInTheDocument()
-expect(screen.getByText('metadata_excerpt')).toBeInTheDocument()
-```
-
-**Step 2: Run test to verify it fails**
-
-Run: `cd apps/tldw-frontend && bunx vitest run __tests__/pages/research-run-console.test.tsx`
-
-Expected: FAIL because trust types and render paths are not defined yet.
-
-**Step 3: Write minimal implementation**
-
-In `researchRuns.ts`, add explicit types for:
-
-- `ResearchVerificationSummary`
-- `ResearchUnsupportedClaim`
-- `ResearchContradiction`
-- `ResearchSourceTrust`
-
-Also add a typed bundle trust shape suitable for the page to consume.
-
-Do not change backend requests in this task.
-
-**Step 4: Run test to verify it passes**
-
-Run: `cd apps/tldw-frontend && bunx vitest run __tests__/pages/research-run-console.test.tsx`
-
-Expected: PASS for the new typed fixture path or fail for the next missing UI behavior.
-
-**Step 5: Commit**
-
-```bash
-git add apps/tldw-frontend/lib/api/researchRuns.ts apps/tldw-frontend/__tests__/pages/research-run-console.test.tsx
-git commit -m "feat(frontend): add research trust view types"
-```
-
-### Task 2: Add Failing Trust Console Tests
-
-**Files:**
-- Modify: `apps/tldw-frontend/__tests__/pages/research-run-console.test.tsx`
-
-**Step 1: Write the failing tests**
 
 Add focused page tests for:
 
 - empty trust state before synthesis
 - trust rendering from a completed bundle
 - lazy trust artifact loading when bundle is not loaded
+- trust reuse when the same trust artifacts were already loaded through the raw artifact viewer path
 - unsupported-claim rendering
 - contradiction rendering
 - source-trust rendering
+- trust reload invalidation when newer trust artifact versions arrive
 
 Use the existing mocked research client seam.
 
@@ -85,7 +38,7 @@ await user.click(screen.getByRole('button', { name: 'Load trust details' }))
 expect(mocks.getResearchArtifact).toHaveBeenCalledWith('rs_1', 'verification_summary.json')
 ```
 
-**Step 2: Run tests to verify they fail**
+**Step 2: Run test to verify it fails**
 
 Run: `cd apps/tldw-frontend && bunx vitest run __tests__/pages/research-run-console.test.tsx`
 
@@ -99,7 +52,7 @@ Do not implement yet. Stop after the tests fail for the expected trust-UI reason
 
 Do not commit in red state.
 
-### Task 3: Implement Trust Normalization And Rendering
+### Task 2: Implement Trust Types, Normalization, And Rendering
 
 **Files:**
 - Modify: `apps/tldw-frontend/pages/research.tsx`
@@ -108,23 +61,40 @@ Do not commit in red state.
 
 **Step 1: Write minimal implementation**
 
+In `researchRuns.ts`:
+
+- add explicit types for:
+  - `ResearchVerificationSummary`
+  - `ResearchUnsupportedClaim`
+  - `ResearchContradiction`
+  - `ResearchSourceTrust`
+- add a typed bundle trust shape suitable for the page to consume
+
 In `research.tsx`:
 
 - add a small normalization helper that derives one trust view from:
   - `state.bundle`, or
-  - lazy-loaded trust artifacts in `state.artifactContents`
+  - already loaded trust artifacts in `state.artifactContents`
+- normalize both:
+  - bundle trust fields
+  - artifact wrapper payloads such as `claims`, `contradictions`, and `sources`
 - add a `Research Trust` section below checkpoints and above the raw artifact list
 - render:
   - verification summary
   - unsupported claims
   - contradictions
   - source trust
-- add a `Load trust details` button when trust data is not yet loaded but should be fetchable
+- add a `Load trust details` button only when trust data is not yet loaded and trust artifacts should exist
 - lazy-load:
   - `verification_summary.json`
   - `unsupported_claims.json`
   - `contradictions.json`
   - `source_trust.json`
+- hide the button once trust details are loaded
+- add local trust loading and trust error state so failures stay within the trust section
+- invalidate loaded trust data when:
+  - newer trust artifact versions arrive
+  - the run phase moves back to `collecting` or `synthesizing`
 
 Use compact read-only rendering. Do not add mutating actions.
 
@@ -138,7 +108,7 @@ Expected: PASS
 
 If the page grows unwieldy:
 
-- extract tiny render helpers inside `research.tsx`
+- extract a tiny colocated normalization helper or render helper used only by `research.tsx`
 - do not create a new component tree unless the tests become hard to follow
 
 Keep behavior identical while simplifying the page code.
@@ -156,7 +126,7 @@ git add apps/tldw-frontend/pages/research.tsx apps/tldw-frontend/lib/api/researc
 git commit -m "feat(frontend): surface research trust signals"
 ```
 
-### Task 4: Run Focused Verification And Finish
+### Task 3: Run Focused Verification And Finish
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-07-deep-research-trust-ui-implementation-plan.md`
