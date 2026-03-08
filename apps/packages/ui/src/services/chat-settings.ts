@@ -48,6 +48,36 @@ const toEpoch = (value: string | undefined): number => {
   return Number.isNaN(parsed) ? 0 : parsed
 }
 
+const normalizeComparableChatSettingsValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeComparableChatSettingsValue(entry))
+  }
+  if (!value || typeof value !== "object") {
+    return value
+  }
+
+  const normalizedEntries = Object.entries(value as Record<string, unknown>)
+    .filter(([key, entryValue]) => key !== "updatedAt" && entryValue !== undefined)
+    .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+    .map(([key, entryValue]) => [
+      key,
+      normalizeComparableChatSettingsValue(entryValue)
+    ])
+
+  return Object.fromEntries(normalizedEntries)
+}
+
+export const areEquivalentChatSettings = (
+  left: ChatSettingsRecord | null,
+  right: ChatSettingsRecord | null
+): boolean => {
+  if (!left || !right) return left === right
+  return (
+    JSON.stringify(normalizeComparableChatSettingsValue(left)) ===
+    JSON.stringify(normalizeComparableChatSettingsValue(right))
+  )
+}
+
 const mergeEntry = (
   left: CharacterMemoryEntry | undefined,
   right: CharacterMemoryEntry | undefined
@@ -192,6 +222,11 @@ export const syncChatSettingsForServerChat = async (params: {
 
   const merged = mergeChatSettings(localSettings, remoteSettings)
   if (!merged) return null
+
+  if (remoteSettings && areEquivalentChatSettings(merged, remoteSettings)) {
+    await saveChatSettingsForKey(serverKey, merged)
+    return merged
+  }
 
   const mergedTime = toEpoch(merged.updatedAt)
   const remoteTime = toEpoch(remoteSettings?.updatedAt)

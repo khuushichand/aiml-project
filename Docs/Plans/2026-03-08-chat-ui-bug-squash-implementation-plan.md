@@ -214,7 +214,7 @@ git commit -m "fix(chat-ui): add explicit selected-chat load and failure states"
 
 ### Task 3: Stop Settings Sync From Bumping Chat Versions When Nothing Changed
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/services/chat-settings.ts`
@@ -283,6 +283,8 @@ git commit -m "fix(chat-ui): avoid no-op server chat settings writes"
 ```
 
 ### Task 4: Add Stale-Version Recovery For Chat Mutations In The API Client
+
+**Status:** Not Started
 
 **Files:**
 - Modify: `apps/packages/ui/src/services/tldw/TldwApiClient.ts`
