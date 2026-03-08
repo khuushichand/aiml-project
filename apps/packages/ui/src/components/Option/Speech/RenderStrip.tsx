@@ -37,6 +37,8 @@ export type RenderStripProps = {
   onEdit?: (id: string) => void
   onPlay?: (id: string) => void
   onPause?: (id: string) => void
+  /** Called when audio playback ends naturally */
+  onEnd?: (id: string) => void
   onRetry?: (id: string) => void
   onConfigTagClick?: (id: string, field: string) => void
 }
@@ -66,6 +68,7 @@ export const RenderStrip: React.FC<RenderStripProps> = ({
   onEdit,
   onPlay,
   onPause,
+  onEnd,
   onRetry,
   onConfigTagClick
 }) => {
@@ -232,6 +235,7 @@ export const RenderStrip: React.FC<RenderStripProps> = ({
           forcePaused={forcePaused}
           onPlay={() => onPlay?.(id)}
           onPause={() => onPause?.(id)}
+          onEnd={() => onEnd?.(id)}
         />
       )}
 

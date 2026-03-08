@@ -726,7 +726,11 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
             ...existing.config,
             provider: selection.provider,
             voice: selection.voice,
-            model: selection.model || existing.config.model
+            // Only preserve old model if the provider didn't change; otherwise use selection.model
+            // (which is undefined for openai/elevenlabs/browser — that's intentional)
+            model: selection.provider === existing.config.provider
+              ? (selection.model ?? existing.config.model)
+              : selection.model
           })
         }
         setVoicePickerTargetStripId(null)
@@ -763,8 +767,8 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     [multiRender]
   )
 
-  const handlePlayAllRenders = React.useCallback(async () => {
-    await multiRender.playAllSequentially()
+  const handlePlayAllRenders = React.useCallback(() => {
+    multiRender.playAllSequentially()
   }, [multiRender])
 
   React.useEffect(() => {
@@ -2454,6 +2458,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                             }}
                             onPlay={multiRender.startPlaying}
                             onPause={multiRender.stopPlaying}
+                            onEnd={multiRender.handleStripEnded}
                             onRetry={(id) => {
                               const effectiveText = useDraftEditor ? transcriptDraft : ttsText
                               void multiRender.generateRender(id, effectiveText)

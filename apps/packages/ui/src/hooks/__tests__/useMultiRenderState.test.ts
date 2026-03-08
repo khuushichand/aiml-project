@@ -142,6 +142,45 @@ describe("useMultiRenderState", () => {
     expect(result.current.hasReady).toBe(false)
   })
 
+  it("handleStripEnded clears playingId when no queue", () => {
+    const { result } = renderHook(() => useMultiRenderState())
+    act(() => {
+      result.current.addRender({ provider: "tldw", voice: "af_heart" })
+    })
+    const id = result.current.renders[0].id
+    act(() => {
+      result.current.startPlaying(id)
+    })
+    expect(result.current.playingId).toBe(id)
+    act(() => {
+      result.current.handleStripEnded(id)
+    })
+    expect(result.current.playingId).toBeNull()
+  })
+
+  it("playAllSequentially sets first strip as playing", () => {
+    const { result } = renderHook(() => useMultiRenderState())
+    act(() => {
+      result.current.addRender({ provider: "tldw", voice: "v1" })
+      result.current.addRender({ provider: "tldw", voice: "v2" })
+    })
+    // Manually set both strips to ready state with audioUrl
+    act(() => {
+      result.current.updateRender(result.current.renders[0].id, {
+        state: "ready",
+        audioUrl: "blob:url1"
+      })
+      result.current.updateRender(result.current.renders[1].id, {
+        state: "ready",
+        audioUrl: "blob:url2"
+      })
+    })
+    act(() => {
+      result.current.playAllSequentially()
+    })
+    expect(result.current.playingId).toBe(result.current.renders[0].id)
+  })
+
   it("generateRender transitions to generating then ready", async () => {
     const { result } = renderHook(() => useMultiRenderState())
     act(() => {

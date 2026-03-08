@@ -80,6 +80,7 @@ export const VoicePickerModal: React.FC<VoicePickerModalProps> = ({
   const [searchQuery, setSearchQuery] = React.useState("")
   const [previewingVoice, setPreviewingVoice] = React.useState<string | null>(null)
   const previewAudioRef = React.useRef<HTMLAudioElement | null>(null)
+  const previewBlobUrlRef = React.useRef<string | null>(null)
 
   // Fetch providers if not passed externally
   const { data: fetchedProvidersInfo, isLoading } = useQuery<TldwTtsProvidersInfo | null>({
@@ -221,15 +222,19 @@ export const VoicePickerModal: React.FC<VoicePickerModalProps> = ({
       )
       const blob = new Blob([buffer], { type: "audio/mpeg" })
       const url = URL.createObjectURL(blob)
+      // Track blob URL so cleanup effect can revoke it if modal closes during playback
+      previewBlobUrlRef.current = url
       const audio = new Audio(url)
       previewAudioRef.current = audio
       audio.onended = () => {
         setPreviewingVoice(null)
         URL.revokeObjectURL(url)
+        previewBlobUrlRef.current = null
       }
       audio.onerror = () => {
         setPreviewingVoice(null)
         URL.revokeObjectURL(url)
+        previewBlobUrlRef.current = null
       }
       await audio.play()
     } catch {
@@ -243,6 +248,11 @@ export const VoicePickerModal: React.FC<VoicePickerModalProps> = ({
       previewAudioRef.current?.pause()
       setPreviewingVoice(null)
       setSearchQuery("")
+      // Revoke any outstanding preview blob URL to prevent memory leak
+      if (previewBlobUrlRef.current) {
+        URL.revokeObjectURL(previewBlobUrlRef.current)
+        previewBlobUrlRef.current = null
+      }
     }
   }, [open])
 

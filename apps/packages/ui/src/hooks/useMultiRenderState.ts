@@ -195,31 +195,44 @@ export const useMultiRenderState = () => {
     setPlayingId((prev) => (prev === id ? null : prev))
   }, [])
 
-  const playAllSequentially = useCallback(
-    async (onStripPlay?: (id: string) => void) => {
-      const readyStrips = renders.filter(
-        (r) => r.state === "ready" && r.audioUrl
-      )
-      for (const strip of readyStrips) {
-        setPlayingId(strip.id)
-        onStripPlay?.(strip.id)
-        // Wait for audio to finish by creating a temporary audio element
-        await new Promise<void>((resolve) => {
-          if (!strip.audioUrl) {
-            resolve()
-            return
-          }
-          const audio = new Audio(strip.audioUrl)
-          audio.onended = () => resolve()
-          audio.onerror = () => resolve()
-          audio.play().catch(() => resolve())
-        })
-        // 1-second pause between strips
-        await new Promise<void>((resolve) => setTimeout(resolve, 1000))
-      }
+  // Sequential play queue: stores IDs to play in order.
+  // When the current strip ends (via onEnd callback from UnifiedAudioPlayer),
+  // the next strip in the queue is activated by setting playingId.
+  const playQueueRef = useRef<string[]>([])
+
+  const advancePlayQueue = useCallback(() => {
+    const next = playQueueRef.current.shift()
+    if (next) {
+      // 1-second pause between strips
+      setTimeout(() => setPlayingId(next), 1000)
+    } else {
       setPlayingId(null)
+    }
+  }, [])
+
+  const playAllSequentially = useCallback(() => {
+    const readyStrips = renders.filter(
+      (r) => r.state === "ready" && r.audioUrl
+    )
+    if (readyStrips.length === 0) return
+
+    // Queue all but the first; start the first immediately
+    playQueueRef.current = readyStrips.slice(1).map((r) => r.id)
+    setPlayingId(readyStrips[0].id)
+  }, [renders])
+
+  // Called by RenderStrip when its UnifiedAudioPlayer emits onEnd
+  const handleStripEnded = useCallback(
+    (id: string) => {
+      // If this strip was playing as part of a sequential queue, advance
+      if (playQueueRef.current.length > 0) {
+        advancePlayQueue()
+      } else {
+        // Single strip ended naturally — clear playingId
+        setPlayingId((prev) => (prev === id ? null : prev))
+      }
     },
-    [renders]
+    [advancePlayQueue]
   )
 
   const hasIdle = renders.some((r) => r.state === "idle" || r.state === "error")
@@ -239,6 +252,7 @@ export const useMultiRenderState = () => {
     startPlaying,
     stopPlaying,
     playAllSequentially,
+    handleStripEnded,
     hasIdle,
     hasReady,
     isAnyGenerating
