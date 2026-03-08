@@ -276,6 +276,11 @@ def _deserialize_source_row(row: Any) -> dict[str, Any]:
         result["config"] = _json_loads(result.pop("config_json"), {})
     if "schedule_config_json" in result:
         result["schedule_config"] = _json_loads(result.pop("schedule_config_json"), {})
+    if "last_successful_sync_summary_json" in result:
+        result["last_successful_sync_summary"] = _json_loads(
+            result.pop("last_successful_sync_summary_json"),
+            {},
+        )
     if "enabled" in result:
         result["enabled"] = bool(result["enabled"])
     if "schedule_enabled" in result:
@@ -320,9 +325,11 @@ async def get_source_by_id(db, *, source_id: int, user_id: int | None = None) ->
             st.last_sync_started_at,
             st.last_sync_completed_at,
             st.last_sync_status,
-            st.last_error
+            st.last_error,
+            ss.summary_json AS last_successful_sync_summary_json
         FROM ingestion_sources s
         JOIN ingestion_source_state st ON st.source_id = s.id
+        LEFT JOIN ingestion_source_snapshots ss ON ss.id = st.last_successful_snapshot_id
         WHERE s.id = ?
     """
     params: list[Any] = [int(source_id)]
@@ -429,9 +436,11 @@ async def list_sources_for_scheduler(db) -> list[dict[str, Any]]:
             st.last_sync_started_at,
             st.last_sync_completed_at,
             st.last_sync_status,
-            st.last_error
+            st.last_error,
+            ss.summary_json AS last_successful_sync_summary_json
         FROM ingestion_sources s
         JOIN ingestion_source_state st ON st.source_id = s.id
+        LEFT JOIN ingestion_source_snapshots ss ON ss.id = st.last_successful_snapshot_id
         WHERE s.enabled = 1
           AND s.schedule_enabled = 1
         ORDER BY s.id ASC
@@ -459,9 +468,11 @@ async def list_sources_for_retention_cleanup(db) -> list[dict[str, Any]]:
             st.last_sync_started_at,
             st.last_sync_completed_at,
             st.last_sync_status,
-            st.last_error
+            st.last_error,
+            ss.summary_json AS last_successful_sync_summary_json
         FROM ingestion_sources s
         JOIN ingestion_source_state st ON st.source_id = s.id
+        LEFT JOIN ingestion_source_snapshots ss ON ss.id = st.last_successful_snapshot_id
         WHERE s.source_type = 'archive_snapshot'
         ORDER BY s.id ASC
         """
@@ -490,9 +501,11 @@ async def list_sources_by_user(db, *, user_id: int) -> list[dict[str, Any]]:
             st.last_sync_started_at,
             st.last_sync_completed_at,
             st.last_sync_status,
-            st.last_error
+            st.last_error,
+            ss.summary_json AS last_successful_sync_summary_json
         FROM ingestion_sources s
         JOIN ingestion_source_state st ON st.source_id = s.id
+        LEFT JOIN ingestion_source_snapshots ss ON ss.id = st.last_successful_snapshot_id
         WHERE s.user_id = ?
         ORDER BY s.id ASC
         """,

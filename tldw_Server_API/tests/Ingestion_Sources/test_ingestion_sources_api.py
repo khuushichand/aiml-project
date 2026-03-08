@@ -291,6 +291,100 @@ def test_list_source_items_endpoint_returns_tracked_items(tmp_path, ingestion_so
 
 
 @pytest.mark.integration
+def test_source_responses_include_last_successful_sync_summary(tmp_path, ingestion_sources_client, monkeypatch):
+    client, auth_headers = ingestion_sources_client
+
+    import aiosqlite
+    import tldw_Server_API.app.api.v1.endpoints.ingestion_sources as ep
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        create_source_snapshot,
+        ensure_ingestion_sources_schema,
+    )
+
+    class _FakePool:
+        def __init__(self, db):
+            self._db = db
+
+        class _Tx:
+            def __init__(self, db):
+                self._db = db
+
+            async def __aenter__(self):
+                return self._db
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        def transaction(self):
+            return self._Tx(self._db)
+
+    async def _run_test() -> None:
+        meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+        async with aiosqlite.connect(str(meta_db_path)) as db:
+            db.row_factory = aiosqlite.Row
+            await ensure_ingestion_sources_schema(db)
+            source = await create_source(
+                db,
+                user_id=1,
+                payload={
+                    "source_type": "local_directory",
+                    "sink_type": "notes",
+                    "policy": "canonical",
+                    "config": {"path": "/tmp/example"},
+                },
+            )
+            snapshot = await create_source_snapshot(
+                db,
+                source_id=int(source["id"]),
+                snapshot_kind="local_directory",
+                status="success",
+                summary={
+                    "processed": 3,
+                    "degraded_items": 2,
+                    "sink_failed_items": 1,
+                    "ingestion_failed_items": 1,
+                },
+            )
+            await db.execute(
+                "UPDATE ingestion_source_state "
+                "SET last_successful_snapshot_id = ?, last_sync_status = 'success' "
+                "WHERE source_id = ?",
+                (int(snapshot["id"]), int(source["id"])),
+            )
+
+            async def _fake_get_db_pool():
+                return _FakePool(db)
+
+            monkeypatch.setattr(ep, "get_db_pool", _fake_get_db_pool)
+
+            detail_response = client.get(
+                f"/api/v1/ingestion-sources/{int(source['id'])}",
+                headers=auth_headers,
+            )
+
+            assert detail_response.status_code == 200, detail_response.text
+            detail_payload = detail_response.json()
+            assert detail_payload["last_successful_sync_summary"]["processed"] == 3
+            assert detail_payload["last_successful_sync_summary"]["degraded_items"] == 2
+            assert detail_payload["last_successful_sync_summary"]["sink_failed_items"] == 1
+
+            list_response = client.get(
+                "/api/v1/ingestion-sources",
+                headers=auth_headers,
+            )
+
+            assert list_response.status_code == 200, list_response.text
+            list_payload = list_response.json()
+            assert len(list_payload) == 1
+            assert list_payload[0]["last_successful_sync_summary"]["ingestion_failed_items"] == 1
+
+    import asyncio
+
+    asyncio.run(_run_test())
+
+
+@pytest.mark.integration
 def test_reattach_item_endpoint_clears_detached_status(tmp_path, ingestion_sources_client, monkeypatch):
     client, auth_headers = ingestion_sources_client
 

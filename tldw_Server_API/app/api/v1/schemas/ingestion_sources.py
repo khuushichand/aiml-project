@@ -45,6 +45,7 @@ class IngestionSourceResponse(BaseModel):
     last_sync_completed_at: str | None = None
     last_sync_status: str | None = None
     last_error: str | None = None
+    last_successful_sync_summary: dict[str, Any] = Field(default_factory=dict)
     created_at: str | None = None
     updated_at: str | None = None
 
