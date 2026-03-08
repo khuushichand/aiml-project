@@ -221,6 +221,7 @@ from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.Persona.memory_integration import persist_persona_turn
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.testing import (
@@ -799,6 +800,58 @@ def _extract_assistant_text_from_completion_payload(payload: dict[str, Any]) -> 
     if not isinstance(message_block, dict):
         return ""
     return _extract_text_from_message_content(message_block.get("content"))
+
+
+def _persona_memory_write_enabled(assistant_context: dict[str, Any] | None) -> bool:
+    if not isinstance(assistant_context, dict):
+        return False
+    return (
+        assistant_context.get("assistant_kind") == "persona"
+        and bool(assistant_context.get("assistant_id"))
+        and assistant_context.get("persona_memory_mode") == "read_write"
+    )
+
+
+async def _persist_persona_chat_reply_if_enabled(
+    *,
+    assistant_context: dict[str, Any] | None,
+    user_id: str | None,
+    conversation_id: str | None,
+    assistant_text: str,
+) -> bool:
+    """Persist assistant reply into persona memory when conversation writeback is enabled."""
+    if not _persona_memory_write_enabled(assistant_context):
+        return False
+    if not conversation_id:
+        return False
+    content = str(assistant_text or "").strip()
+    if not content:
+        return False
+
+    persona_id = str(assistant_context.get("assistant_id") or "").strip()
+    if not persona_id:
+        return False
+
+    loop = asyncio.get_running_loop()
+    return bool(
+        await loop.run_in_executor(
+            None,
+            partial(
+                persist_persona_turn,
+                user_id=user_id,
+                session_id=conversation_id,
+                persona_id=persona_id,
+                role="assistant",
+                content=content,
+                turn_type="assistant_delta",
+                metadata={
+                    "source": "chat_completions",
+                    "conversation_id": conversation_id,
+                },
+                store_as_memory=True,
+            ),
+        )
+    )
 
 
 def _record_persona_telemetry_hooks(
@@ -2659,6 +2712,11 @@ async def create_chat_completion(
                 if isinstance(continuation_runtime.get("tldw_continuation"), dict)
                 else None
             )
+            assistant_context = (
+                continuation_runtime.get("assistant_context")
+                if isinstance(continuation_runtime.get("assistant_context"), dict)
+                else None
+            )
             assistant_parent_message_id = (
                 str(continuation_runtime.get("assistant_parent_message_id"))
                 if continuation_runtime.get("assistant_parent_message_id")
@@ -3267,32 +3325,39 @@ async def create_chat_completion(
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                     return base
 
-            async def _on_stream_full_reply_for_persona_telemetry(full_reply: str) -> None:
-                if character_db_id_for_context is None:
-                    return
-                persona_telemetry = compute_persona_exemplar_telemetry(
-                    output_text=str(full_reply or ""),
-                    selected_exemplars=persona_selected_exemplars,
-                )
-                debug_id_for_logs = (
-                    str(persona_debug_meta.get("debug_id"))
-                    if isinstance(persona_debug_meta, dict) and persona_debug_meta.get("debug_id")
-                    else None
-                )
-                logger.debug(
-                    "Persona streaming telemetry debug_id={} ioo={} ior={} lcs={}",
-                    debug_id_for_logs or "n/a",
-                    persona_telemetry.get("ioo"),
-                    persona_telemetry.get("ior"),
-                    persona_telemetry.get("lcs"),
-                )
-                _record_persona_telemetry_hooks(
-                    telemetry=persona_telemetry,
-                    provider=provider,
-                    model=model,
+            async def _on_stream_full_reply_for_assistant_runtime(full_reply: str) -> None:
+                assistant_text = str(full_reply or "")
+                if character_db_id_for_context is not None:
+                    persona_telemetry = compute_persona_exemplar_telemetry(
+                        output_text=assistant_text,
+                        selected_exemplars=persona_selected_exemplars,
+                    )
+                    debug_id_for_logs = (
+                        str(persona_debug_meta.get("debug_id"))
+                        if isinstance(persona_debug_meta, dict) and persona_debug_meta.get("debug_id")
+                        else None
+                    )
+                    logger.debug(
+                        "Persona streaming telemetry debug_id={} ioo={} ior={} lcs={}",
+                        debug_id_for_logs or "n/a",
+                        persona_telemetry.get("ioo"),
+                        persona_telemetry.get("ior"),
+                        persona_telemetry.get("lcs"),
+                    )
+                    _record_persona_telemetry_hooks(
+                        telemetry=persona_telemetry,
+                        provider=provider,
+                        model=model,
+                        user_id=user_id,
+                        character_id=character_db_id_for_context,
+                        debug_id=debug_id_for_logs,
+                    )
+
+                await _persist_persona_chat_reply_if_enabled(
+                    assistant_context=assistant_context,
                     user_id=user_id,
-                    character_id=character_db_id_for_context,
-                    debug_id=debug_id_for_logs,
+                    conversation_id=final_conversation_id,
+                    assistant_text=assistant_text,
                 )
 
             if request_data.stream:
@@ -3323,7 +3388,7 @@ async def create_chat_completion(
                     structured_request_context=structured_request_context,
                     moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
-                    on_stream_full_reply=_on_stream_full_reply_for_persona_telemetry,
+                    on_stream_full_reply=_on_stream_full_reply_for_assistant_runtime,
                     rg_commit_cb=(
                         (lambda total: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": int(total)}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
                         if _rg_handle_id else None
@@ -3425,6 +3490,15 @@ async def create_chat_completion(
                         meta_payload = {}
                         encoded_payload["meta"] = meta_payload
                     meta_payload["persona"] = persona_debug_meta
+
+                if isinstance(encoded_payload, dict):
+                    assistant_reply_text = _extract_assistant_text_from_completion_payload(encoded_payload)
+                    await _persist_persona_chat_reply_if_enabled(
+                        assistant_context=assistant_context,
+                        user_id=user_id,
+                        conversation_id=final_conversation_id,
+                        assistant_text=assistant_reply_text,
+                    )
                 # Track response size and return
                 if isinstance(encoded_payload, dict):
                     response_size = len(json.dumps(encoded_payload))
