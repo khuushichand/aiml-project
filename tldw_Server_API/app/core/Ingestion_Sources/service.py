@@ -728,6 +728,7 @@ async def update_source_item_state(
     binding: dict[str, Any] | None = None,
     present_in_source: bool | None = None,
     content_hash: str | None = None,
+    clear_content_hash: bool = False,
 ) -> dict[str, Any]:
     existing_cursor = await db.execute(
         """
@@ -756,7 +757,9 @@ async def update_source_item_state(
             str(sync_status),
             _json_dumps(updated_binding),
             1 if (existing.get("present_in_source") if present_in_source is None else present_in_source) else 0,
-            content_hash if content_hash is not None else existing.get("content_hash"),
+            None
+            if clear_content_hash
+            else (content_hash if content_hash is not None else existing.get("content_hash")),
             now,
             int(item_id),
         ),

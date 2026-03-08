@@ -259,5 +259,6 @@ async def reattach_ingestion_source_item(
             item_id=item_id,
             sync_status="sync_managed",
             binding=binding,
+            clear_content_hash=True,
         )
     return updated
