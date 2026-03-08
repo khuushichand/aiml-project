@@ -224,6 +224,9 @@ from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_top
 from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import (
     assemble_persona_exemplar_prompt,
 )
+from tldw_Server_API.app.core.Persona.exemplar_turn_classifier import (
+    extract_latest_user_turn_text,
+)
 from tldw_Server_API.app.core.Persona.memory_integration import persist_persona_turn
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
@@ -693,6 +696,7 @@ def _assemble_persona_runtime_guidance(
     exemplars: list[dict[str, Any]],
     requested_scenario_tags: list[str] | None = None,
     requested_tone: str | None = None,
+    current_turn_text: str | None = None,
     conflicting_capability_tags: list[str] | None = None,
 ) -> dict[str, Any]:
     """Append shared persona exemplar guidance for persona-backed ordinary chat."""
@@ -729,6 +733,7 @@ def _assemble_persona_runtime_guidance(
         exemplars=exemplars,
         requested_scenario_tags=requested_scenario_tags,
         requested_tone=requested_tone,
+        current_turn_text=current_turn_text,
         conflicting_capability_tags=conflicting_capability_tags,
     )
 
@@ -2845,6 +2850,7 @@ async def create_chat_completion(
                     system_message=final_system_message,
                     assistant_context=assistant_context,
                     exemplars=persona_exemplars,
+                    current_turn_text=extract_latest_user_turn_text(templated_llm_payload),
                 )
                 final_system_message = runtime_guidance["system_message"]
                 persona_selected_exemplars = list(runtime_guidance["selected_exemplars"])

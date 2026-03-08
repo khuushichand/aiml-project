@@ -114,6 +114,7 @@ def assemble_persona_exemplar_prompt(
     exemplars: list[dict[str, Any]],
     requested_scenario_tags: list[str] | None = None,
     requested_tone: str | None = None,
+    current_turn_text: str | None = None,
     conflicting_capability_tags: list[str] | None = None,
 ) -> PersonaExemplarPromptAssembly:
     """Select persona exemplars and assemble prompt sections for reuse across runtimes."""
@@ -122,6 +123,7 @@ def assemble_persona_exemplar_prompt(
         exemplars=exemplars,
         requested_scenario_tags=requested_scenario_tags,
         requested_tone=requested_tone,
+        current_turn_text=current_turn_text,
     )
     conflicting_tags = set(_normalize_tag_list(conflicting_capability_tags))
     selected: list[dict[str, Any]] = []

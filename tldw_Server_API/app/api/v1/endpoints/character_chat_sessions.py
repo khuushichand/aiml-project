@@ -2868,6 +2868,7 @@ def _build_persona_preview_sections(
     exemplars: list[dict[str, Any]],
     requested_scenario_tags: list[str] | None = None,
     requested_tone: str | None = None,
+    current_turn_text: str | None = None,
     conflicting_capability_tags: list[str] | None = None,
 ) -> list[tuple[str, str, int]]:
     """Build persona exemplar preview sections using the shared assembly helper."""
@@ -2883,6 +2884,7 @@ def _build_persona_preview_sections(
         exemplars=exemplars,
         requested_scenario_tags=requested_scenario_tags,
         requested_tone=requested_tone,
+        current_turn_text=current_turn_text,
         conflicting_capability_tags=conflicting_capability_tags,
     )
     return assembly.sections
@@ -3148,6 +3150,15 @@ async def prompt_assembly_preview(
                     include_deleted=False,
                     limit=50,
                     offset=0,
+                ),
+                current_turn_text=body.append_user_message or next(
+                    (
+                        str(message.get("content") or "").strip()
+                        for message in reversed(formatted)
+                        if str(message.get("role") or "").strip().lower() == "user"
+                        and str(message.get("content") or "").strip()
+                    ),
+                    "",
                 ),
             )
 

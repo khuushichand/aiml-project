@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from tldw_Server_API.app.core.Persona.exemplar_turn_classifier import classify_persona_turn
+
 
 _BOUNDARY_KINDS = {"boundary"}
 _STYLE_KINDS = {"style", "scenario_demo"}
@@ -70,11 +72,15 @@ def select_persona_exemplars(
     exemplars: list[dict[str, Any]],
     requested_scenario_tags: list[str] | None = None,
     requested_tone: str | None = None,
+    current_turn_text: str | None = None,
 ) -> PersonaExemplarSelectionResult:
     """Select a bounded deterministic set of persona exemplars for a turn."""
     requested_persona_id = str(persona_id or "").strip()
-    requested_tags = set(_normalize_tag_list(requested_scenario_tags))
-    normalized_tone = _normalize_text(requested_tone)
+    explicit_tags = _normalize_tag_list(requested_scenario_tags)
+    explicit_tone = _normalize_text(requested_tone)
+    turn_classification = classify_persona_turn(current_turn_text) if str(current_turn_text or "").strip() else None
+    requested_tags = set(explicit_tags or (turn_classification.scenario_tags if turn_classification else []))
+    normalized_tone = explicit_tone or (turn_classification.tone if turn_classification else None)
 
     ranked_candidates: list[tuple[tuple[int, int, int, str], dict[str, Any], str]] = []
     rejected: list[dict[str, Any]] = []
