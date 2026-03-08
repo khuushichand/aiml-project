@@ -97,6 +97,8 @@ export const useSelectServerChat = () => {
     setServerChatTitle,
     setServerChatCharacterId,
     setServerChatVersion,
+    setServerChatLoadState,
+    setServerChatLoadError,
     setServerChatState,
     setServerChatTopic,
     setServerChatClusterId,
@@ -111,6 +113,8 @@ export const useSelectServerChat = () => {
       setServerChatTitle: state.setServerChatTitle,
       setServerChatCharacterId: state.setServerChatCharacterId,
       setServerChatVersion: state.setServerChatVersion,
+      setServerChatLoadState: state.setServerChatLoadState,
+      setServerChatLoadError: state.setServerChatLoadError,
       setServerChatState: state.setServerChatState,
       setServerChatTopic: state.setServerChatTopic,
       setServerChatClusterId: state.setServerChatClusterId,
@@ -135,6 +139,8 @@ export const useSelectServerChat = () => {
       setServerChatTitle(chat.title || "")
       const characterId = resolveCharacterId(chat.character_id)
       setServerChatCharacterId(characterId)
+      setServerChatLoadState("loading")
+      setServerChatLoadError(null)
       const syncRequestId = characterSyncRequestRef.current + 1
       characterSyncRequestRef.current = syncRequestId
       const syncSelectedCharacter = async () => {
@@ -189,6 +195,8 @@ export const useSelectServerChat = () => {
       setServerChatClusterId,
       setServerChatExternalRef,
       setServerChatId,
+      setServerChatLoadError,
+      setServerChatLoadState,
       setServerChatMetaLoaded,
       setServerChatSource,
       setServerChatState,

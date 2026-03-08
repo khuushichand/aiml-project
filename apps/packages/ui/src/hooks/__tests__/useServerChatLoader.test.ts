@@ -4,6 +4,7 @@ import type { ServerChatMessage } from "@/services/tldw/TldwApiClient"
 import {
   fetchAllServerChatMessages,
   mapServerChatMessagesToPlaygroundMessages,
+  shouldCommitServerChatLoadResult,
   shouldPreserveLocalMessagesForServerLoad,
   shouldSkipLoadedServerChatReload
 } from "@/hooks/chat/useServerChatLoader"
@@ -148,6 +149,45 @@ describe("shouldSkipLoadedServerChatReload", () => {
         currentMessages: [createMessage({ message: "synced" })]
       })
     ).toBe(true)
+  })
+})
+
+describe("shouldCommitServerChatLoadResult", () => {
+  it("returns true when the same chat is still active and the same controller owns the load", () => {
+    const controller = new AbortController()
+
+    expect(
+      shouldCommitServerChatLoadResult({
+        requestedChatId: "chat-1",
+        activeServerChatId: "chat-1",
+        requestController: controller,
+        activeController: controller
+      })
+    ).toBe(true)
+  })
+
+  it("returns false when a newer chat selection has replaced the active chat", () => {
+    const controller = new AbortController()
+
+    expect(
+      shouldCommitServerChatLoadResult({
+        requestedChatId: "chat-a",
+        activeServerChatId: "chat-b",
+        requestController: controller,
+        activeController: controller
+      })
+    ).toBe(false)
+  })
+
+  it("returns false when the active controller no longer matches the request controller", () => {
+    expect(
+      shouldCommitServerChatLoadResult({
+        requestedChatId: "chat-1",
+        activeServerChatId: "chat-1",
+        requestController: new AbortController(),
+        activeController: new AbortController()
+      })
+    ).toBe(false)
   })
 })
 

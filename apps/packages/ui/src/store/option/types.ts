@@ -199,6 +199,12 @@ export type State = {
   setServerChatCharacterId: (id: string | number | null) => void
   serverChatMetaLoaded: boolean
   setServerChatMetaLoaded: (loaded: boolean) => void
+  serverChatLoadState: "idle" | "loading" | "loaded" | "failed"
+  setServerChatLoadState: (
+    state: "idle" | "loading" | "loaded" | "failed"
+  ) => void
+  serverChatLoadError: string | null
+  setServerChatLoadError: (error: string | null) => void
   serverChatState: ConversationState | null
   setServerChatState: (state: ConversationState | null) => void
   serverChatVersion: number | null

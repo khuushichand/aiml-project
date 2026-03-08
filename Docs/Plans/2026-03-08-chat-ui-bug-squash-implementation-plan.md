@@ -12,6 +12,8 @@
 
 ### Task 1: Preserve Sidebar Data On Recoverable Refresh Failures
 
+**Status:** Complete
+
 **Files:**
 - Modify: `apps/packages/ui/src/hooks/useServerChatHistory.ts`
 - Test: `apps/packages/ui/src/hooks/__tests__/useServerChatHistory.test.ts`
@@ -122,6 +124,8 @@ git commit -m "fix(chat-ui): preserve sidebar chats on recoverable refresh failu
 
 ### Task 2: Make Selected-Chat Loading End In Loaded Or Failed State
 
+**Status:** Complete
+
 **Files:**
 - Modify: `apps/packages/ui/src/store/option/types.ts`
 - Modify: `apps/packages/ui/src/store/option/slices/server-chat-slice.ts`
@@ -209,6 +213,8 @@ git commit -m "fix(chat-ui): add explicit selected-chat load and failure states"
 ```
 
 ### Task 3: Stop Settings Sync From Bumping Chat Versions When Nothing Changed
+
+**Status:** Not Started
 
 **Files:**
 - Modify: `apps/packages/ui/src/services/chat-settings.ts`
