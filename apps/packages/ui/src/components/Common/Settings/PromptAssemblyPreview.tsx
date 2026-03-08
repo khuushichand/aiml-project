@@ -86,7 +86,9 @@ const SECTION_I18N_KEYS: Record<string, string> = {
   message_steering: "playground:section.message_steering",
   greeting: "playground:section.greeting",
   lorebook: "playground:section.lorebook",
-  world_book: "playground:section.world_book"
+  world_book: "playground:section.world_book",
+  persona_boundary: "playground:section.persona_boundary",
+  persona_exemplars: "playground:section.persona_exemplars"
 }
 
 const toBudgetStatus = (
@@ -208,8 +210,7 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
     ],
     enabled:
       open &&
-      Boolean(serverChatId) &&
-      serverChatAssistantKind !== "persona",
+      Boolean(serverChatId),
     queryFn: async () => {
       if (!serverChatId) {
         return null
@@ -285,16 +286,7 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
             </p>
           )}
 
-          {serverChatAssistantKind === "persona" && (
-            <p className="text-text-muted">
-              {t("playground:composer.promptPreview.personaUnsupported", {
-                defaultValue:
-                  "Prompt preview is currently available only for character-backed chats."
-              })}
-            </p>
-          )}
-
-          {serverChatId && serverChatAssistantKind !== "persona" && (
+          {serverChatId && (
             <>
               <div className="mb-2 flex items-center justify-end">
                 <button

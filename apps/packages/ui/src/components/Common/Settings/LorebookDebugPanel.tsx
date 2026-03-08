@@ -417,7 +417,7 @@ export const LorebookDebugPanel: React.FC<Props> = ({
             <p className="text-text-muted">
               {t("playground:composer.lorebookDebug.personaUnsupported", {
                 defaultValue:
-                  "Lorebook debug is currently available only for character-backed chats.",
+                  "Lorebook debug stays character-only for persona chats. Use Prompt preview to inspect persona exemplar guidance instead.",
               })}
             </p>
           )}

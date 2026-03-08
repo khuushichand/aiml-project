@@ -63,7 +63,7 @@ describe("persona chat settings guards", () => {
     vi.clearAllMocks()
   })
 
-  it("shows character-only guard copy for prompt preview and lorebook debug", () => {
+  it("keeps lorebook debug character-only while allowing persona prompt preview", () => {
     render(
       <>
         <PromptAssemblyPreview
@@ -84,22 +84,19 @@ describe("persona chat settings guards", () => {
 
     expect(
       screen.getByText(
-        "Prompt preview is currently available only for character-backed chats."
-      )
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText(
-        "Lorebook debug is currently available only for character-backed chats."
+        "Lorebook debug stays character-only for persona chats. Use Prompt preview to inspect persona exemplar guidance instead."
       )
     ).toBeInTheDocument()
 
-    const promptQuery = queryCalls.find(
+    const promptQueryCalls = queryCalls.filter(
       (entry) => entry?.queryKey?.[0] === "promptAssemblyPreview"
     )
-    const lorebookQuery = queryCalls.find(
+    const lorebookQueryCalls = queryCalls.filter(
       (entry) => entry?.queryKey?.[0] === "lorebookDebugPanel"
     )
-    expect(promptQuery?.enabled).toBe(false)
-    expect(lorebookQuery?.enabled).toBe(false)
+    expect(promptQueryCalls.some((entry) => entry?.enabled === true)).toBe(true)
+    expect(lorebookQueryCalls.some((entry) => entry?.enabled === false)).toBe(
+      true
+    )
   })
 })
