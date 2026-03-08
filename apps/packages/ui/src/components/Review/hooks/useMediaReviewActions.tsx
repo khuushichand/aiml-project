@@ -163,7 +163,7 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
         path: `/api/v1/media/${id}?include_content=true&include_versions=false` as any,
         method: 'GET' as any
       })
-      const base = Array.isArray(data) ? (data as MediaItem[]).find((x) => x.id === id) : undefined
+      const base = Array.isArray(data) ? (data as MediaItem[]).find((x) => idsEqual(x.id, id)) : undefined
       const enriched = { ...d, id, title: (d as any)?.title ?? base?.title, type: (d as any)?.type ?? base?.type, created_at: (d as any)?.created_at ?? base?.created_at } as any
       setDetails((prev) => ({ ...prev, [id]: enriched }))
       setFailedIds((prev) => {
@@ -266,8 +266,8 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
 
   const toggleSelect = React.useCallback(async (id: string | number, event?: React.MouseEvent) => {
     if (event?.shiftKey && lastClickedRef.current != null && Array.isArray(data)) {
-      const lastIdx = data.findIndex(r => r.id === lastClickedRef.current)
-      const currIdx = data.findIndex(r => r.id === id)
+      const lastIdx = data.findIndex(r => idsEqual(r.id, lastClickedRef.current!))
+      const currIdx = data.findIndex(r => idsEqual(r.id, id))
       if (lastIdx !== -1 && currIdx !== -1) {
         const [start, end] = lastIdx < currIdx ? [lastIdx, currIdx] : [currIdx, lastIdx]
         const rangeIds = data.slice(start, end + 1).map(r => r.id)
@@ -428,7 +428,7 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
         return
       }
       if (viewMode !== "all") {
-        const idx = viewerItems.findIndex((m) => m.id === id)
+        const idx = viewerItems.findIndex((m) => idsEqual(m.id, id))
         if (idx >= 0) viewerVirtualizer.scrollToIndex(idx, { align: "start" })
       }
     },

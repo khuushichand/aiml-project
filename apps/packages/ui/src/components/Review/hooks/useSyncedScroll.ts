@@ -50,6 +50,7 @@ export function useSyncedScroll(enabled: boolean, panelCount: number = 0) {
         el.removeEventListener("scroll", fn)
       }
     }
+    // panelCount is a dependency signal to rebind listeners when panels change
   }, [enabled, panelCount])
 
   return { setRef }
