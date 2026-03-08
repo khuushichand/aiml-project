@@ -18,6 +18,7 @@ The new step exists for the narrow case where a downstream workflow genuinely ne
 - keep the field-selection contract fixed and explicit
 - avoid inventing derived fields or dotted-path semantics
 - preserve deterministic behavior for missing optional research outputs by returning `null`
+- keep inline workflow outputs bounded enough that this step does not recreate the full-bundle state-bloat problem
 
 ## Non-Goals
 
@@ -80,6 +81,7 @@ The step must not synthesize new summary fields or expose non-canonical data.
 - `fields` must be non-empty
 - requested field names must all be in the fixed allowlist
 - duplicate field names are deduped while preserving request order
+- unknown config keys are rejected at both save time and adapter runtime
 
 ### Runtime Requirements
 
@@ -87,6 +89,7 @@ The step must not synthesize new summary fields or expose non-canonical data.
 - the adapter loads the canonical bundle through `ResearchService.get_bundle(...)`
 - every requested field appears in output
 - if an allowed field is absent in the bundle, the output value is `null`
+- selected inline output is size-bounded before returning; if the serialized `selected_fields` payload exceeds the v1 cap, the step fails with an explicit message telling the user to select fewer fields or use `deep_research_load_bundle`
 
 ### Outputs
 
@@ -115,7 +118,20 @@ The adapter should:
 3. require `completed` session state
 4. load the canonical bundle
 5. build `selected_fields` from the fixed allowlist
-6. optionally persist `deep_research_selected_fields.json` as a workflow artifact
+6. enforce a fixed serialized-size cap for inline `selected_fields`
+7. optionally persist `deep_research_selected_fields.json` as a workflow artifact
+
+### Payload Size Guard
+
+This step is allowed to inline selected canonical fields, but it still needs a hard bound so it stays workflow-safe.
+
+Recommended v1 behavior:
+
+- serialize `selected_fields` to JSON before returning
+- if the serialized payload exceeds a fixed cap such as `256 KB`, fail fast with a clear error like:
+  - `deep_research_select_bundle_fields output exceeds inline size limit; select fewer fields or use deep_research_load_bundle`
+
+This keeps the current canonical allowlist intact while preserving the original reason for splitting this step from `deep_research_load_bundle`.
 
 ## Frontend Design
 
@@ -155,6 +171,8 @@ The step should fail for:
 - missing or unusable run reference
 - non-completed research run
 - invalid requested field names
+- unknown config keys
+- selected inline payload exceeding the size cap
 
 The step should not fail for:
 
@@ -169,11 +187,17 @@ Backend tests should cover:
 - raw `run_id` input
 - prior-step object input
 - invalid field names
+- unknown config keys rejected at save time and runtime
 - deduped fields preserving order
 - `null` for absent allowed fields
 - rejection of non-completed runs
+- rejection when selected inline payload exceeds the size cap
 - artifact persistence
 - workflow definition validation and `/step-types` exposure
+- one saved-workflow runtime chain proving:
+  - `deep_research_wait` with `include_bundle=false`
+  - `deep_research_select_bundle_fields`
+  - downstream consumption in a later step
 
 Frontend tests should cover:
 

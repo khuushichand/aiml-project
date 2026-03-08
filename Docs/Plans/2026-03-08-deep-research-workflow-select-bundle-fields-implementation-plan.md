@@ -23,9 +23,11 @@ Add failing tests for:
 - selecting fields from a raw `run_id`
 - selecting fields from a prior step output object
 - invalid field names
+- rejecting unknown config keys at runtime
 - deduping duplicate field names while preserving order
 - returning `null` for allowed but absent fields
 - rejecting non-completed runs
+- rejecting oversized selected inline payloads
 - writing `deep_research_selected_fields.json`
 
 Use a fake completed research session and fake canonical bundle like:
@@ -58,7 +60,13 @@ Add failing coverage that:
 
 - `/api/v1/workflows/step-types` includes `deep_research_select_bundle_fields`
 - workflow definition validation rejects unknown requested fields
+- workflow definition validation rejects unknown config keys
 - workflow definition validation still works when `jsonschema` is unavailable
+- a saved workflow chain:
+  - `deep_research_wait` with `include_bundle=false`
+  - `deep_research_select_bundle_fields`
+  - downstream `prompt`
+  succeeds and consumes selected fields
 
 **Step 3: Run the focused tests to verify failure**
 
@@ -108,6 +116,7 @@ Validation rules:
 - `fields` non-empty
 - every field in the fixed allowlist
 - dedupe duplicate fields while preserving order
+- reject unknown config keys by overriding the base adapter permissive-extra behavior for this model
 
 **Step 2: Implement the adapter**
 
@@ -126,6 +135,7 @@ selected_fields = {
 }
 ```
 
+- serialize `selected_fields` and fail if it exceeds the v1 inline payload cap
 - write `deep_research_selected_fields.json` when `save_artifact` is true
 - return:
 
@@ -266,9 +276,11 @@ In `step-registry.ts`, add:
   - `run_id` as `template-editor`
   - `run` as `json-editor`
   - `fields` as `multiselect`
-  - `save_artifact` as `checkbox`
+- `save_artifact` as `checkbox`
 
 Use the fixed allowlist for `fields.options`.
+
+Add a short description/warning on `fields` that large selections can hit the inline size limit and that `deep_research_load_bundle` remains the pointer-oriented alternative.
 
 **Step 2: Add registry tests**
 
