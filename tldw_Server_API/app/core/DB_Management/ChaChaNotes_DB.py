@@ -434,7 +434,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 32  # Schema v32 adds normalized assistant identity to conversations
+    _CURRENT_SCHEMA_VERSION = 33  # Schema v33 adds persona exemplar persistence
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -451,6 +451,19 @@ class CharactersRAGDB:
     _ALLOWED_PERSONA_SESSION_STATUSES: tuple[str, ...] = ("active", "paused", "closed", "archived")
     _ALLOWED_CONVERSATION_ASSISTANT_KINDS: tuple[str, ...] = ("character", "persona")
     _ALLOWED_PERSONA_MEMORY_MODES: tuple[str, ...] = ("read_only", "read_write")
+    _ALLOWED_PERSONA_EXEMPLAR_KINDS: tuple[str, ...] = (
+        "style",
+        "catchphrase",
+        "boundary",
+        "scenario_demo",
+        "tool_behavior",
+    )
+    _ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES: tuple[str, ...] = (
+        "manual",
+        "transcript_import",
+        "character_seed",
+        "generated_candidate",
+    )
 
     _FTS_CONFIG: list[tuple[str, str, list[str]]] = [
         (
@@ -2955,6 +2968,49 @@ UPDATE db_schema_version
    AND version < 32;
 """
 
+    _MIGRATION_SQL_V32_TO_V33 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 33 - Persona exemplars (2026-03-08)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS persona_exemplars(
+  id TEXT PRIMARY KEY,
+  persona_id TEXT NOT NULL REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL
+    CHECK(kind IN ('style','catchphrase','boundary','scenario_demo','tool_behavior')),
+  content TEXT NOT NULL,
+  tone TEXT,
+  scenario_tags_json TEXT NOT NULL DEFAULT '[]',
+  capability_tags_json TEXT NOT NULL DEFAULT '[]',
+  priority INTEGER NOT NULL DEFAULT 0,
+  enabled BOOLEAN NOT NULL DEFAULT 1,
+  source_type TEXT NOT NULL DEFAULT 'manual'
+    CHECK(source_type IN ('manual','transcript_import','character_seed','generated_candidate')),
+  source_ref TEXT,
+  notes TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_persona_exemplars_persona
+  ON persona_exemplars(persona_id, deleted, enabled);
+CREATE INDEX IF NOT EXISTS idx_persona_exemplars_user
+  ON persona_exemplars(user_id, deleted, enabled);
+CREATE INDEX IF NOT EXISTS idx_persona_exemplars_kind
+  ON persona_exemplars(kind, deleted);
+CREATE INDEX IF NOT EXISTS idx_persona_exemplars_enabled
+  ON persona_exemplars(enabled, deleted);
+
+UPDATE db_schema_version
+   SET version = 33
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 33;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4546,6 +4602,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V31->V32: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V32 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v32_to_v33(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V32 to V33 (persona exemplar persistence)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V32 to V33 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V32_TO_V33)
+            final_version = self._get_db_version(conn)
+            if final_version != 33:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V32->V33 failed version check. Expected 33, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V33 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V32->V33 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V32->V33 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V32->V33: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V33 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4779,6 +4855,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 32 and current_db_version == 31:
                         self._migrate_from_v31_to_v32(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 33 and current_db_version == 32:
+                        self._migrate_from_v32_to_v33(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -5086,6 +5165,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v30_to_v31(conn)
                             elif fallback_version == 31:
                                 self._migrate_from_v31_to_v32(conn)
+                            elif fallback_version == 32:
+                                self._migrate_from_v32_to_v33(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5157,6 +5238,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 32 and current_db_version == 31:
                     self._migrate_from_v31_to_v32(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 33 and current_db_version == 32:
+                    self._migrate_from_v32_to_v33(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -5442,6 +5526,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 32:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V31_TO_V32, conn, expected_version=32)
                 current_version = 32
+            if current_version < 33:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V32_TO_V33, conn, expected_version=33)
+                current_version = 33
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -6555,6 +6642,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 item["salience"] = 0.0
         return item
 
+    def _persona_exemplar_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a persona exemplar DB row to an API-safe dict."""
+        if not row:
+            return None
+        item = self._deserialize_row_fields(row, self._PERSONA_EXEMPLAR_JSON_FIELDS)
+        if not item:
+            return None
+        item["enabled"] = self._as_bool(item.get("enabled", True))
+        item["deleted"] = self._as_bool(item.get("deleted"))
+        try:
+            item["priority"] = int(item.get("priority", 0) or 0)
+        except (TypeError, ValueError):
+            item["priority"] = 0
+        item["scenario_tags"] = self._normalize_persona_exemplar_tags(
+            item.pop("scenario_tags_json", []),
+            "scenario_tags",
+        )
+        item["capability_tags"] = self._normalize_persona_exemplar_tags(
+            item.pop("capability_tags_json", []),
+            "capability_tags",
+        )
+        return item
+
     def _require_active_persona_profile_owner(self, conn: Any, *, persona_id: str, user_id: str) -> dict[str, Any]:
         """Require an active persona profile owned by `user_id` using DB `conn`.
 
@@ -6578,6 +6688,292 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 entity_id=persona_id,
             )
         return item
+
+    def _normalize_persona_exemplar_tone(self, value: Any) -> str | None:
+        tone = self._normalize_nullable_text(value)
+        if tone is None:
+            return None
+        normalized = tone.strip().lower()
+        return normalized or None
+
+    def create_persona_exemplar(self, exemplar_data: dict[str, Any]) -> str:
+        """Create a persona-owned exemplar and return its ID."""
+        persona_id = str(exemplar_data.get("persona_id") or "").strip()
+        user_id = str(exemplar_data.get("user_id") or "").strip()
+        if not persona_id:
+            raise InputError("persona_id is required for persona exemplar creation.")  # noqa: TRY003
+        if not user_id:
+            raise InputError("user_id is required for persona exemplar creation.")  # noqa: TRY003
+
+        kind = self._normalize_exemplar_enum(
+            exemplar_data.get("kind"),
+            allowed=self._ALLOWED_PERSONA_EXEMPLAR_KINDS,
+            field_name="kind",
+            default="style",
+        )
+        content = self._normalize_nullable_text(exemplar_data.get("content"))
+        if not content:
+            raise InputError("content is required for persona exemplar creation.")  # noqa: TRY003
+
+        tone = self._normalize_persona_exemplar_tone(exemplar_data.get("tone"))
+        scenario_tags = self._normalize_persona_exemplar_tags(
+            exemplar_data.get("scenario_tags"),
+            "scenario_tags",
+        )
+        capability_tags = self._normalize_persona_exemplar_tags(
+            exemplar_data.get("capability_tags"),
+            "capability_tags",
+        )
+        try:
+            priority = int(exemplar_data.get("priority", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise InputError("priority must be an integer.") from exc  # noqa: TRY003
+        enabled = self._as_bool(exemplar_data.get("enabled", True))
+        source_type = self._normalize_exemplar_enum(
+            exemplar_data.get("source_type"),
+            allowed=self._ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES,
+            field_name="source_type",
+            default="manual",
+        )
+        source_ref = self._normalize_nullable_text(exemplar_data.get("source_ref"))
+        notes = self._normalize_nullable_text(exemplar_data.get("notes"))
+        exemplar_id = str(exemplar_data.get("id") or self._generate_uuid()).strip()
+        now = self._get_current_utc_timestamp_iso()
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        deleted = self._normalize_deleted_input(exemplar_data.get("deleted", False))
+        version = self._parse_version_input(exemplar_data.get("version", 1))
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "INSERT INTO persona_exemplars("
+                "id, persona_id, user_id, kind, content, tone, scenario_tags_json, capability_tags_json, "
+                "priority, enabled, source_type, source_ref, notes, created_at, last_modified, deleted, version"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            params = (
+                exemplar_id,
+                persona_id,
+                user_id,
+                kind,
+                content,
+                tone,
+                self._ensure_json_string(scenario_tags) or "[]",
+                self._ensure_json_string(capability_tags) or "[]",
+                priority,
+                bool_cast(enabled),
+                source_type,
+                source_ref,
+                notes,
+                exemplar_data.get("created_at") or now,
+                exemplar_data.get("last_modified") or now,
+                bool_cast(deleted),
+                version,
+            )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            conn.execute(prepared_query, prepared_params or ())
+        return exemplar_id
+
+    def get_persona_exemplar(
+        self,
+        *,
+        exemplar_id: str,
+        persona_id: str,
+        user_id: str,
+        include_deleted: bool = False,
+        include_deleted_personas: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a persona exemplar owned by a user."""
+        clauses = [
+            "pe.id = ?",
+            "pe.persona_id = ?",
+            "pe.user_id = ?",
+            "pp.id = pe.persona_id",
+            "pp.user_id = pe.user_id",
+        ]
+        params: list[Any] = [exemplar_id, persona_id, user_id]
+        if not include_deleted:
+            clauses.append("pe.deleted = 0")
+        if not include_deleted_personas:
+            clauses.append("pp.deleted = 0")
+        query = (
+            "SELECT pe.* "
+            "FROM persona_exemplars pe "
+            "JOIN persona_profiles pp ON pp.id = pe.persona_id AND pp.user_id = pe.user_id "
+            "WHERE " + " AND ".join(clauses) + " LIMIT 1"
+        )
+        cursor = self.execute_query(query, tuple(params))
+        return self._persona_exemplar_row_to_dict(cursor.fetchone())
+
+    def list_persona_exemplars(
+        self,
+        *,
+        user_id: str,
+        persona_id: str | None = None,
+        include_disabled: bool = False,
+        include_deleted: bool = False,
+        include_deleted_personas: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List persona exemplars for a user, optionally filtered to a persona."""
+        clauses = [
+            "pe.user_id = ?",
+            "pp.id = pe.persona_id",
+            "pp.user_id = pe.user_id",
+        ]
+        params: list[Any] = [user_id]
+        if persona_id is not None:
+            clauses.append("pe.persona_id = ?")
+            params.append(persona_id)
+        if not include_disabled:
+            clauses.append("pe.enabled = 1")
+        if not include_deleted:
+            clauses.append("pe.deleted = 0")
+        if not include_deleted_personas:
+            clauses.append("pp.deleted = 0")
+        query = (
+            "SELECT pe.* "
+            "FROM persona_exemplars pe "
+            "JOIN persona_profiles pp ON pp.id = pe.persona_id AND pp.user_id = pe.user_id "
+            "WHERE " + " AND ".join(clauses) + " "
+            "ORDER BY pe.priority DESC, pe.last_modified DESC, pe.id ASC LIMIT ? OFFSET ?"
+        )
+        params.extend([max(1, int(limit)), max(0, int(offset))])
+        cursor = self.execute_query(query, tuple(params))
+        return [self._persona_exemplar_row_to_dict(row) for row in cursor.fetchall() if row]
+
+    def update_persona_exemplar(
+        self,
+        *,
+        exemplar_id: str,
+        persona_id: str,
+        user_id: str,
+        update_data: dict[str, Any],
+    ) -> bool:
+        """Update mutable persona exemplar fields."""
+        if not update_data:
+            raise InputError("No exemplar fields provided for update.")  # noqa: TRY003
+
+        allowed_fields = {
+            "kind",
+            "content",
+            "tone",
+            "scenario_tags",
+            "capability_tags",
+            "priority",
+            "enabled",
+            "source_type",
+            "source_ref",
+            "notes",
+            "deleted",
+        }
+        set_parts: list[str] = []
+        params: list[Any] = []
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            if key == "kind":
+                params.append(
+                    self._normalize_exemplar_enum(
+                        value,
+                        allowed=self._ALLOWED_PERSONA_EXEMPLAR_KINDS,
+                        field_name="kind",
+                        default="style",
+                    )
+                )
+                set_parts.append("kind = ?")
+            elif key == "content":
+                content = self._normalize_nullable_text(value)
+                if not content:
+                    raise InputError("content cannot be empty.")  # noqa: TRY003
+                params.append(content)
+                set_parts.append("content = ?")
+            elif key == "tone":
+                params.append(self._normalize_persona_exemplar_tone(value))
+                set_parts.append("tone = ?")
+            elif key == "scenario_tags":
+                params.append(self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "scenario_tags")) or "[]")
+                set_parts.append("scenario_tags_json = ?")
+            elif key == "capability_tags":
+                params.append(self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "capability_tags")) or "[]")
+                set_parts.append("capability_tags_json = ?")
+            elif key == "priority":
+                try:
+                    params.append(int(value))
+                except (TypeError, ValueError) as exc:
+                    raise InputError("priority must be an integer.") from exc  # noqa: TRY003
+                set_parts.append("priority = ?")
+            elif key == "enabled":
+                params.append(bool_cast(self._as_bool(value)))
+                set_parts.append("enabled = ?")
+            elif key == "source_type":
+                params.append(
+                    self._normalize_exemplar_enum(
+                        value,
+                        allowed=self._ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES,
+                        field_name="source_type",
+                        default="manual",
+                    )
+                )
+                set_parts.append("source_type = ?")
+            elif key == "deleted":
+                params.append(bool_cast(self._normalize_deleted_input(value)))
+                set_parts.append("deleted = ?")
+            else:
+                params.append(self._normalize_nullable_text(value))
+                set_parts.append(f"{key} = ?")
+
+        if not set_parts:
+            raise InputError("No valid exemplar fields provided for update.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.append("last_modified = ?")
+        params.append(now)
+        set_parts.append("version = version + 1")
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "UPDATE persona_exemplars "
+                f"SET {', '.join(set_parts)} "
+                "WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0"
+            )
+            params.extend([exemplar_id, persona_id, user_id])
+            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            return cursor.rowcount > 0
+
+    def soft_delete_persona_exemplar(
+        self,
+        *,
+        exemplar_id: str,
+        persona_id: str,
+        user_id: str,
+    ) -> bool:
+        """Soft-delete a persona exemplar owned by a user."""
+        now = self._get_current_utc_timestamp_iso()
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "UPDATE persona_exemplars "
+                "SET deleted = ?, enabled = ?, last_modified = ?, version = version + 1 "
+                "WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0"
+            )
+            params = (
+                bool_cast(True),
+                bool_cast(False),
+                now,
+                exemplar_id,
+                persona_id,
+                user_id,
+            )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            return cursor.rowcount > 0
 
     def create_persona_profile(self, profile_data: dict[str, Any]) -> str:
         """Create a persona profile and return its UUID."""
@@ -8367,6 +8763,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     _CHARACTER_CARD_JSON_FIELDS = ['alternate_greetings', 'tags', 'extensions']
     _CHARACTER_FOLDER_TAG_PREFIX = "__tldw_folder_id:"
     _CHARACTER_EXEMPLAR_JSON_FIELDS = ['rhetorical', 'safety_allowed', 'safety_blocked']
+    _PERSONA_EXEMPLAR_JSON_FIELDS = ['scenario_tags_json', 'capability_tags_json']
     _ALLOWED_EXEMPLAR_SOURCE_TYPES = ('audio_transcript', 'video_transcript', 'article', 'other')
     _ALLOWED_EXEMPLAR_NOVELTY_HINTS = ('post_cutoff', 'unknown', 'pre_cutoff')
     _ALLOWED_EXEMPLAR_EMOTIONS = ('angry', 'neutral', 'happy', 'other')
@@ -9693,6 +10090,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             text = str(item).strip()
             if text:
                 normalized.append(text)
+        return normalized
+
+    def _normalize_persona_exemplar_tags(self, value: Any, field_name: str) -> list[str]:
+        """Normalize free-form persona exemplar tags to lowercase unique strings."""
+        raw_values = self._normalize_exemplar_string_list(value, field_name)
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in raw_values:
+            text = str(item).strip().lower()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            normalized.append(text)
         return normalized
 
     def _normalize_character_exemplar_row(self, row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
