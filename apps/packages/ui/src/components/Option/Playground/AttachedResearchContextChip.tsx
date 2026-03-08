@@ -7,11 +7,13 @@ import type { AttachedResearchContext } from "./research-chat-context"
 
 type AttachedResearchContextChipProps = {
   context: AttachedResearchContext
+  onPreview?: () => void
   onRemove: () => void
 }
 
 export const AttachedResearchContextChip = ({
   context,
+  onPreview,
   onRemove
 }: AttachedResearchContextChipProps) => {
   const { t } = useTranslation(["playground", "common"])
@@ -36,6 +38,18 @@ export const AttachedResearchContextChip = ({
         </div>
       </div>
       <div className="flex items-center gap-2">
+        {onPreview ? (
+          <button
+            type="button"
+            onClick={onPreview}
+            className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"
+          >
+            {t(
+              "playground:actions.previewAttachedResearchContext",
+              "Edit attached research"
+            )}
+          </button>
+        ) : null}
         <Link
           to={context.research_url}
           className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"

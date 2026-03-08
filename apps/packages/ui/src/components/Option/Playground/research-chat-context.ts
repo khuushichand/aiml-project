@@ -16,6 +16,8 @@ export type DeepResearchCompletionMetadata = {
   kind: "completion_handoff"
 }
 
+export type AttachedResearchContextEdits = Partial<AttachedResearchContext>
+
 const isRecord = (value: unknown): value is RecordLike =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value)
 
@@ -111,6 +113,102 @@ export const deriveAttachedResearchContext = (
     research_url: buildChatLinkedResearchPath(runId)
   }
 }
+
+const sanitizeOutline = (
+  outline: AttachedResearchContext["outline"]
+): AttachedResearchContext["outline"] =>
+  Array.isArray(outline)
+    ? outline
+        .map((section) => asNonEmptyString(section?.title))
+        .filter((title): title is string => title !== null)
+        .map((title) => ({ title }))
+    : []
+
+const sanitizeKeyClaims = (
+  keyClaims: AttachedResearchContext["key_claims"]
+): AttachedResearchContext["key_claims"] =>
+  Array.isArray(keyClaims)
+    ? keyClaims
+        .map((claim) => asNonEmptyString(claim?.text))
+        .filter((text): text is string => text !== null)
+        .map((text) => ({ text }))
+    : []
+
+const sanitizeUnresolvedQuestions = (
+  unresolvedQuestions: AttachedResearchContext["unresolved_questions"]
+): AttachedResearchContext["unresolved_questions"] =>
+  Array.isArray(unresolvedQuestions)
+    ? unresolvedQuestions
+        .map((question) => asNonEmptyString(question))
+        .filter((question): question is string => question !== null)
+    : []
+
+export const sanitizeAttachedResearchContext = (
+  value: AttachedResearchContext
+): AttachedResearchContext => {
+  const question = asNonEmptyString(value.question) ?? value.query
+  const unsupportedClaimCount = asNonNegativeInteger(
+    value.verification_summary?.unsupported_claim_count
+  )
+  const highTrustCount = asNonNegativeInteger(
+    value.source_trust_summary?.high_trust_count
+  )
+
+  return {
+    attached_at: value.attached_at,
+    run_id: value.run_id,
+    query: value.query,
+    question,
+    outline: sanitizeOutline(value.outline),
+    key_claims: sanitizeKeyClaims(value.key_claims),
+    unresolved_questions: sanitizeUnresolvedQuestions(
+      value.unresolved_questions
+    ),
+    verification_summary:
+      unsupportedClaimCount === null
+        ? undefined
+        : { unsupported_claim_count: unsupportedClaimCount },
+    source_trust_summary:
+      highTrustCount === null
+        ? undefined
+        : { high_trust_count: highTrustCount },
+    research_url: value.research_url
+  }
+}
+
+export const applyAttachedResearchContextEdits = (
+  current: AttachedResearchContext,
+  edits: AttachedResearchContextEdits
+): AttachedResearchContext =>
+  sanitizeAttachedResearchContext({
+    ...current,
+    question:
+      edits.question !== undefined ? edits.question : current.question,
+    outline: edits.outline !== undefined ? edits.outline : current.outline,
+    key_claims:
+      edits.key_claims !== undefined ? edits.key_claims : current.key_claims,
+    unresolved_questions:
+      edits.unresolved_questions !== undefined
+        ? edits.unresolved_questions
+        : current.unresolved_questions,
+    verification_summary:
+      edits.verification_summary !== undefined
+        ? edits.verification_summary
+        : current.verification_summary,
+    source_trust_summary:
+      edits.source_trust_summary !== undefined
+        ? edits.source_trust_summary
+        : current.source_trust_summary,
+    run_id: current.run_id,
+    query: current.query,
+    research_url: current.research_url,
+    attached_at: current.attached_at
+  })
+
+export const resetAttachedResearchContext = (
+  baseline: AttachedResearchContext | null
+): AttachedResearchContext | null =>
+  baseline ? sanitizeAttachedResearchContext(baseline) : null
 
 export const isDeepResearchCompletionMetadata = (
   value: unknown

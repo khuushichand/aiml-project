@@ -71,6 +71,20 @@ const getLastSubmitPayload = (): SubmitPayload => {
   return payload
 }
 
+const buildAttachedResearchContext = (overrides: Record<string, unknown> = {}) => ({
+  attached_at: "2026-03-08T20:00:00Z",
+  run_id: "run_123",
+  query: "Battery recycling supply chain",
+  question: "Battery recycling supply chain",
+  outline: [{ title: "Overview" }],
+  key_claims: [{ text: "Claim one" }],
+  unresolved_questions: ["What changed in Europe?"],
+  verification_summary: { unsupported_claim_count: 0 },
+  source_trust_summary: { high_trust_count: 2 },
+  research_url: "/research?run=run_123",
+  ...overrides
+})
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, fallback?: string, options?: Record<string, unknown>) => {
@@ -1114,6 +1128,77 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
 
     const submitPayload = getLastSubmitPayload()
     expect(submitPayload.imageGenerationRefine).toBeUndefined()
+  })
+
+  it("shows and applies attached research context edits in the raw request preview", async () => {
+    const user = userEvent.setup()
+
+    const PreviewHarness = () => {
+      const [attachedContext, setAttachedContext] = React.useState(
+        buildAttachedResearchContext()
+      )
+      const [baselineContext] = React.useState(buildAttachedResearchContext())
+
+      return (
+        <PlaygroundForm
+          droppedFiles={[]}
+          attachedResearchContext={attachedContext as any}
+          attachedResearchContextBaseline={baselineContext as any}
+          onApplyAttachedResearchContext={(next) => setAttachedContext(next)}
+          onResetAttachedResearchContext={() =>
+            setAttachedContext(baselineContext as any)
+          }
+        />
+      )
+    }
+
+    render(<PreviewHarness />)
+
+    await user.click(screen.getByRole("button", { name: "Edit attached research" }))
+    expect(
+      await screen.findByRole("dialog", { name: "Current chat request JSON" })
+    ).toBeInTheDocument()
+    expect(screen.getByTestId("attached-research-context-panel")).toBeInTheDocument()
+
+    const questionInput = screen.getByTestId(
+      "attached-research-context-question-input"
+    ) as HTMLInputElement
+    expect(questionInput.value).toBe("Battery recycling supply chain")
+
+    const rawJson = screen.getByTestId("raw-chat-request-json") as HTMLTextAreaElement
+    await waitFor(() => {
+      expect(rawJson.value).toContain('"run_id": "run_123"')
+    })
+
+    await user.clear(questionInput)
+    await user.type(questionInput, "Edited attached question")
+    await user.click(screen.getByRole("button", { name: "Apply" }))
+    await user.click(screen.getByRole("button", { name: "Refresh" }))
+
+    await waitFor(() => {
+      expect(
+        (screen.getByTestId(
+          "attached-research-context-question-input"
+        ) as HTMLInputElement).value
+      ).toBe("Edited attached question")
+      expect(
+        (screen.getByTestId("raw-chat-request-json") as HTMLTextAreaElement).value
+      ).toContain('"question": "Edited attached question"')
+    })
+
+    await user.click(screen.getByRole("button", { name: "Reset to Attached Run" }))
+    await user.click(screen.getByRole("button", { name: "Refresh" }))
+
+    await waitFor(() => {
+      expect(
+        (screen.getByTestId(
+          "attached-research-context-question-input"
+        ) as HTMLInputElement).value
+      ).toBe("Battery recycling supply chain")
+      expect(
+        (screen.getByTestId("raw-chat-request-json") as HTMLTextAreaElement).value
+      ).toContain('"question": "Battery recycling supply chain"')
+    })
   })
 
   it("clears refine candidate when prompt is manually edited before submit", async () => {

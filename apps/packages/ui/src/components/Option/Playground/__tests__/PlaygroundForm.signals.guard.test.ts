@@ -5,6 +5,10 @@ import { describe, expect, it } from "vitest"
 describe("PlaygroundForm signal surface guard", () => {
   it("keeps mention/slash affordance and state-change/degradation signals", () => {
     const formSourcePath = path.resolve(__dirname, "../PlaygroundForm.tsx")
+    const chipSourcePath = path.resolve(
+      __dirname,
+      "../AttachedResearchContextChip.tsx"
+    )
     const contextPanelSourcePath = path.resolve(
       __dirname,
       "../ContextFootprintPanel.tsx"
@@ -13,6 +17,7 @@ describe("PlaygroundForm signal surface guard", () => {
       __dirname,
       "../ModelRecommendationsPanel.tsx"
     )
+    const chipSource = fs.readFileSync(chipSourcePath, "utf8")
     const formSource = fs.readFileSync(formSourcePath, "utf8")
     const contextPanelSource = fs.readFileSync(contextPanelSourcePath, "utf8")
     const recommendationsPanelSource = fs.readFileSync(
@@ -76,6 +81,10 @@ describe("PlaygroundForm signal surface guard", () => {
     expect(formSource).toContain("attachedResearchContext")
     expect(formSource).toContain("onRemoveAttachedResearchContext")
     expect(formSource).toContain("researchContext:")
+    expect(formSource).toContain("Attached Research Context")
+    expect(formSource).toContain("Reset to Attached Run")
+    expect(formSource).toContain("Apply")
+    expect(chipSource).toContain("Edit attached research")
     expect(formSource).toContain("playground:insights.modalTitle")
     expect(formSource).toContain("startup-template-preview-modal")
     expect(formSource).toContain(

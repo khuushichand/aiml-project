@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  applyAttachedResearchContextEdits,
   deriveAttachedResearchContext,
-  isDeepResearchCompletionMetadata
+  isDeepResearchCompletionMetadata,
+  resetAttachedResearchContext,
+  sanitizeAttachedResearchContext,
+  toChatResearchContext
 } from "../research-chat-context"
 
 describe("research-chat-context", () => {
@@ -97,5 +101,82 @@ describe("research-chat-context", () => {
       })
     ).toBe(false)
     expect(isDeepResearchCompletionMetadata(null)).toBe(false)
+  })
+
+  it("sanitizes and applies attached research context edits without mutating identity fields", () => {
+    const active = {
+      attached_at: "2026-03-08T20:00:00Z",
+      run_id: "run_123",
+      query: "Battery recycling supply chain",
+      question: "Battery recycling supply chain",
+      outline: [{ title: "Overview" }],
+      key_claims: [{ text: "Claim one" }],
+      unresolved_questions: ["What changed in Europe?"],
+      verification_summary: { unsupported_claim_count: 0 },
+      source_trust_summary: { high_trust_count: 2 },
+      research_url: "/research?run=run_123"
+    } as const
+
+    const edited = applyAttachedResearchContextEdits(active, {
+      question: "  Edited question  ",
+      outline: [{ title: " Updated overview " }, { title: "   " }],
+      key_claims: [{ text: " Edited claim " }, { text: " " }],
+      unresolved_questions: ["  Follow-up  ", ""],
+      verification_summary: { unsupported_claim_count: 3 },
+      source_trust_summary: { high_trust_count: 5 },
+      run_id: "run_mutated",
+      query: "mutated query",
+      research_url: "/research?run=mutated"
+    })
+
+    expect(edited).toMatchObject({
+      run_id: "run_123",
+      query: "Battery recycling supply chain",
+      research_url: "/research?run=run_123",
+      question: "Edited question",
+      outline: [{ title: "Updated overview" }],
+      key_claims: [{ text: "Edited claim" }],
+      unresolved_questions: ["Follow-up"],
+      verification_summary: { unsupported_claim_count: 3 },
+      source_trust_summary: { high_trust_count: 5 }
+    })
+    expect(toChatResearchContext(edited)).toMatchObject({
+      run_id: "run_123",
+      question: "Edited question",
+      outline: [{ title: "Updated overview" }]
+    })
+  })
+
+  it("sanitizes a draft and resets back to the run-derived baseline", () => {
+    const baseline = {
+      attached_at: "2026-03-08T20:00:00Z",
+      run_id: "run_123",
+      query: "Battery recycling supply chain",
+      question: "Battery recycling supply chain",
+      outline: [{ title: "Overview" }],
+      key_claims: [{ text: "Claim one" }],
+      unresolved_questions: ["What changed in Europe?"],
+      verification_summary: { unsupported_claim_count: 0 },
+      source_trust_summary: { high_trust_count: 2 },
+      research_url: "/research?run=run_123"
+    } as const
+
+    expect(
+      sanitizeAttachedResearchContext({
+        ...baseline,
+        question: "   ",
+        outline: [{ title: " " }, { title: "Regional shifts" }],
+        key_claims: [{ text: " " }, { text: "Claim two" }],
+        unresolved_questions: [" ", "Question two"]
+      })
+    ).toMatchObject({
+      question: "Battery recycling supply chain",
+      outline: [{ title: "Regional shifts" }],
+      key_claims: [{ text: "Claim two" }],
+      unresolved_questions: ["Question two"]
+    })
+
+    expect(resetAttachedResearchContext(baseline)).toEqual(baseline)
+    expect(resetAttachedResearchContext(null)).toBeNull()
   })
 })

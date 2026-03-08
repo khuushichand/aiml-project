@@ -233,6 +233,8 @@ import { createComposerPerfTracker } from "@/utils/perf/composer-perf"
 import { createRenderPerfTracker } from "@/utils/perf/render-profiler"
 import { buildResearchLaunchPath } from "@/routes/route-paths"
 import {
+  applyAttachedResearchContextEdits,
+  resetAttachedResearchContext,
   toChatResearchContext,
   type AttachedResearchContext
 } from "./research-chat-context"
@@ -240,6 +242,9 @@ import {
 type Props = {
   droppedFiles: File[]
   attachedResearchContext?: AttachedResearchContext | null
+  attachedResearchContextBaseline?: AttachedResearchContext | null
+  onApplyAttachedResearchContext?: (context: AttachedResearchContext) => void
+  onResetAttachedResearchContext?: () => void
   onRemoveAttachedResearchContext?: () => void
 }
 
@@ -279,9 +284,40 @@ const collectStringSegments = (
   }
 }
 
+const cloneAttachedResearchContext = (
+  context: AttachedResearchContext | null
+): AttachedResearchContext | null =>
+  context
+    ? {
+        ...context,
+        outline: context.outline.map((section) => ({ ...section })),
+        key_claims: context.key_claims.map((claim) => ({ ...claim })),
+        unresolved_questions: [...context.unresolved_questions],
+        verification_summary: context.verification_summary
+          ? { ...context.verification_summary }
+          : undefined,
+        source_trust_summary: context.source_trust_summary
+          ? { ...context.source_trust_summary }
+          : undefined
+      }
+    : null
+
+const stringifyOutline = (context: AttachedResearchContext | null): string =>
+  context?.outline.map((section) => section.title).join("\n") ?? ""
+
+const stringifyKeyClaims = (context: AttachedResearchContext | null): string =>
+  context?.key_claims.map((claim) => claim.text).join("\n") ?? ""
+
+const stringifyUnresolvedQuestions = (
+  context: AttachedResearchContext | null
+): string => context?.unresolved_questions.join("\n") ?? ""
+
 export const PlaygroundForm = ({
   droppedFiles,
   attachedResearchContext = null,
+  attachedResearchContextBaseline = null,
+  onApplyAttachedResearchContext,
+  onResetAttachedResearchContext,
   onRemoveAttachedResearchContext
 }: Props) => {
   const { t } = useTranslation(["playground", "common", "option"])
@@ -292,6 +328,8 @@ export const PlaygroundForm = ({
   const navigate = useNavigate()
 
   const [typing, setTyping] = React.useState<boolean>(false)
+  const [attachedResearchContextDraft, setAttachedResearchContextDraft] =
+    React.useState<AttachedResearchContext | null>(null)
   const [checkWideMode] = useStorage("checkWideMode", false)
   const [allowExternalImages, setAllowExternalImages] = useStorage(
     "allowExternalImages",
@@ -5007,11 +5045,15 @@ export const PlaygroundForm = ({
         extra_body: parseJsonObject(currentChatModelSettings.extraBody),
         response_format: currentChatModelSettings.jsonMode
           ? { type: "json_object" }
-          : undefined
+          : undefined,
+        research_context: resolveAttachedResearchRequestContext({
+          compareModeActive
+        })
       }
       return request
     },
     [
+      compareModeActive,
       currentChatModelSettings.apiProvider,
       currentChatModelSettings.extraBody,
       currentChatModelSettings.extraHeaders,
@@ -5029,6 +5071,7 @@ export const PlaygroundForm = ({
       mcpHealthState,
       mcpTools,
       parseJsonObject,
+      resolveAttachedResearchRequestContext,
       serverChatId,
       temporaryChat,
       toPreviewHistoryMessages,
@@ -5237,6 +5280,121 @@ export const PlaygroundForm = ({
         ? JSON.stringify(rawRequestSnapshot.body, null, 2)
         : "",
     [rawRequestSnapshot]
+  )
+
+  React.useEffect(() => {
+    if (!attachedResearchContext) {
+      setAttachedResearchContextDraft(null)
+      if (rawRequestModalOpen) {
+        setRawRequestModalOpen(false)
+      }
+      return
+    }
+    setAttachedResearchContextDraft(cloneAttachedResearchContext(attachedResearchContext))
+  }, [attachedResearchContext, rawRequestModalOpen])
+
+  const attachedResearchPreviewSuppressed =
+    Boolean(attachedResearchContext) &&
+    Boolean(rawRequestSnapshot) &&
+    !(rawRequestSnapshot?.body as any)?.research_context
+
+  const applyAttachedResearchDraft = React.useCallback(() => {
+    if (!attachedResearchContext || !attachedResearchContextDraft) return
+    const nextContext = applyAttachedResearchContextEdits(
+      attachedResearchContext,
+      attachedResearchContextDraft
+    )
+    onApplyAttachedResearchContext?.(nextContext)
+    setAttachedResearchContextDraft(cloneAttachedResearchContext(nextContext))
+  }, [
+    attachedResearchContext,
+    attachedResearchContextDraft,
+    onApplyAttachedResearchContext
+  ])
+
+  const handleResetAttachedResearchDraft = React.useCallback(() => {
+    const resetContext = resetAttachedResearchContext(
+      attachedResearchContextBaseline
+    )
+    if (!resetContext) return
+    onResetAttachedResearchContext?.()
+    setAttachedResearchContextDraft(cloneAttachedResearchContext(resetContext))
+  }, [attachedResearchContextBaseline, onResetAttachedResearchContext])
+
+  const handleAttachedResearchDraftQuestionChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      const nextQuestion = event.target.value
+      setAttachedResearchContextDraft((current) =>
+        current ? { ...current, question: nextQuestion } : current
+      )
+    },
+    []
+  )
+
+  const handleAttachedResearchDraftOutlineChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const nextOutline = event.target.value
+        .split("\n")
+        .map((title) => ({ title }))
+      setAttachedResearchContextDraft((current) =>
+        current ? { ...current, outline: nextOutline } : current
+      )
+    },
+    []
+  )
+
+  const handleAttachedResearchDraftClaimsChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const nextClaims = event.target.value
+        .split("\n")
+        .map((text) => ({ text }))
+      setAttachedResearchContextDraft((current) =>
+        current ? { ...current, key_claims: nextClaims } : current
+      )
+    },
+    []
+  )
+
+  const handleAttachedResearchDraftUnresolvedChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const nextQuestions = event.target.value.split("\n")
+      setAttachedResearchContextDraft((current) =>
+        current
+          ? { ...current, unresolved_questions: nextQuestions }
+          : current
+      )
+    },
+    []
+  )
+
+  const handleAttachedResearchDraftUnsupportedClaimCountChange =
+    React.useCallback((value: number | null | undefined) => {
+      setAttachedResearchContextDraft((current) =>
+        current
+          ? {
+              ...current,
+              verification_summary:
+                value == null
+                  ? undefined
+                  : { unsupported_claim_count: value }
+            }
+          : current
+      )
+    }, [])
+
+  const handleAttachedResearchDraftHighTrustCountChange = React.useCallback(
+    (value: number | null | undefined) => {
+      setAttachedResearchContextDraft((current) =>
+        current
+          ? {
+              ...current,
+              source_trust_summary:
+                value == null ? undefined : { high_trust_count: value }
+            }
+          : current
+      )
+    },
+    []
   )
 
   const refreshRawRequestSnapshot = React.useCallback(async () => {
@@ -7460,9 +7618,10 @@ export const PlaygroundForm = ({
                         ? "rounded-md border border-dashed border-border bg-surface2"
                         : ""
                     }`}>
-                    {attachedResearchContext && (
+                  {attachedResearchContext && (
                       <AttachedResearchContextChip
                         context={attachedResearchContext}
+                        onPreview={openRawRequestModal}
                         onRemove={() => onRemoveAttachedResearchContext?.()}
                       />
                     )}
@@ -8798,6 +8957,22 @@ export const PlaygroundForm = ({
             <Button onClick={refreshRawRequestSnapshot}>
               {t("common:refresh", "Refresh")}
             </Button>
+            {attachedResearchContextDraft ? (
+              <Button onClick={handleResetAttachedResearchDraft}>
+                {t(
+                  "playground:actions.resetAttachedResearchContext",
+                  "Reset to Attached Run"
+                )}
+              </Button>
+            ) : null}
+            {attachedResearchContextDraft ? (
+              <Button type="primary" onClick={applyAttachedResearchDraft}>
+                {t(
+                  "playground:actions.applyAttachedResearchContext",
+                  "Apply"
+                )}
+              </Button>
+            ) : null}
             <Button onClick={copyRawRequestJson} disabled={!rawRequestJson}>
               {t("common:copy", "Copy")}
             </Button>
@@ -8810,6 +8985,154 @@ export const PlaygroundForm = ({
         <div className="space-y-3">
           {rawRequestSnapshot ? (
             <>
+              {attachedResearchContextDraft ? (
+                <div
+                  data-testid="attached-research-context-panel"
+                  className="space-y-3 rounded-md border border-border bg-surface px-3 py-3"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-medium text-text">
+                        {t(
+                          "playground:tools.attachedResearchContextTitle",
+                          "Attached Research Context"
+                        )}
+                      </h3>
+                      <p className="text-xs text-text-muted">
+                        {attachedResearchContextDraft.query}
+                      </p>
+                    </div>
+                    <div className="space-y-1 text-right text-[11px] text-text-muted">
+                      <div>
+                        {t("playground:tools.attachedResearchRunId", "Run ID")}:{" "}
+                        <span className="font-mono">
+                          {attachedResearchContextDraft.run_id}
+                        </span>
+                      </div>
+                      <div>
+                        {t(
+                          "playground:tools.attachedResearchAttachedAt",
+                          "Attached"
+                        )}
+                        :{" "}
+                        {new Date(
+                          attachedResearchContextDraft.attached_at
+                        ).toLocaleString()}
+                      </div>
+                    </div>
+                  </div>
+                  {attachedResearchPreviewSuppressed ? (
+                    <p className="text-xs text-text-muted">
+                      {t(
+                        "playground:tools.attachedResearchContextSuppressed",
+                        "Attached research is active but omitted from this request preview."
+                      )}
+                    </p>
+                  ) : null}
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-text-muted">
+                        {t("playground:composer.context.question", "Question")}
+                      </label>
+                      <Input
+                        data-testid="attached-research-context-question-input"
+                        value={attachedResearchContextDraft.question}
+                        onChange={handleAttachedResearchDraftQuestionChange}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-text-muted">
+                        {t(
+                          "playground:tools.attachedResearchContextLink",
+                          "Research link"
+                        )}
+                      </label>
+                      <Input
+                        value={attachedResearchContextDraft.research_url}
+                        readOnly
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-text-muted">
+                        {t("playground:composer.context.outline", "Outline")}
+                      </label>
+                      <Input.TextArea
+                        data-testid="attached-research-context-outline-input"
+                        value={stringifyOutline(attachedResearchContextDraft)}
+                        onChange={handleAttachedResearchDraftOutlineChange}
+                        autoSize={{ minRows: 3, maxRows: 6 }}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-text-muted">
+                        {t("playground:composer.context.claims", "Key claims")}
+                      </label>
+                      <Input.TextArea
+                        data-testid="attached-research-context-claims-input"
+                        value={stringifyKeyClaims(attachedResearchContextDraft)}
+                        onChange={handleAttachedResearchDraftClaimsChange}
+                        autoSize={{ minRows: 3, maxRows: 6 }}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-text-muted">
+                        {t(
+                          "playground:composer.context.unresolvedQuestions",
+                          "Unresolved questions"
+                        )}
+                      </label>
+                      <Input.TextArea
+                        data-testid="attached-research-context-unresolved-input"
+                        value={stringifyUnresolvedQuestions(
+                          attachedResearchContextDraft
+                        )}
+                        onChange={handleAttachedResearchDraftUnresolvedChange}
+                        autoSize={{ minRows: 3, maxRows: 6 }}
+                      />
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-text-muted">
+                          {t(
+                            "playground:tools.attachedResearchUnsupportedClaims",
+                            "Unsupported claim count"
+                          )}
+                        </label>
+                        <InputNumber
+                          data-testid="attached-research-context-unsupported-count-input"
+                          value={
+                            attachedResearchContextDraft.verification_summary
+                              ?.unsupported_claim_count
+                          }
+                          min={0}
+                          onChange={
+                            handleAttachedResearchDraftUnsupportedClaimCountChange
+                          }
+                          style={{ width: "100%" }}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-text-muted">
+                          {t(
+                            "playground:tools.attachedResearchHighTrustSources",
+                            "High-trust sources"
+                          )}
+                        </label>
+                        <InputNumber
+                          data-testid="attached-research-context-high-trust-count-input"
+                          value={
+                            attachedResearchContextDraft.source_trust_summary
+                              ?.high_trust_count
+                          }
+                          min={0}
+                          onChange={handleAttachedResearchDraftHighTrustCountChange}
+                          style={{ width: "100%" }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               <div className="space-y-1 text-xs text-text-muted">
                 <p>
                   {t("playground:tools.rawChatRequestEndpoint", "Endpoint")}:{" "}
@@ -8835,6 +9158,7 @@ export const PlaygroundForm = ({
                 </p>
               </div>
               <Input.TextArea
+                data-testid="raw-chat-request-json"
                 readOnly
                 value={rawRequestJson}
                 autoSize={{ minRows: 14, maxRows: 30 }}

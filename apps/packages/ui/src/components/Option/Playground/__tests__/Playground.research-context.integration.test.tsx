@@ -90,21 +90,59 @@ vi.mock("react-i18next", () => ({
 
 vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
   PlaygroundForm: (props: {
-    attachedResearchContext?: { run_id?: string; query?: string } | null
+    attachedResearchContext?: {
+      run_id?: string
+      query?: string
+      question?: string
+    } | null
+    attachedResearchContextBaseline?: {
+      run_id?: string
+      query?: string
+      question?: string
+    } | null
+    onApplyAttachedResearchContext?: (
+      context: ReturnType<typeof buildAttachedContext>
+    ) => void
+    onResetAttachedResearchContext?: () => void
     onRemoveAttachedResearchContext?: () => void
   }) => (
     <div
       data-testid="playground-form"
       data-attached-run-id={props.attachedResearchContext?.run_id || ""}
       data-attached-query={props.attachedResearchContext?.query || ""}
+      data-attached-question={props.attachedResearchContext?.question || ""}
+      data-baseline-run-id={props.attachedResearchContextBaseline?.run_id || ""}
+      data-baseline-question={props.attachedResearchContextBaseline?.question || ""}
     >
       {props.attachedResearchContext ? (
-        <button
-          type="button"
-          onClick={() => props.onRemoveAttachedResearchContext?.()}
-        >
-          Remove attached research
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={() =>
+              props.onApplyAttachedResearchContext?.({
+                ...buildAttachedContext(
+                  props.attachedResearchContext?.run_id || "run_edited",
+                  props.attachedResearchContext?.query || "Edited query"
+                ),
+                question: "Edited attached question"
+              })
+            }
+          >
+            Edit attached research
+          </button>
+          <button
+            type="button"
+            onClick={() => props.onResetAttachedResearchContext?.()}
+          >
+            Reset attached research
+          </button>
+          <button
+            type="button"
+            onClick={() => props.onRemoveAttachedResearchContext?.()}
+          >
+            Remove attached research
+          </button>
+        </>
       ) : null}
     </div>
   )
@@ -262,6 +300,50 @@ describe("Playground research context integration", () => {
     )
   })
 
+  it("tracks a run-derived baseline and lets preview edits update only the active attachment", async () => {
+    render(<Playground />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Attach run 1" }))
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-run-id",
+        "run_1"
+      )
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-attached-question",
+      "Battery recycling supply chain"
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-baseline-run-id",
+      "run_1"
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-baseline-question",
+      "Battery recycling supply chain"
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit attached research" }))
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-question",
+        "Edited attached question"
+      )
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-baseline-question",
+      "Battery recycling supply chain"
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset attached research" }))
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-question",
+        "Battery recycling supply chain"
+      )
+    )
+  })
+
   it("clears attached research context when the active thread changes", async () => {
     const view = render(<Playground />)
 
@@ -281,6 +363,10 @@ describe("Playground research context integration", () => {
         ""
       )
     )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-baseline-run-id",
+      ""
+    )
 
     fireEvent.click(screen.getByRole("button", { name: "Attach run 2" }))
     await waitFor(() =>
@@ -297,6 +383,10 @@ describe("Playground research context integration", () => {
         "data-attached-run-id",
         ""
       )
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-baseline-run-id",
+      ""
     )
   })
 })

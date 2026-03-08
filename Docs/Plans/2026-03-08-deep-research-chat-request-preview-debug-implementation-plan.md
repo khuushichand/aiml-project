@@ -12,6 +12,8 @@
 
 ### Task 1: Add Red Tests For Structured Preview And Edit State
 
+**Status:** Complete
+
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts`
@@ -65,6 +67,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 ```
 
 ### Task 2: Add Pure Helpers For Edit Sanitization And Reset Behavior
+
+**Status:** Complete
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/research-chat-context.ts`
@@ -142,6 +146,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 
 ### Task 3: Track Active And Baseline Attached Context In Playground State
 
+**Status:** Complete
+
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/Playground.tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx`
@@ -197,6 +203,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 ```
 
 ### Task 4: Extend The Raw Request Modal With Structured Research Editing
+
+**Status:** Complete
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx`
@@ -264,6 +272,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 
 ### Task 5: Keep Raw Request Preview Honest For Suppressed Flows
 
+**Status:** Complete
+
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts`
@@ -322,6 +332,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 
 ### Task 6: Final Verification And Plan Closure
 
+**Status:** Complete
+
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/Docs/Plans/2026-03-08-deep-research-chat-request-preview-debug-implementation-plan.md`
 
@@ -373,3 +385,12 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
   Docs/Plans/2026-03-08-deep-research-chat-request-preview-debug-implementation-plan.md
 git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr commit -m "docs(research): finalize chat request preview debug plan"
 ```
+
+## Execution Notes
+
+- All six tasks were completed in this worktree.
+- The implementation stayed frontend-only; no backend request contract changed.
+- The request preview now uses the same attached-research resolver as the live standard text send path, so the structured editor, composer chip, and raw JSON remain aligned.
+- Compare-mode and image-generation preview flows still suppress `research_context`, and the modal now explains that suppression explicitly.
+- Practical deviation from the original commands:
+  - this worktree used `./node_modules/.bin/vitest run ...` instead of `bunx vitest run ...` because `bunx vitest` was not resolving `jsdom` correctly here.

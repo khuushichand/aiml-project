@@ -35,7 +35,10 @@ import {
   type TimelineActionDetail
 } from "@/utils/timeline-actions"
 import { useCharacterGreeting } from "@/hooks/useCharacterGreeting"
-import type { AttachedResearchContext } from "./research-chat-context"
+import {
+  resetAttachedResearchContext,
+  type AttachedResearchContext
+} from "./research-chat-context"
 import {
   collectThreadSearchMatches,
   getWrappedMatchIndex
@@ -52,6 +55,8 @@ export const Playground = () => {
   const shortcutsCloseRef = React.useRef<HTMLButtonElement>(null)
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([])
   const [attachedResearchContext, setAttachedResearchContext] =
+    React.useState<AttachedResearchContext | null>(null)
+  const [attachedResearchContextBaseline, setAttachedResearchContextBaseline] =
     React.useState<AttachedResearchContext | null>(null)
   const { t } = useTranslation(["playground", "common"])
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
@@ -239,9 +244,36 @@ export const Playground = () => {
       previousThreadRef.current !== currentThreadKey
     ) {
       setAttachedResearchContext(null)
+      setAttachedResearchContextBaseline(null)
     }
     previousThreadRef.current = currentThreadKey
   }, [historyId, serverChatId])
+
+  const handleAttachResearchContext = React.useCallback(
+    (context: AttachedResearchContext) => {
+      setAttachedResearchContext(context)
+      setAttachedResearchContextBaseline(context)
+    },
+    []
+  )
+
+  const handleApplyAttachedResearchContext = React.useCallback(
+    (context: AttachedResearchContext) => {
+      setAttachedResearchContext(context)
+    },
+    []
+  )
+
+  const handleResetAttachedResearchContext = React.useCallback(() => {
+    setAttachedResearchContext(
+      resetAttachedResearchContext(attachedResearchContextBaseline)
+    )
+  }, [attachedResearchContextBaseline])
+
+  const handleRemoveAttachedResearchContext = React.useCallback(() => {
+    setAttachedResearchContext(null)
+    setAttachedResearchContextBaseline(null)
+  }, [])
 
   // Session persistence for draft restoration
   const {
@@ -1171,7 +1203,7 @@ export const Playground = () => {
                 searchQuery={threadSearchQuery.trim()}
                 matchedMessageIndices={threadSearchMatchSet}
                 activeSearchMessageIndex={threadSearchActiveMessageIndex}
-                onAttachResearchContext={setAttachedResearchContext}
+                onAttachResearchContext={handleAttachResearchContext}
               />
             </div>
           </div>
@@ -1201,9 +1233,10 @@ export const Playground = () => {
             <PlaygroundForm
               droppedFiles={droppedFiles}
               attachedResearchContext={attachedResearchContext}
-              onRemoveAttachedResearchContext={() =>
-                setAttachedResearchContext(null)
-              }
+              attachedResearchContextBaseline={attachedResearchContextBaseline}
+              onApplyAttachedResearchContext={handleApplyAttachedResearchContext}
+              onResetAttachedResearchContext={handleResetAttachedResearchContext}
+              onRemoveAttachedResearchContext={handleRemoveAttachedResearchContext}
             />
           </div>
         </div>
