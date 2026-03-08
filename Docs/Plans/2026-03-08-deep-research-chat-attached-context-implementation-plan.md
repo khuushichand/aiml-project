@@ -4,7 +4,7 @@
 
 **Goal:** Let users attach a bounded, completed deep research run to the active chat session as reusable follow-up context without polluting the transcript or persisting the attachment to the thread.
 
-**Architecture:** Keep the attached research context session-scoped in the web playground by storing it in local `Playground` state and passing it down to `PlaygroundChat` and `PlaygroundForm`. Extend the existing `/api/v1/chat/completions` request contract with an optional typed `research_context` payload, inject that payload into the model-facing prompt assembly in `chat_service.py`, and add a hidden metadata marker to research completion handoff messages so the chat UI can render `Use in Chat` without parsing free text.
+**Architecture:** Keep the attached research context session-scoped in the web playground by storing it in local `Playground` state and passing it down to `PlaygroundChat` and `PlaygroundForm`. Fetch completed bundles through a shared package-side `TldwApiClient.getResearchBundle(...)` helper, clear the attached snapshot whenever the active `serverChatId` or `historyId` changes, extend the existing `/api/v1/chat/completions` request contract with an optional typed `research_context` payload whose nested models reject unknown keys, inject that payload into the model-facing prompt assembly in `chat_service.py`, and add a hidden metadata marker to research completion handoff messages so the chat UI can render `Use in Chat` without parsing free text. Only standard text follow-up requests should carry `research_context` in v1.
 
 **Tech Stack:** FastAPI, Pydantic v2, existing chat service/orchestrator pipeline, React/TypeScript, existing package-side playground components, pytest, vitest, Bandit.
 
@@ -23,6 +23,7 @@ Add schema tests that prove:
 - `ChatCompletionRequest` accepts a bounded `research_context`
 - omitting `research_context` preserves current behavior
 - invalid `research_context` payloads are rejected
+- nested unknown keys inside `research_context` are rejected even though the parent request still allows extras
 
 Use a focused request example shaped like:
 
@@ -73,6 +74,7 @@ Do not touch the frontend yet.
 Implement only enough schema scaffolding to make the first assertions possible:
 
 - add typed helper models in `chat_request_schemas.py`
+- make the nested `research_context` helper models explicitly reject unknown keys
 - add optional `research_context` to `ChatCompletionRequest`
 
 Use explicit top-level fields only. Do not add nested path selectors or raw bundle support.
@@ -248,6 +250,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/PlaygroundChat.tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Common/Playground/Message.tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/hooks/chat/useServerChatLoader.ts`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/services/tldw/TldwApiClient.ts`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx`
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx`
 
@@ -255,7 +258,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 
 Add integration coverage that proves:
 
-- clicking `Use in Chat` on a completed linked run fetches the bundle and attaches context
+- clicking `Use in Chat` on a completed linked run fetches the bundle through the shared package-side client and attaches context
 - completion handoff messages with `metadataExtra.deep_research_completion` show the same action
 - the action does not appear for unrelated assistant messages
 
@@ -293,6 +296,10 @@ In `useServerChatLoader.ts`:
 
 - ensure `metadataExtra` continues to flow through mapped messages used by the chat renderer
 
+In `TldwApiClient.ts`:
+
+- add the shared `getResearchBundle(runId)` helper used by the package-side chat UI
+
 **Step 4: Run tests to verify they pass**
 
 Re-run the same vitest command.
@@ -309,6 +316,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
   apps/packages/ui/src/components/Option/Playground/PlaygroundChat.tsx \
   apps/packages/ui/src/components/Common/Playground/Message.tsx \
   apps/packages/ui/src/hooks/chat/useServerChatLoader.ts \
+  apps/packages/ui/src/services/tldw/TldwApiClient.ts \
   apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx
 git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr commit -m "feat(chat): add use-in-chat research actions"
@@ -334,6 +342,8 @@ Add integration coverage that proves:
 - attaching a second run replaces the first
 - removing the chip stops sending `research_context`
 - bundle fetch failure does not attach anything
+- switching to a different `serverChatId` or `historyId` clears the attached context
+- nonstandard send paths like image-command and compare-mode requests do not carry `research_context`
 
 **Step 2: Run tests to verify they fail**
 
@@ -356,12 +366,14 @@ In `Playground.tsx`:
 
 - add local `attachedResearchContext` state
 - pass attach/remove callbacks to `PlaygroundChat` and `PlaygroundForm`
+- clear the attached context whenever the active `serverChatId` or `historyId` changes
 
 In `PlaygroundForm.tsx`:
 
 - render `AttachedResearchContextChip`
 - thread `attachedResearchContext` into `ChatCompletionRequest`
 - keep the context active until removed or replaced
+- suppress `research_context` for image-command, compare-mode, and other nonstandard send paths in v1
 
 In `TldwApiClient.ts`:
 
@@ -462,4 +474,3 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
   Docs/Plans/2026-03-08-deep-research-chat-attached-context-implementation-plan.md
 git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr commit -m "docs(research): finalize chat attached-context plan"
 ```
-

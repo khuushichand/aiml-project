@@ -43,6 +43,7 @@ The current code already provides:
 The current code does **not** provide:
 
 - a chat-side attached research context state model
+- a package-side research bundle fetch helper for the shared playground client
 - any `research_context` field on the chat completion request
 - a composer UI surface for active research context
 - a structured marker on completion handoff messages for rendering a `Use in Chat` action
@@ -62,6 +63,7 @@ That means:
 - attaching context is an explicit client action
 - the attached snapshot lives only in the current chat session
 - reloads clear it in v1
+- switching to a different `serverChatId` or `historyId` clears the attached context immediately
 - replacing the attached run overwrites the current context instead of stacking multiple contexts
 
 This preserves the clean boundary the user asked for: useful follow-up context without turning research state into transcript clutter or durable hidden thread state.
@@ -136,13 +138,17 @@ Extend the chat completion request contract with an explicit optional `research_
 
 Frontend:
 
+- add a shared package-side `getResearchBundle(runId)` helper alongside the existing linked-run status client methods
 - add `research_context` to the package-side `ChatCompletionRequest` interface
 - when context is attached, include the bounded snapshot on every send
 - when no context is attached, omit the field entirely
+- only include `research_context` on standard text follow-up chat requests in v1
+- suppress `research_context` for image-command, compare-mode, and other nonstandard send paths in v1
 
 Backend:
 
 - add a typed `ResearchChatContext` model to `chat_request_schemas.py`
+- make `ResearchChatContext` and nested helper models `extra="forbid"` so the bounded payload cannot smuggle arbitrary keys
 - add an optional `research_context` field to `ChatCompletionRequest`
 - carry it through the existing `/api/v1/chat/completions` request assembly path
 
@@ -195,6 +201,7 @@ This keeps the feature predictable and avoids surprising users with disappearing
 In `tldw_Server_API/app/api/v1/schemas/chat_request_schemas.py`:
 
 - add `ResearchChatContext` and any nested helper models needed for the bounded payload
+- make the nested bounded-context models reject unknown keys explicitly
 - add optional `research_context: ResearchChatContext | None` to `ChatCompletionRequest`
 
 In the chat completion pipeline:
@@ -202,11 +209,13 @@ In the chat completion pipeline:
 - thread `research_context` through the request assembly/orchestration path
 - inject a bounded context block into model-facing prompt assembly
 - keep transcript messages unchanged
+- only apply the attached context on the normal text chat path in v1
 
 ### Frontend
 
 In `apps/packages/ui/src/services/tldw/TldwApiClient.ts`:
 
+- add `getResearchBundle(runId)` for the shared playground client
 - extend `ChatCompletionRequest` with optional `research_context`
 - add a typed representation of the attached research context
 
@@ -267,4 +276,3 @@ Frontend tests should cover:
 - keep only one attached research context active at a time in v1
 - prefer hidden metadata markers over content parsing for the completion-message action
 - do not persist attached context across reloads in this slice
-
