@@ -29,6 +29,11 @@ import type { Character } from "@/types/character"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { ChatGreetingPicker } from "@/components/Common/ChatGreetingPicker"
 import {
+  deriveAttachedResearchContext,
+  isDeepResearchCompletionMetadata,
+  type AttachedResearchContext
+} from "./research-chat-context"
+import {
   IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
   IMAGE_GENERATION_USER_MESSAGE_TYPE,
   isImageGenerationMessageType,
@@ -62,6 +67,7 @@ type PlaygroundChatProps = {
   searchQuery?: string
   matchedMessageIndices?: Set<number>
   activeSearchMessageIndex?: number | null
+  onAttachResearchContext?: (context: AttachedResearchContext) => void
 }
 
 const PerModelMiniComposer: React.FC<{
@@ -156,7 +162,8 @@ const buildBlocks = (messages: TimelineMessageShape[]): TimelineBlock[] => {
 export const PlaygroundChat = ({
   searchQuery,
   matchedMessageIndices,
-  activeSearchMessageIndex = null
+  activeSearchMessageIndex = null,
+  onAttachResearchContext
 }: PlaygroundChatProps) => {
   const { t } = useTranslation(["playground", "common"])
   const notification = useAntdNotification()
@@ -304,6 +311,35 @@ export const PlaygroundChat = ({
       ? linkedResearchRunsQuery.data.runs
       : []
   }, [linkedResearchRunsEnabled, linkedResearchRunsQuery.data?.runs, linkedResearchRunsQuery.isSuccess])
+  const handleAttachResearchRun = React.useCallback(
+    async (runId: string, query: string) => {
+      if (!onAttachResearchContext) {
+        return
+      }
+      await tldwClient.initialize().catch(() => null)
+      const bundle = await tldwClient.getResearchBundle(runId)
+      onAttachResearchContext(
+        deriveAttachedResearchContext(bundle, runId, query)
+      )
+    },
+    [onAttachResearchContext]
+  )
+  const buildMessageUseInChatHandler = React.useCallback(
+    (metadataExtra?: Record<string, unknown>) => {
+      const completion = isDeepResearchCompletionMetadata(
+        metadataExtra?.deep_research_completion
+      )
+        ? metadataExtra.deep_research_completion
+        : null
+      if (!completion) {
+        return undefined
+      }
+      return () => {
+        void handleAttachResearchRun(completion.run_id, completion.query)
+      }
+    },
+    [handleAttachResearchRun]
+  )
   const normalizedSearchQuery =
     typeof searchQuery === "string" ? searchQuery.trim() : ""
   const resolveSearchMatch = React.useCallback(
@@ -919,7 +955,12 @@ export const PlaygroundChat = ({
           serverChatId={serverChatId}
           className="mb-6 mt-4"
         />
-        <ResearchRunStatusStack runs={linkedResearchRuns} />
+        <ResearchRunStatusStack
+          runs={linkedResearchRuns}
+          onUseInChat={(run) => {
+            void handleAttachResearchRun(run.run_id, run.query)
+          }}
+        />
         {blocks.map((block, blockIndex) => {
           if (block.kind === "single") {
             const message = messages[block.index]
@@ -981,6 +1022,8 @@ export const PlaygroundChat = ({
                 serverMessageId={message.serverMessageId}
                 messageId={message.id}
                 pinned={Boolean(message.pinned)}
+                metadataExtra={message.metadataExtra}
+                onUseInChat={buildMessageUseInChatHandler(message.metadataExtra)}
                 discoSkillComment={message.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
@@ -1277,6 +1320,8 @@ export const PlaygroundChat = ({
                 serverMessageId={userMessage.serverMessageId}
                 messageId={userMessage.id}
                 pinned={Boolean(userMessage.pinned)}
+                metadataExtra={userMessage.metadataExtra}
+                onUseInChat={buildMessageUseInChatHandler(userMessage.metadataExtra)}
                 discoSkillComment={userMessage.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
@@ -1892,6 +1937,8 @@ export const PlaygroundChat = ({
                         serverMessageId={message.serverMessageId}
                         messageId={message.id}
                         pinned={Boolean(message.pinned)}
+                        metadataExtra={message.metadataExtra}
+                        onUseInChat={buildMessageUseInChatHandler(message.metadataExtra)}
                         discoSkillComment={message.discoSkillComment}
                         historyId={stableHistoryId ?? undefined}
                         conversationInstanceId={conversationInstanceId}

@@ -271,6 +271,8 @@ export interface ChatLinkedResearchRunsResponse {
   runs: ChatLinkedResearchRun[]
 }
 
+export type ResearchBundleResponse = Record<string, unknown>
+
 export type ConversationSharePermission = "view"
 
 export interface ConversationShareLinkSummary {
@@ -3755,6 +3757,16 @@ export class TldwApiClient {
         updated_at: String(run?.updated_at ?? "")
       }))
     }
+  }
+
+  async getResearchBundle(
+    run_id: string | number
+  ): Promise<ResearchBundleResponse> {
+    const rid = String(run_id)
+    return await bgRequest<ResearchBundleResponse>({
+      path: `/api/v1/research/runs/${encodeURIComponent(rid)}/bundle`,
+      method: "GET"
+    })
   }
 
   async getChatSettings(chat_id: string | number): Promise<ChatSettingsResponse> {

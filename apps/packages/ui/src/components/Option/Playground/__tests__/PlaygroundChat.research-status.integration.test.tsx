@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { PlaygroundChat } from "../PlaygroundChat"
@@ -79,6 +79,18 @@ const notificationMocks = vi.hoisted(() => ({
   warning: vi.fn()
 }))
 
+const clientMocks = vi.hoisted(() => ({
+  initialize: vi.fn().mockResolvedValue(undefined),
+  getResearchBundle: vi.fn().mockResolvedValue({
+    question: "What changed in the battery recycling market?",
+    outline: { sections: [{ title: "Overview" }] },
+    claims: [{ text: "Claim one" }],
+    unresolved_questions: ["What changed in Europe?"],
+    verification_summary: { unsupported_claim_count: 0 },
+    source_trust: [{ source_id: "src_1", trust_tier: "high" }]
+  })
+}))
+
 const mockComponents = vi.hoisted(() => ({
   PlaygroundEmpty: () => <div data-testid="playground-empty" />
 }))
@@ -121,6 +133,10 @@ vi.mock("@/hooks/useSelectedCharacter", () => ({
 
 vi.mock("@/hooks/useAntdNotification", () => ({
   useAntdNotification: () => notificationMocks
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: clientMocks
 }))
 
 vi.mock("@/components/Common/ChatGreetingPicker", () => ({
@@ -271,6 +287,43 @@ describe("PlaygroundChat linked research status integration", () => {
     expect(rows).toHaveLength(2)
     expect(within(rows[0]).queryByRole("button", { name: "Use in Chat" })).not.toBeInTheDocument()
     expect(within(rows[1]).getByRole("button", { name: "Use in Chat" })).toBeInTheDocument()
+  })
+
+  it("clicking Use in Chat on a completed linked run fetches the bundle and attaches bounded context", async () => {
+    setLinkedRuns([
+      {
+        run_id: "rs_completed",
+        query: "Battery recycling supply chain",
+        status: "completed",
+        phase: "completed",
+        control_state: "running",
+        latest_checkpoint_id: null,
+        updated_at: "2026-03-08T20:02:00+00:00"
+      }
+    ])
+
+    const attachSpy = vi.fn()
+    render(
+      <DemoModeProvider>
+        <PlaygroundChat onAttachResearchContext={attachSpy} />
+      </DemoModeProvider>
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Use in Chat" }))
+
+    await waitFor(() =>
+      expect(clientMocks.getResearchBundle).toHaveBeenCalledWith("rs_completed")
+    )
+    await waitFor(() =>
+      expect(attachSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          run_id: "rs_completed",
+          query: "Battery recycling supply chain",
+          question: "What changed in the battery recycling market?",
+          research_url: "/research?run=rs_completed"
+        })
+      )
+    )
   })
 
   it("does not render the status block for temporary chats or chats without a server id", () => {

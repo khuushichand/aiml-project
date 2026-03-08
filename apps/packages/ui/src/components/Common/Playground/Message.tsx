@@ -80,6 +80,7 @@ import {
   resolveImageGenerationMetadata,
   type ImageGenerationRequestSnapshot
 } from "@/utils/image-generation-chat"
+import { isDeepResearchCompletionMetadata } from "@/components/Option/Playground/research-chat-context"
 
 const Markdown = React.lazy(() => import("../../Common/Markdown"))
 
@@ -227,6 +228,8 @@ type Props = {
   messageSteeringForceNarrate?: boolean
   onMessageSteeringForceNarrateChange?: (enabled: boolean) => void
   onClearMessageSteering?: () => void
+  metadataExtra?: Record<string, unknown>
+  onUseInChat?: () => void
   onRegenerateImage?: (payload: {
     messageId?: string
     imageIndex: number
@@ -451,6 +454,11 @@ export const PlaygroundMessage = (props: Props) => {
     Boolean(props.onRegenerateImage) &&
     Boolean(imageGenerationMetadata?.request)
   const showInlineImageActions = canRegenerateImage || Boolean(props.onDeleteImage)
+  const deepResearchCompletion = React.useMemo(() => {
+    const candidate = props.metadataExtra?.deep_research_completion
+    return isDeepResearchCompletionMetadata(candidate) ? candidate : null
+  }, [props.metadataExtra])
+  const showUseInChat = Boolean(props.onUseInChat && deepResearchCompletion)
   const isImageGenerationAssistantEvent =
     props.isBot &&
     Boolean(imageGenerationMetadata?.request) &&
@@ -2427,6 +2435,18 @@ export const PlaygroundMessage = (props: Props) => {
                   ))}
               </div>
             )}
+
+          {showUseInChat && (
+            <div className="mt-3 flex">
+              <button
+                type="button"
+                className="rounded-full border border-border/70 bg-surface px-3 py-1 text-sm font-medium text-text transition hover:border-primary/50 hover:text-primary"
+                onClick={props.onUseInChat}
+              >
+                Use in Chat
+              </button>
+            </div>
+          )}
 
           {showInlineActions && (
             <MessageActionsBar
