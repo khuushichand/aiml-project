@@ -3606,6 +3606,53 @@ export class TldwApiClient {
     }
   }
 
+  private isVersionConflictError(error: unknown): boolean {
+    const candidate = error as
+      | {
+          status?: unknown
+          response?: { status?: unknown }
+          message?: unknown
+          details?: unknown
+        }
+      | null
+      | undefined
+    const rawStatus = candidate?.status ?? candidate?.response?.status
+    const statusCode =
+      typeof rawStatus === "number"
+        ? rawStatus
+        : typeof rawStatus === "string"
+          ? Number(rawStatus)
+          : Number.NaN
+    const normalizedMessage = String(candidate?.message || "").toLowerCase()
+    const normalizedDetails = (() => {
+      const details = candidate?.details
+      if (typeof details === "string") return details.toLowerCase()
+      if (details == null) return ""
+      try {
+        return JSON.stringify(details).toLowerCase()
+      } catch {
+        return String(details).toLowerCase()
+      }
+    })()
+
+    return (
+      statusCode === 409 ||
+      normalizedMessage.includes("version conflict") ||
+      normalizedMessage.includes("expected_version") ||
+      normalizedDetails.includes("version conflict") ||
+      normalizedDetails.includes("expected_version")
+    )
+  }
+
+  private async getLatestChatVersion(chatId: string): Promise<number> {
+    const current = await this.getChat(chatId)
+    const version = Number(current?.version)
+    if (Number.isInteger(version) && version >= 0) {
+      return version
+    }
+    throw new Error("Chat mutation failed: missing expected version")
+  }
+
   // Chats API (resource-based)
   async listChatCommands(): Promise<any> {
     return await bgRequest<any>({
@@ -3760,25 +3807,37 @@ export class TldwApiClient {
     let expectedVersion = options?.expectedVersion
     if (expectedVersion == null) {
       try {
-        const current = await this.getChat(cid)
-        if (typeof current?.version === "number") {
-          expectedVersion = current.version
-        }
+        expectedVersion = await this.getLatestChatVersion(cid)
       } catch {
         // ignore and fall back to unversioned update
       }
     }
-    const qp =
-      typeof expectedVersion === "number"
-        ? `?expected_version=${encodeURIComponent(String(expectedVersion))}`
-        : ""
-    const res = await bgRequest<any>({
-      path: `/api/v1/chats/${cid}${qp}`,
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: payload
-    })
-    return this.normalizeChatSummary(res)
+    const attemptUpdate = async (
+      versionToUse: number | undefined,
+      hasRetried = false
+    ): Promise<ServerChatSummary> => {
+      const qp =
+        typeof versionToUse === "number"
+          ? `?expected_version=${encodeURIComponent(String(versionToUse))}`
+          : ""
+      try {
+        const res = await bgRequest<any>({
+          path: `/api/v1/chats/${cid}${qp}`,
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: payload
+        })
+        return this.normalizeChatSummary(res)
+      } catch (error) {
+        if (hasRetried || !this.isVersionConflictError(error)) {
+          throw error
+        }
+        const latestVersion = await this.getLatestChatVersion(cid)
+        return await attemptUpdate(latestVersion, true)
+      }
+    }
+
+    return await attemptUpdate(expectedVersion)
   }
 
   async deleteChat(
@@ -3789,16 +3848,31 @@ export class TldwApiClient {
     }
   ): Promise<void> {
     const cid = String(chat_id)
-    const query = this.buildQuery({
-      ...(typeof options?.expectedVersion === "number"
-        ? { expected_version: options.expectedVersion }
-        : {}),
-      ...(options?.hardDelete ? { hard_delete: true } : {})
-    })
-    await bgRequest<void>({
-      path: `/api/v1/chats/${cid}${query}`,
-      method: "DELETE"
-    })
+    const attemptDelete = async (
+      versionToUse: number | undefined,
+      hasRetried = false
+    ): Promise<void> => {
+      const query = this.buildQuery({
+        ...(typeof versionToUse === "number"
+          ? { expected_version: versionToUse }
+          : {}),
+        ...(options?.hardDelete ? { hard_delete: true } : {})
+      })
+      try {
+        await bgRequest<void>({
+          path: `/api/v1/chats/${cid}${query}`,
+          method: "DELETE"
+        })
+      } catch (error) {
+        if (hasRetried || !this.isVersionConflictError(error)) {
+          throw error
+        }
+        const latestVersion = await this.getLatestChatVersion(cid)
+        await attemptDelete(latestVersion, true)
+      }
+    }
+
+    await attemptDelete(options?.expectedVersion)
   }
 
   async restoreChat(
@@ -3806,16 +3880,36 @@ export class TldwApiClient {
     options?: { expectedVersion?: number }
   ): Promise<ServerChatSummary> {
     const cid = String(chat_id)
-    const query = this.buildQuery(
-      typeof options?.expectedVersion === "number"
-        ? { expected_version: options.expectedVersion }
-        : {}
-    )
-    const res = await bgRequest<any>({
-      path: `/api/v1/chats/${cid}/restore${query}`,
-      method: "POST"
-    })
-    return this.normalizeChatSummary(res)
+    let expectedVersion = options?.expectedVersion
+    if (expectedVersion == null) {
+      expectedVersion = await this.getLatestChatVersion(cid)
+    }
+
+    const attemptRestore = async (
+      versionToUse: number | undefined,
+      hasRetried = false
+    ): Promise<ServerChatSummary> => {
+      const query = this.buildQuery(
+        typeof versionToUse === "number"
+          ? { expected_version: versionToUse }
+          : {}
+      )
+      try {
+        const res = await bgRequest<any>({
+          path: `/api/v1/chats/${cid}/restore${query}`,
+          method: "POST"
+        })
+        return this.normalizeChatSummary(res)
+      } catch (error) {
+        if (hasRetried || !this.isVersionConflictError(error)) {
+          throw error
+        }
+        const latestVersion = await this.getLatestChatVersion(cid)
+        return await attemptRestore(latestVersion, true)
+      }
+    }
+
+    return await attemptRestore(expectedVersion)
   }
 
   async createConversationShareLink(

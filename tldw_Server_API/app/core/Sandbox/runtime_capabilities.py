@@ -29,3 +29,32 @@ class RuntimePreflightResult:
         default_factory=lambda: {"deny_all": False, "allowlist": False}
     )
 
+
+def collect_runtime_preflights(
+    *,
+    network_policy: str | None = None,
+) -> dict[RuntimeType, RuntimePreflightResult]:
+    """Collect a shared runtime preflight snapshot for policy admission."""
+
+    from .runners.docker_runner import docker_available
+    from .runners.firecracker_runner import firecracker_available
+    from .runners.lima_runner import LimaRunner
+
+    requested_policy = str(network_policy or "deny_all").strip().lower() or "deny_all"
+
+    docker_ok = bool(docker_available())
+    firecracker_ok = bool(firecracker_available())
+
+    return {
+        RuntimeType.docker: RuntimePreflightResult(
+            runtime=RuntimeType.docker,
+            available=docker_ok,
+            reasons=[] if docker_ok else ["docker_unavailable"],
+        ),
+        RuntimeType.firecracker: RuntimePreflightResult(
+            runtime=RuntimeType.firecracker,
+            available=firecracker_ok,
+            reasons=[] if firecracker_ok else ["firecracker_unavailable"],
+        ),
+        RuntimeType.lima: LimaRunner().preflight(network_policy=requested_policy),
+    }

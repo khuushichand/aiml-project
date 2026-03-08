@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.36] 2026-03-08
+
+### Added
+
+- **TTS "Compose & Compare" Redesign** — New A/B comparison workflow for the Speech Playground TTS tab:
+  - **`UnifiedAudioPlayer`** (`components/Common/UnifiedAudioPlayer.tsx`): Single audio player component for all providers — play/pause/seek slider, time display, waveform visualization (via `WaveformCanvas`), download button; accepts `audioUrl`, `audioBlob`, or streaming mode; replaces per-provider player inconsistency
+  - **`RenderStrip`** (`components/Option/Speech/RenderStrip.tsx`): Self-contained generation card with five states (`idle`, `generating`, `ready`, `playing`, `error`); config tags (provider, voice, format, speed) as clickable chips; embeds `UnifiedAudioPlayer` for playback and `TtsJobProgress` for long-running generations; undo notification on remove with 4-second restore window
+  - **`useMultiRenderState`** hook (`hooks/useMultiRenderState.ts`): Manages array of render strips with independent generation lifecycle; actions: `addRender`, `removeRender`, `generateRender`, `generateAll`, `clearAll`, `playAllSequentially`; play-one-at-a-time enforcement (starting one pauses others); object URL lifecycle management (create on generate, revoke on remove/unmount)
+  - **`VoicePickerModal`** (`components/Option/Speech/VoicePickerModal.tsx`): Unified voice selection across all 19 backend TTS providers; search input, recent voices row (last 5 from localStorage), provider-grouped catalog (Local Engines / Cloud Providers) with collapsible sections; inline `[Play]` preview per voice; capability badges (Stream, Clone); selecting a voice returns `{ provider, voice, model }` and auto-selects provider
+  - **Render strips zone** in `SpeechPlaygroundPage.tsx`: Between text editor and action bar — maps `useMultiRenderState` to `RenderStrip` components; "Add Render", "Pick Voice", "Generate All", "Play All", "Clear" controls; per-strip generate, edit (opens voice picker), retry, remove actions
+  - **Action bar extensions** in `TtsStickyActionBar.tsx`: "Add Render" button with separator, "Play All" button (shown when multiple ready strips exist)
+  - **Smart defaults**: Last-used voice config persisted to `localStorage` for render strip defaults; recent voices tracked in voice picker
+  - **Accessibility**: `role="region"` + `aria-label` on all strips and players; `role="option"` + keyboard Enter on voice picker items; `aria-label` on all interactive buttons
+  - 36 new tests: `UnifiedAudioPlayer.test.tsx` (8), `RenderStrip.test.tsx` (11), `useMultiRenderState.test.ts` (10), `VoicePickerModal.test.tsx` (7)
+
+### Fixed
+
+- Sandbox runs no longer remain stuck in `starting` when Docker, Firecracker, or Lima runner startup fails; runner exceptions now persist a terminal `failed` state.
+- `sandbox_runs_started_total` now increments only after a sandbox run scaffold is accepted, so rejected requests are no longer counted as started runs.
+- Sandbox runtime admission now uses shared runtime preflight results across service and policy layers instead of diverging ad hoc availability booleans.
+- Sandbox websocket log streams now stop emitting heartbeats after a run ends, preventing terminal `end` frames from being buried in multi-subscriber stress scenarios.
+- Sandbox snapshot creation now tolerates transient files disappearing during concurrent atomic workspace writes, avoiding archive failures on temporary rename targets.
+- `RunStreamHub` subscriber registration now works in synchronous Python 3.11 contexts where no default main-thread event loop exists.
+
 ## [0.1.35] 2026-03-08
 
 ### Added
@@ -18,6 +42,23 @@ and this project adheres to Some kind of Versioning
 - Restored Chat Workflows route exposure in the Next.js web app:
   - Added `apps/tldw-frontend/pages/chat-workflows.tsx` so `/chat-workflows` resolves instead of falling through to a missing-page state.
   - Preserved discoverability through existing launcher coverage targeting `/chat-workflows`.
+- Chat UI regression coverage for server-chat reliability:
+  - Added recoverable refresh regression coverage in `useServerChatHistory.test.ts`
+  - Added selected-chat load state and stale-request guard coverage in `useServerChatLoader.test.ts`
+  - Added selected-chat failure rendering coverage in `PlaygroundChat.server-load-state.test.tsx`
+  - Added settings sync no-op coverage in `chat-settings.sync.test.ts`
+  - Added stale-version mutation retry coverage in `tldw-api-client.chat-trash.test.ts` and `tldw-api-client.chat-mutations.test.ts`
+  - Added sidebar reliability and conflict-feedback coverage in `ServerChatList.reliability.test.tsx`
+
+### Fixed
+
+- **Chat UI reliability bug squash**:
+  - Preserved server chat sidebar data on recoverable refresh failures instead of collapsing to an empty state during transient auth/config/rate-limit issues
+  - Added explicit selected server chat load states (`idle`, `loading`, `loaded`, `failed`) so chat switching no longer leaves the conversation pane blank on failed loads
+  - Rendered a dedicated selected-chat failure state in the playground instead of the generic empty-chat shell
+  - Stopped no-op server chat settings sync writes when only sync metadata changed, preventing version churn during chat load
+  - Retried chat delete, restore, and update mutations once after optimistic-lock conflicts by fetching the latest chat version first
+  - Clarified sidebar reliability states with stale-data warnings, unavailable refresh copy, and conflict-specific mutation error messaging for chat actions
 
 ## [0.1.34] 2026-03-07
 

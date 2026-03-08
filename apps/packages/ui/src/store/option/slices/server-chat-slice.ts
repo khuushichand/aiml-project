@@ -11,6 +11,10 @@ export const createServerChatSlice: StoreSlice<
     | "setServerChatCharacterId"
     | "serverChatMetaLoaded"
     | "setServerChatMetaLoaded"
+    | "serverChatLoadState"
+    | "setServerChatLoadState"
+    | "serverChatLoadError"
+    | "setServerChatLoadError"
     | "serverChatState"
     | "setServerChatState"
     | "serverChatVersion"
@@ -34,6 +38,8 @@ export const createServerChatSlice: StoreSlice<
       serverChatTitle: null,
       serverChatCharacterId: null,
       serverChatMetaLoaded: false,
+      serverChatLoadState: id ? "loading" : "idle",
+      serverChatLoadError: null,
       serverChatTopic: null,
       serverChatClusterId: null,
       serverChatSource: null,
@@ -51,6 +57,12 @@ export const createServerChatSlice: StoreSlice<
   serverChatMetaLoaded: false,
   setServerChatMetaLoaded: (serverChatMetaLoaded) =>
     set({ serverChatMetaLoaded }),
+  serverChatLoadState: "idle",
+  setServerChatLoadState: (serverChatLoadState) =>
+    set({ serverChatLoadState }),
+  serverChatLoadError: null,
+  setServerChatLoadError: (serverChatLoadError) =>
+    set({ serverChatLoadError: serverChatLoadError != null ? serverChatLoadError : null }),
   serverChatState: null,
   setServerChatState: (state) =>
     set({ serverChatState: state ?? null }),

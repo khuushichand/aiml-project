@@ -122,6 +122,22 @@ export const shouldSkipLoadedServerChatReload = ({
   return Array.isArray(currentMessages) && currentMessages.length > 0
 }
 
+export const shouldCommitServerChatLoadResult = ({
+  requestedChatId,
+  activeServerChatId,
+  requestController,
+  activeController
+}: {
+  requestedChatId: string | null
+  activeServerChatId: string | null
+  requestController: AbortController | null
+  activeController: AbortController | null
+}): boolean => {
+  if (!requestedChatId || !activeServerChatId) return false
+  if (requestedChatId !== activeServerChatId) return false
+  return requestController != null && requestController === activeController
+}
+
 export const fetchAllServerChatMessages = async (
   fetchPage: FetchServerChatMessagesPage,
   options?: {
@@ -372,6 +388,8 @@ export const useServerChatLoader = ({
     serverChatCharacterId,
     serverChatMetaLoaded,
     temporaryChat,
+    setServerChatLoadState,
+    setServerChatLoadError,
     setServerChatTitle,
     setServerChatCharacterId,
     setServerChatState,
@@ -388,6 +406,8 @@ export const useServerChatLoader = ({
       serverChatCharacterId: state.serverChatCharacterId,
       serverChatMetaLoaded: state.serverChatMetaLoaded,
       temporaryChat: state.temporaryChat,
+      setServerChatLoadState: state.setServerChatLoadState,
+      setServerChatLoadError: state.setServerChatLoadError,
       setServerChatTitle: state.setServerChatTitle,
       setServerChatCharacterId: state.setServerChatCharacterId,
       setServerChatState: state.setServerChatState,
@@ -456,6 +476,13 @@ export const useServerChatLoader = ({
     serverChatDebounceRef.current.chatId = serverChatId
     serverChatDebounceRef.current.timer = setTimeout(() => {
       const controller = new AbortController()
+      const canCommitCurrentLoad = () =>
+        shouldCommitServerChatLoadResult({
+          requestedChatId: serverChatId,
+          activeServerChatId: serverChatLoadRef.current.chatId,
+          requestController: controller,
+          activeController: serverChatLoadRef.current.controller
+        })
       serverChatLoadRef.current = {
         chatId: serverChatId,
         controller,
@@ -464,8 +491,11 @@ export const useServerChatLoader = ({
       }
 
       const loadServerChat = async () => {
+        let didLoadSuccessfully = false
         try {
           setIsLoading(true)
+          setServerChatLoadState("loading")
+          setServerChatLoadError(null)
           await tldwClient.initialize().catch(() => null)
 
           let assistantName = "Assistant"
@@ -475,6 +505,9 @@ export const useServerChatLoader = ({
           if (!serverChatMetaLoaded) {
             try {
               const chat = await tldwClient.getChat(serverChatId)
+              if (!canCommitCurrentLoad()) {
+                return
+              }
               const meta = chat as unknown as Record<string, unknown>
               chatTitle = String(meta?.title || chatTitle || "")
               const resolvedCharacterId =
@@ -550,6 +583,9 @@ export const useServerChatLoader = ({
             assistantName,
             characterId
           })
+          if (!canCommitCurrentLoad()) {
+            return
+          }
           const history = mappedMessages.map((message) => ({
             role: message.role,
             content: message.message,
@@ -641,21 +677,27 @@ export const useServerChatLoader = ({
           if (chatTitle) {
             updatePageTitle(chatTitle)
           }
+          didLoadSuccessfully = true
+          setServerChatLoadError(null)
+          setServerChatLoadState("loaded")
         } catch (e: unknown) {
           const message = e instanceof Error ? e.message : String(e || "")
           const isAbort =
             e instanceof Error && e.name === "AbortError"
               ? true
               : message.toLowerCase().includes("abort")
-          if (!isAbort) {
+          if (!isAbort && canCommitCurrentLoad()) {
+            const description =
+              message ||
+              t("common:serverChatLoadError", {
+                defaultValue:
+                  "Failed to load server chat. Check your connection and try again."
+              })
+            setServerChatLoadState("failed")
+            setServerChatLoadError(description)
             notification.error({
               message: t("error", { defaultValue: "Error" }),
-              description:
-                message ||
-                t("common:serverChatLoadError", {
-                  defaultValue:
-                    "Failed to load server chat. Check your connection and try again."
-                })
+              description
             })
           }
         } finally {
@@ -664,7 +706,7 @@ export const useServerChatLoader = ({
               chatId: serverChatId,
               controller: null,
               inFlight: false,
-              loaded: true
+              loaded: didLoadSuccessfully
             }
           }
           setIsLoading(false)
@@ -693,6 +735,8 @@ export const useServerChatLoader = ({
     setServerChatCharacterId,
     setServerChatClusterId,
     setServerChatExternalRef,
+    setServerChatLoadError,
+    setServerChatLoadState,
     setServerChatMetaLoaded,
     setServerChatSource,
     setServerChatState,

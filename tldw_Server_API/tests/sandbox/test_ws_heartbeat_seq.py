@@ -4,11 +4,13 @@ import os
 import asyncio as _asyncio
 import time
 from typing import Any, Dict
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
+from tldw_Server_API.app.core.Sandbox.streams import get_hub
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -65,3 +67,43 @@ def test_ws_heartbeats_include_seq(monkeypatch: pytest.MonkeyPatch, ws_flush) ->
             assert saw_heartbeat, "Did not receive heartbeat with seq in time"
             ws_flush(run_id)
             ws.close()
+
+
+@pytest.mark.unit
+def test_ws_heartbeats_stop_after_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
+
+    _orig_sleep = _asyncio.sleep
+
+    async def _fast_sleep(_n: float) -> None:  # pragma: no cover - trivial
+        await _orig_sleep(0.01)
+
+    monkeypatch.setattr(sb.asyncio, "sleep", _fast_sleep, raising=True)
+
+    with _client(monkeypatch) as client:
+        run_id = f"run-{uuid4()}"
+        hub = get_hub()
+        original_publish_heartbeat = hub.publish_heartbeat
+        heartbeat_states: list[bool] = []
+
+        def _tracked_publish_heartbeat(target_run_id: str) -> None:
+            if target_run_id == run_id:
+                heartbeat_states.append(target_run_id in hub._ended)
+            original_publish_heartbeat(target_run_id)
+
+        monkeypatch.setattr(hub, "publish_heartbeat", _tracked_publish_heartbeat, raising=True)
+
+        with client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws:
+            deadline = time.time() + 1.0
+            hub.publish_event(run_id, "start", {"source": "heartbeat-stop"})
+            while time.time() < deadline:
+                msg = ws.receive_json()
+                if msg.get("type") == "heartbeat":
+                    break
+            else:
+                pytest.fail("Did not receive initial heartbeat")
+
+            hub.publish_event(run_id, "end", {})
+            time.sleep(0.1)
+
+        assert True not in heartbeat_states
