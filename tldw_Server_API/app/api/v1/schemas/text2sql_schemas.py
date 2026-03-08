@@ -35,4 +35,3 @@ class Text2SQLResponse(BaseModel):
     target_id: str
     guardrail: Text2SQLGuardrail = Field(default_factory=Text2SQLGuardrail)
     truncated: bool = False
-

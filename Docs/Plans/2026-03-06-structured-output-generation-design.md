@@ -1,7 +1,7 @@
 # Structured Output Generation Design
 
-Date: 2026-03-06  
-Status: Approved  
+Date: 2026-03-06
+Status: Approved
 Scope: `chat/completions` + claims/RAG internal structured generation paths
 
 ## 1. Summary

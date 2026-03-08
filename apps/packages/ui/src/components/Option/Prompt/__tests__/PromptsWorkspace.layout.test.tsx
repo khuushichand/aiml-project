@@ -86,4 +86,3 @@ describe("PromptsWorkspace layout", () => {
     expect(shell.className).not.toContain("max-w-none")
   })
 })
-

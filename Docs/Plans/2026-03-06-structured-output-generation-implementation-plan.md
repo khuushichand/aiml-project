@@ -74,7 +74,7 @@ def test_response_format_rejects_json_schema_without_schema_object():
 
 **Step 2: Run tests to verify they fail**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Chat/unit/test_chat_request_schemas.py tldw_Server_API/tests/Chat_NEW/unit/test_chat_schemas.py -k response_format`
 
 Expected: FAIL with validation/type mismatch for `json_schema` format.
@@ -103,7 +103,7 @@ class ResponseFormat(BaseModel):
 
 **Step 4: Run tests to verify they pass**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Chat/unit/test_chat_request_schemas.py tldw_Server_API/tests/Chat_NEW/unit/test_chat_schemas.py -k response_format`
 
 Expected: PASS.
@@ -156,7 +156,7 @@ def test_validate_structured_payload_raises_on_schema_mismatch():
 
 **Step 2: Run tests to verify they fail**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/LLM_Calls/test_structured_generation.py`
 
 Expected: FAIL (module/functions missing).
@@ -187,7 +187,7 @@ Include:
 
 **Step 4: Run tests to verify they pass**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/LLM_Calls/test_structured_generation.py`
 
 Expected: PASS.
@@ -231,7 +231,7 @@ def test_non_stream_structured_failure_returns_400(...):
 
 **Step 2: Run tests to verify they fail**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Chat/integration/test_chat_endpoint.py -k structured`
 
 Expected: FAIL.
@@ -255,7 +255,7 @@ Important behavior rule:
 
 **Step 4: Run tests to verify they pass**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Chat/integration/test_chat_endpoint.py -k structured`
 
 Expected: PASS.
@@ -298,7 +298,7 @@ async def test_stream_emits_structured_error_and_done_on_validation_failure():
 
 **Step 2: Run tests to verify they fail**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Chat/unit/test_streaming_structured_events.py`
 
 Expected: FAIL.
@@ -324,7 +324,7 @@ Ensure order:
 
 **Step 4: Run tests to verify they pass**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Chat/unit/test_streaming_structured_events.py`
 
 Expected: PASS.
@@ -360,7 +360,7 @@ def test_claims_parse_path_uses_shared_schema_validation(monkeypatch):
 
 **Step 2: Run tests to verify they fail**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Claims/test_claims_output_parser.py tldw_Server_API/tests/Claims/test_claims_response_format_contracts.py`
 
 Expected: FAIL.
@@ -382,7 +382,7 @@ Map shared exceptions back into claims-specific exception classes to preserve co
 
 **Step 4: Run tests to verify they pass**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Claims/test_claims_output_parser.py tldw_Server_API/tests/Claims/test_claims_response_format_contracts.py`
 
 Expected: PASS.
@@ -404,14 +404,14 @@ git commit -m "refactor(claims): route structured parsing through shared orchest
 
 **Step 1: Run targeted test suite**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/LLM_Calls/test_structured_generation.py tldw_Server_API/tests/Chat/unit/test_streaming_structured_events.py tldw_Server_API/tests/Claims/test_claims_output_parser.py tldw_Server_API/tests/Claims/test_claims_response_format_contracts.py && python -m pytest -q tldw_Server_API/tests/Chat/integration/test_chat_endpoint.py -k structured`
 
 Expected: PASS.
 
 **Step 2: Run Bandit on touched backend paths**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/core/LLM_Calls/structured_generation.py tldw_Server_API/app/core/Chat/chat_service.py tldw_Server_API/app/core/Chat/streaming_utils.py tldw_Server_API/app/core/Claims_Extraction/output_parser.py tldw_Server_API/app/api/v1/schemas/chat_request_schemas.py -f json -o /tmp/bandit_structured_output_generation.json`
 
 Expected: No new high-confidence findings in changed code.
@@ -426,7 +426,7 @@ Expected: No new high-confidence findings in changed code.
 
 **Step 4: Re-run docs + targeted tests**
 
-Run:  
+Run:
 `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Chat/integration/test_chat_endpoint.py -k structured`
 
 Expected: PASS.

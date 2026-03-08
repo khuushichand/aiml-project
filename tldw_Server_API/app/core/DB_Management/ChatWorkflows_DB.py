@@ -183,7 +183,7 @@ class ChatWorkflowsDatabase:
 
             CREATE INDEX IF NOT EXISTS idx_chat_workflow_answers_run
             ON chat_workflow_answers(run_id, step_index);
-            
+
             CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_workflow_answers_idempotency
             ON chat_workflow_answers(run_id, idempotency_key)
             WHERE idempotency_key IS NOT NULL;

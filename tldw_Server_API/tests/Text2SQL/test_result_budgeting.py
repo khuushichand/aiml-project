@@ -69,4 +69,3 @@ async def test_service_enforces_requested_max_rows_even_if_executor_overproduces
     assert result["row_count"] == 7
     assert result["truncated"] is True
     assert result["guardrail"]["result_budget"]["applied_max_rows"] == 7
-

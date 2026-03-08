@@ -92,4 +92,3 @@ async def test_sql_retriever_records_success_telemetry_for_sql_input(monkeypatch
     assert counters and counters[-1][0] == "success"
     assert durations and durations[-1][0] == "success"
     assert rows == [("success", 1)]
-

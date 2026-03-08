@@ -389,7 +389,7 @@ export const useMessage = () => {
     setIsLoading(false)
     setIsProcessing(false)
     setStreaming(false)
-    updatePageTitle() 
+    updatePageTitle()
     currentChatModelSettings.reset()
     setServerChatId(null)
     resetServerChatState()
