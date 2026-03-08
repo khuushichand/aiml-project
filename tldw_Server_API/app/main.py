@@ -1032,6 +1032,7 @@ else:
         logger.warning(f"Items endpoints unavailable; skipping import: {_items_err}")
         _HAS_ITEMS = False
     # Notes / Prompts / Translation
+    from tldw_Server_API.app.api.v1.endpoints.ingestion_sources import router as ingestion_sources_router
     from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
     from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
     from tldw_Server_API.app.api.v1.endpoints.translate import router as translate_router
@@ -6111,6 +6112,13 @@ else:
         )
     except _IMPORT_EXCEPTIONS as _conn_e:
         logger.warning(f"Connectors endpoints unavailable; skipping import: {_conn_e}")
+    _include_if_enabled(
+        "ingestion-sources",
+        ingestion_sources_router,
+        prefix=f"{API_V1_PREFIX}",
+        tags=["ingestion-sources"],
+        default_stable=False,
+    )
     if "claims_router" in locals():
         _include_if_enabled("claims", claims_router, prefix=f"{API_V1_PREFIX}")
     if "media_embeddings_router" in locals():

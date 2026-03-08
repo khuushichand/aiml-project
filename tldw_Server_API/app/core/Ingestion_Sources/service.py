@@ -306,6 +306,38 @@ async def list_sources_for_scheduler(db) -> list[dict[str, Any]]:
     return [_deserialize_source_row(row) for row in rows]
 
 
+async def list_sources_by_user(db, *, user_id: int) -> list[dict[str, Any]]:
+    cursor = await db.execute(
+        """
+        SELECT
+            s.id,
+            s.user_id,
+            s.source_type,
+            s.sink_type,
+            s.policy,
+            s.enabled,
+            s.schedule_enabled,
+            s.schedule_config_json,
+            s.config_json,
+            s.created_at,
+            s.updated_at,
+            st.active_job_id,
+            st.last_successful_snapshot_id,
+            st.last_sync_started_at,
+            st.last_sync_completed_at,
+            st.last_sync_status,
+            st.last_error
+        FROM ingestion_sources s
+        JOIN ingestion_source_state st ON st.source_id = s.id
+        WHERE s.user_id = ?
+        ORDER BY s.id ASC
+        """,
+        (int(user_id),),
+    )
+    rows = await cursor.fetchall()
+    return [_deserialize_source_row(row) for row in rows]
+
+
 async def start_source_sync_job(db, *, source_id: int, job_id: str) -> dict[str, Any]:
     now = _utc_now_text()
     await db.execute(
