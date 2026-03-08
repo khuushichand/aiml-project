@@ -102,6 +102,17 @@ def deliver_research_chat_handoff(
         )
         if not message_id:
             raise RuntimeError("failed to insert research completion chat message")
+        chat_db.set_message_metadata_extra(
+            message_id,
+            {
+                "deep_research_completion": {
+                    "run_id": session.id,
+                    "query": session.query,
+                    "kind": "completion_handoff",
+                }
+            },
+            merge=True,
+        )
         db.mark_chat_handoff_chat_inserted(
             session_id,
             delivered_chat_message_id=message_id,

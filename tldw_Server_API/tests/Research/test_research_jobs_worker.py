@@ -2025,10 +2025,19 @@ async def test_packaging_job_inserts_completion_message_into_linked_chat(tmp_pat
         assert len(assistant_messages) == 1
         assert session.query in str(assistant_messages[0].get("content") or "")
         assert f"/research?run={session.id}" in str(assistant_messages[0].get("content") or "")
+        message_metadata = chat_db.get_message_metadata(assistant_messages[0]["id"])
         assert handoff is not None
         assert handoff.handoff_status == "chat_inserted"
         assert handoff.delivered_chat_message_id == assistant_messages[0]["id"]
         assert handoff.delivered_notification_id is None
+        assert message_metadata is not None
+        assert message_metadata.get("extra") == {
+            "deep_research_completion": {
+                "run_id": session.id,
+                "query": session.query,
+                "kind": "completion_handoff",
+            }
+        }
     finally:
         _restore_user_db_base(previous_user_db_base)
 

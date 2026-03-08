@@ -680,6 +680,54 @@ class TLDWContinuationSpec(BaseModel):
     )
 
 
+class ResearchChatContextOutlineSection(BaseModel):
+    """Bounded outline section attached from a completed deep research run."""
+
+    title: str = Field(..., min_length=1)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ResearchChatContextClaim(BaseModel):
+    """Bounded key claim attached from a completed deep research run."""
+
+    text: str = Field(..., min_length=1)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ResearchChatContextVerificationSummary(BaseModel):
+    """Compact verification summary attached from a completed deep research run."""
+
+    unsupported_claim_count: Optional[int] = Field(default=None, ge=0)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ResearchChatContextSourceTrustSummary(BaseModel):
+    """Compact source-trust summary attached from a completed deep research run."""
+
+    high_trust_count: Optional[int] = Field(default=None, ge=0)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ResearchChatContext(BaseModel):
+    """Bounded deep research context attached to a chat request."""
+
+    run_id: str = Field(..., min_length=1)
+    query: str = Field(..., min_length=1)
+    question: str = Field(..., min_length=1)
+    outline: list[ResearchChatContextOutlineSection] = Field(default_factory=list)
+    key_claims: list[ResearchChatContextClaim] = Field(default_factory=list)
+    unresolved_questions: list[str] = Field(default_factory=list)
+    verification_summary: Optional[ResearchChatContextVerificationSummary] = None
+    source_trust_summary: Optional[ResearchChatContextSourceTrustSummary] = None
+    research_url: str = Field(..., min_length=1)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 # --- Main Request Model ---
 class ChatCompletionRequest(BaseModel):
     """
@@ -752,6 +800,13 @@ class ChatCompletionRequest(BaseModel):
         ),
     )
     user: Optional[str] = Field(None, description="End-user identifier for monitoring.")
+    research_context: Optional[ResearchChatContext] = Field(
+        None,
+        description=(
+            "[Extension] Optional bounded deep research context attached from a completed run. "
+            "Used as model-side working context and not persisted as transcript content."
+        ),
+    )
 
     # --- Slash Commands Injection Override ---
     slash_command_injection_mode: Optional[Literal["system", "preface", "replace"]] = Field(

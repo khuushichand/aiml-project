@@ -147,6 +147,7 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     estimate_tokens_from_json,
     execute_non_stream_call,
     execute_streaming_call,
+    inject_research_context_into_prompt,
     moderate_input_messages,
     perform_chat_api_call,
     queue_is_active,
@@ -2790,13 +2791,19 @@ async def create_chat_completion(
                     loop=current_loop,
                 )
 
+            llm_final_system_message, llm_templated_payload = inject_research_context_into_prompt(
+                final_system_message=final_system_message,
+                templated_llm_payload=templated_llm_payload,
+                research_context=getattr(request_data, "research_context", None),
+            )
+
             # --- LLM Call ---
             cleaned_args = build_call_params_from_request(
                 request_data=request_data,
                 target_api_provider=target_api_provider,
                 provider_api_key=provider_api_key,
-                templated_llm_payload=templated_llm_payload,
-                final_system_message=final_system_message,
+                templated_llm_payload=llm_templated_payload,
+                final_system_message=llm_final_system_message,
                 app_config=app_config_override,
             )
             cleaned_args["request"] = request
@@ -2870,8 +2877,8 @@ async def create_chat_completion(
                     request_data=request_data,
                     target_api_provider=target_provider,
                     provider_api_key=provider_api_key_new,
-                    templated_llm_payload=templated_llm_payload,
-                    final_system_message=final_system_message,
+                    templated_llm_payload=llm_templated_payload,
+                    final_system_message=llm_final_system_message,
                     app_config=refreshed_resolution.app_config,
                 )
                 refreshed_args["request"] = request

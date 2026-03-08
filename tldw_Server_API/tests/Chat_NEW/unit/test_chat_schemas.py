@@ -89,6 +89,20 @@ class TestMessageValidation:
 class TestChatCompletionRequest:
     """Test ChatCompletionRequest model validation."""
 
+    @staticmethod
+    def _bounded_research_context_payload() -> Dict[str, Any]:
+        return {
+            "run_id": "run_123",
+            "query": "battery recycling supply chain",
+            "question": "What changed in the battery recycling market?",
+            "outline": [{"title": "Overview"}],
+            "key_claims": [{"text": "Claim one"}],
+            "unresolved_questions": ["What changed in Europe?"],
+            "verification_summary": {"unsupported_claim_count": 0},
+            "source_trust_summary": {"high_trust_count": 3},
+            "research_url": "/research?run=run_123",
+        }
+
     @pytest.mark.unit
     def test_minimal_valid_request(self):
         """Test minimal valid chat completion request."""
@@ -101,6 +115,41 @@ class TestChatCompletionRequest:
         assert request.model == "gpt-3.5-turbo"
         assert len(request.messages) == 1
         assert request.messages[0].role == "user"
+
+    @pytest.mark.unit
+    def test_request_accepts_typed_research_context(self):
+        """Test request accepts a bounded typed research_context payload."""
+        request = ChatCompletionRequest(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Use the attached research."}],
+            research_context=self._bounded_research_context_payload(),
+        )
+
+        assert request.research_context.run_id == "run_123"
+        assert request.research_context.key_claims[0].text == "Claim one"
+
+    @pytest.mark.unit
+    def test_request_without_research_context_preserves_current_behavior(self):
+        """Test omitting research_context still produces the current request shape."""
+        request = ChatCompletionRequest(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+        assert not hasattr(request, "research_context") or request.research_context is None
+
+    @pytest.mark.unit
+    def test_request_rejects_unknown_nested_research_context_keys(self):
+        """Test bounded research_context rejects unknown nested keys."""
+        bad_context = self._bounded_research_context_payload()
+        bad_context["unexpected"] = "nope"
+
+        with pytest.raises(ValidationError):
+            ChatCompletionRequest(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "Use the attached research."}],
+                research_context=bad_context,
+            )
 
     @pytest.mark.unit
     def test_request_with_all_parameters(self):
