@@ -97,6 +97,10 @@ vi.mock("../StudioPane", () => ({
   StudioPane: () => <div data-testid="workspace-studio-pane">Studio</div>
 }))
 
+vi.mock("../WorkspaceStatusBar", () => ({
+  WorkspaceStatusBar: () => <div data-testid="workspace-status-bar" />
+}))
+
 vi.mock("antd", () => ({
   Drawer: ({ placement, mask, open, children }: any) => (
     <div

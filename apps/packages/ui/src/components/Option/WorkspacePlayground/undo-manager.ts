@@ -1,6 +1,7 @@
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 
 export const WORKSPACE_UNDO_WINDOW_MS = 10000
+const WORKSPACE_UNDO_MAX_STACK_SIZE = 10
 
 export interface WorkspaceUndoActionHandle {
   id: string
@@ -24,6 +25,12 @@ interface ScheduleWorkspaceUndoActionInput {
 
 const pendingWorkspaceUndoActions = new Map<string, PendingWorkspaceUndoAction>()
 
+/**
+ * Insertion-order stack of action IDs. Most recent is last.
+ * Capped at WORKSPACE_UNDO_MAX_STACK_SIZE entries.
+ */
+const undoStack: string[] = []
+
 const createWorkspaceUndoActionId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID()
@@ -38,6 +45,8 @@ const clearPendingWorkspaceUndoAction = (
   if (!action) return null
   clearTimeout(action.timer)
   pendingWorkspaceUndoActions.delete(id)
+  const stackIndex = undoStack.indexOf(id)
+  if (stackIndex !== -1) undoStack.splice(stackIndex, 1)
   return action
 }
 
@@ -58,6 +67,15 @@ export const scheduleWorkspaceUndoAction = ({
     action.finalize()
   }, timeoutMs)
 
+  // Evict oldest entry when at capacity
+  if (undoStack.length >= WORKSPACE_UNDO_MAX_STACK_SIZE) {
+    const oldestId = undoStack[0]
+    if (oldestId) {
+      const evicted = clearPendingWorkspaceUndoAction(oldestId)
+      if (evicted) evicted.finalize()
+    }
+  }
+
   pendingWorkspaceUndoActions.set(id, {
     id,
     expiresAt,
@@ -65,6 +83,7 @@ export const scheduleWorkspaceUndoAction = ({
     finalize: finalize || (() => {}),
     timer
   })
+  undoStack.push(id)
 
   return { id, expiresAt }
 }
@@ -79,6 +98,17 @@ export const undoWorkspaceAction = (id: string): boolean => {
   return true
 }
 
+/**
+ * Undo the most recent pending action (Cmd+Z / Ctrl+Z).
+ * Returns true if an action was undone.
+ */
+export const undoLatestWorkspaceAction = (): boolean => {
+  if (undoStack.length === 0) return false
+  const latestId = undoStack[undoStack.length - 1]
+  if (!latestId) return false
+  return undoWorkspaceAction(latestId)
+}
+
 export const getWorkspaceUndoPendingCount = (): number =>
   pendingWorkspaceUndoActions.size
 
@@ -87,4 +117,5 @@ export const clearWorkspaceUndoActionsForTests = (): void => {
     clearTimeout(action.timer)
   }
   pendingWorkspaceUndoActions.clear()
+  undoStack.length = 0
 }
