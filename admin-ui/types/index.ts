@@ -259,3 +259,71 @@ export interface VoiceAnalyticsSummary {
 }
 
 export type { IncidentEvent, IncidentItem, IncidentsResponse } from './incidents';
+
+// ============================================
+// Billing & Subscription Types
+// ============================================
+
+export type PlanTier = 'free' | 'pro' | 'enterprise';
+export type SubscriptionStatus = 'active' | 'past_due' | 'canceled' | 'trialing' | 'incomplete';
+
+export interface Plan {
+  id: string;
+  name: string;
+  tier: PlanTier;
+  stripe_product_id: string;
+  stripe_price_id: string;
+  monthly_price_cents: number;
+  included_token_credits: number;
+  overage_rate_per_1k_tokens_cents: number;
+  features: string[];
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Subscription {
+  id: string;
+  org_id: number;
+  plan_id: string;
+  plan?: Plan;
+  stripe_subscription_id: string;
+  status: SubscriptionStatus;
+  current_period_start: string;
+  current_period_end: string;
+  trial_end?: string;
+  cancel_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrgUsageSummary {
+  org_id: number;
+  period_start: string;
+  period_end: string;
+  tokens_used: number;
+  tokens_included: number;
+  tokens_overage: number;
+  overage_cost_cents: number;
+  breakdown_by_provider: Record<string, number>;
+}
+
+export interface Invoice {
+  id: string;
+  stripe_invoice_id: string;
+  amount_cents: number;
+  currency: string;
+  status: 'paid' | 'open' | 'void' | 'draft' | 'uncollectible';
+  invoice_pdf?: string;
+  period_start: string;
+  period_end: string;
+  created_at: string;
+}
+
+export interface FeatureRegistryEntry {
+  feature_key: string;
+  display_name: string;
+  description: string;
+  plans: string[];
+  category: string;
+}
