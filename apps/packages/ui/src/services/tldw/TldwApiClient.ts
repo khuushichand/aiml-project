@@ -251,10 +251,27 @@ export interface ServerChatSummary {
   external_ref?: string | null
   bm25_norm?: number | null
   character_id?: string | number | null
+  assistant_kind?: "character" | "persona" | null
+  assistant_id?: string | null
+  persona_memory_mode?: "read_only" | "read_write" | null
   parent_conversation_id?: string | null
   root_id?: string | null
   forked_from_message_id?: string | null
   version?: number | null
+}
+
+export interface PersonaProfileSummary {
+  id: string
+  name?: string | null
+  character_card_id?: number | null
+  origin_character_id?: number | null
+  [key: string]: unknown
+}
+
+export interface PersonaProfile extends PersonaProfileSummary {
+  mode?: string | null
+  system_prompt?: string | null
+  use_persona_state_context_default?: boolean
 }
 
 export type ConversationSharePermission = "view"
@@ -314,6 +331,16 @@ export type ChatSettingsResponse = {
   conversation_id: string
   settings: Record<string, unknown>
   last_modified: string
+}
+
+const normalizePersonaProfile = <T extends Record<string, unknown>>(
+  input: T | null | undefined
+): PersonaProfile => {
+  const candidate = input && typeof input === "object" ? input : ({} as T)
+  return {
+    ...candidate,
+    id: String(candidate?.id ?? candidate?.persona_id ?? "")
+  }
 }
 
 export type WorldBookProcessDiagnostic = {
@@ -3571,6 +3598,17 @@ export class TldwApiClient {
         : typeof messageCountRaw === "string" && messageCountRaw.trim().length > 0
           ? Number.parseFloat(messageCountRaw)
           : null
+    const character_id = input?.character_id ?? input?.characterId ?? null
+    const assistant_kind =
+      input?.assistant_kind ??
+      input?.assistantKind ??
+      (character_id != null ? "character" : null)
+    const assistant_id =
+      input?.assistant_id ??
+      input?.assistantId ??
+      (assistant_kind === "character" && character_id != null
+        ? String(character_id)
+        : null)
     return {
       id: String(input?.id ?? ""),
       title: String(input?.title || ""),
@@ -3591,7 +3629,23 @@ export class TldwApiClient {
           : typeof input?.relevance === "number"
             ? input?.relevance
             : null,
-      character_id: input?.character_id ?? input?.characterId ?? null,
+      character_id,
+      assistant_kind:
+        assistant_kind === "character" || assistant_kind === "persona"
+          ? assistant_kind
+          : null,
+      assistant_id:
+        assistant_id == null || assistant_id === ""
+          ? null
+          : String(assistant_id),
+      persona_memory_mode:
+        input?.persona_memory_mode === "read_only" ||
+        input?.persona_memory_mode === "read_write"
+          ? input.persona_memory_mode
+          : input?.personaMemoryMode === "read_only" ||
+              input?.personaMemoryMode === "read_write"
+            ? input.personaMemoryMode
+            : null,
       parent_conversation_id:
         input?.parent_conversation_id ?? input?.parentConversationId ?? null,
       root_id: input?.root_id ?? input?.rootId ?? null,
@@ -3604,6 +3658,28 @@ export class TldwApiClient {
             ? input.expected_version
             : null
     }
+  }
+
+  async listPersonaProfiles(): Promise<PersonaProfileSummary[]> {
+    const payload = await this.request<any>({
+      path: "/api/v1/persona/catalog",
+      method: "GET"
+    })
+    const list = Array.isArray(payload) ? payload : []
+    return list.map((item) =>
+      normalizePersonaProfile(item as Record<string, unknown>)
+    )
+  }
+
+  async getPersonaProfile(id: string | number): Promise<PersonaProfile> {
+    const personaId = encodeURIComponent(String(id))
+    const payload = await this.request<any>({
+      path: `/api/v1/persona/profiles/${personaId}`,
+      method: "GET"
+    })
+    return normalizePersonaProfile(
+      payload as Record<string, unknown> | null | undefined
+    )
   }
 
   private isVersionConflictError(error: unknown): boolean {
