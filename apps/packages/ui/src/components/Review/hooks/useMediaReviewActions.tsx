@@ -303,7 +303,7 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
       }
     }
 
-    if (!selectedIds.includes(id) && selectedIds.length >= openAllLimit) {
+    if (!includesId(selectedIds, id) && selectedIds.length >= openAllLimit) {
       message.warning(
         t('mediaPage.selectionLimitReached', {
           defaultValue: 'Selection limit reached ({{limit}} items)',
@@ -315,8 +315,8 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
 
     lastClickedRef.current = id
     setSelectedIds((prev) => {
-      const exists = prev.includes(id)
-      const next = exists ? prev.filter((x) => x !== id) : [...prev, id]
+      const exists = includesId(prev, id)
+      const next = exists ? prev.filter((x) => !idsEqual(x, id)) : [...prev, id]
       if (!exists && viewerRef.current) {
         setTimeout(() => viewerRef.current?.focus(), 100)
       }
@@ -493,58 +493,6 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
   }, [setKeywordOptions])
 
   React.useEffect(() => { if (isOnline) void loadKeywordSuggestions() }, [loadKeywordSuggestions, isOnline])
-
-  const resolveDetailForCompare = React.useCallback(async (id: string | number): Promise<MediaDetail | null> => {
-    const existing = details[id]
-    if (existing) return existing
-    try {
-      const fetched = await bgRequest<MediaDetail>({
-        path: `/api/v1/media/${id}?include_content=true&include_versions=false` as any,
-        method: 'GET' as any
-      })
-      const base = allResults.find((item) => item.id === id)
-      const enriched = {
-        ...fetched,
-        id,
-        title: (fetched as any)?.title ?? base?.title,
-        type: (fetched as any)?.type ?? base?.type,
-        created_at: (fetched as any)?.created_at ?? base?.created_at
-      } as MediaDetail
-      setDetails((prev) => ({ ...prev, [id]: enriched }))
-      return enriched
-    } catch {
-      return null
-    }
-  }, [allResults, details, setDetails])
-
-  const handleCompareContent = React.useCallback(async () => {
-    if (selectedIds.length !== 2) return
-    const [leftId, rightId] = selectedIds
-    const leftDetail = await resolveDetailForCompare(leftId)
-    const rightDetail = await resolveDetailForCompare(rightId)
-
-    if (!leftDetail || !rightDetail) {
-      message.error(
-        t('mediaPage.compareContentLoadFailed', 'Could not load both items for comparison. Retry and try again.')
-      )
-      return
-    }
-
-    const leftContent = getContent(leftDetail).trim()
-    const rightContent = getContent(rightDetail).trim()
-    if (!leftContent || !rightContent) {
-      message.error(
-        t('mediaPage.compareContentMissing', 'One or both selected items have no content to compare.')
-      )
-      return
-    }
-
-    setCompareLeftText(leftContent)
-    setCompareRightText(rightContent)
-    setCompareLeftLabel(leftDetail.title || `${t('mediaPage.media', 'Media')} ${leftId}`)
-    setCompareRightLabel(rightDetail.title || `${t('mediaPage.media', 'Media')} ${rightId}`)
-    setCompareDiffOpen(true)
-  }, [message, resolveDetailForCompare, selectedIds, t, setCompareLeftText, setCompareRightText, setCompareLeftLabel, setCompareRightLabel, setCompareDiffOpen])
 
   const handleChatAboutSelection = React.useCallback(() => {
     if (selectedIds.length === 0) return
@@ -930,7 +878,6 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
     handleBatchMoveToTrash,
     handleBatchExport,
     handleBatchReprocess,
-    handleCompareContent,
     handleChatAboutSelection,
     expandAllContent,
     collapseAllContent,
@@ -939,7 +886,6 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
     getSelectedNumericIds,
     openTrashFromBatch,
     confirmBatchTrash,
-    resolveDetailForCompare,
     // Expose fetchList for query binding
     _fetchList: fetchList
   }

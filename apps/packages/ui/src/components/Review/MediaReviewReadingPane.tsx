@@ -75,7 +75,7 @@ export const MediaReviewReadingPane: React.FC<MediaReviewReadingPaneProps> = ({ 
   const {
     goRelative, scrollToCard, ensureDetail,
     removeFromSelection, addVisibleToSelection, replaceSelectionWithVisible,
-    handleCompareContent, handleChatAboutSelection,
+    handleChatAboutSelection,
     expandAllContent, collapseAllContent, expandAllAnalysis, collapseAllAnalysis,
     retryFetch
   } = actions
@@ -761,10 +761,26 @@ export const MediaReviewReadingPane: React.FC<MediaReviewReadingPaneProps> = ({ 
             <SectionNavigator
               content={primaryContent}
               onNavigate={(section) => {
-                // Scroll the content area to the section offset
+                // Find section text in the rendered content and scroll to it
                 const contentEl = viewerRef?.current?.querySelector("[data-testid^='media-review-content-body-']")
-                if (contentEl) {
-                  contentEl.scrollTop = Math.max(0, section.offset / 10)
+                if (!contentEl) return
+                // Search for headings (h1-h6) or text nodes matching the section label
+                const trimmedLabel = section.label.trim()
+                const headings = contentEl.querySelectorAll("h1, h2, h3, h4, h5, h6")
+                for (const heading of headings) {
+                  if (heading.textContent?.trim() === trimmedLabel) {
+                    heading.scrollIntoView({ behavior: "smooth", block: "start" })
+                    return
+                  }
+                }
+                // Fallback: search for timestamp text in any element
+                const walker = document.createTreeWalker(contentEl, NodeFilter.SHOW_TEXT)
+                let node: Text | null
+                while ((node = walker.nextNode() as Text | null)) {
+                  if (node.textContent && node.textContent.includes(trimmedLabel.slice(0, 20))) {
+                    node.parentElement?.scrollIntoView({ behavior: "smooth", block: "start" })
+                    return
+                  }
                 }
               }}
               t={t}

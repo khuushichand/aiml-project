@@ -30,7 +30,7 @@ export const ComparisonSplit: React.FC<ComparisonSplitProps> = ({
 }) => {
   const [syncScroll, setSyncScroll] = React.useState(true)
   const [showDiff, setShowDiff] = React.useState(true)
-  const { setRef } = useSyncedScroll(syncScroll)
+  const { setRef } = useSyncedScroll(syncScroll, items.length)
 
   const diffLines = React.useMemo<DiffLine[] | null>(() => {
     if (items.length !== 2 || !showDiff) return null
