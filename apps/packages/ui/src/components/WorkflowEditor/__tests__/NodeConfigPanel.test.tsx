@@ -264,4 +264,53 @@ describe("NodeConfigPanel selectors", () => {
       )
     ).toBeInTheDocument()
   })
+
+  it("merges deep research select-bundle-fields metadata with server schema fields", () => {
+    const schema: WorkflowStepSchema = {
+      type: "object",
+      properties: {
+        run_id: {
+          type: "string",
+          description: "Templated research run ID, typically {{ deep_research_wait.run_id }}"
+        },
+        run: { type: "object", description: "Optional prior step output object containing run_id" },
+        fields: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["question", "verification_summary", "unsupported_claims"]
+          },
+          minItems: 1,
+          description: "Canonical top-level bundle fields to load inline"
+        },
+        save_artifact: { type: "boolean", default: true }
+      },
+      required: ["fields"]
+    }
+    setupStore("deep_research_select_bundle_fields", schema, {
+      run_id: "{{ deep_research_wait.run_id }}",
+      fields: ["question", "verification_summary"],
+      save_artifact: true
+    })
+
+    vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
+      optionsByKey: {},
+      loadingByKey: {}
+    })
+
+    render(<NodeConfigPanel />)
+
+    expect(
+      screen.getByText("Use {{variable}} for template placeholders")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Fields")).toBeInTheDocument()
+    expect(screen.getByText("Question")).toBeInTheDocument()
+    expect(screen.getByText("Verification Summary")).toBeInTheDocument()
+    expect(screen.getByText("Save Artifact")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Loads selected canonical bundle fields from a completed deep research run and returns null for missing allowed fields"
+      )
+    ).toBeInTheDocument()
+  })
 })

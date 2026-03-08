@@ -714,6 +714,60 @@ export const BASE_STEP_REGISTRY: StepRegistry = {
     ]
   },
 
+  deep_research_select_bundle_fields: {
+    type: "deep_research_select_bundle_fields",
+    label: "Deep Research Select Bundle Fields",
+    description:
+      "Loads selected canonical bundle fields from a completed deep research run and returns null for missing allowed fields",
+    category: "research",
+    icon: "ListChecks",
+    color: "bg-violet-900",
+    inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }],
+    configSchema: [
+      {
+        key: "run_id",
+        type: "template-editor",
+        label: "Run ID",
+        description: "Primary chaining field, typically {{ deep_research_wait.run_id }}"
+      },
+      {
+        key: "run",
+        type: "json-editor",
+        label: "Run",
+        description: "Optional full wait output object containing run_id"
+      },
+      {
+        key: "fields",
+        type: "multiselect",
+        label: "Fields",
+        description:
+          "Canonical top-level bundle fields to load inline. Large selections may hit the inline size limit; use deep_research_load_bundle for pointer-oriented access.",
+        required: true,
+        options: [
+          { value: "question", label: "Question" },
+          { value: "brief", label: "Brief" },
+          { value: "outline", label: "Outline" },
+          { value: "report_markdown", label: "Report Markdown" },
+          { value: "claims", label: "Claims" },
+          { value: "source_inventory", label: "Source Inventory" },
+          { value: "unresolved_questions", label: "Unresolved Questions" },
+          { value: "verification_summary", label: "Verification Summary" },
+          { value: "unsupported_claims", label: "Unsupported Claims" },
+          { value: "contradictions", label: "Contradictions" },
+          { value: "source_trust", label: "Source Trust" }
+        ]
+      },
+      {
+        key: "save_artifact",
+        type: "checkbox",
+        label: "Save Artifact",
+        description: "Persist deep_research_selected_fields.json as a workflow artifact",
+        default: true
+      }
+    ]
+  },
+
   // ─── Utility Steps ───────────────────────────────────────────────────────
 
   delay: {
@@ -949,6 +1003,10 @@ const PORT_OVERRIDES: Record<
     inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
     outputs: [{ id: "result", label: "Result", dataType: "object" }]
   },
+  deep_research_select_bundle_fields: {
+    inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }]
+  },
   // Audio
   tts: {
     inputs: [{ id: "text", label: "Text", dataType: "string", required: true }],
@@ -1154,6 +1212,7 @@ export const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
   deep_research: "research",
   deep_research_wait: "research",
   deep_research_load_bundle: "research",
+  deep_research_select_bundle_fields: "research",
   arxiv_search: "research",
   arxiv_download: "research",
   pubmed_search: "research",
@@ -1305,6 +1364,7 @@ export const ICON_OVERRIDES: Record<string, string> = {
   deep_research: "FileSearch",
   deep_research_wait: "Clock",
   deep_research_load_bundle: "BookText",
+  deep_research_select_bundle_fields: "ListChecks",
   arxiv_search: "GraduationCap",
   arxiv_download: "Download",
   pubmed_search: "FlaskConical",

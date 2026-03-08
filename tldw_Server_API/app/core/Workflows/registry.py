@@ -153,6 +153,7 @@ class StepTypeRegistry:
             "deep_research": StepType("deep_research", "Launch a deep research session and return its run reference; does not wait for completion"),
             "deep_research_wait": StepType("deep_research_wait", "waits for a launched deep-research run to finish and can return the final bundle"),
             "deep_research_load_bundle": StepType("deep_research_load_bundle", "Loads references from a completed deep research run without returning the full bundle"),
+            "deep_research_select_bundle_fields": StepType("deep_research_select_bundle_fields", "Loads selected canonical bundle fields from a completed deep research run and returns null for missing allowed fields"),
         }
 
     def list(self) -> builtins.list[StepType]:

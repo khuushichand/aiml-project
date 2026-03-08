@@ -4,9 +4,23 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from tldw_Server_API.app.core.Workflows.adapters._base import BaseAdapterConfig
+
+DEEP_RESEARCH_CANONICAL_BUNDLE_FIELDS: tuple[str, ...] = (
+    "question",
+    "brief",
+    "outline",
+    "report_markdown",
+    "claims",
+    "source_inventory",
+    "unresolved_questions",
+    "verification_summary",
+    "unsupported_claims",
+    "contradictions",
+    "source_trust",
+)
 
 
 class ArxivSearchConfig(BaseAdapterConfig):
@@ -222,4 +236,55 @@ class DeepResearchLoadBundleConfig(BaseAdapterConfig):
         run_obj_id = str((run_obj or {}).get("run_id") or "").strip()
         if not run_id and not run_obj_id:
             raise ValueError("either run_id or run.run_id is required")
+        return self
+
+
+class DeepResearchSelectBundleFieldsConfig(BaseAdapterConfig):
+    """Config for selecting canonical deep research bundle fields from workflows."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str | None = Field(
+        None,
+        description="Completed research run ID to read selected bundle fields from (templated)",
+    )
+    run: dict[str, Any] | None = Field(
+        None,
+        description="Optional prior step output object containing run_id",
+    )
+    fields: list[str] = Field(
+        ...,
+        description="Canonical top-level bundle fields to return inline",
+    )
+    save_artifact: bool | None = Field(
+        True,
+        description="Whether to persist the selected field payload as a workflow artifact",
+    )
+
+    @model_validator(mode="after")
+    def validate_run_reference_and_fields(self) -> "DeepResearchSelectBundleFieldsConfig":
+        run_id = str(self.run_id or "").strip()
+        run_obj = self.run if isinstance(self.run, dict) else None
+        run_obj_id = str((run_obj or {}).get("run_id") or "").strip()
+        if not run_id and not run_obj_id:
+            raise ValueError("either run_id or run.run_id is required")
+
+        if not self.fields:
+            raise ValueError("fields must not be empty")
+
+        deduped_fields: list[str] = []
+        seen: set[str] = set()
+        allowed = set(DEEP_RESEARCH_CANONICAL_BUNDLE_FIELDS)
+        for value in self.fields:
+            name = str(value or "").strip()
+            if not name:
+                raise ValueError("fields must not contain empty values")
+            if name not in allowed:
+                raise ValueError(f"fields contains unsupported value '{name}'")
+            if name in seen:
+                continue
+            seen.add(name)
+            deduped_fields.append(name)
+
+        self.fields = deduped_fields
         return self

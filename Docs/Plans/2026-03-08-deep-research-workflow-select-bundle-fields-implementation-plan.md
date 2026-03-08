@@ -381,3 +381,12 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
   Docs/Plans/2026-03-08-deep-research-workflow-select-bundle-fields-implementation-plan.md
 git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr commit -m "docs(research): finalize bundle field selector plan"
 ```
+
+## Execution Record
+
+Status: Complete
+
+Verification:
+- Backend workflow scope: `106 passed` in `tldw_Server_API/tests/Workflows/adapters/test_research_adapters.py` and `tldw_Server_API/tests/Workflows/test_workflows_api.py`
+- Frontend workflow-editor scope: `21/21` passed in `step-registry.test.ts` and `NodeConfigPanel.test.tsx`
+- Bandit: `0` findings, `0` errors in `/tmp/bandit_deep_research_select_bundle_fields.json`

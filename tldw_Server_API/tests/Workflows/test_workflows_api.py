@@ -453,6 +453,25 @@ def test_step_types_includes_acp_stage(client_with_workflows_db: TestClient):
     assert "workspace_group_id" in properties
 
 
+def test_step_types_includes_deep_research_select_bundle_fields(client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+    response = client.get("/api/v1/workflows/step-types")
+    assert response.status_code == 200
+    selector = next(
+        (
+            item
+            for item in response.json()
+            if item.get("name") == "deep_research_select_bundle_fields"
+        ),
+        None,
+    )
+    assert selector is not None
+    schema = selector.get("schema") or {}
+    properties = schema.get("properties") or {}
+    assert "fields" in properties
+    assert properties["fields"]["type"] == "array"
+
+
 def test_create_workflow_accepts_acp_stage_definition(client_with_workflows_db: TestClient):
     client = client_with_workflows_db
     definition = {
@@ -590,6 +609,85 @@ def test_create_workflow_rejects_invalid_deep_research_load_bundle_definition_wi
                 "type": "deep_research_load_bundle",
                 "config": {
                     "run": {"bundle_url": "/api/v1/research/runs/missing/bundle"},
+                },
+            }
+        ],
+    }
+
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_create_workflow_rejects_invalid_deep_research_select_bundle_fields_definition(
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    definition = {
+        "name": "invalid-deep-research-select-bundle-fields-definition",
+        "version": 1,
+        "steps": [
+            {
+                "id": "rs1",
+                "type": "deep_research_select_bundle_fields",
+                "config": {
+                    "run_id": "{{ deep_research_wait.run_id }}",
+                    "fields": ["question", "not_allowed"],
+                },
+            }
+        ],
+    }
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_create_workflow_rejects_unknown_config_key_for_deep_research_select_bundle_fields(
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    definition = {
+        "name": "invalid-deep-research-select-bundle-fields-extra-key",
+        "version": 1,
+        "steps": [
+            {
+                "id": "rs1",
+                "type": "deep_research_select_bundle_fields",
+                "config": {
+                    "run_id": "{{ deep_research_wait.run_id }}",
+                    "fields": ["question"],
+                    "unknown_flag": True,
+                },
+            }
+        ],
+    }
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_create_workflow_rejects_invalid_deep_research_select_bundle_fields_definition_without_jsonschema(
+    monkeypatch,
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    original_import = builtins.__import__
+
+    def _patched_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "jsonschema":
+            raise ImportError("simulated missing jsonschema")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _patched_import)
+
+    definition = {
+        "name": "invalid-deep-research-select-bundle-fields-no-jsonschema",
+        "version": 1,
+        "steps": [
+            {
+                "id": "rs1",
+                "type": "deep_research_select_bundle_fields",
+                "config": {
+                    "run": {"run_id": "research-session-8"},
+                    "fields": ["question"],
+                    "unknown_flag": True,
                 },
             }
         ],
@@ -1299,6 +1397,117 @@ def test_run_workflow_loads_bundle_refs_after_wait(monkeypatch, client_with_work
     assert captured["load_get_stream_snapshot_kwargs"] == {
         "owner_user_id": "1",
         "session_id": "research-session-8",
+    }
+
+
+def test_run_workflow_launches_waits_selects_research_bundle_fields_and_uses_them_downstream(
+    monkeypatch,
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+
+    class _LaunchSession:
+        id = "research-session-9"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _CompletedSession:
+        id = "research-session-9"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-08T09:00:00+00:00"
+
+    class _LaunchResearchService:
+        def create_session(self, **kwargs):
+            return _LaunchSession()
+
+    class _WaitResearchService:
+        def get_session(self, **kwargs):
+            return _CompletedSession()
+
+    class _SelectResearchService:
+        def get_session(self, **kwargs):
+            return _CompletedSession()
+
+        def get_bundle(self, **kwargs):
+            return {
+                "question": "Investigate evidence-backed forecasting",
+                "verification_summary": {"supported_claim_count": 2},
+                "unsupported_claims": [{"text": "Claim X"}],
+            }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _LaunchResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _WaitResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.select_bundle_fields._build_research_service",
+        lambda: _SelectResearchService(),
+    )
+
+    definition = {
+        "name": "launch-wait-select-deep-research",
+        "version": 1,
+        "steps": [
+            {
+                "id": "launch",
+                "type": "deep_research",
+                "config": {
+                    "query": "{{ inputs.topic }}",
+                },
+            },
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {
+                    "run_id": "{{ launch.run_id }}",
+                    "include_bundle": False,
+                },
+            },
+            {
+                "id": "select",
+                "type": "deep_research_select_bundle_fields",
+                "config": {
+                    "run_id": "{{ wait.run_id }}",
+                    "fields": ["question", "verification_summary", "unsupported_claims"],
+                },
+            },
+            {
+                "id": "prompt",
+                "type": "prompt",
+                "config": {
+                    "template": "{{ select.selected_fields.question }} :: {{ select.selected_fields.verification_summary.supported_claim_count }}",
+                },
+            },
+        ],
+    }
+
+    create = client.post("/api/v1/workflows", json=definition)
+    assert create.status_code == 201, create.text
+    wid = create.json()["id"]
+
+    run_id = client.post(
+        f"/api/v1/workflows/{wid}/run",
+        json={"inputs": {"topic": "evidence-backed forecasting"}},
+    ).json()["run_id"]
+
+    deadline = time.time() + 5
+    data = {}
+    while time.time() < deadline:
+        data = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if data["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.05)
+
+    assert data["status"] == "succeeded"
+    assert (data.get("outputs") or {}) == {
+        "text": "Investigate evidence-backed forecasting :: 2"
     }
 
 

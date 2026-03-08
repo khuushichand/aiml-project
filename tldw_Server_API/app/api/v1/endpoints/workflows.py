@@ -89,8 +89,10 @@ from tldw_Server_API.app.core.Workflows import RunMode, WorkflowEngine, Workflow
 from tldw_Server_API.app.core.Workflows.adapters._common import artifacts_base_dir, is_subpath
 from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
 from tldw_Server_API.app.core.Workflows.adapters.research._config import (
+    DEEP_RESEARCH_CANONICAL_BUNDLE_FIELDS,
     DeepResearchConfig,
     DeepResearchLoadBundleConfig,
+    DeepResearchSelectBundleFieldsConfig,
     DeepResearchWaitConfig,
 )
 from tldw_Server_API.app.core.Workflows.daily_ledger import (
@@ -537,6 +539,57 @@ def _validate_deep_research_load_bundle_config(cfg: dict[str, Any], *, step_id: 
         raise HTTPException(status_code=422, detail=f"Invalid config for step '{step_id}': {detail}") from exc
 
 
+def _deep_research_select_bundle_fields_step_schema_base() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": (
+            "Loads selected canonical bundle fields from a completed deep research run "
+            "and returns null for missing allowed fields."
+        ),
+        "properties": {
+            "run_id": {
+                "type": "string",
+                "description": (
+                    "Templated research run ID, typically {{ deep_research_wait.run_id }}"
+                ),
+            },
+            "run": {
+                "type": "object",
+                "description": "Optional prior step output object containing run_id",
+            },
+            "fields": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": list(DEEP_RESEARCH_CANONICAL_BUNDLE_FIELDS),
+                },
+                "minItems": 1,
+                "description": (
+                    "Canonical top-level bundle fields to load inline. Large selections may hit "
+                    "the inline size limit; use deep_research_load_bundle for pointer-oriented access."
+                ),
+            },
+            "save_artifact": {
+                "type": "boolean",
+                "default": True,
+                "description": "Persist deep_research_selected_fields.json as a workflow artifact",
+            },
+        },
+        "required": ["fields"],
+        "additionalProperties": False,
+    }
+
+
+def _validate_deep_research_select_bundle_fields_config(
+    cfg: dict[str, Any], *, step_id: str
+) -> None:
+    try:
+        DeepResearchSelectBundleFieldsConfig.model_validate(cfg)
+    except ValidationError as exc:
+        detail = _pydantic_error_detail(exc)
+        raise HTTPException(status_code=422, detail=f"Invalid config for step '{step_id}': {detail}") from exc
+
+
 def _validate_chunking_contract(cfg: dict[str, Any], *, step_id: str) -> None:
     if not isinstance(cfg, dict):
         return
@@ -714,6 +767,7 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
         "deep_research": _deep_research_step_schema_base(),
         "deep_research_wait": _deep_research_wait_step_schema_base(),
         "deep_research_load_bundle": _deep_research_load_bundle_step_schema_base(),
+        "deep_research_select_bundle_fields": _deep_research_select_bundle_fields_step_schema_base(),
         "kanban": {
             "type": "object",
             "properties": {
@@ -875,6 +929,8 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
             _validate_deep_research_wait_config(cfg, step_id=sid)
         if t == "deep_research_load_bundle":
             _validate_deep_research_load_bundle_config(cfg, step_id=sid)
+        if t == "deep_research_select_bundle_fields":
+            _validate_deep_research_select_bundle_fields_config(cfg, step_id=sid)
         if t == "media_ingest":
             _validate_chunking_contract(cfg, step_id=sid)
         if t == "map":
@@ -3324,6 +3380,19 @@ async def list_step_types():
             **_deep_research_load_bundle_step_schema_base(),
             "example": {
                 "run_id": "{{ deep_research_wait.run_id }}",
+                "save_artifact": True,
+            },
+            "min_engine_version": "0.1.0",
+        },
+        "deep_research_select_bundle_fields": {
+            **_deep_research_select_bundle_fields_step_schema_base(),
+            "example": {
+                "run_id": "{{ deep_research_wait.run_id }}",
+                "fields": [
+                    "question",
+                    "verification_summary",
+                    "unsupported_claims",
+                ],
                 "save_artifact": True,
             },
             "min_engine_version": "0.1.0",
