@@ -34,7 +34,7 @@ export function LandingLayout({ children, title, description, segment }: Landing
               )}>
                 Journalists
               </Link>
-              <Link href="/for/researchers" className={cn(
+              <Link href="/research" className={cn(
                 "text-sm hover:text-primary transition-colors",
                 segment === "researchers" && "text-primary font-medium"
               )}>
@@ -92,7 +92,7 @@ export function LandingLayout({ children, title, description, segment }: Landing
                 <h4 className="font-medium mb-4">Use Cases</h4>
                 <ul className="space-y-2 text-sm text-text-muted">
                   <li><Link href="/for/journalists" className="hover:text-primary">Journalists</Link></li>
-                  <li><Link href="/for/researchers" className="hover:text-primary">Researchers</Link></li>
+                  <li><Link href="/research" className="hover:text-primary">Researchers</Link></li>
                   <li><Link href="/for/osint" className="hover:text-primary">OSINT</Link></li>
                 </ul>
               </div>
