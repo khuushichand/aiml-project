@@ -39,6 +39,7 @@ export type PromptPreviewSummary = {
 type Props = {
   serverChatId: string | null
   settingsFingerprint: string
+  serverChatAssistantKind?: "character" | "persona" | null
 }
 
 interface PromptPreviewSectionPayload {
@@ -170,7 +171,8 @@ export const normalizePreviewPayload = (payload: unknown): PromptPreviewSummary 
 
 export const PromptAssemblyPreview: React.FC<Props> = ({
   serverChatId,
-  settingsFingerprint
+  settingsFingerprint,
+  serverChatAssistantKind
 }) => {
   const { t } = useTranslation(["playground", "common"])
   const [open, setOpen] = React.useState(false)
@@ -196,6 +198,7 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
     queryKey: [
       "promptAssemblyPreview",
       serverChatId,
+      serverChatAssistantKind,
       settingsFingerprint,
       resolvedSteering.mode,
       resolvedSteering.forceNarrate,
@@ -203,7 +206,10 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
       messageSteeringPrompts.impersonateUser,
       messageSteeringPrompts.forceNarrate
     ],
-    enabled: open && Boolean(serverChatId),
+    enabled:
+      open &&
+      Boolean(serverChatId) &&
+      serverChatAssistantKind !== "persona",
     queryFn: async () => {
       if (!serverChatId) {
         return null
@@ -279,7 +285,16 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
             </p>
           )}
 
-          {serverChatId && (
+          {serverChatAssistantKind === "persona" && (
+            <p className="text-text-muted">
+              {t("playground:composer.promptPreview.personaUnsupported", {
+                defaultValue:
+                  "Prompt preview is currently available only for character-backed chats."
+              })}
+            </p>
+          )}
+
+          {serverChatId && serverChatAssistantKind !== "persona" && (
             <>
               <div className="mb-2 flex items-center justify-end">
                 <button

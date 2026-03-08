@@ -204,11 +204,13 @@ export const CurrentChatModelSettings = ({
     setSelectedModel,
     serverChatId,
     serverChatAssistantKind,
+    serverChatPersonaMemoryMode,
     serverChatTopic,
     setServerChatTopic,
     serverChatState,
     setServerChatState,
-    setServerChatVersion
+    setServerChatVersion,
+    setServerChatPersonaMemoryMode
   } = useMessageOption()
 
   const [selectedCharacter, , selectedCharacterMeta] =
@@ -640,11 +642,14 @@ export const CurrentChatModelSettings = ({
               uploadedFiles={uploadedFiles}
               onRemoveFile={removeUploadedFile}
               serverChatId={serverChatId}
+              serverChatAssistantKind={serverChatAssistantKind}
+              serverChatPersonaMemoryMode={serverChatPersonaMemoryMode}
               serverChatState={serverChatState}
               onStateChange={(state) => setServerChatState(state)}
               serverChatTopic={serverChatTopic}
               onTopicChange={setServerChatTopic}
               onVersionChange={setServerChatVersion}
+              onPersonaMemoryModeChange={setServerChatPersonaMemoryMode}
             />
           )
         },

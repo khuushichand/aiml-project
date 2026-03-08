@@ -17,6 +17,7 @@ import {
 type Props = {
   serverChatId: string | null;
   settingsFingerprint: string;
+  serverChatAssistantKind?: "character" | "persona" | null;
 };
 
 type LorebookDiagnosticRow = WorldBookProcessDiagnostic & {
@@ -90,16 +91,25 @@ const activationReasonLabel = (
 export const LorebookDebugPanel: React.FC<Props> = ({
   serverChatId,
   settingsFingerprint,
+  serverChatAssistantKind,
 }) => {
   const { t } = useTranslation(["playground", "common"]);
   const [open, setOpen] = React.useState(false);
   const [isExporting, setIsExporting] = React.useState(false);
 
   const query = useQuery({
-    queryKey: ["lorebookDebugPanel", serverChatId, settingsFingerprint],
-    enabled: open && Boolean(serverChatId),
+    queryKey: [
+      "lorebookDebugPanel",
+      serverChatId,
+      serverChatAssistantKind,
+      settingsFingerprint,
+    ],
+    enabled:
+      open &&
+      Boolean(serverChatId) &&
+      serverChatAssistantKind !== "persona",
     queryFn: async (): Promise<LorebookDebugData> => {
-      if (!serverChatId) {
+      if (!serverChatId || serverChatAssistantKind === "persona") {
         return {
           entriesMatched: 0,
           tokensUsed: 0,
@@ -403,7 +413,16 @@ export const LorebookDebugPanel: React.FC<Props> = ({
             </p>
           )}
 
-          {serverChatId && (
+          {serverChatAssistantKind === "persona" && (
+            <p className="text-text-muted">
+              {t("playground:composer.lorebookDebug.personaUnsupported", {
+                defaultValue:
+                  "Lorebook debug is currently available only for character-backed chats.",
+              })}
+            </p>
+          )}
+
+          {serverChatId && serverChatAssistantKind !== "persona" && (
             <>
               <div className="mb-2 flex items-center justify-end">
                 <div className="inline-flex items-center gap-2">

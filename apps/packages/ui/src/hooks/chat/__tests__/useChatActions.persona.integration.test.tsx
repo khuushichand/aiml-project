@@ -245,5 +245,19 @@ describe("useChatActions persona integration", () => {
         persona_memory_mode: "read_only"
       })
     )
+    expect(normalChatModeMock).toHaveBeenCalledWith(
+      "Hello persona",
+      "",
+      false,
+      [],
+      [],
+      expect.any(AbortSignal),
+      expect.objectContaining({
+        assistantIdentity: {
+          name: "Garden Helper",
+          avatarUrl: undefined
+        }
+      })
+    )
   })
 })

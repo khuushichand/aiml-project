@@ -86,6 +86,7 @@ import {
   discardAbortedTurnIfRequested,
   isAbortLikeError
 } from "@/hooks/chat/abort-turn-cleanup"
+import { ensurePersonaServerChat } from "@/hooks/chat/personaServerChat"
 import {
   isPersonaAssistantSelection,
   type AssistantSelection
@@ -136,7 +137,6 @@ type ChatModeOverrides = {
 
 const loadActorSettings = () => import("@/services/actor-settings")
 const STREAMING_UPDATE_INTERVAL_MS = 80
-const DEFAULT_PERSONA_MEMORY_MODE = "read_only" as const
 
 type SaveMessagePayload = Omit<SaveMessageData, "setHistoryId"> & {
   setHistoryId?: SaveMessageData["setHistoryId"]
@@ -894,7 +894,7 @@ export const useChatActions = ({
     }
   }
 
-  const ensurePersonaServerChat = React.useCallback(
+  const ensurePersonaServerChatWithState = React.useCallback(
     async ({
       assistant,
       serverChatIdOverride
@@ -905,103 +905,39 @@ export const useChatActions = ({
       chatId: string
       historyId: string | null
       personaMemoryMode: "read_only" | "read_write"
-    }> => {
-      const overrideChatId =
-        typeof serverChatIdOverride === "string" &&
-        serverChatIdOverride.trim().length > 0
-          ? serverChatIdOverride.trim()
-          : null
-      const resolvedServerChatId = overrideChatId || serverChatId
-      const personaMemoryMode =
-        serverChatPersonaMemoryMode ?? DEFAULT_PERSONA_MEMORY_MODE
-      const assistantId = String(assistant.id)
-      const shouldResetServerChat =
-        Boolean(resolvedServerChatId) &&
-        (serverChatAssistantKind !== "persona" ||
-          !serverChatAssistantId ||
-          String(serverChatAssistantId) !== assistantId)
-
-      if (shouldResetServerChat) {
-        setServerChatId(null)
-        setServerChatTitle(null)
-        setServerChatCharacterId(null)
-        setServerChatAssistantKind(null)
-        setServerChatAssistantId(null)
-        setServerChatPersonaMemoryMode(null)
-        setServerChatMetaLoaded(false)
-        setServerChatState("in-progress")
-        setServerChatVersion(null)
-        setServerChatTopic(null)
-        setServerChatClusterId(null)
-        setServerChatSource(null)
-        setServerChatExternalRef(null)
-      }
-
-      let chatId = shouldResetServerChat ? null : resolvedServerChatId
-      if (!chatId) {
-        const created = await tldwClient.createChat({
-          assistant_kind: "persona",
-          assistant_id: assistantId,
-          persona_memory_mode: personaMemoryMode,
-          state: serverChatState || "in-progress",
-          topic_label: serverChatTopic || undefined,
-          cluster_id: serverChatClusterId || undefined,
-          source: serverChatSource || undefined,
-          external_ref: serverChatExternalRef || undefined
-        })
-
-        let rawId: string | number | undefined
-        if (created && typeof created === "object") {
-          rawId = created.id ?? created.chat_id
-          setServerChatState(
-            normalizeConversationState(
-              created.state ?? created.conversation_state ?? null
-            )
-          )
-          setServerChatVersion(typeof created.version === "number" ? created.version : null)
-          setServerChatTopic(created.topic_label ?? null)
-          setServerChatClusterId(created.cluster_id ?? null)
-          setServerChatSource(created.source ?? null)
-          setServerChatExternalRef(created.external_ref ?? null)
-          setServerChatTitle(String(created.title ?? ""))
-          setServerChatCharacterId(created.character_id ?? null)
-          setServerChatAssistantKind(created.assistant_kind ?? "persona")
-          setServerChatAssistantId(
-            created.assistant_id != null ? String(created.assistant_id) : assistantId
-          )
-          setServerChatPersonaMemoryMode(
-            created.persona_memory_mode ?? personaMemoryMode
-          )
-        } else if (typeof created === "string" || typeof created === "number") {
-          rawId = created
-        }
-
-        const normalizedId = rawId != null ? String(rawId) : ""
-        if (!normalizedId) {
-          throw new Error("Failed to create persona-backed chat session")
-        }
-        chatId = normalizedId
-        setServerChatId(normalizedId)
-        setServerChatMetaLoaded(true)
-        invalidateServerChatHistory()
-      } else {
-        setServerChatAssistantKind("persona")
-        setServerChatAssistantId(assistantId)
-        setServerChatPersonaMemoryMode(personaMemoryMode)
-        setServerChatCharacterId(null)
-      }
-
-      const resolvedHistoryId =
-        temporaryChat || !chatId
-          ? historyId
-          : await ensureServerChatHistoryId(chatId, serverChatTitle || undefined)
-
-      return {
-        chatId,
-        historyId: resolvedHistoryId ?? historyId,
-        personaMemoryMode
-      }
-    },
+    }> =>
+      ensurePersonaServerChat({
+        assistant,
+        serverChatIdOverride,
+        serverChatId,
+        serverChatTitle,
+        serverChatAssistantKind,
+        serverChatAssistantId,
+        serverChatPersonaMemoryMode,
+        serverChatState,
+        serverChatTopic,
+        serverChatClusterId,
+        serverChatSource,
+        serverChatExternalRef,
+        historyId,
+        temporaryChat,
+        createChat: (payload) => tldwClient.createChat(payload),
+        ensureServerChatHistoryId,
+        invalidateServerChatHistory,
+        setServerChatId,
+        setServerChatTitle,
+        setServerChatCharacterId,
+        setServerChatAssistantKind,
+        setServerChatAssistantId,
+        setServerChatPersonaMemoryMode,
+        setServerChatMetaLoaded,
+        setServerChatState,
+        setServerChatVersion,
+        setServerChatTopic,
+        setServerChatClusterId,
+        setServerChatSource,
+        setServerChatExternalRef
+      }),
     [
       ensureServerChatHistoryId,
       historyId,
@@ -2436,10 +2372,17 @@ export const useChatActions = ({
               return
             }
 
-            const personaServerChat = await ensurePersonaServerChat({
+            const personaServerChat = await ensurePersonaServerChatWithState({
               assistant: selectedAssistant,
               serverChatIdOverride
             })
+            const assistantIdentity = {
+              name: selectedAssistant.name,
+              avatarUrl:
+                typeof selectedAssistant.avatar_url === "string"
+                  ? selectedAssistant.avatar_url
+                  : undefined
+            }
             markSteeringApplied()
             await normalChatMode(
               message,
@@ -2450,6 +2393,7 @@ export const useChatActions = ({
               signal,
               {
                 ...enhancedChatModeParams,
+                assistantIdentity,
                 historyId: personaServerChat.historyId,
                 serverChatId: personaServerChat.chatId,
                 saveMessageOnSuccess: (data: SaveMessageData) =>
