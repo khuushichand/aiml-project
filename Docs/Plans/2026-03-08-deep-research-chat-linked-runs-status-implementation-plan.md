@@ -15,6 +15,7 @@
 **Files:**
 - Modify: `tldw_Server_API/tests/Research/test_research_jobs_service.py`
 - Modify: `tldw_Server_API/tests/Character_Chat/test_character_chat_endpoints.py`
+- Add or modify: a multi-user/AuthNZ chat endpoint test under `tldw_Server_API/tests/AuthNZ/` or `tldw_Server_API/tests/Character_Chat_NEW/integration/`
 
 **Step 1: Write the failing service-level tests**
 
@@ -23,7 +24,7 @@ Cover:
 - listing linked runs for a `chat_id` returns only that user’s runs
 - runs include compact fields only
 - terminal history is server-side bounded while nonterminal runs are preserved
-- linked runs are ordered newest first by updated time
+- linked runs are ordered by `research_sessions.updated_at`
 - chats with no linked runs return an empty list
 
 **Step 2: Write the failing endpoint test**
@@ -32,12 +33,13 @@ Cover:
 
 - `GET /api/v1/chats/{chat_id}/research-runs` returns `200`
 - unauthorized or non-owner access is rejected through normal chat ownership checks
+- a real multi-user request cannot read another user’s linked runs for the same chat ID pattern
 
 **Step 3: Run tests to verify they fail**
 
 Run:
 
-- `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Research/test_research_jobs_service.py tldw_Server_API/tests/Character_Chat/test_character_chat_endpoints.py -q`
+- `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Research/test_research_jobs_service.py tldw_Server_API/tests/Character_Chat/test_character_chat_endpoints.py <multi-user-test-path> -q`
 
 Expected: FAIL for missing DB/service query path and missing endpoint/schema support.
 
@@ -63,7 +65,8 @@ In `ResearchSessionsDB.py` add a helper that:
 - filters by `owner_user_id`
 - filters by `chat_id`
 - joins `research_chat_handoffs` to `research_sessions`
-- returns compact linked-run rows ordered by `updated_at DESC`
+- uses `research_sessions.updated_at` as the authoritative sort field
+- returns compact linked-run rows ordered by `research_sessions.updated_at DESC`
 - bounds terminal rows server-side to all nonterminal plus latest `10` terminal runs
 
 Do not return full bundle, artifact, or checkpoint payload data.
@@ -113,7 +116,7 @@ Do not construct `/research` URLs in the backend response.
 
 Run:
 
-- `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Research/test_research_jobs_service.py tldw_Server_API/tests/Character_Chat/test_character_chat_endpoints.py -q`
+- `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Research/test_research_jobs_service.py tldw_Server_API/tests/Character_Chat/test_character_chat_endpoints.py <multi-user-test-path> -q`
 
 Expected: PASS
 
@@ -152,6 +155,7 @@ Cover:
 
 - the query refetch interval is active for nonterminal runs
 - it slows when all rows are terminal
+- after a few consecutive query failures, the polling interval backs off silently
 
 **Step 4: Add non-blocking failure test**
 
@@ -159,6 +163,7 @@ Cover:
 
 - linked-run query failure does not break chat rendering
 - no transcript mutation or toast is emitted for that failure in v1
+- after a success, the backoff state resets to the normal cadence
 
 **Step 5: Run tests to verify they fail**
 
@@ -206,6 +211,7 @@ That helper should:
 - preserve backend order within each group
 - derive row labels like `Running`, `Needs review`, `Completed`, `Failed`, `Cancelled`
 - build `Open in Research` links through the shared route helper
+- manage consecutive query failure counts and silent polling backoff
 
 **Step 3: Render the stacked status block**
 
@@ -217,6 +223,7 @@ In `PlaygroundChat.tsx`:
 - render the compact stacked rows above the transcript
 - include `Open in Research` links through the shared route helper
 - keep query errors non-blocking and silent in v1
+- back off polling after repeated failures, and restore normal cadence on success
 
 **Step 4: Add terminal overflow handling**
 
@@ -249,7 +256,7 @@ Expected: PASS
 
 Run:
 
-- `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Research/test_research_jobs_service.py tldw_Server_API/tests/Character_Chat/test_character_chat_endpoints.py -q`
+- `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Research/test_research_jobs_service.py tldw_Server_API/tests/Character_Chat/test_character_chat_endpoints.py <multi-user-test-path> -q`
 
 **Step 2: Run focused frontend verification**
 

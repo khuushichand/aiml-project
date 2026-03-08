@@ -116,7 +116,8 @@ The DB/helper contract should:
 - scope by `owner_user_id`
 - filter by `chat_id`
 - join handoff rows to current research session state
-- return newest linked runs first by `updated_at DESC`
+- use `research_sessions.updated_at` as the authoritative ordering field
+- return newest linked runs first by `research_sessions.updated_at DESC`
 - bound terminal history server-side instead of sending the entire handoff history forever
 
 The frontend can then group:
@@ -186,6 +187,12 @@ Recommended v1 behavior:
 
 - `5s` while any run is nonterminal
 - `30s` once all runs are terminal
+- after a small number of consecutive query failures, silently back off polling instead of retrying forever at the same rate
+
+Recommended v1 backoff:
+
+- after `3` consecutive failures, switch to a slower retry like `60s`
+- reset to the normal cadence on the next successful fetch
 
 This keeps the feature simple and avoids creating a second real-time contract inside chat.
 
@@ -220,6 +227,8 @@ Do not add a transcript message renderer or mutate the chat message list to repr
 
 The backend endpoint should also use a proper research-service dependency path. It must not instantiate the research DB ad hoc inside the endpoint without the normal per-user path resolution that `ResearchService` already encapsulates.
 
+This v1 surface is scoped to the web playground/chat experience that can navigate to `/research`. If the shared package-side component is later used in a non-web host, that host can either reuse the same route helper semantics or hide the action until it has an equivalent research route.
+
 ## Testing Requirements
 
 ### Backend
@@ -229,6 +238,7 @@ The backend endpoint should also use a proper research-service dependency path. 
 - compact response shape is bounded to all nonterminal plus latest bounded terminal rows
 - ordering is stable with mixed active and terminal runs
 - chats without linked runs return an empty list
+- multi-user endpoint tests prove a user cannot read another user’s linked runs through the chat endpoint
 
 ### Frontend
 
@@ -240,6 +250,7 @@ The backend endpoint should also use a proper research-service dependency path. 
 - polling updates the status rows without touching message history
 - terminal overflow collapse works if implemented in this slice
 - query failure does not block chat rendering and does not emit transcript pollution or toast noise
+- consecutive query failures trigger silent polling backoff instead of fixed-rate retry forever
 
 ## Exit Condition
 
