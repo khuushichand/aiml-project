@@ -12,6 +12,7 @@ The approved model is:
 - ordinary chat can start with either a `Character` or a `Persona`
 - persona-backed chats persist and display only the persona as the assistant identity
 - existing character chats remain character-based when reopened
+- Phase 3 persona-backed ordinary chat is single-assistant first, not a full replacement for every character-only group/diagnostic feature
 - persona-backed ordinary chats use a mixed memory model:
   - read persona memory/state by default
   - only write back durable persona memory when the user explicitly enables it
@@ -133,6 +134,36 @@ Compatibility rules:
 
 Persona-backed ordinary chats do not persist or display the source character as the active assistant identity.
 
+## Minimum Persona Chat Projection
+
+Phase 3 ordinary chat cannot assume the full character card shape exists on persona profiles. The current persona profile model does not include character-style greeting, alternate greetings, avatar/image, or extension payloads, while the existing ordinary-chat UI and runtime frequently assume those fields exist.
+
+Because of that, Phase 3 needs an explicit assistant-facing persona chat projection.
+
+Required projection fields:
+
+- `id`
+- `kind = persona`
+- `display_name`
+- prompt/state inputs required to build the assistant system layer
+
+Optional projection fields:
+
+- `avatar_url`
+- `greeting`
+- `extensions`
+
+Fallback rules for the initial rollout:
+
+- if a persona has no avatar, use the generic assistant avatar path
+- if a persona has no greeting, ordinary chat does not inject a greeting
+- if a persona has no character-style extensions payload, character-only extension features stay disabled
+
+Important constraint:
+
+- persona-backed ordinary chat must not require a live lookup of the mutable source character row in order to function
+- if future richer persona fields are added, they should attach to persona-owned data or persona-owned snapshots, not recreate live source-character dependence
+
 ## Picker And Entry Point UX
 
 The ordinary chat assistant picker should become a tabbed surface:
@@ -169,11 +200,34 @@ Character-backed chat:
 
 Persona-backed chat:
 
-- loads the persona profile as the assistant definition
+- loads the persona chat projection as the assistant definition
 - applies persona-owned overlays and state where relevant
 - does not require Persona Garden websocket/live-session behavior
 
 This preserves Persona Garden live sessions as the richer operational workspace while allowing ordinary chat to use personas as first-class assistants.
+
+## Character-Specific Feature Boundary For Initial Rollout
+
+The current ordinary chat stack contains multiple behaviors that are explicitly character-shaped. Phase 3 should not silently inherit all of them for persona chats without defining how each one maps.
+
+Phase 3 initial rollout should support:
+
+- single-assistant ordinary persona chat
+- ordinary chat persistence and restore
+- prompt assembly using persona-owned state/system layers
+- explicit persona memory mode
+
+Phase 3 initial rollout should treat the following as character-only until explicit persona-aware mappings are added:
+
+- directed-character and participant-routing behavior
+- `speaker_character_id` assistant metadata and related mood/speaker persistence
+- character greeting selection workflows
+- character/world-book and lorebook diagnostics that require a character ID
+- character-preset or character-fallback editor workflows that assume `selectedCharacter`
+
+Implementation rule:
+
+- where a character-only feature has no persona-safe mapping, the UI must hide or disable it for persona-backed chats rather than silently falling back to the source character
 
 ## Persona Memory Modes
 
@@ -221,22 +275,28 @@ Character-backed chats do not use persona memory mode.
 - backfill legacy character chats
 - expose normalized assistant identity through read/write APIs
 
-### Slice 2: Shared assistant selection abstraction
+### Slice 2: Persona chat projection and compatibility boundary
+
+- define the minimum persona chat projection ordinary chat can rely on
+- add explicit fallback behavior for avatar/greeting/media gaps
+- define which character-only runtime features stay disabled in the initial rollout
+
+### Slice 3: Shared assistant selection abstraction
 
 - replace character-only selection state with assistant selection state that can represent either characters or personas
 
-### Slice 3: Tabbed picker rollout
+### Slice 4: Tabbed picker rollout
 
 - adapt the current character picker into the `Characters` tab
 - add a `Personas` tab
 - expose persona-backed chat start wherever character-backed chat start exists
 
-### Slice 4: Persona memory mode controls
+### Slice 5: Persona memory mode controls
 
 - default new persona chats to `read_only`
 - add explicit opt-in for `read_write`
 
-### Slice 5: Compatibility cleanup
+### Slice 6: Compatibility cleanup
 
 - reduce legacy `character_id` dependence after rollout proves stable
 
@@ -255,6 +315,7 @@ Character-backed chats do not use persona memory mode.
 - starting a persona-backed chat persists and restores persona selection
 - reopening legacy character chats keeps them character-based
 - persona memory writeback remains explicit
+- character-only settings and diagnostics surfaces are either migrated or intentionally hidden for persona-backed chats
 
 ### Integration And E2E
 
