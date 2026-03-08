@@ -434,7 +434,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 31  # Schema v31 adds persona origin snapshots for character-derived personas
+    _CURRENT_SCHEMA_VERSION = 32  # Schema v32 adds normalized assistant identity to conversations
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -449,6 +449,8 @@ class CharactersRAGDB:
     )
     _ALLOWED_PERSONA_POLICY_RULE_KINDS: tuple[str, ...] = ("mcp_tool", "skill")
     _ALLOWED_PERSONA_SESSION_STATUSES: tuple[str, ...] = ("active", "paused", "closed", "archived")
+    _ALLOWED_CONVERSATION_ASSISTANT_KINDS: tuple[str, ...] = ("character", "persona")
+    _ALLOWED_PERSONA_MEMORY_MODES: tuple[str, ...] = ("read_only", "read_write")
 
     _FTS_CONFIG: list[tuple[str, str, list[str]]] = [
         (
@@ -2924,6 +2926,35 @@ UPDATE db_schema_version
    AND version < 31;
 """
 
+    _MIGRATION_SQL_V31_TO_V32 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 32 - Conversation assistant identity (2026-03-08)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS assistant_kind TEXT CHECK (assistant_kind IN ('character', 'persona'));
+
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS assistant_id TEXT;
+
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS persona_memory_mode TEXT CHECK (persona_memory_mode IN ('read_only', 'read_write'));
+
+UPDATE conversations
+   SET assistant_kind = 'character'
+ WHERE character_id IS NOT NULL
+   AND COALESCE(TRIM(assistant_kind), '') = '';
+
+UPDATE conversations
+   SET assistant_id = CAST(character_id AS TEXT)
+ WHERE character_id IS NOT NULL
+   AND COALESCE(TRIM(assistant_id), '') = '';
+
+UPDATE db_schema_version
+   SET version = 32
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 32;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4461,6 +4492,60 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V30->V31: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V31 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v31_to_v32(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V31 to V32 (conversation assistant identity)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V31 to V32 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()}
+            if "assistant_kind" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN assistant_kind TEXT CHECK(assistant_kind IN ('character','persona'))"
+                )
+            if "assistant_id" not in existing_cols:
+                conn.execute("ALTER TABLE conversations ADD COLUMN assistant_id TEXT")
+            if "persona_memory_mode" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN persona_memory_mode TEXT CHECK(persona_memory_mode IN ('read_only','read_write'))"
+                )
+            conn.execute(
+                """
+                UPDATE conversations
+                   SET assistant_kind = 'character'
+                 WHERE character_id IS NOT NULL
+                   AND COALESCE(TRIM(assistant_kind), '') = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE conversations
+                   SET assistant_id = CAST(character_id AS TEXT)
+                 WHERE character_id IS NOT NULL
+                   AND COALESCE(TRIM(assistant_id), '') = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 32
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 32;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 32:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V31->V32 failed version check. Expected 32, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V32 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V31->V32 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V31->V32 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V31->V32: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V32 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4691,6 +4776,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 31 and current_db_version == 30:
                         self._migrate_from_v30_to_v31(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 32 and current_db_version == 31:
+                        self._migrate_from_v31_to_v32(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -4996,6 +5084,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v29_to_v30(conn)
                             elif fallback_version == 30:
                                 self._migrate_from_v30_to_v31(conn)
+                            elif fallback_version == 31:
+                                self._migrate_from_v31_to_v32(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5064,6 +5154,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 31 and current_db_version == 30:
                     self._migrate_from_v30_to_v31(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 32 and current_db_version == 31:
+                    self._migrate_from_v31_to_v32(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -5346,6 +5439,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 31:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V30_TO_V31, conn, expected_version=31)
                 current_version = 31
+            if current_version < 32:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V31_TO_V32, conn, expected_version=32)
+                current_version = 32
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -10101,13 +10197,74 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return stripped if stripped else None
         return str(value)
 
+    def _normalize_conversation_assistant_identity(
+        self,
+        *,
+        character_id: Any,
+        assistant_kind: Any,
+        assistant_id: Any,
+        persona_memory_mode: Any,
+    ) -> tuple[str, str, int | None, str | None]:
+        """Normalize and validate the persisted assistant identity for a conversation."""
+        normalized_kind = self._normalize_nullable_text(assistant_kind)
+        normalized_assistant_id = self._normalize_nullable_text(assistant_id)
+        normalized_memory_mode = self._normalize_nullable_text(persona_memory_mode)
+
+        if normalized_kind is None:
+            normalized_kind = "character" if character_id is not None else None
+        if normalized_kind is None:
+            raise InputError(
+                "Conversation requires either 'character_id' or assistant identity fields."
+            )  # noqa: TRY003
+
+        normalized_kind = normalized_kind.strip().lower()
+        if normalized_kind not in self._ALLOWED_CONVERSATION_ASSISTANT_KINDS:
+            raise InputError(
+                f"Invalid assistant_kind '{normalized_kind}'. Allowed: {', '.join(self._ALLOWED_CONVERSATION_ASSISTANT_KINDS)}"
+            )  # noqa: TRY003
+
+        if normalized_kind == "character":
+            normalized_character_id: int | None
+            if character_id is None:
+                if normalized_assistant_id is None:
+                    raise InputError(
+                        "Character conversations require 'character_id' or a numeric 'assistant_id'."
+                    )  # noqa: TRY003
+                try:
+                    normalized_character_id = int(normalized_assistant_id)
+                except (TypeError, ValueError) as exc:  # pragma: no cover - defensive branch
+                    raise InputError(
+                        f"Character assistant_id must be numeric. Got: {normalized_assistant_id}"
+                    ) from exc  # noqa: TRY003
+            else:
+                try:
+                    normalized_character_id = int(character_id)
+                except (TypeError, ValueError) as exc:
+                    raise InputError(f"character_id must be numeric. Got: {character_id}") from exc  # noqa: TRY003
+
+            if normalized_memory_mode is not None:
+                raise InputError("persona_memory_mode is only valid for persona-backed conversations.")  # noqa: TRY003
+            return "character", str(normalized_character_id), normalized_character_id, None
+
+        if normalized_assistant_id is None:
+            raise InputError("Persona conversations require a non-empty 'assistant_id'.")  # noqa: TRY003
+
+        if normalized_memory_mode is not None:
+            normalized_memory_mode = normalized_memory_mode.strip().lower()
+            if normalized_memory_mode not in self._ALLOWED_PERSONA_MEMORY_MODES:
+                raise InputError(
+                    f"Invalid persona_memory_mode '{normalized_memory_mode}'. Allowed: {', '.join(self._ALLOWED_PERSONA_MEMORY_MODES)}"
+                )  # noqa: TRY003
+
+        return "persona", normalized_assistant_id, None, normalized_memory_mode
+
     def add_conversation(self, conv_data: dict[str, Any]) -> str | None:
         """
         Adds a new conversation to the database.
 
         `id` (UUID string) can be provided; if not, it's auto-generated.
         `root_id` (UUID string) should be provided; if not, `id` is used as `root_id`.
-        `character_id` is required in `conv_data`.
+        Either `character_id` or a normalized assistant identity is required in `conv_data`.
         `client_id` defaults to the DB instance's `client_id` if not provided in `conv_data`.
         `version` defaults to 1. `created_at` and `last_modified` are set to current UTC time.
 
@@ -10116,7 +10273,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         Args:
             conv_data: A dictionary containing conversation data.
-                       Required: 'character_id'.
+                       Required: 'character_id' or ('assistant_kind' + 'assistant_id').
                        Recommended: 'id' (if providing own UUID), 'root_id'.
                        Optional: 'forked_from_message_id', 'parent_conversation_id',
                                  'title', 'rating' (1-5), 'client_id'.
@@ -10125,16 +10282,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             The string UUID of the newly created conversation.
 
         Raises:
-            InputError: If required fields like 'character_id' are missing, or if
-                        'client_id' is missing and not set on the DB instance.
+            InputError: If the assistant identity is invalid, or if 'client_id' is
+                        missing and not set on the DB instance.
             ConflictError: If a conversation with the provided 'id' already exists.
             CharactersRAGDBError: For other database-related errors.
         """
         conv_id = conv_data.get('id') or self._generate_uuid()
         root_id = conv_data.get('root_id') or conv_id  # If root_id not given, this is a new root.
-
-        if 'character_id' not in conv_data:
-            raise InputError("Required field 'character_id' is missing for conversation.")  # noqa: TRY003
 
         client_id = conv_data.get('client_id') or self.client_id
         if not client_id:
@@ -10145,25 +10299,32 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cluster_id = self._normalize_nullable_text(conv_data.get('cluster_id'))
         source = self._normalize_nullable_text(conv_data.get('source'))
         external_ref = self._normalize_nullable_text(conv_data.get('external_ref'))
+        assistant_kind, assistant_id, character_id, persona_memory_mode = self._normalize_conversation_assistant_identity(
+            character_id=conv_data.get('character_id'),
+            assistant_kind=conv_data.get('assistant_kind'),
+            assistant_id=conv_data.get('assistant_id'),
+            persona_memory_mode=conv_data.get('persona_memory_mode'),
+        )
 
         now = self._get_current_utc_timestamp_iso()
         query = """
                 INSERT INTO conversations (id, root_id, forked_from_message_id, parent_conversation_id, \
-                                           character_id, title, state, topic_label, cluster_id, source, external_ref, rating, \
+                                           character_id, assistant_kind, assistant_id, persona_memory_mode, \
+                                           title, state, topic_label, cluster_id, source, external_ref, rating, \
                                            created_at, last_modified, client_id, version, deleted) \
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                 """ # created_at added
         if self.backend_type == BackendType.POSTGRESQL:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
-                conv_data.get('parent_conversation_id'), conv_data['character_id'],
+                conv_data.get('parent_conversation_id'), character_id, assistant_kind, assistant_id, persona_memory_mode,
                 conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
                 now, now, client_id, 1, False
             )
         else:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
-                conv_data.get('parent_conversation_id'), conv_data['character_id'],
+                conv_data.get('parent_conversation_id'), character_id, assistant_kind, assistant_id, persona_memory_mode,
                 conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
                 now, now, client_id, 1, 0
             )
@@ -10635,7 +10796,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         Updatable fields from `update_data`: 'title', 'rating', 'state', 'topic_label',
         'topic_label_source', 'topic_last_tagged_at', 'topic_last_tagged_message_id',
-        'cluster_id', 'source', 'external_ref'. Other fields are ignored.
+        'cluster_id', 'source', 'external_ref', 'assistant_kind', 'assistant_id',
+        'character_id', 'persona_memory_mode'. Other fields are ignored.
         If `update_data` is empty or contains no updatable fields, metadata (version,
         last_modified, client_id) is still updated if the version check passes.
 
@@ -10699,7 +10861,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 # Fetch current state, including rowid (though not used for manual FTS, it's good practice to fetch if available)
                 # and current title for potential non-FTS related "title_changed" logic.
-                cursor_check = conn.execute("SELECT rowid, title, version, deleted FROM conversations WHERE id = ?",
+                cursor_check = conn.execute(
+                    """
+                    SELECT rowid, title, version, deleted, character_id, assistant_kind, assistant_id, persona_memory_mode
+                    FROM conversations
+                    WHERE id = ?
+                    """,
                                             (conversation_id,))
                 current_state = cursor_check.fetchone()
 
@@ -10712,6 +10879,30 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 current_db_version = current_state['version']
                 current_title = current_state['title']  # For logging or other conditional logic if title changed
+                assistant_update_requested = any(
+                    field in update_data
+                    for field in ('assistant_kind', 'assistant_id', 'character_id', 'persona_memory_mode')
+                )
+                normalized_assistant_kind = current_state['assistant_kind']
+                normalized_assistant_id = current_state['assistant_id']
+                normalized_character_id = current_state['character_id']
+                normalized_persona_memory_mode = current_state['persona_memory_mode']
+
+                if assistant_update_requested:
+                    (
+                        normalized_assistant_kind,
+                        normalized_assistant_id,
+                        normalized_character_id,
+                        normalized_persona_memory_mode,
+                    ) = self._normalize_conversation_assistant_identity(
+                        character_id=update_data.get('character_id', current_state['character_id']),
+                        assistant_kind=update_data.get('assistant_kind', current_state['assistant_kind']),
+                        assistant_id=update_data.get('assistant_id', current_state['assistant_id']),
+                        persona_memory_mode=update_data.get(
+                            'persona_memory_mode',
+                            current_state['persona_memory_mode'],
+                        ),
+                    )
 
                 logger.debug(
                     f"Conversation current DB version: {current_db_version}, Expected by client: {expected_version}, Current title: {current_title}")
@@ -10771,6 +10962,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if 'external_ref' in update_data:
                     fields_to_update_sql.append("external_ref = ?")
                     params_for_set_clause.append(self._normalize_nullable_text(update_data.get('external_ref')))
+
+                if assistant_update_requested:
+                    fields_to_update_sql.append("character_id = ?")
+                    params_for_set_clause.append(normalized_character_id)
+                    fields_to_update_sql.append("assistant_kind = ?")
+                    params_for_set_clause.append(normalized_assistant_kind)
+                    fields_to_update_sql.append("assistant_id = ?")
+                    params_for_set_clause.append(normalized_assistant_id)
+                    fields_to_update_sql.append("persona_memory_mode = ?")
+                    params_for_set_clause.append(normalized_persona_memory_mode)
 
                 next_version_val = expected_version + 1  # Version always increments on successful update
 
