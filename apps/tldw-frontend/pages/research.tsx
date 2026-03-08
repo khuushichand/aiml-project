@@ -14,31 +14,47 @@ import {
   resumeResearchRun,
   subscribeResearchRunEvents,
   type ResearchArtifactManifestEntry,
+  type ResearchBundle,
   type ResearchCheckpointSummary,
+  type ResearchContradiction,
   type ResearchOutlineCheckpointPayload,
   type ResearchOutlineSeedSection,
   type ResearchPlanCheckpointPayload,
   type ResearchRun,
   type ResearchRunListItem,
   type ResearchRunSnapshot,
+  type ResearchSourceTrust,
   type ResearchRunStreamEvent,
   type ResearchSourceInventoryItem,
   type ResearchSourcesCheckpointPayload,
+  type ResearchUnsupportedClaim,
+  type ResearchVerificationSummary,
 } from '@web/lib/api/researchRuns';
+
+const TRUST_ARTIFACT_NAMES = [
+  'verification_summary.json',
+  'unsupported_claims.json',
+  'contradictions.json',
+  'source_trust.json',
+] as const;
+
+const TRUST_READY_PHASES = new Set(['awaiting_outline_review', 'packaging', 'completed']);
+const TRUST_INVALIDATION_PHASES = new Set(['collecting', 'synthesizing']);
 
 type ConsoleState = {
   snapshot: ResearchRunSnapshot | null;
   artifactContents: Record<string, unknown>;
-  bundle: unknown | null;
+  bundle: ResearchBundle | null;
 };
 
 type ConsoleAction =
   | { type: 'clear' }
+  | { type: 'invalidate-trust' }
   | { type: 'replace-run'; run: ResearchRun }
   | { type: 'replace-snapshot'; snapshot: ResearchRunSnapshot }
   | { type: 'apply-event'; event: ResearchRunStreamEvent }
   | { type: 'store-artifact'; artifactName: string; content: unknown }
-  | { type: 'store-bundle'; bundle: unknown };
+  | { type: 'store-bundle'; bundle: ResearchBundle };
 
 const INITIAL_STATE: ConsoleState = {
   snapshot: null,
@@ -83,10 +99,26 @@ function isSnapshotPayload(payload: unknown): payload is ResearchRunSnapshot {
   return typeof data.latest_event_id === 'number' && typeof data.run === 'object' && data.run !== null;
 }
 
+function isTrustArtifactName(artifactName: string): boolean {
+  return (TRUST_ARTIFACT_NAMES as readonly string[]).includes(artifactName);
+}
+
+function removeTrustArtifacts(artifactContents: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(artifactContents).filter(([artifactName]) => !isTrustArtifactName(artifactName))
+  );
+}
+
 function reducer(state: ConsoleState, action: ConsoleAction): ConsoleState {
   switch (action.type) {
     case 'clear':
       return INITIAL_STATE;
+    case 'invalidate-trust':
+      return {
+        ...state,
+        artifactContents: removeTrustArtifacts(state.artifactContents),
+        bundle: null,
+      };
     case 'replace-run':
       if (state.snapshot) {
         const preserveLiveProgress =
@@ -186,10 +218,29 @@ function reducer(state: ConsoleState, action: ConsoleAction): ConsoleState {
         }
       } else if (action.event.event === 'artifact') {
         const artifact = payload as unknown as ResearchArtifactManifestEntry;
+        const previousArtifact = nextSnapshot.artifacts.find(
+          (currentArtifact) => currentArtifact.artifact_name === artifact.artifact_name
+        );
         nextSnapshot = {
           ...nextSnapshot,
           artifacts: mergeArtifactEntry(nextSnapshot.artifacts, artifact),
         };
+        const nextState = {
+          ...state,
+          snapshot: updateLatestEventId(nextSnapshot, action.event.id),
+        };
+        if (
+          isTrustArtifactName(artifact.artifact_name) &&
+          previousArtifact &&
+          artifact.artifact_version > previousArtifact.artifact_version
+        ) {
+          return {
+            ...nextState,
+            artifactContents: removeTrustArtifacts(state.artifactContents),
+            bundle: null,
+          };
+        }
+        return nextState;
       }
 
       return {
@@ -235,6 +286,100 @@ function formatArtifactContent(content: unknown): string {
     return content;
   }
   return JSON.stringify(content, null, 2);
+}
+
+function asObjectRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function normalizeVerificationSummary(value: unknown): ResearchVerificationSummary | null {
+  const record = asObjectRecord(value);
+  if (!record) {
+    return null;
+  }
+  return {
+    supported_claim_count:
+      typeof record.supported_claim_count === 'number' ? record.supported_claim_count : undefined,
+    unsupported_claim_count:
+      typeof record.unsupported_claim_count === 'number' ? record.unsupported_claim_count : undefined,
+    contradiction_count:
+      typeof record.contradiction_count === 'number' ? record.contradiction_count : undefined,
+    warnings: Array.isArray(record.warnings)
+      ? record.warnings.filter((item): item is string => typeof item === 'string')
+      : undefined,
+  };
+}
+
+function normalizeUnsupportedClaims(value: unknown): ResearchUnsupportedClaim[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is ResearchUnsupportedClaim => Boolean(asObjectRecord(item))) as ResearchUnsupportedClaim[];
+  }
+  const record = asObjectRecord(value);
+  if (record && Array.isArray(record.claims)) {
+    return record.claims.filter((item): item is ResearchUnsupportedClaim => Boolean(asObjectRecord(item))) as ResearchUnsupportedClaim[];
+  }
+  return [];
+}
+
+function normalizeContradictions(value: unknown): ResearchContradiction[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is ResearchContradiction => Boolean(asObjectRecord(item))) as ResearchContradiction[];
+  }
+  const record = asObjectRecord(value);
+  if (record && Array.isArray(record.contradictions)) {
+    return record.contradictions.filter((item): item is ResearchContradiction => Boolean(asObjectRecord(item))) as ResearchContradiction[];
+  }
+  return [];
+}
+
+function normalizeSourceTrust(value: unknown): ResearchSourceTrust[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is ResearchSourceTrust => Boolean(asObjectRecord(item))) as ResearchSourceTrust[];
+  }
+  const record = asObjectRecord(value);
+  if (record && Array.isArray(record.sources)) {
+    return record.sources.filter((item): item is ResearchSourceTrust => Boolean(asObjectRecord(item))) as ResearchSourceTrust[];
+  }
+  return [];
+}
+
+type ResearchTrustView = {
+  verificationSummary: ResearchVerificationSummary | null;
+  unsupportedClaims: ResearchUnsupportedClaim[];
+  contradictions: ResearchContradiction[];
+  sourceTrust: ResearchSourceTrust[];
+};
+
+function deriveTrustView(
+  bundle: ResearchBundle | null,
+  artifactContents: Record<string, unknown>
+): ResearchTrustView | null {
+  const verificationSummary = normalizeVerificationSummary(
+    bundle?.verification_summary ?? artifactContents['verification_summary.json']
+  );
+  const unsupportedClaims = normalizeUnsupportedClaims(
+    bundle?.unsupported_claims ?? artifactContents['unsupported_claims.json']
+  );
+  const contradictions = normalizeContradictions(
+    bundle?.contradictions ?? artifactContents['contradictions.json']
+  );
+  const sourceTrust = normalizeSourceTrust(
+    bundle?.source_trust ?? artifactContents['source_trust.json']
+  );
+
+  if (!verificationSummary && unsupportedClaims.length === 0 && contradictions.length === 0 && sourceTrust.length === 0) {
+    return null;
+  }
+
+  return {
+    verificationSummary,
+    unsupportedClaims,
+    contradictions,
+    sourceTrust,
+  };
 }
 
 type PlanCheckpointEditorState = {
@@ -591,6 +736,8 @@ export default function ResearchRunsPage() {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const [checkpointEditor, setCheckpointEditor] = useState<CheckpointEditorState | null>(null);
   const [isApprovingCheckpoint, setIsApprovingCheckpoint] = useState(false);
+  const [isLoadingTrust, setIsLoadingTrust] = useState(false);
+  const [trustError, setTrustError] = useState<string | null>(null);
 
   const runsQuery = useQuery({
     queryKey: ['research-runs'],
@@ -610,6 +757,8 @@ export default function ResearchRunsPage() {
 
   useEffect(() => {
     dispatch({ type: 'clear' });
+    setIsLoadingTrust(false);
+    setTrustError(null);
   }, [effectiveSelectedRunId]);
 
   const selectedRunQuery = useQuery({
@@ -647,6 +796,20 @@ export default function ResearchRunsPage() {
 
   const selectedSnapshot = state.snapshot;
   const selectedRun = selectedSnapshot?.run ?? selectedRunQuery.data ?? selectedListItem;
+  const trustView = deriveTrustView(state.bundle, state.artifactContents);
+  const loadedTrustArtifactNames = TRUST_ARTIFACT_NAMES.filter(
+    (artifactName) => state.artifactContents[artifactName] !== undefined
+  );
+  const allTrustArtifactsLoaded = loadedTrustArtifactNames.length === TRUST_ARTIFACT_NAMES.length;
+  const trustArtifacts =
+    selectedSnapshot?.artifacts.filter((artifact) => isTrustArtifactName(artifact.artifact_name)) ?? [];
+  const canLoadTrust =
+    Boolean(selectedRun) &&
+    !state.bundle &&
+    !allTrustArtifactsLoaded &&
+    trustArtifacts.length > 0 &&
+    TRUST_READY_PHASES.has(selectedRun.phase) &&
+    !isLoadingTrust;
   const checkpointEvaluation = evaluateCheckpointEditor(checkpointEditor);
   const selectedRunTitle =
     selectedListItem?.query ||
@@ -657,6 +820,18 @@ export default function ResearchRunsPage() {
   useEffect(() => {
     setCheckpointEditor(buildCheckpointEditor(selectedSnapshot?.checkpoint));
   }, [selectedSnapshot?.checkpoint]);
+
+  useEffect(() => {
+    if (
+      selectedRun &&
+      TRUST_INVALIDATION_PHASES.has(selectedRun.phase) &&
+      (state.bundle !== null || loadedTrustArtifactNames.length > 0)
+    ) {
+      dispatch({ type: 'invalidate-trust' });
+      setIsLoadingTrust(false);
+      setTrustError(null);
+    }
+  }, [loadedTrustArtifactNames.length, selectedRun, state.bundle]);
 
   async function handleCreateRun(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -765,6 +940,39 @@ export default function ResearchRunsPage() {
       type: 'store-bundle',
       bundle,
     });
+  }
+
+  async function handleLoadTrustDetails() {
+    if (!effectiveSelectedRunId) {
+      return;
+    }
+    const missingArtifacts = TRUST_ARTIFACT_NAMES.filter(
+      (artifactName) => state.artifactContents[artifactName] === undefined
+    );
+    if (missingArtifacts.length === 0) {
+      return;
+    }
+    setIsLoadingTrust(true);
+    setTrustError(null);
+    try {
+      const loadedArtifacts = await Promise.all(
+        missingArtifacts.map(async (artifactName) => {
+          const artifact = await getResearchArtifact(effectiveSelectedRunId, artifactName);
+          return { artifactName, content: artifact.content };
+        })
+      );
+      loadedArtifacts.forEach(({ artifactName, content }) => {
+        dispatch({
+          type: 'store-artifact',
+          artifactName,
+          content,
+        });
+      });
+    } catch (error) {
+      setTrustError(error instanceof Error ? error.message : 'Unable to load trust details');
+    } finally {
+      setIsLoadingTrust(false);
+    }
   }
 
   const canPause = selectedRun && selectedRun.control_state === 'running' && selectedRun.status !== 'completed';
@@ -1309,6 +1517,137 @@ export default function ResearchRunsPage() {
                         {JSON.stringify(selectedSnapshot.checkpoint.proposed_payload, null, 2)}
                       </pre>
                     )}
+                  </div>
+                )}
+              </section>
+
+              <section className="rounded-2xl border border-border bg-bg/70 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      Research Trust
+                    </h3>
+                    {!trustView && !trustError && !canLoadTrust && (
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        Trust signals will appear after synthesis
+                      </p>
+                    )}
+                  </div>
+                  {canLoadTrust && (
+                    <button
+                      type="button"
+                      className="rounded-full border border-border px-3 py-2 text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={handleLoadTrustDetails}
+                      disabled={isLoadingTrust}
+                    >
+                      {isLoadingTrust ? 'Loading trust details…' : 'Load trust details'}
+                    </button>
+                  )}
+                </div>
+
+                {trustError && (
+                  <div className="mt-3 rounded-xl border border-danger/30 bg-danger/5 px-3 py-3 text-sm text-danger">
+                    Unable to load trust details: {trustError}
+                  </div>
+                )}
+
+                {trustView && (
+                  <div className="mt-4 space-y-4">
+                    <div className="rounded-xl border border-border bg-card px-3 py-3">
+                      <div className="text-sm font-medium">Verification</div>
+                      <div className="mt-3 grid gap-3 md:grid-cols-3">
+                        <div className="text-sm text-muted-foreground">
+                          Supported claims: {trustView.verificationSummary?.supported_claim_count ?? 0}
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          Unsupported claims: {trustView.verificationSummary?.unsupported_claim_count ?? 0}
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          Contradictions: {trustView.verificationSummary?.contradiction_count ?? 0}
+                        </div>
+                      </div>
+                      {trustView.verificationSummary?.warnings?.length ? (
+                        <div className="mt-3 space-y-1">
+                          {trustView.verificationSummary.warnings.map((warning) => (
+                            <div key={warning} className="text-sm text-danger">
+                              {warning}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="rounded-xl border border-border bg-card px-3 py-3">
+                      <div className="text-sm font-medium">Unsupported Claims</div>
+                      {trustView.unsupportedClaims.length ? (
+                        <div className="mt-3 space-y-2">
+                          {trustView.unsupportedClaims.map((claim, index) => (
+                            <div
+                              key={`${claim.claim_id ?? claim.text}-${index}`}
+                              className="rounded-lg border border-border bg-bg px-3 py-2"
+                            >
+                              <div className="text-sm font-medium">{claim.text}</div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {claim.focus_area ?? 'unknown focus area'}
+                                {claim.reason ? ` · ${claim.reason}` : ''}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-sm text-muted-foreground">No unsupported claims flagged.</p>
+                      )}
+                    </div>
+
+                    <div className="rounded-xl border border-border bg-card px-3 py-3">
+                      <div className="text-sm font-medium">Contradictions</div>
+                      {trustView.contradictions.length ? (
+                        <div className="mt-3 space-y-2">
+                          {trustView.contradictions.map((contradiction, index) => (
+                            <div
+                              key={`${contradiction.note_id ?? contradiction.text}-${index}`}
+                              className="rounded-lg border border-border bg-bg px-3 py-2"
+                            >
+                              <div className="text-sm font-medium">{contradiction.text}</div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {contradiction.focus_area ?? 'unknown focus area'}
+                                {contradiction.source_id ? ` · ${contradiction.source_id}` : ''}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-sm text-muted-foreground">No contradictions surfaced.</p>
+                      )}
+                    </div>
+
+                    <div className="rounded-xl border border-border bg-card px-3 py-3">
+                      <div className="text-sm font-medium">Source Trust</div>
+                      {trustView.sourceTrust.length ? (
+                        <div className="mt-3 space-y-2">
+                          {trustView.sourceTrust.map((source) => (
+                            <div
+                              key={source.source_id}
+                              className="rounded-lg border border-border bg-bg px-3 py-2"
+                            >
+                              <div className="text-sm font-medium">{source.title ?? source.source_id}</div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {[source.provider, source.trust_tier, source.snapshot_policy]
+                                  .filter((value): value is string => typeof value === 'string' && value.length > 0)
+                                  .join(' · ')}
+                              </div>
+                              {source.trust_labels?.length ? (
+                                <div className="mt-2 text-xs text-muted-foreground">
+                                  {source.trust_labels.join(', ')}
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-sm text-muted-foreground">No source trust metadata available.</p>
+                      )}
+                    </div>
                   </div>
                 )}
               </section>

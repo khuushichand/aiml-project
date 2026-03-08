@@ -83,12 +83,132 @@ function makeSnapshot(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function makeTrustArtifacts(overrides: Record<string, unknown> = {}) {
+  return [
+    {
+      artifact_name: 'verification_summary.json',
+      artifact_version: 1,
+      content_type: 'application/json',
+      phase: 'synthesizing',
+      job_id: '11',
+    },
+    {
+      artifact_name: 'unsupported_claims.json',
+      artifact_version: 1,
+      content_type: 'application/json',
+      phase: 'synthesizing',
+      job_id: '11',
+    },
+    {
+      artifact_name: 'contradictions.json',
+      artifact_version: 1,
+      content_type: 'application/json',
+      phase: 'synthesizing',
+      job_id: '11',
+    },
+    {
+      artifact_name: 'source_trust.json',
+      artifact_version: 1,
+      content_type: 'application/json',
+      phase: 'synthesizing',
+      job_id: '11',
+    },
+  ].map((artifact) => ({ ...artifact, ...overrides }));
+}
+
+function makeTrustBundle(overrides: Record<string, unknown> = {}) {
+  return {
+    concise_answer: 'Final synthesized answer',
+    report: '# Final report',
+    verification_summary: {
+      supported_claim_count: 2,
+      unsupported_claim_count: 1,
+      contradiction_count: 1,
+      warnings: ['Needs corroboration'],
+    },
+    unsupported_claims: [
+      {
+        claim_id: 'clm_1',
+        text: 'Unverified assertion',
+        focus_area: 'background',
+        reason: 'no_supporting_notes',
+      },
+    ],
+    contradictions: [
+      {
+        note_id: 'note_1',
+        text: 'Evidence contradicted by later note.',
+        focus_area: 'counterevidence',
+        source_id: 'src_2',
+      },
+    ],
+    source_trust: [
+      {
+        source_id: 'src_1',
+        title: 'Primary memo',
+        provider: 'local_corpus',
+        trust_tier: 'internal',
+        snapshot_policy: 'full_artifact',
+        trust_labels: ['local_corpus', 'internal'],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+const TRUST_ARTIFACT_CONTENTS: Record<string, unknown> = {
+  'verification_summary.json': {
+    supported_claim_count: 2,
+    unsupported_claim_count: 1,
+    contradiction_count: 1,
+    warnings: ['Needs corroboration'],
+  },
+  'unsupported_claims.json': {
+    claims: [
+      {
+        claim_id: 'clm_1',
+        text: 'Unverified assertion',
+        focus_area: 'background',
+        reason: 'no_supporting_notes',
+      },
+    ],
+  },
+  'contradictions.json': {
+    contradictions: [
+      {
+        note_id: 'note_1',
+        text: 'Evidence contradicted by later note.',
+        focus_area: 'counterevidence',
+        source_id: 'src_2',
+      },
+    ],
+  },
+  'source_trust.json': {
+    sources: [
+      {
+        source_id: 'src_1',
+        title: 'Primary memo',
+        provider: 'local_corpus',
+        trust_tier: 'internal',
+        snapshot_policy: 'full_artifact',
+        trust_labels: ['local_corpus', 'internal'],
+      },
+    ],
+  },
+};
+
 describe('ResearchRunsPage', () => {
   let currentSnapshot: ReturnType<typeof makeSnapshot>;
+  let streamHandlers: Map<string, (event: { event: string; id?: number; payload?: unknown }) => void>;
+
+  function emitStreamEvent(sessionId: string, event: { event: string; id?: number; payload?: unknown }) {
+    streamHandlers.get(sessionId)?.(event);
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
     currentSnapshot = makeSnapshot();
+    streamHandlers = new Map();
 
     mocks.listResearchRuns.mockResolvedValue([
       makeRun(),
@@ -126,19 +246,20 @@ describe('ResearchRunsPage', () => {
         latest_checkpoint_id: null,
       })
     );
-    mocks.getResearchArtifact.mockResolvedValue({
-      artifact_name: 'plan.json',
+    mocks.getResearchArtifact.mockImplementation(async (_sessionId: string, artifactName: string) => ({
+      artifact_name: artifactName,
       content_type: 'application/json',
-      content: { artifact_summary: 'Loaded artifact body' },
-    });
-    mocks.getResearchBundle.mockResolvedValue({
-      concise_answer: 'Final synthesized answer',
-      report: '# Final report',
-    });
+      content:
+        TRUST_ARTIFACT_CONTENTS[artifactName] ?? {
+          artifact_summary: 'Loaded artifact body',
+        },
+    }));
+    mocks.getResearchBundle.mockResolvedValue(makeTrustBundle());
     mocks.subscribeResearchRunEvents.mockImplementation((options: {
       sessionId: string;
       onEvent: (event: { event: string; id?: number; payload?: unknown }) => void;
     }) => {
+      streamHandlers.set(options.sessionId, options.onEvent);
       if (options.sessionId === 'rs_1') {
         options.onEvent({
           event: 'snapshot',
@@ -326,6 +447,157 @@ describe('ResearchRunsPage', () => {
         ],
       });
     });
+  });
+
+  it('shows a trust empty state before synthesis', async () => {
+    renderWithProviders(<ResearchRunsPage />);
+
+    await screen.findByText('Investigate local evidence');
+
+    expect(screen.getByText('Research Trust')).toBeInTheDocument();
+    expect(screen.getByText('Trust signals will appear after synthesis')).toBeInTheDocument();
+  });
+
+  it('renders trust details from a loaded bundle', async () => {
+    const user = userEvent.setup();
+
+    mocks.getResearchRun.mockResolvedValue(
+      makeRun({
+        id: 'rs_1',
+        status: 'completed',
+        phase: 'completed',
+        progress_message: 'Completed',
+        latest_checkpoint_id: null,
+        completed_at: '2026-03-07T10:10:00Z',
+      })
+    );
+    mocks.getResearchBundle.mockResolvedValue(makeTrustBundle());
+
+    renderWithProviders(<ResearchRunsPage />);
+
+    await screen.findByText('Investigate local evidence');
+    await user.click(screen.getByRole('button', { name: 'Load bundle' }));
+
+    expect(await screen.findByText('Supported claims: 2')).toBeInTheDocument();
+    expect(screen.getByText('Unsupported claims: 1')).toBeInTheDocument();
+    expect(screen.getByText('Contradictions: 1')).toBeInTheDocument();
+    expect(screen.getByText('Needs corroboration')).toBeInTheDocument();
+    expect(screen.getByText('Unverified assertion')).toBeInTheDocument();
+    expect(screen.getByText('Primary memo')).toBeInTheDocument();
+    expect(
+      screen.getByText(/local_corpus\s+·\s+internal\s+·\s+full_artifact/i),
+    ).toBeInTheDocument();
+  });
+
+  it('lazy-loads trust artifacts when they are available but no bundle is loaded', async () => {
+    const user = userEvent.setup();
+    mocks.getResearchRun.mockResolvedValue(
+      makeRun({
+        id: 'rs_1',
+        status: 'waiting_human',
+        phase: 'awaiting_outline_review',
+        latest_checkpoint_id: null,
+      })
+    );
+    currentSnapshot = makeSnapshot({
+      checkpoint: null,
+      run: makeRun({
+        phase: 'awaiting_outline_review',
+        status: 'waiting_human',
+        latest_checkpoint_id: null,
+      }),
+      artifacts: makeTrustArtifacts(),
+    });
+
+    renderWithProviders(<ResearchRunsPage />);
+
+    await screen.findByText('Investigate local evidence');
+    await user.click(screen.getByRole('button', { name: 'Load trust details' }));
+
+    await waitFor(() => {
+      expect(mocks.getResearchArtifact).toHaveBeenCalledWith('rs_1', 'verification_summary.json');
+      expect(mocks.getResearchArtifact).toHaveBeenCalledWith('rs_1', 'unsupported_claims.json');
+      expect(mocks.getResearchArtifact).toHaveBeenCalledWith('rs_1', 'contradictions.json');
+      expect(mocks.getResearchArtifact).toHaveBeenCalledWith('rs_1', 'source_trust.json');
+    });
+  });
+
+  it('reuses trust artifacts that were already loaded through the raw artifact viewer', async () => {
+    const user = userEvent.setup();
+    mocks.getResearchRun.mockResolvedValue(
+      makeRun({
+        id: 'rs_1',
+        status: 'waiting_human',
+        phase: 'awaiting_outline_review',
+        latest_checkpoint_id: null,
+      })
+    );
+    currentSnapshot = makeSnapshot({
+      checkpoint: null,
+      run: makeRun({
+        phase: 'awaiting_outline_review',
+        status: 'waiting_human',
+        latest_checkpoint_id: null,
+      }),
+      artifacts: makeTrustArtifacts(),
+    });
+
+    renderWithProviders(<ResearchRunsPage />);
+
+    await screen.findByText('Investigate local evidence');
+    await user.click(screen.getByRole('button', { name: 'Load verification_summary.json' }));
+    await user.click(screen.getByRole('button', { name: 'Load unsupported_claims.json' }));
+    await user.click(screen.getByRole('button', { name: 'Load contradictions.json' }));
+    await user.click(screen.getByRole('button', { name: 'Load source_trust.json' }));
+
+    expect(await screen.findByText('Supported claims: 2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load trust details' })).not.toBeInTheDocument();
+  });
+
+  it('clears stale trust details when the run returns to collecting', async () => {
+    const user = userEvent.setup();
+    mocks.getResearchRun.mockResolvedValue(
+      makeRun({
+        id: 'rs_1',
+        status: 'waiting_human',
+        phase: 'awaiting_outline_review',
+        latest_checkpoint_id: null,
+      })
+    );
+    currentSnapshot = makeSnapshot({
+      checkpoint: null,
+      run: makeRun({
+        phase: 'awaiting_outline_review',
+        status: 'waiting_human',
+        latest_checkpoint_id: null,
+      }),
+      artifacts: makeTrustArtifacts(),
+    });
+
+    renderWithProviders(<ResearchRunsPage />);
+
+    await screen.findByText('Investigate local evidence');
+    await user.click(screen.getByRole('button', { name: 'Load verification_summary.json' }));
+    await user.click(screen.getByRole('button', { name: 'Load unsupported_claims.json' }));
+    await user.click(screen.getByRole('button', { name: 'Load contradictions.json' }));
+    await user.click(screen.getByRole('button', { name: 'Load source_trust.json' }));
+    expect(await screen.findByText('Supported claims: 2')).toBeInTheDocument();
+
+    emitStreamEvent('rs_1', {
+      event: 'status',
+      id: 7,
+      payload: {
+        id: 'rs_1',
+        status: 'running',
+        phase: 'collecting',
+        progress_message: 'Collecting sources',
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Supported claims: 2')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Trust signals will appear after synthesis')).toBeInTheDocument();
   });
 
   it('lazy-loads artifacts and completed bundles', async () => {

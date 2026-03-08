@@ -97,6 +97,48 @@ export interface ResearchArtifactResponse {
   content: unknown;
 }
 
+export interface ResearchVerificationSummary {
+  supported_claim_count?: number;
+  unsupported_claim_count?: number;
+  contradiction_count?: number;
+  warnings?: string[];
+}
+
+export interface ResearchUnsupportedClaim {
+  claim_id?: string;
+  text: string;
+  focus_area?: string;
+  reason?: string;
+  source_id?: string;
+  note_id?: string;
+}
+
+export interface ResearchContradiction {
+  note_id?: string;
+  text: string;
+  focus_area?: string;
+  source_id?: string;
+}
+
+export interface ResearchSourceTrust {
+  source_id: string;
+  title?: string;
+  provider?: string;
+  trust_tier?: string;
+  snapshot_policy?: string;
+  trust_labels?: string[];
+}
+
+export interface ResearchBundle {
+  concise_answer?: string;
+  report?: string;
+  verification_summary?: ResearchVerificationSummary;
+  unsupported_claims?: ResearchUnsupportedClaim[];
+  contradictions?: ResearchContradiction[];
+  source_trust?: ResearchSourceTrust[];
+  [key: string]: unknown;
+}
+
 export interface ResearchRunStreamEvent {
   event: string;
   id?: number;
@@ -216,7 +258,7 @@ export function getResearchArtifact(
   );
 }
 
-export function getResearchBundle<T = Record<string, unknown>>(sessionId: string): Promise<T> {
+export function getResearchBundle<T = ResearchBundle>(sessionId: string): Promise<T> {
   return apiClient.get<T>(`/research/runs/${sessionId}/bundle`);
 }
 
