@@ -612,6 +612,75 @@ export const BASE_STEP_REGISTRY: StepRegistry = {
     ]
   },
 
+  deep_research_wait: {
+    type: "deep_research_wait",
+    label: "Deep Research Wait",
+    description:
+      "Wait for a launched deep research run to finish and optionally return the final bundle",
+    category: "research",
+    icon: "Clock",
+    color: "bg-violet-700",
+    inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }],
+    configSchema: [
+      {
+        key: "run_id",
+        type: "template-editor",
+        label: "Run ID",
+        description: "Primary chaining field, typically {{ deep_research.run_id }}"
+      },
+      {
+        key: "run",
+        type: "json-editor",
+        label: "Run",
+        description: "Optional full launch output object containing run_id"
+      },
+      {
+        key: "include_bundle",
+        type: "checkbox",
+        label: "Include Bundle",
+        description: "Include the final bundle in step outputs when the run completes",
+        default: true
+      },
+      {
+        key: "fail_on_cancelled",
+        type: "checkbox",
+        label: "Fail on Cancelled",
+        description: "Mark the step as failed when the research run is cancelled",
+        default: true
+      },
+      {
+        key: "fail_on_failed",
+        type: "checkbox",
+        label: "Fail on Failed",
+        description: "Mark the step as failed when the research run fails",
+        default: true
+      },
+      {
+        key: "poll_interval_seconds",
+        type: "number",
+        label: "Poll Interval",
+        description: "How often the workflow polls the research run for terminal status",
+        default: 2,
+        validation: { min: 0.1, max: 60 }
+      },
+      {
+        key: "save_artifact",
+        type: "checkbox",
+        label: "Save Artifact",
+        description: "Persist deep_research_wait.json as a workflow artifact",
+        default: true
+      },
+      {
+        key: "timeout_seconds",
+        type: "number",
+        label: "Wait Timeout",
+        description: "Bounds how long the workflow waits for terminal research status",
+        validation: { min: 1 }
+      }
+    ]
+  },
+
   // ─── Utility Steps ───────────────────────────────────────────────────────
 
   delay: {
@@ -839,6 +908,10 @@ const PORT_OVERRIDES: Record<
     inputs: [{ id: "query", label: "Query", dataType: "string", required: true }],
     outputs: [{ id: "run", label: "Run", dataType: "object" }]
   },
+  deep_research_wait: {
+    inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }]
+  },
   // Audio
   tts: {
     inputs: [{ id: "text", label: "Text", dataType: "string", required: true }],
@@ -1042,6 +1115,7 @@ export const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
 
   // Research & Academic (10 types)
   deep_research: "research",
+  deep_research_wait: "research",
   arxiv_search: "research",
   arxiv_download: "research",
   pubmed_search: "research",
@@ -1191,6 +1265,7 @@ export const ICON_OVERRIDES: Record<string, string> = {
 
   // Research & Academic
   deep_research: "FileSearch",
+  deep_research_wait: "Clock",
   arxiv_search: "GraduationCap",
   arxiv_download: "Download",
   pubmed_search: "FlaskConical",

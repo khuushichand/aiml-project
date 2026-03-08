@@ -196,4 +196,36 @@ describe("NodeConfigPanel selectors", () => {
     expect(screen.getByText("Checkpointed")).toBeInTheDocument()
     expect(screen.getByText("Save Artifact")).toBeInTheDocument()
   })
+
+  it("merges deep research wait metadata with server schema fields", () => {
+    const schema: WorkflowStepSchema = {
+      type: "object",
+      properties: {
+        run_id: { type: "string", description: "Templated research run ID" },
+        run: { type: "object", description: "Optional launch output object" },
+        include_bundle: { type: "boolean", default: true },
+        fail_on_cancelled: { type: "boolean", default: true }
+      },
+      required: ["run_id"]
+    }
+    setupStore("deep_research_wait", schema, {
+      run_id: "{{ deep_research.run_id }}",
+      include_bundle: true,
+      fail_on_cancelled: true
+    })
+
+    vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
+      optionsByKey: {},
+      loadingByKey: {}
+    })
+
+    render(<NodeConfigPanel />)
+
+    expect(
+      screen.getByText("Use {{variable}} for template placeholders")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Include Bundle")).toBeInTheDocument()
+    expect(screen.getByText("Fail on Cancelled")).toBeInTheDocument()
+    expect(screen.getAllByText("Run").length).toBeGreaterThan(0)
+  })
 })

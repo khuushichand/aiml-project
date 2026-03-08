@@ -151,6 +151,7 @@ class StepTypeRegistry:
             "bibtex_generate": StepType("bibtex_generate", "Generate BibTeX entry"),
             "literature_review": StepType("literature_review", "Generate literature review summary"),
             "deep_research": StepType("deep_research", "Launch a deep research session and return its run reference; does not wait for completion"),
+            "deep_research_wait": StepType("deep_research_wait", "waits for a launched deep-research run to finish and can return the final bundle"),
         }
 
     def list(self) -> builtins.list[StepType]:

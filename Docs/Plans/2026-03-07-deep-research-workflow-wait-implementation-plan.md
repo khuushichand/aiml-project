@@ -12,7 +12,7 @@
 
 ### Task 1: Add Red Backend Tests For The Wait Step
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/tests/Workflows/adapters/test_research_adapters.py`
@@ -56,7 +56,7 @@ Expected: FAIL for missing `deep_research_wait` adapter registration, missing sc
 
 ### Task 2: Implement The Backend Config Model And Adapter
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/Workflows/adapters/research/_config.py`
@@ -143,7 +143,7 @@ Expected: PASS for the new adapter-specific tests.
 
 ### Task 3: Register The Step Type And Expose The JSON Schema
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/Workflows/registry.py`
@@ -200,7 +200,7 @@ Expected: PASS
 
 ### Task 4: Add Red Frontend Workflow Editor Tests
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/WorkflowEditor/__tests__/step-registry.test.ts`
@@ -243,7 +243,7 @@ Expected: FAIL for missing frontend registry metadata and config fields.
 
 ### Task 5: Implement The Workflow Editor Metadata
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/WorkflowEditor/step-registry.ts`
@@ -290,7 +290,7 @@ Expected: PASS
 
 ### Task 6: Add A Workflow Runtime Integration Test
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `tldw_Server_API/tests/Workflows/test_workflows_api.py`
@@ -326,7 +326,7 @@ After backend and schema work is in place, rerun the same test until it passes.
 
 ### Task 7: Run Verification And Commit
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-07-deep-research-workflow-wait-implementation-plan.md`
@@ -376,6 +376,12 @@ python -m bandit -r \
 
 Expected: `0` findings in the touched scope.
 
+Result:
+
+- focused backend wait-step verification passed: `9 passed, 80 deselected`
+- focused frontend workflow-editor verification passed: `19/19`
+- Bandit output `/tmp/bandit_deep_research_workflow_wait.json` reported `0` findings and `0` errors
+
 **Step 4: Update the plan status and commit**
 
 Mark each task `Complete`, record any residual risks, then commit with a message like:
@@ -398,3 +404,8 @@ git add \
   apps/packages/ui/src/components/WorkflowEditor/__tests__/NodeConfigPanel.test.tsx
 git commit -m "feat(workflows): add deep research wait step"
 ```
+
+Residual notes:
+
+- `deep_research_wait` intentionally remains terminal-only in v1; if a research run stays in `waiting_human`, the step keeps polling until timeout or workflow cancellation.
+- `include_bundle=true` returns the full bundle into workflow state; larger workflows may prefer `include_bundle=false` and consume the artifact/pointer instead.

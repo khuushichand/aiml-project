@@ -215,6 +215,7 @@ from tldw_Server_API.app.core.Workflows.adapters.research import (
     run_arxiv_search_adapter,
     run_bibtex_generate_adapter,
     run_deep_research_adapter,
+    run_deep_research_wait_adapter,
     run_doi_resolve_adapter,
     run_google_scholar_search_adapter,
     run_literature_review_adapter,

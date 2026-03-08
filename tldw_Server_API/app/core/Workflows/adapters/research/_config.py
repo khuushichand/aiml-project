@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from tldw_Server_API.app.core.Workflows.adapters._base import BaseAdapterConfig
 
@@ -153,3 +153,47 @@ class DeepResearchConfig(BaseAdapterConfig):
         True,
         description="Whether to persist the launch payload as a workflow artifact",
     )
+
+
+class DeepResearchWaitConfig(BaseAdapterConfig):
+    """Config for waiting on a deep research session from workflows."""
+
+    run_id: str | None = Field(
+        None,
+        description="Research run ID to wait on (templated)",
+    )
+    run: dict[str, Any] | None = Field(
+        None,
+        description="Optional launch-step output object containing run_id",
+    )
+    include_bundle: bool = Field(
+        True,
+        description="Whether to include the final research bundle when the run completes",
+    )
+    fail_on_cancelled: bool = Field(
+        True,
+        description="Whether the step should fail if the research run is cancelled",
+    )
+    fail_on_failed: bool = Field(
+        True,
+        description="Whether the step should fail if the research run fails",
+    )
+    poll_interval_seconds: float = Field(
+        2.0,
+        ge=0.1,
+        le=60.0,
+        description="Polling interval while waiting for terminal research status",
+    )
+    save_artifact: bool | None = Field(
+        True,
+        description="Whether to persist the wait result as a workflow artifact",
+    )
+
+    @model_validator(mode="after")
+    def validate_run_reference(self) -> "DeepResearchWaitConfig":
+        run_id = str(self.run_id or "").strip()
+        run_obj = self.run if isinstance(self.run, dict) else None
+        run_obj_id = str((run_obj or {}).get("run_id") or "").strip()
+        if not run_id and not run_obj_id:
+            raise ValueError("either run_id or run.run_id is required")
+        return self

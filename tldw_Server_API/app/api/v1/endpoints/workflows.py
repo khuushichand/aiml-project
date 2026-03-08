@@ -88,7 +88,10 @@ from tldw_Server_API.app.core.testing import (
 from tldw_Server_API.app.core.Workflows import RunMode, WorkflowEngine, WorkflowScheduler
 from tldw_Server_API.app.core.Workflows.adapters._common import artifacts_base_dir, is_subpath
 from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
-from tldw_Server_API.app.core.Workflows.adapters.research._config import DeepResearchConfig
+from tldw_Server_API.app.core.Workflows.adapters.research._config import (
+    DeepResearchConfig,
+    DeepResearchWaitConfig,
+)
 from tldw_Server_API.app.core.Workflows.daily_ledger import (
     backfill_legacy_runs_to_ledger,
     get_workflows_daily_ledger,
@@ -441,6 +444,63 @@ def _validate_deep_research_config(cfg: dict[str, Any], *, step_id: str) -> None
         raise HTTPException(status_code=422, detail=f"Invalid config for step '{step_id}': {detail}") from exc
 
 
+def _deep_research_wait_step_schema_base() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": (
+            "Waits for a launched deep-research run to finish and can return the final bundle."
+        ),
+        "properties": {
+            "run_id": {
+                "type": "string",
+                "description": "Templated research run ID, typically {{ deep_research.run_id }}",
+            },
+            "run": {
+                "type": "object",
+                "description": "Optional launch-step output object containing run_id",
+            },
+            "include_bundle": {
+                "type": "boolean",
+                "default": True,
+                "description": "Include the final research bundle in step outputs when available",
+            },
+            "fail_on_cancelled": {
+                "type": "boolean",
+                "default": True,
+            },
+            "fail_on_failed": {
+                "type": "boolean",
+                "default": True,
+            },
+            "poll_interval_seconds": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 60.0,
+                "default": 2.0,
+            },
+            "save_artifact": {
+                "type": "boolean",
+                "default": True,
+                "description": "Persist deep_research_wait.json as a workflow artifact",
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Bounds how long the workflow waits for terminal research status",
+            },
+        },
+        "additionalProperties": True,
+    }
+
+
+def _validate_deep_research_wait_config(cfg: dict[str, Any], *, step_id: str) -> None:
+    try:
+        DeepResearchWaitConfig.model_validate(cfg)
+    except ValidationError as exc:
+        detail = _pydantic_error_detail(exc)
+        raise HTTPException(status_code=422, detail=f"Invalid config for step '{step_id}': {detail}") from exc
+
+
 def _validate_chunking_contract(cfg: dict[str, Any], *, step_id: str) -> None:
     if not isinstance(cfg, dict):
         return
@@ -616,6 +676,7 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
         },
         "rag_search": _rag_search_schema_base(),
         "deep_research": _deep_research_step_schema_base(),
+        "deep_research_wait": _deep_research_wait_step_schema_base(),
         "kanban": {
             "type": "object",
             "properties": {
@@ -773,6 +834,8 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
             _validate_rag_search_config(cfg, step_id=sid)
         if t == "deep_research":
             _validate_deep_research_config(cfg, step_id=sid)
+        if t == "deep_research_wait":
+            _validate_deep_research_wait_config(cfg, step_id=sid)
         if t == "media_ingest":
             _validate_chunking_contract(cfg, step_id=sid)
         if t == "map":
@@ -3202,6 +3265,18 @@ async def list_step_types():
                 "query": "Investigate {{ inputs.topic }}",
                 "source_policy": "balanced",
                 "autonomy_mode": "checkpointed",
+                "save_artifact": True,
+            },
+            "min_engine_version": "0.1.0",
+        },
+        "deep_research_wait": {
+            **_deep_research_wait_step_schema_base(),
+            "example": {
+                "run_id": "{{ deep_research.run_id }}",
+                "include_bundle": True,
+                "fail_on_cancelled": True,
+                "fail_on_failed": True,
+                "poll_interval_seconds": 2.0,
                 "save_artifact": True,
             },
             "min_engine_version": "0.1.0",
