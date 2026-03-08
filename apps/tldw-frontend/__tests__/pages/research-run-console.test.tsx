@@ -207,6 +207,7 @@ describe('ResearchRunsPage', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, '', '/research');
     currentSnapshot = makeSnapshot();
     streamHandlers = new Map();
 
@@ -326,6 +327,48 @@ describe('ResearchRunsPage', () => {
       });
     });
     expect(await screen.findByText('Selected run: Newly created run')).toBeInTheDocument();
+  });
+
+  it('prefills the research question from launch query params', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/research?query=Trace%20the%20policy%20timeline&source_policy=local_first'
+    );
+
+    renderWithProviders(<ResearchRunsPage />);
+
+    expect(await screen.findByDisplayValue('Trace the policy timeline')).toBeInTheDocument();
+    expect(mocks.createResearchRun).not.toHaveBeenCalled();
+  });
+
+  it('auto-creates a run from launch params when autorun is enabled', async () => {
+    mocks.createResearchRun.mockResolvedValue(
+      makeRun({
+        id: 'rs_launch',
+        query: 'Trace the policy timeline',
+        latest_checkpoint_id: null,
+      })
+    );
+    window.history.replaceState(
+      {},
+      '',
+      '/research?query=Trace%20the%20policy%20timeline&source_policy=local_first&autonomy_mode=autonomous&autorun=1&from=chat'
+    );
+
+    renderWithProviders(<ResearchRunsPage />);
+
+    await waitFor(() => {
+      expect(mocks.createResearchRun).toHaveBeenCalledWith({
+        query: 'Trace the policy timeline',
+        source_policy: 'local_first',
+        autonomy_mode: 'autonomous',
+      });
+    });
+    await waitFor(() => {
+      expect(window.location.search).not.toContain('autorun=1');
+      expect(window.location.search).not.toContain('query=');
+    });
   });
 
   it('submits an edited plan_review checkpoint patch', async () => {

@@ -230,6 +230,7 @@ import {
 } from "./compare-response-diff"
 import { createComposerPerfTracker } from "@/utils/perf/composer-perf"
 import { createRenderPerfTracker } from "@/utils/perf/render-profiler"
+import { buildResearchLaunchPath } from "@/routes/route-paths"
 
 type Props = {
   droppedFiles: File[]
@@ -7137,6 +7138,40 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     </Tooltip>
   )
 
+  const handleLaunchDeepResearch = React.useCallback(() => {
+    const trimmedMessage = form.values.message.trim()
+    navigate(
+      buildResearchLaunchPath(
+        trimmedMessage
+          ? {
+              query: trimmedMessage,
+              sourcePolicy: "balanced",
+              autonomyMode: "checkpointed",
+              autorun: true,
+              from: "chat"
+            }
+          : { from: "chat" }
+      )
+    )
+  }, [form.values.message, navigate])
+
+  const researchLaunchButton = (
+    <TldwButton
+      variant="outline"
+      size={isMobileViewport ? "lg" : "sm"}
+      shape={isProMode ? "rounded" : "pill"}
+      onClick={handleLaunchDeepResearch}
+      title={t("playground:actions.deepResearch", "Deep Research") as string}
+      ariaLabel={t("playground:actions.deepResearch", "Deep Research") as string}
+      className={isProMode ? "" : "whitespace-nowrap"}
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <Search className="h-4 w-4" aria-hidden="true" />
+        <span>{t("playground:actions.deepResearch", "Deep Research")}</span>
+      </span>
+    </TldwButton>
+  )
+
   const startupTemplatePromptResolution = startupTemplatePreview
     ? resolveStartupTemplatePrompt(startupTemplatePreview, promptLibrary)
     : null
@@ -7966,6 +8001,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           modelSelectButton={modelSelectButton}
                           mcpControl={mcpControl}
                           sendControl={sendControl}
+                          researchLaunchButton={researchLaunchButton}
                           attachmentButton={attachmentButton}
                           toolsButton={toolsButton}
                           voiceChatButton={voiceChatButton}

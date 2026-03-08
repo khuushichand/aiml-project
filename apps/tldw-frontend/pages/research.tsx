@@ -41,6 +41,14 @@ const TRUST_ARTIFACT_NAMES = [
 const TRUST_READY_PHASES = new Set(['awaiting_outline_review', 'packaging', 'completed']);
 const TRUST_INVALIDATION_PHASES = new Set(['collecting', 'synthesizing']);
 
+type ResearchLaunchParams = {
+  query: string | null;
+  sourcePolicy: string | null;
+  autonomyMode: string | null;
+  autorun: boolean;
+  runId: string | null;
+};
+
 type ConsoleState = {
   snapshot: ResearchRunSnapshot | null;
   artifactContents: Record<string, unknown>;
@@ -380,6 +388,40 @@ function deriveTrustView(
     contradictions,
     sourceTrust,
   };
+}
+
+function parseResearchLaunchParams(search: string): ResearchLaunchParams {
+  const params = new URLSearchParams(search);
+  const query = params.get('query')?.trim() || null;
+  const sourcePolicy = params.get('source_policy')?.trim() || null;
+  const autonomyMode = params.get('autonomy_mode')?.trim() || null;
+  const runId = params.get('run')?.trim() || null;
+  return {
+    query,
+    sourcePolicy,
+    autonomyMode,
+    autorun: params.get('autorun') === '1',
+    runId,
+  };
+}
+
+function replaceResearchLaunchUrl(runId: string | null) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const nextUrl = new URL(window.location.href);
+  nextUrl.searchParams.delete('query');
+  nextUrl.searchParams.delete('source_policy');
+  nextUrl.searchParams.delete('autonomy_mode');
+  nextUrl.searchParams.delete('autorun');
+  nextUrl.searchParams.delete('from');
+  if (runId) {
+    nextUrl.searchParams.set('run', runId);
+  } else {
+    nextUrl.searchParams.delete('run');
+  }
+  const search = nextUrl.searchParams.toString();
+  window.history.replaceState({}, '', `${nextUrl.pathname}${search ? `?${search}` : ''}${nextUrl.hash}`);
 }
 
 type PlanCheckpointEditorState = {
@@ -733,11 +775,27 @@ export default function ResearchRunsPage() {
   const { show } = useToast();
   const [question, setQuestion] = useState('');
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [launchParams, setLaunchParams] = useState<ResearchLaunchParams | null>(null);
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const [checkpointEditor, setCheckpointEditor] = useState<CheckpointEditorState | null>(null);
   const [isApprovingCheckpoint, setIsApprovingCheckpoint] = useState(false);
   const [isLoadingTrust, setIsLoadingTrust] = useState(false);
   const [trustError, setTrustError] = useState<string | null>(null);
+  const autoLaunchKeyRef = React.useRef<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const nextLaunchParams = parseResearchLaunchParams(window.location.search);
+    setLaunchParams(nextLaunchParams);
+    if (nextLaunchParams.runId) {
+      setSelectedRunId(nextLaunchParams.runId);
+    }
+    if (nextLaunchParams.query) {
+      setQuestion((current) => (current.trim().length > 0 ? current : nextLaunchParams.query ?? ''));
+    }
+  }, []);
 
   const runsQuery = useQuery({
     queryKey: ['research-runs'],
@@ -754,6 +812,60 @@ export default function ResearchRunsPage() {
       setSelectedRunId(runsQuery.data[0].id);
     }
   }, [runsQuery.data, selectedRunId]);
+
+  useEffect(() => {
+    if (!launchParams?.autorun || !launchParams.query) {
+      return;
+    }
+    const autoLaunchKey = JSON.stringify(launchParams);
+    if (autoLaunchKeyRef.current === autoLaunchKey) {
+      return;
+    }
+    autoLaunchKeyRef.current = autoLaunchKey;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const createdRun = await createResearchRun({
+          query: launchParams.query!,
+          source_policy: launchParams.sourcePolicy ?? 'balanced',
+          autonomy_mode: launchParams.autonomyMode ?? 'checkpointed',
+        });
+        if (cancelled) {
+          return;
+        }
+        queryClient.setQueryData<ResearchRunListItem[]>(['research-runs'], (current) =>
+          upsertListItem(current, createdRun, launchParams.query!)
+        );
+        setSelectedRunId(createdRun.id);
+        dispatch({ type: 'replace-run', run: createdRun });
+        setQuestion('');
+        replaceResearchLaunchUrl(createdRun.id);
+        setLaunchParams((current) =>
+          current
+            ? {
+                ...current,
+                autorun: false,
+                query: null,
+                runId: createdRun.id,
+              }
+            : current
+        );
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        show({
+          title: 'Run creation failed',
+          description: error instanceof Error ? error.message : 'Unable to start research run',
+          variant: 'danger',
+        });
+        autoLaunchKeyRef.current = null;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [launchParams, queryClient, show]);
 
   useEffect(() => {
     dispatch({ type: 'clear' });

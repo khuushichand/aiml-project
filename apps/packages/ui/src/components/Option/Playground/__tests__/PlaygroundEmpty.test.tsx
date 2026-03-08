@@ -4,6 +4,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest"
 import { PlaygroundEmpty } from "../PlaygroundEmpty"
 
 const openHelpModal = vi.fn()
+const navigate = vi.fn()
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -23,6 +24,10 @@ vi.mock("@/context/demo-mode", () => ({
 
 vi.mock("@/store/tutorials", () => ({
   useHelpModal: () => ({ open: openHelpModal })
+}))
+
+vi.mock("react-router-dom", () => ({
+  useNavigate: () => navigate
 }))
 
 vi.mock("@/components/Common/FeatureEmptyState", () => ({
@@ -112,5 +117,13 @@ describe("PlaygroundEmpty", () => {
     fireEvent.click(screen.getByRole("button", { name: "Take a quick tour" }))
 
     expect(openHelpModal).toHaveBeenCalledTimes(1)
+  })
+
+  it("routes the deep research starter to the research console", () => {
+    render(<PlaygroundEmpty />)
+
+    fireEvent.click(screen.getByRole("button", { name: /Deep Research/i }))
+
+    expect(navigate).toHaveBeenCalledWith("/research")
   })
 })
