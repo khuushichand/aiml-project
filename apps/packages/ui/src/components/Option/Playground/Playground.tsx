@@ -36,7 +36,13 @@ import {
 } from "@/utils/timeline-actions"
 import { useCharacterGreeting } from "@/hooks/useCharacterGreeting"
 import {
+  applyChatSettingsPatch,
+  syncChatSettingsForServerChat
+} from "@/services/chat-settings"
+import {
+  fromPersistedDeepResearchAttachment,
   resetAttachedResearchContext,
+  toPersistedDeepResearchAttachment,
   type AttachedResearchContext
 } from "./research-chat-context"
 import {
@@ -108,6 +114,8 @@ export const Playground = () => {
   >(null)
   const initializePlaygroundRef = React.useRef(false)
   const previousThreadRef = React.useRef<string | null>(null)
+  const stableHistoryId =
+    historyId && historyId !== "temp" ? historyId : null
 
   const showDropFeedback = React.useCallback(
     (feedback: { type: "info" | "error" | "warning"; message: string }) => {
@@ -249,19 +257,76 @@ export const Playground = () => {
     previousThreadRef.current = currentThreadKey
   }, [historyId, serverChatId])
 
+  const persistAttachedResearchContext = React.useCallback(
+    async (context: AttachedResearchContext | null) => {
+      if (!serverChatId || !stableHistoryId) {
+        return
+      }
+      try {
+        await applyChatSettingsPatch({
+          historyId: stableHistoryId,
+          serverChatId,
+          patch: {
+            deepResearchAttachment: context
+              ? toPersistedDeepResearchAttachment(context)
+              : null
+          }
+        })
+      } catch {
+        // Attachment persistence is best-effort and should never block chat use.
+      }
+    },
+    [serverChatId, stableHistoryId]
+  )
+
+  React.useEffect(() => {
+    if (!playgroundReady || !serverChatId || !stableHistoryId) {
+      return
+    }
+    let cancelled = false
+    const threadKey = `${serverChatId}::${stableHistoryId}`
+
+    const restorePersistedAttachment = async () => {
+      try {
+        const settings = await syncChatSettingsForServerChat({
+          historyId: stableHistoryId,
+          serverChatId
+        })
+        if (cancelled || previousThreadRef.current !== threadKey) {
+          return
+        }
+        const restoredAttachment = settings?.deepResearchAttachment
+          ? fromPersistedDeepResearchAttachment(settings.deepResearchAttachment)
+          : null
+        setAttachedResearchContext((current) => current ?? restoredAttachment)
+        setAttachedResearchContextBaseline((current) => current ?? restoredAttachment)
+      } catch {
+        // Silent, non-blocking auxiliary restore.
+      }
+    }
+
+    void restorePersistedAttachment()
+
+    return () => {
+      cancelled = true
+    }
+  }, [playgroundReady, serverChatId, stableHistoryId])
+
   const handleAttachResearchContext = React.useCallback(
     (context: AttachedResearchContext) => {
       setAttachedResearchContext(context)
       setAttachedResearchContextBaseline(context)
+      void persistAttachedResearchContext(context)
     },
-    []
+    [persistAttachedResearchContext]
   )
 
   const handleApplyAttachedResearchContext = React.useCallback(
     (context: AttachedResearchContext) => {
       setAttachedResearchContext(context)
+      void persistAttachedResearchContext(context)
     },
-    []
+    [persistAttachedResearchContext]
   )
 
   const handleResetAttachedResearchContext = React.useCallback(() => {
@@ -273,7 +338,8 @@ export const Playground = () => {
   const handleRemoveAttachedResearchContext = React.useCallback(() => {
     setAttachedResearchContext(null)
     setAttachedResearchContextBaseline(null)
-  }, [])
+    void persistAttachedResearchContext(null)
+  }, [persistAttachedResearchContext])
 
   // Session persistence for draft restoration
   const {
@@ -404,7 +470,10 @@ export const Playground = () => {
 
   const settingsReturnContext = React.useMemo(() => {
     if (typeof window === "undefined") {
-      return { historyId: null as string | null, serverChatId: null as string | null }
+      return {
+        historyId: null as string | null,
+        serverChatId: null as string | null
+      }
     }
     const params = new URLSearchParams(window.location.search)
     const historyId = params.get(SETTINGS_HISTORY_ID_PARAM)?.trim() || null

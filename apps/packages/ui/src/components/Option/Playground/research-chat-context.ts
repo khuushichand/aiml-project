@@ -1,4 +1,5 @@
 import type { ChatResearchContext } from "@/services/tldw/TldwApiClient"
+import type { DeepResearchAttachment } from "@/types/chat-session-settings"
 import { buildChatLinkedResearchPath } from "./research-run-status"
 
 const MAX_ATTACHED_RESEARCH_CLAIMS = 5
@@ -209,6 +210,21 @@ export const resetAttachedResearchContext = (
   baseline: AttachedResearchContext | null
 ): AttachedResearchContext | null =>
   baseline ? sanitizeAttachedResearchContext(baseline) : null
+
+export const toPersistedDeepResearchAttachment = (
+  value: AttachedResearchContext,
+  updatedAt = new Date().toISOString()
+): DeepResearchAttachment => ({
+  ...sanitizeAttachedResearchContext(value),
+  updatedAt
+})
+
+export const fromPersistedDeepResearchAttachment = (
+  value: DeepResearchAttachment
+): AttachedResearchContext => {
+  const { updatedAt: _updatedAt, ...attachedContext } = value
+  return sanitizeAttachedResearchContext(attachedContext)
+}
 
 export const isDeepResearchCompletionMetadata = (
   value: unknown

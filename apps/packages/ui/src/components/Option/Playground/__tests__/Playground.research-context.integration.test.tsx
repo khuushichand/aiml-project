@@ -62,6 +62,11 @@ const storeOptionState = vi.hoisted(() => ({
   }
 }))
 
+const chatSettingsState = vi.hoisted(() => ({
+  syncChatSettingsForServerChat: vi.fn(async () => null),
+  applyChatSettingsPatch: vi.fn(async () => null)
+}))
+
 const buildAttachedContext = (runId: string, query: string) => ({
   attached_at: "2026-03-08T20:00:00Z",
   run_id: runId,
@@ -73,6 +78,11 @@ const buildAttachedContext = (runId: string, query: string) => ({
   verification_summary: { unsupported_claim_count: 0 },
   source_trust_summary: { high_trust_count: 1 },
   research_url: `/research?run=${runId}`
+})
+
+const buildPersistedAttachment = (runId: string, query: string) => ({
+  ...buildAttachedContext(runId, query),
+  updatedAt: "2026-03-08T20:05:00Z"
 })
 
 vi.mock("react-i18next", () => ({
@@ -248,6 +258,13 @@ vi.mock("@/hooks/useMediaQuery", () => ({
   useMobile: () => mobileViewportState.value
 }))
 
+vi.mock("@/services/chat-settings", () => ({
+  syncChatSettingsForServerChat: (...args: unknown[]) =>
+    chatSettingsState.syncChatSettingsForServerChat(...args),
+  applyChatSettingsPatch: (...args: unknown[]) =>
+    chatSettingsState.applyChatSettingsPatch(...args)
+}))
+
 vi.mock("@/hooks/useLoadLocalConversation", () => ({
   useLoadLocalConversation: () => vi.fn(async () => {})
 }))
@@ -268,6 +285,8 @@ describe("Playground research context integration", () => {
     storeOptionState.value.compareParentByHistory = {}
     messageOptionState.value.serverChatId = "chat-1"
     messageOptionState.value.historyId = "history-1"
+    chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue(null)
+    chatSettingsState.applyChatSettingsPatch.mockResolvedValue(null)
   })
 
   it("replaces the attached research context and lets the form remove it", async () => {
@@ -387,6 +406,143 @@ describe("Playground research context integration", () => {
     expect(screen.getByTestId("playground-form")).toHaveAttribute(
       "data-baseline-run-id",
       ""
+    )
+  })
+
+  it("auto-restores persisted attached research context for saved chats", async () => {
+    chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue({
+      updatedAt: "2026-03-08T20:10:00Z",
+      deepResearchAttachment: buildPersistedAttachment(
+        "run_saved",
+        "Recovered battery recycling run"
+      )
+    })
+
+    render(<Playground />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-run-id",
+        "run_saved"
+      )
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-baseline-run-id",
+      "run_saved"
+    )
+    expect(chatSettingsState.syncChatSettingsForServerChat).toHaveBeenCalledWith({
+      historyId: "history-1",
+      serverChatId: "chat-1"
+    })
+  })
+
+  it("persists attachment attach, apply, and remove actions for saved chats", async () => {
+    render(<Playground />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Attach run 1" }))
+    await waitFor(() =>
+      expect(chatSettingsState.applyChatSettingsPatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          historyId: "history-1",
+          serverChatId: "chat-1",
+          patch: expect.objectContaining({
+            deepResearchAttachment: expect.objectContaining({
+              run_id: "run_1",
+              query: "Battery recycling supply chain"
+            })
+          })
+        })
+      )
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit attached research" }))
+    await waitFor(() =>
+      expect(chatSettingsState.applyChatSettingsPatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          patch: expect.objectContaining({
+            deepResearchAttachment: expect.objectContaining({
+              question: "Edited attached question"
+            })
+          })
+        })
+      )
+    )
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove attached research" })
+    )
+    await waitFor(() =>
+      expect(chatSettingsState.applyChatSettingsPatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          patch: expect.objectContaining({
+            deepResearchAttachment: null
+          })
+        })
+      )
+    )
+  })
+
+  it("does not persist attachments for temporary chats", async () => {
+    messageOptionState.value.serverChatId = null
+    messageOptionState.value.historyId = "temp"
+
+    render(<Playground />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Attach run 1" }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-run-id",
+        "run_1"
+      )
+    )
+    expect(chatSettingsState.syncChatSettingsForServerChat).not.toHaveBeenCalled()
+    expect(chatSettingsState.applyChatSettingsPatch).not.toHaveBeenCalled()
+  })
+
+  it("restores the correct persisted attachment when switching saved chats", async () => {
+    chatSettingsState.syncChatSettingsForServerChat.mockImplementation(
+      async ({ serverChatId }: { serverChatId: string }) => {
+        if (serverChatId === "chat-1") {
+          return {
+            updatedAt: "2026-03-08T20:10:00Z",
+            deepResearchAttachment: buildPersistedAttachment(
+              "run_one",
+              "First saved run"
+            )
+          }
+        }
+        if (serverChatId === "chat-2") {
+          return {
+            updatedAt: "2026-03-08T20:11:00Z",
+            deepResearchAttachment: buildPersistedAttachment(
+              "run_two",
+              "Second saved run"
+            )
+          }
+        }
+        return null
+      }
+    )
+
+    const view = render(<Playground />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-run-id",
+        "run_one"
+      )
+    )
+
+    messageOptionState.value.serverChatId = "chat-2"
+    messageOptionState.value.historyId = "history-2"
+    view.rerender(<Playground />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-run-id",
+        "run_two"
+      )
     )
   })
 })

@@ -3,10 +3,48 @@ import { tldwClient } from "@/services/tldw/TldwApiClient"
 import {
   CHAT_SETTINGS_SCHEMA_VERSION,
   ChatSettingsRecord,
-  CharacterMemoryEntry
+  CharacterMemoryEntry,
+  DeepResearchAttachment
 } from "@/types/chat-session-settings"
 
 const storage = createSafeStorage()
+const MAX_DEEP_RESEARCH_ATTACHMENT_CLAIMS = 5
+const MAX_DEEP_RESEARCH_ATTACHMENT_UNRESOLVED_QUESTIONS = 5
+const DEEP_RESEARCH_ATTACHMENT_ALLOWED_KEYS = new Set([
+  "run_id",
+  "query",
+  "question",
+  "outline",
+  "key_claims",
+  "unresolved_questions",
+  "verification_summary",
+  "source_trust_summary",
+  "research_url",
+  "attached_at",
+  "updatedAt"
+])
+const CHAT_SETTINGS_OPTIONAL_KEYS = [
+  "autoSummaryEnabled",
+  "autoSummaryThresholdMessages",
+  "autoSummaryWindowMessages",
+  "pinnedMessageIds",
+  "greetingSelectionId",
+  "greetingsVersion",
+  "greetingsChecksum",
+  "useCharacterDefault",
+  "greetingEnabled",
+  "greetingScope",
+  "presetScope",
+  "memoryScope",
+  "directedCharacterId",
+  "chatPresetOverrideId",
+  "authorNote",
+  "authorNotePosition",
+  "characterMemoryById",
+  "chatGenerationOverride",
+  "summary",
+  "imageEventSyncMode"
+] as const
 
 export const getChatSettingsStorageKey = (chatKey: string) =>
   `chatSettings:${chatKey}`
@@ -21,8 +59,115 @@ export const resolveChatSettingsKey = (params: {
   return "scratch"
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value)
+
+const asNonEmptyString = (value: unknown): string | null => {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+const asIsoString = (value: unknown): string | null => {
+  const text = asNonEmptyString(value)
+  if (!text) return null
+  const parsed = Date.parse(text)
+  return Number.isNaN(parsed) ? null : text
+}
+
+const asNonNegativeInteger = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.trunc(value)
+  }
+  return null
+}
+
+const copyKnownChatSettings = (
+  raw: Record<string, unknown>
+): Partial<ChatSettingsRecord> => {
+  const next: Partial<ChatSettingsRecord> = {}
+  for (const key of CHAT_SETTINGS_OPTIONAL_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(raw, key)) {
+      ;(next as Record<string, unknown>)[key] = raw[key]
+    }
+  }
+  return next
+}
+
+const sanitizeDeepResearchAttachment = (
+  value: unknown
+): DeepResearchAttachment | null => {
+  if (!isRecord(value)) return null
+  const keys = Object.keys(value)
+  if (keys.some((key) => !DEEP_RESEARCH_ATTACHMENT_ALLOWED_KEYS.has(key))) {
+    return null
+  }
+
+  const runId = asNonEmptyString(value.run_id)
+  const query = asNonEmptyString(value.query)
+  const question = asNonEmptyString(value.question)
+  const researchUrl = asNonEmptyString(value.research_url)
+  const attachedAt = asIsoString(value.attached_at)
+  const updatedAt = asIsoString(value.updatedAt)
+
+  if (!runId || !query || !question || !researchUrl || !attachedAt || !updatedAt) {
+    return null
+  }
+
+  const outline = Array.isArray(value.outline)
+    ? value.outline
+        .map((entry) =>
+          isRecord(entry) ? asNonEmptyString(entry.title) : null
+        )
+        .filter((title): title is string => title !== null)
+        .map((title) => ({ title }))
+    : []
+
+  const keyClaims = Array.isArray(value.key_claims)
+    ? value.key_claims
+        .map((entry) => (isRecord(entry) ? asNonEmptyString(entry.text) : null))
+        .filter((text): text is string => text !== null)
+        .slice(0, MAX_DEEP_RESEARCH_ATTACHMENT_CLAIMS)
+        .map((text) => ({ text }))
+    : []
+
+  const unresolvedQuestions = Array.isArray(value.unresolved_questions)
+    ? value.unresolved_questions
+        .map((entry) => asNonEmptyString(entry))
+        .filter((entry): entry is string => entry !== null)
+        .slice(0, MAX_DEEP_RESEARCH_ATTACHMENT_UNRESOLVED_QUESTIONS)
+    : []
+
+  const unsupportedClaimCount = isRecord(value.verification_summary)
+    ? asNonNegativeInteger(value.verification_summary.unsupported_claim_count)
+    : null
+  const highTrustCount = isRecord(value.source_trust_summary)
+    ? asNonNegativeInteger(value.source_trust_summary.high_trust_count)
+    : null
+
+  return {
+    run_id: runId,
+    query,
+    question,
+    outline,
+    key_claims: keyClaims,
+    unresolved_questions: unresolvedQuestions,
+    verification_summary:
+      unsupportedClaimCount === null
+        ? undefined
+        : { unsupported_claim_count: unsupportedClaimCount },
+    source_trust_summary:
+      highTrustCount === null
+        ? undefined
+        : { high_trust_count: highTrustCount },
+    research_url: researchUrl,
+    attached_at: attachedAt,
+    updatedAt
+  }
+}
+
 const coerceSettings = (raw: any): ChatSettingsRecord | null => {
-  if (!raw || typeof raw !== "object") return null
+  if (!isRecord(raw)) return null
   const schemaVersion =
     typeof raw.schemaVersion === "number"
       ? raw.schemaVersion
@@ -31,11 +176,24 @@ const coerceSettings = (raw: any): ChatSettingsRecord | null => {
     typeof raw.updatedAt === "string"
       ? raw.updatedAt
       : new Date().toISOString()
-  return {
-    ...raw,
+  const next: ChatSettingsRecord = {
+    ...copyKnownChatSettings(raw),
     schemaVersion,
     updatedAt
-  } as ChatSettingsRecord
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, "deepResearchAttachment")) {
+    if (raw.deepResearchAttachment === null) {
+      next.deepResearchAttachment = null
+    } else {
+      const sanitizedAttachment = sanitizeDeepResearchAttachment(
+        raw.deepResearchAttachment
+      )
+      if (sanitizedAttachment) {
+        next.deepResearchAttachment = sanitizedAttachment
+      }
+    }
+  }
+  return next
 }
 
 export const normalizeChatSettingsRecord = (
@@ -94,6 +252,20 @@ export const mergeChatSettings = (
     merged.characterMemoryById = mergedMap
   }
 
+  if (
+    local.deepResearchAttachment &&
+    remote.deepResearchAttachment &&
+    local.deepResearchAttachment !== null &&
+    remote.deepResearchAttachment !== null
+  ) {
+    const localAttachmentTime = toEpoch(local.deepResearchAttachment.updatedAt)
+    const remoteAttachmentTime = toEpoch(remote.deepResearchAttachment.updatedAt)
+    merged.deepResearchAttachment =
+      remoteAttachmentTime >= localAttachmentTime
+        ? remote.deepResearchAttachment
+        : local.deepResearchAttachment
+  }
+
   return merged
 }
 
@@ -116,10 +288,13 @@ export const saveChatSettingsForKey = async (
 ): Promise<boolean> => {
   try {
     const key = getChatSettingsStorageKey(chatKey)
-    const payload: ChatSettingsRecord = {
+    const payload = normalizeChatSettingsRecord({
       ...settings,
       schemaVersion: CHAT_SETTINGS_SCHEMA_VERSION,
       updatedAt: settings.updatedAt || new Date().toISOString()
+    })
+    if (!payload) {
+      return false
     }
     await storage.set(key, payload)
     return true
@@ -216,15 +391,20 @@ export const applyChatSettingsPatch = async (params: {
   const { historyId, serverChatId, patch } = params
   const chatKey = resolveChatSettingsKey({ historyId, serverChatId })
   const existing = await getChatSettingsForKey(chatKey)
-  const next: ChatSettingsRecord = {
-    ...(existing || {
+  const next =
+    normalizeChatSettingsRecord({
+      ...(existing || {
+        schemaVersion: CHAT_SETTINGS_SCHEMA_VERSION,
+        updatedAt: new Date().toISOString()
+      }),
+      ...patch,
       schemaVersion: CHAT_SETTINGS_SCHEMA_VERSION,
       updatedAt: new Date().toISOString()
-    }),
-    ...patch,
-    schemaVersion: CHAT_SETTINGS_SCHEMA_VERSION,
-    updatedAt: new Date().toISOString()
-  }
+    }) ||
+    ({
+      schemaVersion: CHAT_SETTINGS_SCHEMA_VERSION,
+      updatedAt: new Date().toISOString()
+    } as ChatSettingsRecord)
 
   await saveChatSettingsForKey(chatKey, next)
 
