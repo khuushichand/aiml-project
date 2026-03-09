@@ -539,6 +539,142 @@ class ACPSessionsDB:
         return ancestors
 
     # ------------------------------------------------------------------
+    # Quota configuration
+    # ------------------------------------------------------------------
+
+    def configure_quotas(
+        self,
+        *,
+        max_concurrent_per_user: int = 5,
+        max_tokens_per_session: int = 1_000_000,
+        session_ttl_seconds: int = 86400,
+        max_session_duration_seconds: int = 14400,
+    ) -> None:
+        """Store quota limits as instance attributes (from server config)."""
+        self._max_concurrent_per_user = max_concurrent_per_user
+        self._max_tokens_per_session = max_tokens_per_session
+        self._session_ttl_seconds = session_ttl_seconds
+        self._max_session_duration_seconds = max_session_duration_seconds
+
+    def check_session_quota(self, user_id: int) -> dict[str, Any] | None:
+        """Check if user has reached the concurrent session limit.
+
+        Returns an error dict if quota exceeded, None otherwise.
+        """
+        limit = getattr(self, "_max_concurrent_per_user", 5)
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE user_id = ? AND status = 'active'",
+            (user_id,),
+        ).fetchone()
+        count = row[0] if row else 0
+        if count >= limit:
+            return {
+                "code": "quota_exceeded",
+                "message": f"Max concurrent sessions ({limit}) exceeded",
+                "current": count,
+                "limit": limit,
+            }
+        return None
+
+    def check_token_quota(self, session_id: str) -> dict[str, Any] | None:
+        """Check if session has exceeded the token limit.
+
+        Returns an error dict if quota exceeded, None if under limit
+        or session not found.
+        """
+        limit = getattr(self, "_max_tokens_per_session", 1_000_000)
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT total_tokens FROM sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        if row[0] >= limit:
+            return {
+                "code": "token_quota_exceeded",
+                "message": f"Session token limit ({limit}) exceeded",
+                "current": row[0],
+                "limit": limit,
+            }
+        return None
+
+    def get_quota_status(
+        self, user_id: int, session_id: str | None = None
+    ) -> dict[str, Any]:
+        """Return current quota usage stats."""
+        conn = self._get_conn()
+        concurrent_limit = getattr(self, "_max_concurrent_per_user", 5)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE user_id = ? AND status = 'active'",
+            (user_id,),
+        ).fetchone()
+        active_count = row[0] if row else 0
+
+        result: dict[str, Any] = {
+            "concurrent_sessions": {
+                "current": active_count,
+                "limit": concurrent_limit,
+            },
+        }
+
+        if session_id is not None:
+            token_limit = getattr(self, "_max_tokens_per_session", 1_000_000)
+            sess_row = conn.execute(
+                "SELECT total_tokens FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            total = sess_row[0] if sess_row else 0
+            result["session_tokens"] = {
+                "current": total,
+                "limit": token_limit,
+            }
+
+        return result
+
+    def evict_expired_sessions(self) -> int:
+        """Close active sessions that have exceeded TTL or max duration.
+
+        Returns the number of sessions evicted.
+        """
+        ttl = getattr(self, "_session_ttl_seconds", 86400)
+        max_dur = getattr(self, "_max_session_duration_seconds", 14400)
+        # Use the smaller of the two as the effective cutoff
+        cutoff_seconds = min(ttl, max_dur)
+
+        conn = self._get_conn()
+        now = datetime.now(timezone.utc)
+
+        # Fetch active sessions and check expiry in Python
+        rows = conn.execute(
+            "SELECT session_id, created_at FROM sessions WHERE status = 'active'"
+        ).fetchall()
+
+        expired_ids: list[str] = []
+        for r in rows:
+            try:
+                created = datetime.fromisoformat(r["created_at"])
+            except (ValueError, TypeError):
+                continue
+            age = (now - created).total_seconds()
+            if age >= cutoff_seconds:
+                expired_ids.append(r["session_id"])
+
+        if not expired_ids:
+            return 0
+
+        now_iso = _utcnow_iso()
+        for sid in expired_ids:
+            conn.execute(
+                "UPDATE sessions SET status = 'closed', last_activity_at = ? WHERE session_id = ?",
+                (now_iso, sid),
+            )
+        conn.commit()
+        logger.info("Evicted {} expired ACP sessions", len(expired_ids))
+        return len(expired_ids)
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 

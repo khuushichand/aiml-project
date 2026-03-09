@@ -262,6 +262,84 @@ class TestForkSession:
         assert len(messages) == 2  # all messages copied
 
 
+class TestQuotasAndCleanup:
+    def test_check_session_quota_under_limit(self, db):
+        db.configure_quotas(max_concurrent_per_user=3)
+        db.register_session(session_id="s1", user_id=1)
+        assert db.check_session_quota(1) is None
+
+    def test_check_session_quota_exceeded(self, db):
+        db.configure_quotas(max_concurrent_per_user=1)
+        db.register_session(session_id="s1", user_id=1)
+        error = db.check_session_quota(1)
+        assert error is not None
+        assert error["code"] == "quota_exceeded"
+        assert error["current"] == 1
+        assert error["limit"] == 1
+
+    def test_check_session_quota_ignores_closed(self, db):
+        db.configure_quotas(max_concurrent_per_user=1)
+        db.register_session(session_id="s1", user_id=1)
+        db.close_session("s1")
+        # Closed session shouldn't count
+        assert db.check_session_quota(1) is None
+
+    def test_check_token_quota_under_limit(self, db):
+        db.configure_quotas(max_tokens_per_session=1000)
+        db.register_session(session_id="s1", user_id=1)
+        assert db.check_token_quota("s1") is None
+
+    def test_check_token_quota_exceeded(self, db):
+        db.configure_quotas(max_tokens_per_session=100)
+        db.register_session(session_id="s1", user_id=1)
+        db.update_token_usage("s1", prompt_tokens=80, completion_tokens=30)
+        error = db.check_token_quota("s1")
+        assert error is not None
+        assert error["code"] == "token_quota_exceeded"
+
+    def test_check_token_quota_nonexistent_session(self, db):
+        db.configure_quotas(max_tokens_per_session=100)
+        assert db.check_token_quota("nope") is None
+
+    def test_get_quota_status(self, db):
+        db.configure_quotas(max_concurrent_per_user=5, max_tokens_per_session=1000)
+        db.register_session(session_id="s1", user_id=1)
+        status = db.get_quota_status(1, session_id="s1")
+        assert status["concurrent_sessions"]["current"] == 1
+        assert status["concurrent_sessions"]["limit"] == 5
+        assert "session_tokens" in status
+
+    def test_get_quota_status_without_session(self, db):
+        db.configure_quotas(max_concurrent_per_user=5)
+        db.register_session(session_id="s1", user_id=1)
+        status = db.get_quota_status(1)
+        assert status["concurrent_sessions"]["current"] == 1
+        assert "session_tokens" not in status
+
+    def test_evict_expired_sessions(self, db):
+        db.configure_quotas(session_ttl_seconds=0)  # Immediate expiry
+        db.register_session(session_id="s1", user_id=1)
+        evicted = db.evict_expired_sessions()
+        assert evicted == 1
+        rec = db.get_session("s1")
+        assert rec["status"] == "closed"
+
+    def test_evict_skips_already_closed(self, db):
+        db.configure_quotas(session_ttl_seconds=0)
+        db.register_session(session_id="s1", user_id=1)
+        db.close_session("s1")
+        evicted = db.evict_expired_sessions()
+        assert evicted == 0
+
+    def test_evict_preserves_fresh_sessions(self, db):
+        db.configure_quotas(session_ttl_seconds=86400)  # 24h
+        db.register_session(session_id="s1", user_id=1)
+        evicted = db.evict_expired_sessions()
+        assert evicted == 0
+        rec = db.get_session("s1")
+        assert rec["status"] == "active"
+
+
 class TestCascadeDelete:
     def test_delete_session_cascades_messages(self, db):
         db.register_session(session_id="s1", user_id=1)
