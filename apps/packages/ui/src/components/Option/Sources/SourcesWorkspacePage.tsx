@@ -1,0 +1,103 @@
+import React from "react"
+import { Alert, Button, Empty, Spin, Tag, Typography } from "antd"
+import { Link } from "react-router-dom"
+import { useTranslation } from "react-i18next"
+
+import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
+import { PageShell } from "@/components/Common/PageShell"
+import { useIngestionSourcesQuery } from "@/hooks/use-ingestion-sources"
+import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+import { useServerOnline } from "@/hooks/useServerOnline"
+import { SourceListTable } from "./SourceListTable"
+
+type SourcesWorkspacePageProps = {
+  mode?: "user" | "admin"
+}
+
+export const SourcesWorkspacePage: React.FC<SourcesWorkspacePageProps> = ({
+  mode = "user"
+}) => {
+  const { t } = useTranslation(["sources", "common", "option"])
+  const isOnline = useServerOnline()
+  const { capabilities, loading: capsLoading } = useServerCapabilities()
+  const sourcesQuery = useIngestionSourcesQuery()
+
+  if (!isOnline) {
+    return (
+      <PageShell className="py-6" maxWidthClassName="max-w-6xl">
+        <Empty
+          description={t(
+            "sources:offline",
+            "Server is offline. Connect to manage ingestion sources."
+          )}
+        />
+      </PageShell>
+    )
+  }
+
+  if (!capsLoading && capabilities && !capabilities.hasIngestionSources) {
+    return (
+      <PageShell className="py-6" maxWidthClassName="max-w-6xl">
+        <FeatureEmptyState
+          title={t("sources:title", "Sources")}
+          description={t(
+            "sources:states.unsupported",
+            "This server does not advertise ingestion source support."
+          )}
+        />
+      </PageShell>
+    )
+  }
+
+  return (
+    <PageShell className="space-y-6 py-6" maxWidthClassName="max-w-6xl">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Typography.Title level={2} className="!mb-0">
+              {t("sources:title", "Sources")}
+            </Typography.Title>
+            {mode === "admin" && <Tag color="gold">Admin view</Tag>}
+          </div>
+          <Typography.Paragraph type="secondary" className="!mb-0">
+            {t(
+              "sources:description",
+              "Manage local folders and archive snapshots that sync into notes or media."
+            )}
+          </Typography.Paragraph>
+        </div>
+        <Button type="primary">
+          <Link to="/sources/new">{t("sources:actions.new", "New source")}</Link>
+        </Button>
+      </div>
+
+      {sourcesQuery.isLoading ? (
+        <div className="flex justify-center py-10">
+          <Spin />
+        </div>
+      ) : null}
+
+      {!sourcesQuery.isLoading && sourcesQuery.error ? (
+        <Alert
+          type="error"
+          message={String(
+            (sourcesQuery.error as { message?: string } | undefined)?.message ||
+              "Failed to load sources"
+          )}
+        />
+      ) : null}
+
+      {!sourcesQuery.isLoading &&
+      !sourcesQuery.error &&
+      (sourcesQuery.data?.total ?? 0) === 0 ? (
+        <Empty description={t("sources:states.empty", "No ingestion sources yet.")} />
+      ) : null}
+
+      {!sourcesQuery.isLoading &&
+      !sourcesQuery.error &&
+      (sourcesQuery.data?.sources?.length ?? 0) > 0 ? (
+        <SourceListTable sources={sourcesQuery.data?.sources ?? []} />
+      ) : null}
+    </PageShell>
+  )
+}
