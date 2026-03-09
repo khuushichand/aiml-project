@@ -30,6 +30,8 @@ class AgentRegistryEntry:
     env: dict[str, str] = field(default_factory=dict)
     requires_api_key: str | None = None
     default: bool = False
+    install_instructions: list[str] = field(default_factory=list)
+    docs_url: str | None = None
 
     def check_availability(self) -> dict[str, Any]:
         """Check runtime availability of this agent."""
@@ -126,6 +128,8 @@ class AgentRegistry:
                 env=dict(item.get("env", {})),
                 requires_api_key=item.get("requires_api_key"),
                 default=bool(item.get("default", False)),
+                install_instructions=list(item.get("install_instructions", [])),
+                docs_url=item.get("docs_url"),
             )
             entries.append(entry)
             if entry.default:
