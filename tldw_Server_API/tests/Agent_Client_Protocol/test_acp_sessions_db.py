@@ -204,6 +204,20 @@ class TestSessionMessages:
         assert usage["prompt_tokens"] == 0
         assert usage["total_tokens"] == 0
 
+    def test_update_token_usage_directly(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.update_token_usage("s1", prompt_tokens=50, completion_tokens=25)
+        rec = db.get_session("s1")
+        assert rec["prompt_tokens"] == 50
+        assert rec["completion_tokens"] == 25
+        assert rec["total_tokens"] == 75
+        # Second call accumulates
+        db.update_token_usage("s1", prompt_tokens=10, completion_tokens=5)
+        rec = db.get_session("s1")
+        assert rec["prompt_tokens"] == 60
+        assert rec["completion_tokens"] == 30
+        assert rec["total_tokens"] == 90
+
 
 class TestForkSession:
     def test_fork_copies_messages(self, db):
