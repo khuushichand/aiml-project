@@ -86,6 +86,11 @@ import {
   discardAbortedTurnIfRequested,
   isAbortLikeError
 } from "@/hooks/chat/abort-turn-cleanup"
+import { ensurePersonaServerChat } from "@/hooks/chat/personaServerChat"
+import {
+  isPersonaAssistantSelection,
+  type AssistantSelection
+} from "@/types/assistant-selection"
 import type { Character } from "@/types/character"
 import type {
   MessageSteeringMode,
@@ -153,6 +158,9 @@ type TldwChatMeta =
       external_ref?: string | null
       title?: string | null
       character_id?: string | number | null
+      assistant_kind?: "character" | "persona" | null
+      assistant_id?: string | number | null
+      persona_memory_mode?: "read_only" | "read_write" | null
     }
   | string
   | number
@@ -224,6 +232,9 @@ type UseChatActionsOptions = {
   serverChatId: string | null
   serverChatTitle: string | null
   serverChatCharacterId: string | number | null
+  serverChatAssistantKind: "character" | "persona" | null
+  serverChatAssistantId: string | null
+  serverChatPersonaMemoryMode: "read_only" | "read_write" | null
   serverChatState: ConversationState | null
   serverChatTopic: string | null
   serverChatClusterId: string | null
@@ -232,6 +243,13 @@ type UseChatActionsOptions = {
   setServerChatId: (id: string | null) => void
   setServerChatTitle: (title: string | null) => void
   setServerChatCharacterId: (id: string | number | null) => void
+  setServerChatAssistantKind: (
+    kind: "character" | "persona" | null
+  ) => void
+  setServerChatAssistantId: (id: string | null) => void
+  setServerChatPersonaMemoryMode: (
+    mode: "read_only" | "read_write" | null
+  ) => void
   setServerChatMetaLoaded: (loaded: boolean) => void
   setServerChatState: (state: ConversationState | null) => void
   setServerChatVersion: (version: number | null) => void
@@ -260,6 +278,7 @@ type UseChatActionsOptions = {
   setSelectedSystemPrompt: (prompt: string) => void
   invalidateServerChatHistory: () => void
   selectedCharacter: Character | null
+  selectedAssistant: AssistantSelection | null
   messageSteeringMode: MessageSteeringMode
   messageSteeringForceNarrate: boolean
   clearMessageSteering: () => void
@@ -299,6 +318,9 @@ export const useChatActions = ({
   serverChatId,
   serverChatTitle,
   serverChatCharacterId,
+  serverChatAssistantKind,
+  serverChatAssistantId,
+  serverChatPersonaMemoryMode,
   serverChatState,
   serverChatTopic,
   serverChatClusterId,
@@ -307,6 +329,9 @@ export const useChatActions = ({
   setServerChatId,
   setServerChatTitle,
   setServerChatCharacterId,
+  setServerChatAssistantKind,
+  setServerChatAssistantId,
+  setServerChatPersonaMemoryMode,
   setServerChatMetaLoaded,
   setServerChatState,
   setServerChatVersion,
@@ -332,6 +357,7 @@ export const useChatActions = ({
   setSelectedSystemPrompt,
   invalidateServerChatHistory,
   selectedCharacter,
+  selectedAssistant,
   messageSteeringMode,
   messageSteeringForceNarrate,
   clearMessageSteering
@@ -597,13 +623,17 @@ export const useChatActions = ({
         : payload?.conversationId != null
           ? String(payload.conversationId)
           : null
-    const isServerConversation =
-      payloadConversationId && serverChatId
-        ? payloadConversationId === String(serverChatId)
-        : false
+    const resolvedServerConversationId =
+      payloadConversationId ??
+      (serverChatId != null ? String(serverChatId) : null)
     const serverConversationMatches = payloadConversationId
-      ? payloadConversationId === String(serverChatId)
+      ? serverChatId != null
+        ? payloadConversationId === String(serverChatId)
+        : true
       : true
+    const isServerConversation = Boolean(
+      resolvedServerConversationId && serverConversationMatches
+    )
     const isImageGenerationNoOp =
       isImageGenerationMessageType(payload?.userMessageType) ||
       isImageGenerationMessageType(payload?.assistantMessageType)
@@ -624,7 +654,7 @@ export const useChatActions = ({
 
     // When resuming a server-backed chat, mirror new turns to /api/v1/chats.
     if (
-      serverChatId &&
+      resolvedServerConversationId &&
       serverConversationMatches &&
       !skipServerWrite
     ) {
@@ -725,10 +755,13 @@ export const useChatActions = ({
             imageDataUrl: latestPreview
           })
 
-          const mirroredMessage = await tldwClient.addChatMessage(serverChatId, {
+          const mirroredMessage = await tldwClient.addChatMessage(
+            resolvedServerConversationId,
+            {
             role: "assistant",
             content: mirroredContent
-          })
+            }
+          )
 
           await updateImageEventSyncMetadata(payload, {
             status: "synced",
@@ -757,7 +790,7 @@ export const useChatActions = ({
         typeof payload?.fullText === "string"
       ) {
         try {
-          const cid = serverChatId
+          const cid = resolvedServerConversationId
           const userContent = payload.message.trim()
           const assistantContent = payload.fullText.trim()
 
@@ -860,6 +893,81 @@ export const useChatActions = ({
       ...overrides
     }
   }
+
+  const ensurePersonaServerChatWithState = React.useCallback(
+    async ({
+      assistant,
+      serverChatIdOverride
+    }: {
+      assistant: AssistantSelection & { kind: "persona" }
+      serverChatIdOverride?: string | null
+    }): Promise<{
+      chatId: string
+      historyId: string | null
+      personaMemoryMode: "read_only" | "read_write"
+    }> =>
+      ensurePersonaServerChat({
+        assistant,
+        serverChatIdOverride,
+        serverChatId,
+        serverChatTitle,
+        serverChatAssistantKind,
+        serverChatAssistantId,
+        serverChatPersonaMemoryMode,
+        serverChatState,
+        serverChatTopic,
+        serverChatClusterId,
+        serverChatSource,
+        serverChatExternalRef,
+        historyId,
+        temporaryChat,
+        createChat: (payload) => tldwClient.createChat(payload),
+        ensureServerChatHistoryId,
+        invalidateServerChatHistory,
+        setServerChatId,
+        setServerChatTitle,
+        setServerChatCharacterId,
+        setServerChatAssistantKind,
+        setServerChatAssistantId,
+        setServerChatPersonaMemoryMode,
+        setServerChatMetaLoaded,
+        setServerChatState,
+        setServerChatVersion,
+        setServerChatTopic,
+        setServerChatClusterId,
+        setServerChatSource,
+        setServerChatExternalRef
+      }),
+    [
+      ensureServerChatHistoryId,
+      historyId,
+      invalidateServerChatHistory,
+      serverChatAssistantId,
+      serverChatAssistantKind,
+      serverChatClusterId,
+      serverChatExternalRef,
+      serverChatId,
+      serverChatPersonaMemoryMode,
+      serverChatSource,
+      serverChatState,
+      serverChatTitle,
+      serverChatTopic,
+      setServerChatAssistantId,
+      setServerChatAssistantKind,
+      setServerChatCharacterId,
+      setServerChatClusterId,
+      setServerChatExternalRef,
+      setServerChatId,
+      setServerChatMetaLoaded,
+      setServerChatPersonaMemoryMode,
+      setServerChatSource,
+      setServerChatState,
+      setServerChatTitle,
+      setServerChatTopic,
+      setServerChatVersion,
+      temporaryChat
+    ]
+  )
 
   const characterChatMode = async ({
     message,
@@ -2248,6 +2356,53 @@ export const useChatActions = ({
               messageSteering: messageSteeringForTurn,
               serverChatIdOverride
             })
+            return
+          }
+
+          if (isPersonaAssistantSelection(selectedAssistant)) {
+            const resolvedModel = effectiveSelectedModel?.trim()
+            if (!resolvedModel) {
+              notification.error({
+                message: t("error"),
+                description: t("validationSelectModel")
+              })
+              setIsProcessing(false)
+              setStreaming(false)
+              setAbortController(null)
+              return
+            }
+
+            const personaServerChat = await ensurePersonaServerChatWithState({
+              assistant: selectedAssistant,
+              serverChatIdOverride
+            })
+            const assistantIdentity = {
+              name: selectedAssistant.name,
+              avatarUrl:
+                typeof selectedAssistant.avatar_url === "string"
+                  ? selectedAssistant.avatar_url
+                  : undefined
+            }
+            markSteeringApplied()
+            await normalChatMode(
+              message,
+              image,
+              isRegenerate,
+              baseMessages,
+              baseHistory,
+              signal,
+              {
+                ...enhancedChatModeParams,
+                assistantIdentity,
+                historyId: personaServerChat.historyId,
+                serverChatId: personaServerChat.chatId,
+                saveMessageOnSuccess: (data: SaveMessageData) =>
+                  saveMessageOnSuccess({
+                    ...data,
+                    conversationId: personaServerChat.chatId
+                  })
+              }
+            )
             return
           }
         }

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom"
 import { Modal } from "antd"
 import { shallow } from "zustand/shallow"
 import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
-import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
+import { useSelectedAssistant } from "@/hooks/useSelectedAssistant"
 import { useStoreMessageOption } from "@/store/option"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { cleanupAntOverlays } from "@/utils/cleanup-ant-overlays"
@@ -11,7 +11,12 @@ import { normalizeConversationState } from "@/utils/conversation-state"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { collectGreetings } from "@/utils/character-greetings"
 import type { ServerChatSummary } from "@/services/tldw/TldwApiClient"
+import {
+  characterToAssistantSelection,
+  personaToAssistantSelection
+} from "@/types/assistant-selection"
 import type { Character } from "@/types/character"
+import { resolveServerChatAssistantIdentity } from "@/hooks/chat/useServerChatLoader"
 
 const resolveCharacterId = (value: unknown): string | number | null => {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -79,8 +84,8 @@ const normalizeSelectedCharacter = (raw: unknown): Character | null => {
 
 export const useSelectServerChat = () => {
   const navigate = useNavigate()
-  const [, setSelectedCharacter] = useSelectedCharacter<Character | null>(null)
-  const characterSyncRequestRef = React.useRef(0)
+  const [, setSelectedAssistant] = useSelectedAssistant(null)
+  const assistantSyncRequestRef = React.useRef(0)
   const {
     setHistory,
     setHistoryId,
@@ -96,6 +101,9 @@ export const useSelectServerChat = () => {
     setServerChatId,
     setServerChatTitle,
     setServerChatCharacterId,
+    setServerChatAssistantKind,
+    setServerChatAssistantId,
+    setServerChatPersonaMemoryMode,
     setServerChatVersion,
     setServerChatLoadState,
     setServerChatLoadError,
@@ -112,6 +120,9 @@ export const useSelectServerChat = () => {
       setServerChatId: state.setServerChatId,
       setServerChatTitle: state.setServerChatTitle,
       setServerChatCharacterId: state.setServerChatCharacterId,
+      setServerChatAssistantKind: state.setServerChatAssistantKind,
+      setServerChatAssistantId: state.setServerChatAssistantId,
+      setServerChatPersonaMemoryMode: state.setServerChatPersonaMemoryMode,
       setServerChatVersion: state.setServerChatVersion,
       setServerChatLoadState: state.setServerChatLoadState,
       setServerChatLoadError: state.setServerChatLoadError,
@@ -137,34 +148,70 @@ export const useSelectServerChat = () => {
       setMessages([])
       setServerChatId(chat.id)
       setServerChatTitle(chat.title || "")
-      const characterId = resolveCharacterId(chat.character_id)
+      const assistantIdentity = resolveServerChatAssistantIdentity(
+        chat as unknown as Record<string, unknown>
+      )
+      const characterId = resolveCharacterId(assistantIdentity.characterId)
       setServerChatCharacterId(characterId)
+      setServerChatAssistantKind(assistantIdentity.assistantKind)
+      setServerChatAssistantId(assistantIdentity.assistantId)
+      setServerChatPersonaMemoryMode(assistantIdentity.personaMemoryMode)
       setServerChatLoadState("loading")
       setServerChatLoadError(null)
-      const syncRequestId = characterSyncRequestRef.current + 1
-      characterSyncRequestRef.current = syncRequestId
-      const syncSelectedCharacter = async () => {
+      const syncRequestId = assistantSyncRequestRef.current + 1
+      assistantSyncRequestRef.current = syncRequestId
+      const syncSelectedAssistant = async () => {
+        if (assistantIdentity.assistantKind === "persona" && assistantIdentity.assistantId) {
+          try {
+            await tldwClient.initialize().catch(() => null)
+            const persona = await tldwClient.getPersonaProfile(
+              assistantIdentity.assistantId
+            )
+            if (assistantSyncRequestRef.current !== syncRequestId) return
+            await setSelectedAssistant(
+              personaToAssistantSelection({
+                ...persona,
+                id: assistantIdentity.assistantId,
+                name: persona?.name || "Persona"
+              })
+            )
+          } catch (error) {
+            if (assistantSyncRequestRef.current !== syncRequestId) return
+            console.warn("[useSelectServerChat] Failed to sync persona", {
+              chatId: chat.id,
+              assistantId: assistantIdentity.assistantId,
+              error
+            })
+            await setSelectedAssistant(
+              personaToAssistantSelection({
+                id: assistantIdentity.assistantId,
+                name: "Persona"
+              })
+            )
+          }
+          return
+        }
         if (characterId == null) {
-          await setSelectedCharacter(null)
+          await setSelectedAssistant(null)
           return
         }
         try {
           await tldwClient.initialize().catch(() => null)
           const character = await tldwClient.getCharacter(characterId)
-          if (characterSyncRequestRef.current !== syncRequestId) return
+          if (assistantSyncRequestRef.current !== syncRequestId) return
           const normalized = normalizeSelectedCharacter(character)
-          await setSelectedCharacter(normalized)
+          await setSelectedAssistant(characterToAssistantSelection(normalized))
         } catch (error) {
-          if (characterSyncRequestRef.current !== syncRequestId) return
+          if (assistantSyncRequestRef.current !== syncRequestId) return
           console.warn("[useSelectServerChat] Failed to sync character", {
             chatId: chat.id,
             characterId,
             error
           })
-          await setSelectedCharacter(null)
+          await setSelectedAssistant(null)
         }
       }
-      void syncSelectedCharacter()
+      void syncSelectedAssistant()
       setIsProcessing(false)
       setStreaming(false)
       setIsEmbedding(false)
@@ -190,7 +237,9 @@ export const useSelectServerChat = () => {
       setIsProcessing,
       setIsSearchingInternet,
       setMessages,
-      setSelectedCharacter,
+      setSelectedAssistant,
+      setServerChatAssistantId,
+      setServerChatAssistantKind,
       setServerChatCharacterId,
       setServerChatClusterId,
       setServerChatExternalRef,
@@ -198,6 +247,7 @@ export const useSelectServerChat = () => {
       setServerChatLoadError,
       setServerChatLoadState,
       setServerChatMetaLoaded,
+      setServerChatPersonaMemoryMode,
       setServerChatSource,
       setServerChatState,
       setServerChatTitle,

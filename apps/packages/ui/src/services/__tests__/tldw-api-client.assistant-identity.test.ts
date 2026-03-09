@@ -1,0 +1,149 @@
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const mocks = vi.hoisted(() => ({
+  bgRequest: vi.fn(),
+  bgUpload: vi.fn(),
+  bgStream: vi.fn(),
+  storedConfig: null as
+    | {
+        serverUrl: string
+        authMode: "single-user" | "multi-user"
+        apiKey?: string
+        accessToken?: string
+      }
+    | null
+}))
+
+vi.mock("@/services/background-proxy", () => ({
+  bgRequest: (...args: unknown[]) => mocks.bgRequest(...args),
+  bgUpload: (...args: unknown[]) => mocks.bgUpload(...args),
+  bgStream: (...args: unknown[]) => mocks.bgStream(...args)
+}))
+
+vi.mock("@/utils/safe-storage", () => ({
+  createSafeStorage: () => ({
+    get: vi.fn(async (key?: string) => {
+      if (key === "tldwConfig") {
+        return mocks.storedConfig
+      }
+      return null
+    }),
+    set: vi.fn(async () => undefined),
+    remove: vi.fn(async () => undefined)
+  }),
+  safeStorageSerde: {
+    serialize: (value: unknown) => value,
+    deserialize: (value: unknown) => value
+  }
+}))
+
+import { TldwApiClient } from "@/services/tldw/TldwApiClient"
+
+const createConfiguredClient = (): TldwApiClient => {
+  mocks.storedConfig = {
+    serverUrl: "http://127.0.0.1:8000",
+    authMode: "single-user",
+    apiKey: "test-api-key"
+  }
+  return new TldwApiClient()
+}
+
+describe("TldwApiClient assistant identity helpers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.storedConfig = null
+  })
+
+  it("normalizes assistant identity fields for persona-backed chats", async () => {
+    mocks.bgRequest.mockImplementation(
+      async (request: { path?: string; method?: string }) => {
+        if (request.path === "/api/v1/chats/chat-7" && request.method === "GET") {
+          return {
+            id: "chat-7",
+            title: "Persona thread",
+            created_at: "2026-03-08T00:00:00Z",
+            assistant_kind: "persona",
+            assistant_id: "garden-helper",
+            persona_memory_mode: "read_only"
+          }
+        }
+
+        throw new Error(`Unexpected request: ${request.method} ${request.path}`)
+      }
+    )
+
+    const client = createConfiguredClient()
+    const chat = await client.getChat("chat-7")
+
+    expect(chat).toMatchObject({
+      id: "chat-7",
+      assistant_kind: "persona",
+      assistant_id: "garden-helper",
+      persona_memory_mode: "read_only"
+    })
+  })
+
+  it("lists persona profiles from the persona catalog", async () => {
+    mocks.bgRequest.mockImplementation(
+      async (request: { path?: string; method?: string }) => {
+        if (
+          request.path === "/api/v1/persona/catalog" &&
+          request.method === "GET"
+        ) {
+          return [
+            {
+              id: 17,
+              name: "Garden Helper",
+              character_card_id: 42,
+              origin_character_id: 42
+            }
+          ]
+        }
+
+        throw new Error(`Unexpected request: ${request.method} ${request.path}`)
+      }
+    )
+
+    const client = createConfiguredClient()
+    const profiles = await client.listPersonaProfiles()
+
+    expect(profiles).toEqual([
+      expect.objectContaining({
+        id: "17",
+        name: "Garden Helper",
+        character_card_id: 42,
+        origin_character_id: 42
+      })
+    ])
+  })
+
+  it("gets a persona profile by id", async () => {
+    mocks.bgRequest.mockImplementation(
+      async (request: { path?: string; method?: string }) => {
+        if (
+          request.path === "/api/v1/persona/profiles/garden-helper" &&
+          request.method === "GET"
+        ) {
+          return {
+            id: "garden-helper",
+            name: "Garden Helper",
+            system_prompt: "Stay focused on the garden.",
+            use_persona_state_context_default: true
+          }
+        }
+
+        throw new Error(`Unexpected request: ${request.method} ${request.path}`)
+      }
+    )
+
+    const client = createConfiguredClient()
+    const profile = await client.getPersonaProfile("garden-helper")
+
+    expect(profile).toMatchObject({
+      id: "garden-helper",
+      name: "Garden Helper",
+      system_prompt: "Stay focused on the garden.",
+      use_persona_state_context_default: true
+    })
+  })
+})
