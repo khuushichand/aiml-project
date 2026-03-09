@@ -142,3 +142,118 @@ class TestSessionCRUD:
         row = db.register_session(session_id="s1", user_id=1)
         assert row["created_at"] is not None
         assert len(row["created_at"]) > 0  # ISO timestamp string
+
+
+class TestSessionMessages:
+    def test_record_prompt_stores_messages(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        prompt = [{"role": "user", "content": "Hello"}]
+        result = {"content": [{"text": "Hi there"}], "usage": {"input_tokens": 10, "output_tokens": 5}}
+        usage = db.record_prompt("s1", prompt, result)
+        assert usage is not None
+        assert usage["prompt_tokens"] == 10
+        assert usage["completion_tokens"] == 5
+        assert usage["total_tokens"] == 15
+
+        rec = db.get_session("s1")
+        assert rec["message_count"] == 2
+        assert rec["total_tokens"] == 15
+
+    def test_record_prompt_nonexistent_session(self, db):
+        assert db.record_prompt("nope", [], {}) is None
+
+    def test_get_messages(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.record_prompt(
+            "s1",
+            [{"role": "user", "content": "Hello"}],
+            {"content": [{"text": "Hi"}], "usage": {}},
+        )
+        messages = db.get_messages("s1")
+        assert len(messages) == 2
+        assert messages[0]["role"] == "user"
+        assert messages[1]["role"] == "assistant"
+
+    def test_get_messages_with_limit(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        for i in range(5):
+            db.record_prompt(
+                "s1",
+                [{"role": "user", "content": f"msg {i}"}],
+                {"content": [{"text": f"reply {i}"}], "usage": {}},
+            )
+        messages = db.get_messages("s1", limit=4)
+        assert len(messages) == 4
+
+    def test_record_prompt_accumulates_tokens(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.record_prompt("s1", [{"role": "user", "content": "a"}],
+                         {"content": "r1", "usage": {"prompt_tokens": 10, "completion_tokens": 5}})
+        db.record_prompt("s1", [{"role": "user", "content": "b"}],
+                         {"content": "r2", "usage": {"prompt_tokens": 20, "completion_tokens": 10}})
+        rec = db.get_session("s1")
+        assert rec["prompt_tokens"] == 30
+        assert rec["completion_tokens"] == 15
+        assert rec["total_tokens"] == 45
+        assert rec["message_count"] == 4
+
+    def test_record_prompt_handles_missing_usage(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        usage = db.record_prompt("s1", [{"role": "user", "content": "hello"}],
+                                 {"content": "world"})
+        assert usage["prompt_tokens"] == 0
+        assert usage["total_tokens"] == 0
+
+
+class TestForkSession:
+    def test_fork_copies_messages(self, db):
+        db.register_session(session_id="s1", user_id=1, agent_type="claude_code")
+        db.record_prompt("s1", [{"role": "user", "content": "Hello"}],
+                         {"content": [{"text": "Hi"}], "usage": {}})
+        db.record_prompt("s1", [{"role": "user", "content": "Next"}],
+                         {"content": [{"text": "OK"}], "usage": {}})
+        forked = db.fork_session("s1", "s2", message_index=1, user_id=1)
+        assert forked is not None
+        assert forked["forked_from"] == "s1"
+        assert forked["agent_type"] == "claude_code"
+        assert forked["needs_bootstrap"] is True
+        messages = db.get_messages("s2")
+        assert len(messages) == 2  # messages 0 and 1
+
+    def test_fork_nonexistent_source(self, db):
+        assert db.fork_session("nope", "s2", message_index=0, user_id=1) is None
+
+    def test_fork_wrong_user(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        assert db.fork_session("s1", "s2", message_index=-1, user_id=999) is None
+
+    def test_get_fork_lineage(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.fork_session("s1", "s2", message_index=-1, user_id=1)
+        db.fork_session("s2", "s3", message_index=-1, user_id=1)
+        lineage = db.get_fork_lineage("s3")
+        assert lineage == ["s1", "s2"]
+
+    def test_get_fork_lineage_no_fork(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        assert db.get_fork_lineage("s1") == []
+
+    def test_fork_all_messages(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.record_prompt("s1", [{"role": "user", "content": "a"}],
+                         {"content": "b", "usage": {}})
+        # Copy all messages with a large index
+        forked = db.fork_session("s1", "s2", message_index=999, user_id=1)
+        messages = db.get_messages("s2")
+        assert len(messages) == 2  # all messages copied
+
+
+class TestCascadeDelete:
+    def test_delete_session_cascades_messages(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.record_prompt("s1", [{"role": "user", "content": "Hello"}],
+                         {"content": "Hi", "usage": {}})
+        assert len(db.get_messages("s1")) == 2
+        db.delete_session("s1")
+        # Messages should be gone too (CASCADE)
+        assert db.get_messages("s1") == []
