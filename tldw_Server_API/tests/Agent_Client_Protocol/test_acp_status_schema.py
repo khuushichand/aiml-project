@@ -112,10 +112,11 @@ class _StubSessionRecord:
             "forked_from": self.forked_from,
         }
 
-    def to_detail_dict(self, *, has_websocket: bool = False) -> dict:
+    def to_detail_dict(self, *, has_websocket: bool = False, fork_lineage: list[str] | None = None) -> dict:
         payload = self.to_info_dict(has_websocket=has_websocket)
         payload["messages"] = list(self.messages)
         payload["cwd"] = self.cwd
+        payload["fork_lineage"] = fork_lineage or []
         return payload
 
 
@@ -140,6 +141,9 @@ class _StubSessionStore:
         if session_id != self.record.session_id:
             return None
         return self.record
+
+    async def get_fork_lineage(self, session_id: str, *, max_depth: int = 50):
+        return []
 
 
 class _StubRunnerClient:

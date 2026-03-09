@@ -33,6 +33,15 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
+- Chat Workflows web-shell regression coverage:
+  - Added `apps/tldw-frontend/__tests__/pages/chat-workflows-route.test.tsx` to verify the Next.js page shim exists and still lazy-loads `@/routes/option-chat-workflows`.
+  - Tightened `apps/packages/ui/src/routes/__tests__/chat-workflows-route.test.tsx` to keep the `/chat-workflows` workspace navigation metadata aligned with the shared route registry.
+
+### Fixed
+
+- Restored Chat Workflows route exposure in the Next.js web app:
+  - Added `apps/tldw-frontend/pages/chat-workflows.tsx` so `/chat-workflows` resolves instead of falling through to a missing-page state.
+  - Preserved discoverability through existing launcher coverage targeting `/chat-workflows`.
 - Chat UI regression coverage for server-chat reliability:
   - Added recoverable refresh regression coverage in `useServerChatHistory.test.ts`
   - Added selected-chat load state and stale-request guard coverage in `useServerChatLoader.test.ts`

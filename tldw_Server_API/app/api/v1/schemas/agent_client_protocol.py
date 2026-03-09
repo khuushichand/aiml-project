@@ -309,6 +309,7 @@ class ACPSessionDetailResponse(ACPSessionInfo):
     """Detailed information about an ACP session, including message history."""
     messages: list[dict[str, Any]] = Field(default_factory=list, description="Message history (if available)")
     cwd: str | None = Field(default=None, description="Working directory for this session")
+    fork_lineage: list[str] = Field(default_factory=list, description="Ancestor session IDs from oldest to most recent parent")
 
 
 class ACPSessionForkRequest(BaseModel):
@@ -409,6 +410,21 @@ class ACPPermissionPolicyListResponse(BaseModel):
     """Response for listing permission policies."""
     policies: list[ACPPermissionPolicyResponse] = Field(default_factory=list)
     total: int = Field(default=0)
+
+
+# -----------------------------------------------------------------------------
+# Health Check Response
+# -----------------------------------------------------------------------------
+
+
+class ACPHealthResponse(BaseModel):
+    """ACP dependency chain health check response."""
+    timestamp: str = Field(..., description="ISO 8601 timestamp")
+    runner: dict[str, Any] = Field(default_factory=dict, description="Runner binary status")
+    agents: list[dict[str, Any]] = Field(default_factory=list, description="Downstream agent statuses")
+    runner_probe: dict[str, Any] = Field(default_factory=dict, description="Runner process probe result")
+    overall: str = Field(default="unknown", description="ok | degraded | unavailable")
+    message: str | None = Field(default=None, description="Human-readable status message")
 
 
 # -----------------------------------------------------------------------------

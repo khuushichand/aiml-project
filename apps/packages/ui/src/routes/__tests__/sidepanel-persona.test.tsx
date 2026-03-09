@@ -9,6 +9,13 @@ const mocks = vi.hoisted(() => ({
     loading: false
   } as { capabilities: { hasPersona: boolean } | null; loading: boolean },
   navigate: vi.fn(),
+  location: {
+    pathname: "/persona",
+    search: "",
+    hash: "",
+    state: null,
+    key: "persona-route"
+  },
   useBlocker: vi.fn(),
   blocker: {
     state: "unblocked" as "unblocked" | "blocked" | "proceeding",
@@ -35,6 +42,7 @@ vi.mock("react-router-dom", async () => {
   return {
     ...actual,
     useNavigate: () => mocks.navigate,
+    useLocation: () => mocks.location,
     useBlocker: (...args: unknown[]) =>
       (mocks.useBlocker as (...args: unknown[]) => unknown)(...args)
   }
@@ -198,6 +206,11 @@ describe("SidepanelPersona", () => {
     mocks.capabilitiesState.capabilities = { hasPersona: true }
     mocks.capabilitiesState.loading = false
     mocks.navigate.mockReset()
+    mocks.location.pathname = "/persona"
+    mocks.location.search = ""
+    mocks.location.hash = ""
+    mocks.location.state = null
+    mocks.location.key = "persona-route"
     mocks.useBlocker.mockReset()
     mocks.blocker.state = "unblocked"
     mocks.blocker.proceed.mockReset()
@@ -215,6 +228,7 @@ describe("SidepanelPersona", () => {
     mocks.isOnline = false
     render(<SidepanelPersona />)
 
+    expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Persona Garden")
     expect(screen.getByText("Connect to use Persona")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
     expect(mocks.navigate).toHaveBeenCalledWith("/settings")
@@ -224,7 +238,105 @@ describe("SidepanelPersona", () => {
     mocks.capabilitiesState.capabilities = { hasPersona: false }
     render(<SidepanelPersona />)
 
+    expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Persona Garden")
     expect(screen.getByText("Persona unavailable")).toBeInTheDocument()
+  })
+
+  it("renders Persona Garden framing while keeping live session controls", () => {
+    render(<SidepanelPersona />)
+
+    expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Persona Garden")
+    expect(screen.getByRole("tab", { name: "Live Session" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Profiles" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Voice & Examples" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "State Docs" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Scopes" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Policies" })).toBeInTheDocument()
+    expect(screen.getByTestId("persona-memory-toggle")).toBeInTheDocument()
+    expect(screen.getByTestId("persona-resume-session-select")).toBeInTheDocument()
+  })
+
+  it("boots persona selection and active tab from query params", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            { id: "research_assistant", name: "Research Assistant" },
+            { id: "garden-helper", name: "Garden Helper" }
+          ]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-garden-helper",
+            persona: { id: init?.body?.persona_id || null }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    expect(screen.getByRole("tab", { name: "Profiles" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
+
+    fireEvent.click(screen.getByRole("tab", { name: "Live Session" }))
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(mocks.fetchWithAuth).toHaveBeenCalled()
+    })
+    const calledPaths = mocks.fetchWithAuth.mock.calls.map(([path]) => String(path))
+    expect(
+      calledPaths.some((path) => path.includes("/persona/profiles/garden-helper"))
+    ).toBe(true)
+    expect(
+      calledPaths.some((path) =>
+        path.includes("/persona/sessions?persona_id=garden-helper")
+      )
+    ).toBe(true)
+    const createSessionCall = mocks.fetchWithAuth.mock.calls.find(
+      ([path]) => String(path) === "/api/v1/persona/session"
+    )
+    expect(createSessionCall?.[1]).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        body: expect.objectContaining({
+          persona_id: "garden-helper"
+        })
+      })
+    )
   })
 
   it.each([390, 1280])(

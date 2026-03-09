@@ -5772,6 +5772,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"])
     except _IMPORT_EXCEPTIONS as _acp_min_err:
         logger.debug(f"Skipping ACP router in minimal test app: {_acp_min_err}")
+    # Agent Orchestration endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import router as orch_router
+
+        app.include_router(orch_router, prefix=f"{API_V1_PREFIX}", tags=["agent-orchestration"])
+    except _IMPORT_EXCEPTIONS as _orch_min_err:
+        logger.debug(f"Skipping orchestration router in minimal test app: {_orch_min_err}")
     # Include admin router in minimal mode if available (ensure not gated by MCP import)
     try:
         if "admin_router" not in locals():

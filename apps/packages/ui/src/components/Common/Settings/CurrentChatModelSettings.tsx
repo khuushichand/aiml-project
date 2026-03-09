@@ -28,6 +28,7 @@ import {
   estimateActorTokens
 } from "@/utils/actor"
 import type { Character } from "@/types/character"
+import { useSelectedAssistant } from "@/hooks/useSelectedAssistant"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import {
   ModelBasicsTab,
@@ -202,16 +203,22 @@ export const CurrentChatModelSettings = ({
     selectedModel,
     setSelectedModel,
     serverChatId,
+    serverChatAssistantKind,
+    serverChatPersonaMemoryMode,
     serverChatTopic,
     setServerChatTopic,
     serverChatState,
     setServerChatState,
-    setServerChatVersion
+    setServerChatVersion,
+    setServerChatPersonaMemoryMode
   } = useMessageOption()
 
   const [selectedCharacter, , selectedCharacterMeta] =
     useSelectedCharacter<Character | null>(null)
+  const [selectedAssistant] = useSelectedAssistant(null)
   const selectedCharacterId = selectedCharacter?.id ?? null
+  const personaChatActive =
+    serverChatAssistantKind === "persona" || selectedAssistant?.kind === "persona"
 
   const {
     settings: actorSettings,
@@ -307,15 +314,24 @@ export const CurrentChatModelSettings = ({
       const next: ActorSettings = buildActorSettingsFromForm(base, values)
 
       setActorSettings(next)
-      void loadActorSettings().then(({ saveActorSettingsForChat }) =>
-        saveActorSettingsForChat({
-          historyId,
-          serverChatId,
-          settings: next
-        })
-      )
+      if (!personaChatActive) {
+        void loadActorSettings().then(({ saveActorSettingsForChat }) =>
+          saveActorSettingsForChat({
+            historyId,
+            serverChatId,
+            settings: next
+          })
+        )
+      }
     },
-    [actorSettings, historyId, serverChatId, setActorSettings, updateSetting]
+    [
+      actorSettings,
+      historyId,
+      personaChatActive,
+      serverChatId,
+      setActorSettings,
+      updateSetting
+    ]
   )
 
   const buildBaseValues = useCallback(
@@ -400,7 +416,7 @@ export const CurrentChatModelSettings = ({
       const baseValues = buildBaseValues(data, tempSystemPrompt)
 
       let actor = actorSettings
-      if (!actor) {
+      if (!actor && !personaChatActive) {
         const { getActorSettingsForChatWithCharacterFallback } =
           await loadActorSettings()
         actor = await getActorSettingsForChatWithCharacterFallback({
@@ -408,6 +424,9 @@ export const CurrentChatModelSettings = ({
           serverChatId,
           characterId: selectedCharacterId
         })
+      }
+      if (!actor) {
+        actor = createDefaultActorSettings()
       }
       setActorSettings(actor)
 
@@ -435,7 +454,7 @@ export const CurrentChatModelSettings = ({
       setPreviewAndTokens(preview, estimateActorTokens(preview))
       return data
     },
-    enabled: open && !selectedCharacterMeta.isLoading,
+    enabled: open && !selectedCharacterMeta.isLoading && !personaChatActive,
     refetchOnMount: false,
     refetchOnWindowFocus: false
   })
@@ -591,75 +610,81 @@ export const CurrentChatModelSettings = ({
   }, [composerModels])
 
   const tabItems = useMemo(
-    () => [
-      {
-        key: "model",
-        label: t("modelSettings.tabs.model", "Model"),
-        children: (
-          <ModelBasicsTab
-            form={form}
-            selectedModel={selectedModel}
-            onModelChange={setSelectedModel}
-            modelOptions={modelOptions}
-            modelsLoading={modelsLoading}
-            isOCREnabled={isOCREnabled}
-            ocrLanguage={ocrLanguage}
-            ocrLanguages={ocrLanguages}
-            onOcrLanguageChange={(value) => setOcrLanguage(value)}
-          />
-        )
-      },
-      {
-        key: "conversation",
-        label: t("modelSettings.tabs.conversation", "Conversation"),
-        children: (
-          <ConversationTab
-            useDrawer={useDrawer}
-            historyId={historyId}
-            selectedSystemPrompt={selectedSystemPrompt}
-            onSystemPromptChange={savePrompt}
-            onResetSystemPrompt={resetSystemPrompt}
-            uploadedFiles={uploadedFiles}
-            onRemoveFile={removeUploadedFile}
-            serverChatId={serverChatId}
-            serverChatState={serverChatState}
-            onStateChange={(state) => setServerChatState(state)}
-            serverChatTopic={serverChatTopic}
-            onTopicChange={setServerChatTopic}
-            onVersionChange={setServerChatVersion}
-          />
-        )
-      },
-      {
-        key: "advanced",
-        label: t("modelSettings.tabs.advanced", "Advanced"),
-        children: (
-          <AdvancedParamsTab
-            form={form}
-            providerOptions={providerOptions}
-          />
-        )
-      },
-      {
-        key: "actor",
-        label: t("modelSettings.tabs.actor", "Scene Director"),
-        children: (
-          <ActorTab
-            form={form}
-            actorSettings={actorSettings}
-            setActorSettings={setActorSettings}
-            actorPreview={actorPreview}
-            actorTokenCount={actorTokenCount}
-            onRecompute={recomputeActorPreview}
-            newAspectTarget={newAspectTarget}
-            setNewAspectTarget={setNewAspectTarget}
-            newAspectName={newAspectName}
-            setNewAspectName={setNewAspectName}
-            actorPositionValue={actorPositionValue}
-          />
-        )
-      }
-    ],
+    () =>
+      [
+        {
+          key: "model",
+          label: t("modelSettings.tabs.model", "Model"),
+          children: (
+            <ModelBasicsTab
+              form={form}
+              selectedModel={selectedModel}
+              onModelChange={setSelectedModel}
+              modelOptions={modelOptions}
+              modelsLoading={modelsLoading}
+              isOCREnabled={isOCREnabled}
+              ocrLanguage={ocrLanguage}
+              ocrLanguages={ocrLanguages}
+              onOcrLanguageChange={(value) => setOcrLanguage(value)}
+            />
+          )
+        },
+        {
+          key: "conversation",
+          label: t("modelSettings.tabs.conversation", "Conversation"),
+          children: (
+            <ConversationTab
+              useDrawer={useDrawer}
+              historyId={historyId}
+              selectedSystemPrompt={selectedSystemPrompt}
+              onSystemPromptChange={savePrompt}
+              onResetSystemPrompt={resetSystemPrompt}
+              uploadedFiles={uploadedFiles}
+              onRemoveFile={removeUploadedFile}
+              serverChatId={serverChatId}
+              serverChatAssistantKind={serverChatAssistantKind}
+              serverChatPersonaMemoryMode={serverChatPersonaMemoryMode}
+              serverChatState={serverChatState}
+              onStateChange={(state) => setServerChatState(state)}
+              serverChatTopic={serverChatTopic}
+              onTopicChange={setServerChatTopic}
+              onVersionChange={setServerChatVersion}
+              onPersonaMemoryModeChange={setServerChatPersonaMemoryMode}
+            />
+          )
+        },
+        {
+          key: "advanced",
+          label: t("modelSettings.tabs.advanced", "Advanced"),
+          children: (
+            <AdvancedParamsTab
+              form={form}
+              providerOptions={providerOptions}
+            />
+          )
+        },
+        !personaChatActive
+          ? {
+              key: "actor",
+              label: t("modelSettings.tabs.actor", "Scene Director"),
+              children: (
+                <ActorTab
+                  form={form}
+                  actorSettings={actorSettings}
+                  setActorSettings={setActorSettings}
+                  actorPreview={actorPreview}
+                  actorTokenCount={actorTokenCount}
+                  onRecompute={recomputeActorPreview}
+                  newAspectTarget={newAspectTarget}
+                  setNewAspectTarget={setNewAspectTarget}
+                  newAspectName={newAspectName}
+                  setNewAspectName={setNewAspectName}
+                  actorPositionValue={actorPositionValue}
+                />
+              )
+            }
+          : null
+      ].filter(Boolean),
     [
       t,
       form,
@@ -687,6 +712,7 @@ export const CurrentChatModelSettings = ({
       setActorSettings,
       actorPreview,
       actorTokenCount,
+      personaChatActive,
       recomputeActorPreview,
       newAspectTarget,
       newAspectName,
