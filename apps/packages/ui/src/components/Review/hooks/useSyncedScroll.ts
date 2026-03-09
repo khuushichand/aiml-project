@@ -4,7 +4,7 @@ import React from "react"
  * Synchronize scroll positions across 2-4 panels.
  * When one panel scrolls, all others are updated to the same scroll percentage.
  */
-export function useSyncedScroll(enabled: boolean, panelCount: number = 0) {
+export function useSyncedScroll(enabled: boolean, bindingKey: string = "") {
   const refsRef = React.useRef<(HTMLElement | null)[]>([])
   const scrollingRef = React.useRef(false)
 
@@ -50,8 +50,8 @@ export function useSyncedScroll(enabled: boolean, panelCount: number = 0) {
         el.removeEventListener("scroll", fn)
       }
     }
-    // panelCount is a dependency signal to rebind listeners when panels change
-  }, [enabled, panelCount])
+    // bindingKey forces listener rebinding when the compared panel set changes.
+  }, [enabled, bindingKey])
 
   return { setRef }
 }

@@ -583,6 +583,29 @@ describe('MediaReviewPage stage7 three-panel layout', () => {
     })
   })
 
+  it('treats restored string ids as the same selection as numeric result ids', async () => {
+    mocks.getSetting.mockImplementation(async (setting: { key?: string }) => {
+      if (setting?.key === 'mediaReviewSelection') return ['1']
+      return null
+    })
+
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('1 / 30 selected')).toBeInTheDocument()
+    })
+
+    const row = getResultRowByTitle('Item 1')
+    expect(row).toHaveAttribute('aria-selected', 'true')
+    expect(within(row).getByRole('checkbox')).toBeChecked()
+
+    selectItemByCheckbox('Item 1')
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+  })
+
   it('j/k keyboard navigation moves preview cursor through results', async () => {
     render(<MediaReviewPage />)
 

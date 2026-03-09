@@ -447,4 +447,29 @@ describe("MediaReviewPage stage6 keyboard shortcut scope", () => {
     // Selection should be preserved while comparing
     expect(screen.getByText("2 / 30 selected")).toBeInTheDocument()
   })
+
+  it("does not hijack Space on focused action buttons", async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText("0 / 30 selected")).toBeInTheDocument()
+    })
+
+    selectItemByCheckbox("Item 1")
+
+    await waitFor(() => {
+      expect(screen.getByText("1 / 30 selected")).toBeInTheDocument()
+    })
+
+    const clearButton = within(screen.getByTestId("panel-center")).getByRole("button", {
+      name: /^clear$/i
+    })
+    clearButton.focus()
+
+    fireEvent.keyDown(clearButton, { key: " " })
+
+    await waitFor(() => {
+      expect(screen.getByText("1 / 30 selected")).toBeInTheDocument()
+    })
+  })
 })

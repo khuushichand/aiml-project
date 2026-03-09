@@ -48,6 +48,25 @@ const makeItem = (id: number, title: string, content: string): MediaDetail => ({
   summary: ""
 })
 
+const setScrollableMetrics = (
+  element: HTMLElement,
+  metrics: { clientHeight: number; scrollHeight: number; scrollTop?: number }
+) => {
+  Object.defineProperty(element, "clientHeight", {
+    configurable: true,
+    value: metrics.clientHeight
+  })
+  Object.defineProperty(element, "scrollHeight", {
+    configurable: true,
+    value: metrics.scrollHeight
+  })
+  Object.defineProperty(element, "scrollTop", {
+    configurable: true,
+    writable: true,
+    value: metrics.scrollTop ?? 0
+  })
+}
+
 describe("ComparisonSplit", () => {
   it("renders nothing with fewer than 2 items", () => {
     const { container } = render(
@@ -189,5 +208,46 @@ describe("ComparisonSplit", () => {
       />
     )
     expect(screen.getByText("Comparing 3 items")).toBeInTheDocument()
+  })
+
+  it("rebinds synced-scroll listeners when comparison panels remount", () => {
+    const { rerender } = render(
+      <ComparisonSplit
+        items={[makeItem(1, "Alpha", "Left"), makeItem(2, "Beta", "Right")]}
+        hideTranscriptTimings={false}
+        onClose={vi.fn()}
+        t={t}
+      />
+    )
+
+    const firstLeftPanel = screen.getByTestId("comparison-content-0")
+    const firstRightPanel = screen.getByTestId("comparison-content-1")
+    setScrollableMetrics(firstLeftPanel, { clientHeight: 100, scrollHeight: 1000 })
+    setScrollableMetrics(firstRightPanel, { clientHeight: 100, scrollHeight: 500 })
+
+    rerender(
+      <ComparisonSplit
+        items={[makeItem(3, "Gamma", "Fresh left"), makeItem(4, "Delta", "Fresh right")]}
+        hideTranscriptTimings={false}
+        onClose={vi.fn()}
+        t={t}
+      />
+    )
+
+    const nextLeftPanel = screen.getByTestId("comparison-content-0")
+    const nextRightPanel = screen.getByTestId("comparison-content-1")
+    expect(nextLeftPanel).not.toBe(firstLeftPanel)
+    expect(nextRightPanel).not.toBe(firstRightPanel)
+
+    setScrollableMetrics(nextLeftPanel, {
+      clientHeight: 100,
+      scrollHeight: 1000,
+      scrollTop: 450
+    })
+    setScrollableMetrics(nextRightPanel, { clientHeight: 100, scrollHeight: 500 })
+
+    fireEvent.scroll(nextLeftPanel)
+
+    expect(nextRightPanel.scrollTop).toBe(200)
   })
 })
