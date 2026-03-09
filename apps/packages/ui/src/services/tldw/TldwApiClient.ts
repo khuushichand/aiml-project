@@ -251,10 +251,75 @@ export interface ServerChatSummary {
   external_ref?: string | null
   bm25_norm?: number | null
   character_id?: string | number | null
+  assistant_kind?: "character" | "persona" | null
+  assistant_id?: string | null
+  persona_memory_mode?: "read_only" | "read_write" | null
   parent_conversation_id?: string | null
   root_id?: string | null
   forked_from_message_id?: string | null
   version?: number | null
+}
+
+export interface PersonaProfileSummary {
+  id: string
+  name?: string | null
+  character_card_id?: number | null
+  origin_character_id?: number | null
+  [key: string]: unknown
+}
+
+export interface PersonaProfile extends PersonaProfileSummary {
+  mode?: string | null
+  system_prompt?: string | null
+  use_persona_state_context_default?: boolean
+}
+
+export interface PersonaExemplar {
+  id: string
+  persona_id: string
+  kind: string
+  content: string
+  tone?: string | null
+  scenario_tags: string[]
+  capability_tags: string[]
+  priority: number
+  enabled: boolean
+  source_type?: string | null
+  source_ref?: string | null
+  notes?: string | null
+  created_at?: string | null
+  last_modified?: string | null
+}
+
+export type PersonaExemplarInput = {
+  kind: string
+  content: string
+  tone?: string | null
+  scenario_tags?: string[]
+  capability_tags?: string[]
+  priority?: number
+  enabled?: boolean
+  source_type?: string | null
+  source_ref?: string | null
+  notes?: string | null
+}
+
+export type PersonaExemplarListOptions = {
+  includeDisabled?: boolean
+  includeDeleted?: boolean
+  includeDeletedPersonas?: boolean
+}
+
+export type PersonaExemplarImportInput = {
+  transcript: string
+  source_ref?: string | null
+  notes?: string | null
+  max_candidates?: number
+}
+
+export type PersonaExemplarReviewInput = {
+  action: "approve" | "reject"
+  notes?: string | null
 }
 
 export type ConversationSharePermission = "view"
@@ -314,6 +379,64 @@ export type ChatSettingsResponse = {
   conversation_id: string
   settings: Record<string, unknown>
   last_modified: string
+}
+
+const normalizePersonaProfile = <T extends Record<string, unknown>>(
+  input: T | null | undefined
+): PersonaProfile => {
+  const candidate = input && typeof input === "object" ? input : ({} as T)
+  return {
+    ...candidate,
+    id: String(candidate?.id ?? candidate?.persona_id ?? "")
+  }
+}
+
+const normalizeStringArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => item.length > 0)
+}
+
+const normalizePersonaExemplar = (
+  input: Record<string, unknown> | null | undefined
+): PersonaExemplar => {
+  const candidate = input && typeof input === "object" ? input : {}
+  const priorityValue = Number(candidate?.priority)
+  return {
+    id: String(candidate?.id ?? ""),
+    persona_id: String(candidate?.persona_id ?? candidate?.personaId ?? ""),
+    kind: String(candidate?.kind ?? "style"),
+    content: String(candidate?.content ?? ""),
+    tone:
+      candidate?.tone == null || String(candidate.tone).trim() === ""
+        ? null
+        : String(candidate.tone),
+    scenario_tags: normalizeStringArray(
+      candidate?.scenario_tags ?? candidate?.scenarioTags
+    ),
+    capability_tags: normalizeStringArray(
+      candidate?.capability_tags ?? candidate?.capabilityTags
+    ),
+    priority: Number.isFinite(priorityValue) ? priorityValue : 0,
+    enabled: candidate?.enabled !== false,
+    source_type:
+      candidate?.source_type == null || String(candidate.source_type).trim() === ""
+        ? null
+        : String(candidate.source_type),
+    source_ref:
+      candidate?.source_ref == null || String(candidate.source_ref).trim() === ""
+        ? null
+        : String(candidate.source_ref),
+    notes:
+      candidate?.notes == null || String(candidate.notes).trim() === ""
+        ? null
+        : String(candidate.notes),
+    created_at:
+      candidate?.created_at == null ? null : String(candidate.created_at),
+    last_modified:
+      candidate?.last_modified == null ? null : String(candidate.last_modified)
+  }
 }
 
 export type WorldBookProcessDiagnostic = {
@@ -3571,6 +3694,17 @@ export class TldwApiClient {
         : typeof messageCountRaw === "string" && messageCountRaw.trim().length > 0
           ? Number.parseFloat(messageCountRaw)
           : null
+    const character_id = input?.character_id ?? input?.characterId ?? null
+    const assistant_kind =
+      input?.assistant_kind ??
+      input?.assistantKind ??
+      (character_id != null ? "character" : null)
+    const assistant_id =
+      input?.assistant_id ??
+      input?.assistantId ??
+      (assistant_kind === "character" && character_id != null
+        ? String(character_id)
+        : null)
     return {
       id: String(input?.id ?? ""),
       title: String(input?.title || ""),
@@ -3591,7 +3725,23 @@ export class TldwApiClient {
           : typeof input?.relevance === "number"
             ? input?.relevance
             : null,
-      character_id: input?.character_id ?? input?.characterId ?? null,
+      character_id,
+      assistant_kind:
+        assistant_kind === "character" || assistant_kind === "persona"
+          ? assistant_kind
+          : null,
+      assistant_id:
+        assistant_id == null || assistant_id === ""
+          ? null
+          : String(assistant_id),
+      persona_memory_mode:
+        input?.persona_memory_mode === "read_only" ||
+        input?.persona_memory_mode === "read_write"
+          ? input.persona_memory_mode
+          : input?.personaMemoryMode === "read_only" ||
+              input?.personaMemoryMode === "read_write"
+            ? input.personaMemoryMode
+            : null,
       parent_conversation_id:
         input?.parent_conversation_id ?? input?.parentConversationId ?? null,
       root_id: input?.root_id ?? input?.rootId ?? null,
@@ -3604,6 +3754,131 @@ export class TldwApiClient {
             ? input.expected_version
             : null
     }
+  }
+
+  async listPersonaProfiles(): Promise<PersonaProfileSummary[]> {
+    const payload = await this.request<any>({
+      path: "/api/v1/persona/catalog",
+      method: "GET"
+    })
+    const list = Array.isArray(payload) ? payload : []
+    return list.map((item) =>
+      normalizePersonaProfile(item as Record<string, unknown>)
+    )
+  }
+
+  async getPersonaProfile(id: string | number): Promise<PersonaProfile> {
+    const personaId = encodeURIComponent(String(id))
+    const payload = await this.request<any>({
+      path: `/api/v1/persona/profiles/${personaId}`,
+      method: "GET"
+    })
+    return normalizePersonaProfile(
+      payload as Record<string, unknown> | null | undefined
+    )
+  }
+
+  async listPersonaExemplars(
+    personaId: string | number,
+    options?: PersonaExemplarListOptions
+  ): Promise<PersonaExemplar[]> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const query = new URLSearchParams()
+    if (options?.includeDisabled) query.set("include_disabled", "true")
+    if (options?.includeDeleted) query.set("include_deleted", "true")
+    if (options?.includeDeletedPersonas) {
+      query.set("include_deleted_personas", "true")
+    }
+    const payload = await this.request<any>({
+      path: appendPathQuery(
+        `/api/v1/persona/profiles/${encodedPersonaId}/exemplars`,
+        query.toString() ? `?${query.toString()}` : ""
+      ),
+      method: "GET"
+    })
+    const list = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : []
+    return list.map((item) =>
+      normalizePersonaExemplar(item as Record<string, unknown>)
+    )
+  }
+
+  async createPersonaExemplar(
+    personaId: string | number,
+    payload: PersonaExemplarInput
+  ): Promise<PersonaExemplar> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const response = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars`,
+      method: "POST",
+      body: payload
+    })
+    return normalizePersonaExemplar(response as Record<string, unknown>)
+  }
+
+  async importPersonaExemplars(
+    personaId: string | number,
+    payload: PersonaExemplarImportInput
+  ): Promise<PersonaExemplar[]> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const response = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/import`,
+      method: "POST",
+      body: payload
+    })
+    const list = Array.isArray(response)
+      ? response
+      : Array.isArray(response?.items)
+        ? response.items
+        : []
+    return list.map((item) =>
+      normalizePersonaExemplar(item as Record<string, unknown>)
+    )
+  }
+
+  async updatePersonaExemplar(
+    personaId: string | number,
+    exemplarId: string | number,
+    payload: Partial<PersonaExemplarInput>
+  ): Promise<PersonaExemplar> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const encodedExemplarId = encodeURIComponent(String(exemplarId))
+    const response = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/${encodedExemplarId}`,
+      method: "PATCH",
+      body: payload
+    })
+    return normalizePersonaExemplar(response as Record<string, unknown>)
+  }
+
+  async reviewPersonaExemplar(
+    personaId: string | number,
+    exemplarId: string | number,
+    payload: PersonaExemplarReviewInput
+  ): Promise<PersonaExemplar> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const encodedExemplarId = encodeURIComponent(String(exemplarId))
+    const response = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/${encodedExemplarId}/review`,
+      method: "POST",
+      body: payload
+    })
+    return normalizePersonaExemplar(response as Record<string, unknown>)
+  }
+
+  async deletePersonaExemplar(
+    personaId: string | number,
+    exemplarId: string | number
+  ): Promise<void> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const encodedExemplarId = encodeURIComponent(String(exemplarId))
+    await this.request<void>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/${encodedExemplarId}`,
+      method: "DELETE"
+    })
   }
 
   private isVersionConflictError(error: unknown): boolean {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import contextlib
 import os
 import threading
@@ -824,6 +825,12 @@ class SandboxService:
         sess = self._orch.create_session(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
         return sess
 
+    def get_session(self, session_id: str) -> Session | None:
+        return self._orch.get_session(session_id)
+
+    def get_session_owner(self, session_id: str) -> str | None:
+        return self._orch.get_session_owner(session_id)
+
     def destroy_session(self, session_id: str) -> bool:
         try:
             destroyed = bool(self._orch.destroy_session(session_id))
@@ -898,14 +905,14 @@ class SandboxService:
         results: list[tuple[str, bytes]] = []
         if not files:
             return results
-        for f in files:
+        for index, f in enumerate(files):
             try:
                 p = str(f.get("path", ""))
                 b64 = str(f.get("content_b64", ""))
-                data = base64.b64decode(b64)
+                data = base64.b64decode(b64, validate=True)
                 results.append((p, data))
-            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"Failed to parse inline file: {e}")
+            except (binascii.Error, ValueError, TypeError, AttributeError) as e:
+                raise ValueError(f"invalid inline file at index {index}") from e
         return results
 
     def start_run_scaffold(self, user_id: str | int, spec: RunSpec, spec_version: str, idem_key: str | None, raw_body: dict) -> RunStatus:
@@ -1456,6 +1463,13 @@ class SandboxService:
             spec = SessionSpec(
                 runtime=source_sess.runtime,
                 base_image=source_sess.base_image,
+                cpu_limit=source_sess.cpu_limit,
+                memory_mb=source_sess.memory_mb,
+                timeout_sec=source_sess.timeout_sec,
+                network_policy=source_sess.network_policy,
+                env=dict(source_sess.env or {}),
+                labels=dict(source_sess.labels or {}),
+                trust_level=source_sess.trust_level,
                 persona_id=source_sess.persona_id,
                 workspace_id=source_sess.workspace_id,
                 workspace_group_id=source_sess.workspace_group_id,

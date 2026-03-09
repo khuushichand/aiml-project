@@ -144,9 +144,18 @@ function OrganizationsPageContent() {
         setTotalItems(0);
       }
       if (isBillingEnabled()) {
-        setOrgPlans(await fetchOrganizationPlanMap(() => api.getSubscriptions()));
-      } else {
-        setOrgPlans({});
+        try {
+          const subs = await api.getSubscriptions();
+          const planMap: Record<number, { tier: PlanTier; status: string }> = {};
+          if (Array.isArray(subs)) {
+            subs.forEach((sub: Subscription) => {
+              planMap[sub.org_id] = { tier: (sub.plan?.tier ?? 'free') as PlanTier, status: sub.status };
+            });
+          }
+          setOrgPlans(planMap);
+        } catch (err) {
+          console.warn('Failed to load subscription data for organizations:', err);
+        }
       }
     } catch (error: unknown) {
       setOrganizations([]);

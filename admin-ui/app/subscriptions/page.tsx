@@ -15,6 +15,7 @@ import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { isBillingEnabled } from '@/lib/billing';
 import Link from 'next/link';
+import { formatDate } from '@/lib/formatters';
 import type { Subscription, SubscriptionStatus } from '@/types';
 
 const STATUS_VARIANTS: Record<SubscriptionStatus, 'default' | 'outline' | 'destructive' | 'secondary'> = {
@@ -32,10 +33,6 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: 'past_due', label: 'Past Due' },
   { value: 'canceled', label: 'Canceled' },
 ];
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString();
-}
 
 function SubscriptionsPageContent() {
   const { error: showError } = useToast();

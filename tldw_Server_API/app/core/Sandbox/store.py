@@ -64,6 +64,23 @@ def _parse_optional_iso_datetime(value: Any) -> datetime | None:
         return None
 
 
+def _normalize_string_dict(value: Any) -> dict[str, str]:
+    if isinstance(value, dict):
+        return {str(k): str(v) for k, v in value.items()}
+    if value is None:
+        return {}
+    text = str(value).strip()
+    if not text:
+        return {}
+    try:
+        loaded = json.loads(text)
+    except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return {str(k): str(v) for k, v in loaded.items()}
+
+
 class IdempotencyConflict(Exception):
     def __init__(self, original_id: str, key: str | None = None, created_at: float | None = None, message: str = "Idempotency conflict") -> None:
         super().__init__(message)
@@ -131,6 +148,13 @@ class SandboxStore:
         session_id: str,
         runtime: str | None,
         base_image: str | None,
+        cpu_limit: float | None,
+        memory_mb: int | None,
+        timeout_sec: int | None,
+        network_policy: str | None,
+        env: dict[str, str] | None,
+        labels: dict[str, str] | None,
+        trust_level: str | None,
         expires_at_iso: str | None,
         workspace_path: str | None,
         persona_id: str | None = None,
@@ -176,6 +200,16 @@ class SandboxStore:
 
     def get_user_artifact_bytes(self, user_id: str) -> int:
         return 0
+
+    def try_reserve_user_artifact_bytes(self, user_id: str, delta: int, cap_bytes: int) -> bool:
+        if int(delta or 0) <= 0:
+            self.increment_user_artifact_bytes(user_id, int(delta or 0))
+            return True
+        current = int(self.get_user_artifact_bytes(user_id))
+        if current + int(delta) > int(cap_bytes):
+            return False
+        self.increment_user_artifact_bytes(user_id, int(delta))
+        return True
 
     def increment_user_artifact_bytes(self, user_id: str, delta: int) -> None:
         pass
@@ -508,6 +542,13 @@ class InMemoryStore(SandboxStore):
         session_id: str,
         runtime: str | None,
         base_image: str | None,
+        cpu_limit: float | None,
+        memory_mb: int | None,
+        timeout_sec: int | None,
+        network_policy: str | None,
+        env: dict[str, str] | None,
+        labels: dict[str, str] | None,
+        trust_level: str | None,
         expires_at_iso: str | None,
         workspace_path: str | None,
         persona_id: str | None = None,
@@ -521,6 +562,13 @@ class InMemoryStore(SandboxStore):
                 "user_id": self._user_key(user_id),
                 "runtime": runtime,
                 "base_image": base_image,
+                "cpu_limit": (float(cpu_limit) if cpu_limit is not None else None),
+                "memory_mb": (int(memory_mb) if memory_mb is not None else None),
+                "timeout_sec": (int(timeout_sec) if timeout_sec is not None else None),
+                "network_policy": (str(network_policy) if network_policy is not None else None),
+                "env": _normalize_string_dict(env),
+                "labels": _normalize_string_dict(labels),
+                "trust_level": (str(trust_level) if trust_level is not None else None),
                 "expires_at": expires_at_iso,
                 "workspace_path": workspace_path,
                 "persona_id": (str(persona_id) if persona_id is not None else None),
@@ -600,6 +648,18 @@ class InMemoryStore(SandboxStore):
         with self._lock:
             cur = int(self._user_bytes.get(user_id, 0))
             self._user_bytes[user_id] = max(0, cur + int(delta))
+
+    def try_reserve_user_artifact_bytes(self, user_id: str, delta: int, cap_bytes: int) -> bool:
+        d = int(delta or 0)
+        if d <= 0:
+            self.increment_user_artifact_bytes(user_id, d)
+            return True
+        with self._lock:
+            cur = int(self._user_bytes.get(user_id, 0))
+            if cur + d > int(cap_bytes):
+                return False
+            self._user_bytes[user_id] = cur + d
+            return True
 
     def list_runs(
         self,
@@ -891,6 +951,13 @@ class SQLiteStore(SandboxStore):
                     user_id TEXT,
                     runtime TEXT,
                     base_image TEXT,
+                    cpu_limit REAL,
+                    memory_mb INTEGER,
+                    timeout_sec INTEGER,
+                    network_policy TEXT,
+                    env TEXT,
+                    labels TEXT,
+                    trust_level TEXT,
                     persona_id TEXT,
                     workspace_id TEXT,
                     workspace_group_id TEXT,
@@ -951,6 +1018,13 @@ class SQLiteStore(SandboxStore):
             _ensure_sqlite_column("sandbox_runs", "scope_snapshot_id", "TEXT")
             _ensure_sqlite_column("sandbox_runs", "claim_owner", "TEXT")
             _ensure_sqlite_column("sandbox_runs", "claim_expires_at", "TEXT")
+            _ensure_sqlite_column("sandbox_sessions", "cpu_limit", "REAL")
+            _ensure_sqlite_column("sandbox_sessions", "memory_mb", "INTEGER")
+            _ensure_sqlite_column("sandbox_sessions", "timeout_sec", "INTEGER")
+            _ensure_sqlite_column("sandbox_sessions", "network_policy", "TEXT")
+            _ensure_sqlite_column("sandbox_sessions", "env", "TEXT")
+            _ensure_sqlite_column("sandbox_sessions", "labels", "TEXT")
+            _ensure_sqlite_column("sandbox_sessions", "trust_level", "TEXT")
             _ensure_sqlite_column("sandbox_sessions", "persona_id", "TEXT")
             _ensure_sqlite_column("sandbox_sessions", "workspace_id", "TEXT")
             _ensure_sqlite_column("sandbox_sessions", "workspace_group_id", "TEXT")
@@ -1413,6 +1487,13 @@ class SQLiteStore(SandboxStore):
         session_id: str,
         runtime: str | None,
         base_image: str | None,
+        cpu_limit: float | None,
+        memory_mb: int | None,
+        timeout_sec: int | None,
+        network_policy: str | None,
+        env: dict[str, str] | None,
+        labels: dict[str, str] | None,
+        trust_level: str | None,
         expires_at_iso: str | None,
         workspace_path: str | None,
         persona_id: str | None = None,
@@ -1425,13 +1506,20 @@ class SQLiteStore(SandboxStore):
             con.execute(
                 (
                     "INSERT INTO sandbox_sessions("
-                    "id,user_id,runtime,base_image,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,"
-                    "expires_at,workspace_path,created_at,updated_at"
-                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "id,user_id,runtime,base_image,cpu_limit,memory_mb,timeout_sec,network_policy,env,labels,trust_level,"
+                    "persona_id,workspace_id,workspace_group_id,scope_snapshot_id,expires_at,workspace_path,created_at,updated_at"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET "
                     "user_id=excluded.user_id,"
                     "runtime=excluded.runtime,"
                     "base_image=excluded.base_image,"
+                    "cpu_limit=excluded.cpu_limit,"
+                    "memory_mb=excluded.memory_mb,"
+                    "timeout_sec=excluded.timeout_sec,"
+                    "network_policy=excluded.network_policy,"
+                    "env=excluded.env,"
+                    "labels=excluded.labels,"
+                    "trust_level=excluded.trust_level,"
                     "persona_id=excluded.persona_id,"
                     "workspace_id=excluded.workspace_id,"
                     "workspace_group_id=excluded.workspace_group_id,"
@@ -1445,6 +1533,13 @@ class SQLiteStore(SandboxStore):
                     self._user_key(user_id),
                     (str(runtime) if runtime is not None else None),
                     (str(base_image) if base_image is not None else None),
+                    (float(cpu_limit) if cpu_limit is not None else None),
+                    (int(memory_mb) if memory_mb is not None else None),
+                    (int(timeout_sec) if timeout_sec is not None else None),
+                    (str(network_policy) if network_policy is not None else None),
+                    (json.dumps(_normalize_string_dict(env)) if env is not None else None),
+                    (json.dumps(_normalize_string_dict(labels)) if labels is not None else None),
+                    (str(trust_level) if trust_level is not None else None),
                     (str(persona_id) if persona_id is not None else None),
                     (str(workspace_id) if workspace_id is not None else None),
                     (str(workspace_group_id) if workspace_group_id is not None else None),
@@ -1460,7 +1555,8 @@ class SQLiteStore(SandboxStore):
         with self._lock, self._conn() as con:
             cur = con.execute(
                 (
-                    "SELECT id,user_id,runtime,base_image,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,"
+                    "SELECT id,user_id,runtime,base_image,cpu_limit,memory_mb,timeout_sec,network_policy,env,labels,trust_level,"
+                    "persona_id,workspace_id,workspace_group_id,scope_snapshot_id,"
                     "expires_at,workspace_path,created_at,updated_at "
                     "FROM sandbox_sessions WHERE id=?"
                 ),
@@ -1475,6 +1571,13 @@ class SQLiteStore(SandboxStore):
                 "user_id": row_dict.get("user_id"),
                 "runtime": row_dict.get("runtime"),
                 "base_image": row_dict.get("base_image"),
+                "cpu_limit": row_dict.get("cpu_limit"),
+                "memory_mb": row_dict.get("memory_mb"),
+                "timeout_sec": row_dict.get("timeout_sec"),
+                "network_policy": row_dict.get("network_policy"),
+                "env": _normalize_string_dict(row_dict.get("env")),
+                "labels": _normalize_string_dict(row_dict.get("labels")),
+                "trust_level": row_dict.get("trust_level"),
                 "persona_id": row_dict.get("persona_id"),
                 "workspace_id": row_dict.get("workspace_id"),
                 "workspace_group_id": row_dict.get("workspace_group_id"),
@@ -1595,6 +1698,25 @@ class SQLiteStore(SandboxStore):
                 "REPLACE INTO sandbox_usage(user_id, artifact_bytes) VALUES (?,?)",
                 (user_id, new_val),
             )
+
+    def try_reserve_user_artifact_bytes(self, user_id: str, delta: int, cap_bytes: int) -> bool:
+        d = int(delta or 0)
+        if d <= 0:
+            self.increment_user_artifact_bytes(user_id, d)
+            return True
+        with self._lock, self._conn() as con:
+            con.execute("BEGIN IMMEDIATE")
+            cur = con.execute("SELECT artifact_bytes FROM sandbox_usage WHERE user_id=?", (user_id,))
+            row = cur.fetchone()
+            cur_val = int(row["artifact_bytes"]) if row and row["artifact_bytes"] is not None else 0
+            if cur_val + d > int(cap_bytes):
+                con.rollback()
+                return False
+            con.execute(
+                "REPLACE INTO sandbox_usage(user_id, artifact_bytes) VALUES (?,?)",
+                (user_id, cur_val + d),
+            )
+            return True
 
     def list_runs(
         self,
@@ -1955,6 +2077,13 @@ class PostgresStore(SandboxStore):
                         user_id TEXT,
                         runtime TEXT,
                         base_image TEXT,
+                        cpu_limit DOUBLE PRECISION,
+                        memory_mb INTEGER,
+                        timeout_sec INTEGER,
+                        network_policy TEXT,
+                        env TEXT,
+                        labels TEXT,
+                        trust_level TEXT,
                         persona_id TEXT,
                         workspace_id TEXT,
                         workspace_group_id TEXT,
@@ -2011,6 +2140,13 @@ class PostgresStore(SandboxStore):
             _ensure_column("sandbox_runs", "scope_snapshot_id", "TEXT")
             _ensure_column("sandbox_runs", "claim_owner", "TEXT")
             _ensure_column("sandbox_runs", "claim_expires_at", "TEXT")
+            _ensure_column("sandbox_sessions", "cpu_limit", "DOUBLE PRECISION")
+            _ensure_column("sandbox_sessions", "memory_mb", "INTEGER")
+            _ensure_column("sandbox_sessions", "timeout_sec", "INTEGER")
+            _ensure_column("sandbox_sessions", "network_policy", "TEXT")
+            _ensure_column("sandbox_sessions", "env", "TEXT")
+            _ensure_column("sandbox_sessions", "labels", "TEXT")
+            _ensure_column("sandbox_sessions", "trust_level", "TEXT")
             _ensure_column("sandbox_sessions", "persona_id", "TEXT")
             _ensure_column("sandbox_sessions", "workspace_id", "TEXT")
             _ensure_column("sandbox_sessions", "workspace_group_id", "TEXT")
@@ -2492,6 +2628,13 @@ class PostgresStore(SandboxStore):
         session_id: str,
         runtime: str | None,
         base_image: str | None,
+        cpu_limit: float | None,
+        memory_mb: int | None,
+        timeout_sec: int | None,
+        network_policy: str | None,
+        env: dict[str, str] | None,
+        labels: dict[str, str] | None,
+        trust_level: str | None,
         expires_at_iso: str | None,
         workspace_path: str | None,
         persona_id: str | None = None,
@@ -2505,14 +2648,21 @@ class PostgresStore(SandboxStore):
                 cur.execute(
                     """
                     INSERT INTO sandbox_sessions(
-                        id,user_id,runtime,base_image,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,
-                        expires_at,workspace_path,created_at,updated_at
+                        id,user_id,runtime,base_image,cpu_limit,memory_mb,timeout_sec,network_policy,env,labels,trust_level,
+                        persona_id,workspace_id,workspace_group_id,scope_snapshot_id,expires_at,workspace_path,created_at,updated_at
                     )
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (id) DO UPDATE SET
                         user_id=EXCLUDED.user_id,
                         runtime=EXCLUDED.runtime,
                         base_image=EXCLUDED.base_image,
+                        cpu_limit=EXCLUDED.cpu_limit,
+                        memory_mb=EXCLUDED.memory_mb,
+                        timeout_sec=EXCLUDED.timeout_sec,
+                        network_policy=EXCLUDED.network_policy,
+                        env=EXCLUDED.env,
+                        labels=EXCLUDED.labels,
+                        trust_level=EXCLUDED.trust_level,
                         persona_id=EXCLUDED.persona_id,
                         workspace_id=EXCLUDED.workspace_id,
                         workspace_group_id=EXCLUDED.workspace_group_id,
@@ -2526,6 +2676,13 @@ class PostgresStore(SandboxStore):
                         self._user_key(user_id),
                         (str(runtime) if runtime is not None else None),
                         (str(base_image) if base_image is not None else None),
+                        (float(cpu_limit) if cpu_limit is not None else None),
+                        (int(memory_mb) if memory_mb is not None else None),
+                        (int(timeout_sec) if timeout_sec is not None else None),
+                        (str(network_policy) if network_policy is not None else None),
+                        (json.dumps(_normalize_string_dict(env)) if env is not None else None),
+                        (json.dumps(_normalize_string_dict(labels)) if labels is not None else None),
+                        (str(trust_level) if trust_level is not None else None),
                         (str(persona_id) if persona_id is not None else None),
                         (str(workspace_id) if workspace_id is not None else None),
                         (str(workspace_group_id) if workspace_group_id is not None else None),
@@ -2541,14 +2698,20 @@ class PostgresStore(SandboxStore):
         with self._lock, self._conn() as con, con.cursor() as cur:
             cur.execute(
                 (
-                    "SELECT id,user_id,runtime,base_image,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,"
+                    "SELECT id,user_id,runtime,base_image,cpu_limit,memory_mb,timeout_sec,network_policy,env,labels,trust_level,"
+                    "persona_id,workspace_id,workspace_group_id,scope_snapshot_id,"
                     "expires_at,workspace_path,created_at,updated_at "
                     "FROM sandbox_sessions WHERE id=%s"
                 ),
                 (str(session_id),),
             )
             row = cur.fetchone()
-            return dict(row) if isinstance(row, dict) else None
+            if not isinstance(row, dict):
+                return None
+            result = dict(row)
+            result["env"] = _normalize_string_dict(result.get("env"))
+            result["labels"] = _normalize_string_dict(result.get("labels"))
+            return result
 
     def get_session_owner(self, session_id: str) -> str | None:
         row = self.get_session(str(session_id))
@@ -2671,6 +2834,29 @@ class PostgresStore(SandboxStore):
                     """,
                     (user_id, d),
                 )
+
+    def try_reserve_user_artifact_bytes(self, user_id: str, delta: int, cap_bytes: int) -> bool:
+        if not user_id:
+            return False
+        d = int(delta or 0)
+        if d <= 0:
+            self.increment_user_artifact_bytes(user_id, d)
+            return True
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO sandbox_usage(user_id, artifact_bytes)
+                    SELECT %s, %s
+                    WHERE %s <= %s
+                    ON CONFLICT (user_id) DO UPDATE
+                    SET artifact_bytes = COALESCE(sandbox_usage.artifact_bytes, 0) + EXCLUDED.artifact_bytes
+                    WHERE COALESCE(sandbox_usage.artifact_bytes, 0) + EXCLUDED.artifact_bytes <= %s
+                    RETURNING artifact_bytes
+                    """,
+                    (user_id, d, d, int(cap_bytes), int(cap_bytes)),
+                )
+                return cur.fetchone() is not None
 
     def list_runs(
         self,

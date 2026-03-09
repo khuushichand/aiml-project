@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 from typing import Any, Dict
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
+from tldw_Server_API.app.core.Sandbox.models import RunPhase, RunStatus, RuntimeType, TrustLevel
 
 
 def _client(monkeypatch) -> TestClient:
@@ -65,6 +67,33 @@ def test_create_session_scaffold(monkeypatch) -> None:
         assert r3.status_code == 409
 
 
+def test_create_session_returns_execution_defaults(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
+        body: Dict[str, Any] = {
+            "spec_version": "1.0",
+            "runtime": "docker",
+            "base_image": "python:3.12-slim",
+            "cpu_limit": 1.5,
+            "memory_mb": 768,
+            "timeout_sec": 77,
+            "network_policy": "deny_all",
+            "env": {"SESSION_TOKEN": "present"},
+            "labels": {"team": "sandbox"},
+            "trust_level": "trusted",
+        }
+        r = client.post("/api/v1/sandbox/sessions", json=body)
+        assert r.status_code == 200
+        j = r.json()
+        assert j["base_image"] == "python:3.12-slim"
+        assert j["cpu_limit"] == 1.5
+        assert j["memory_mb"] == 768
+        assert j["timeout_sec"] == 77
+        assert j["network_policy"] == "deny_all"
+        assert j["env"] == {"SESSION_TOKEN": "present"}
+        assert j["labels"] == {"team": "sandbox"}
+        assert j["trust_level"] == "trusted"
+
+
 def test_start_run_scaffold_returns_completed_with_metadata(monkeypatch) -> None:
 
 
@@ -96,6 +125,104 @@ def test_start_run_scaffold_returns_completed_with_metadata(monkeypatch) -> None
         assert r3.status_code == 409
 
 
+def test_start_run_rejects_missing_session_and_base_image(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
+        r = client.post(
+            "/api/v1/sandbox/runs",
+            json={
+                "spec_version": "1.0",
+                "command": ["python", "-c", "print('hello')"],
+            },
+        )
+        assert r.status_code == 422
+
+
+def test_start_run_rejects_both_session_and_base_image(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
+        session_resp = client.post(
+            "/api/v1/sandbox/sessions",
+            json={
+                "spec_version": "1.0",
+                "runtime": "docker",
+                "base_image": "python:3.11-slim",
+            },
+        )
+        assert session_resp.status_code == 200
+        session_id = str(session_resp.json()["id"])
+
+        r = client.post(
+            "/api/v1/sandbox/runs",
+            json={
+                "spec_version": "1.0",
+                "session_id": session_id,
+                "base_image": "python:3.11-slim",
+                "command": ["python", "-c", "print('hello')"],
+            },
+        )
+        assert r.status_code == 422
+
+
+def test_session_backed_run_inherits_session_defaults(monkeypatch) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
+
+    captured: dict[str, Any] = {}
+
+    def _fake_start_run_scaffold(*, user_id, spec, spec_version, idem_key, raw_body):
+        captured["user_id"] = user_id
+        captured["spec"] = spec
+        return RunStatus(
+            id="run-session-defaults",
+            phase=RunPhase.queued,
+            spec_version=spec_version,
+            runtime=spec.runtime or RuntimeType.docker,
+            base_image=spec.base_image,
+            session_id=spec.session_id,
+            started_at=datetime.now(timezone.utc),
+        )
+
+    monkeypatch.setattr(sb._service, "start_run_scaffold", _fake_start_run_scaffold)
+
+    with _client(monkeypatch) as client:
+        session_resp = client.post(
+            "/api/v1/sandbox/sessions",
+            json={
+                "spec_version": "1.0",
+                "runtime": "docker",
+                "base_image": "python:3.12-slim",
+                "cpu_limit": 1.5,
+                "memory_mb": 768,
+                "timeout_sec": 77,
+                "network_policy": "deny_all",
+                "env": {"SESSION_TOKEN": "present"},
+                "trust_level": "trusted",
+            },
+        )
+        assert session_resp.status_code == 200
+        session_id = str(session_resp.json()["id"])
+
+        run_resp = client.post(
+            "/api/v1/sandbox/runs",
+            json={
+                "spec_version": "1.0",
+                "session_id": session_id,
+                "command": ["python", "-c", "print('hello')"],
+            },
+        )
+        assert run_resp.status_code == 200
+        assert run_resp.json()["base_image"] == "python:3.12-slim"
+
+    spec = captured["spec"]
+    assert spec.session_id == session_id
+    assert spec.runtime == RuntimeType.docker
+    assert spec.base_image == "python:3.12-slim"
+    assert spec.cpu == 1.5
+    assert spec.memory_mb == 768
+    assert spec.timeout_sec == 77
+    assert spec.network_policy == "deny_all"
+    assert spec.env == {"SESSION_TOKEN": "present"}
+    assert spec.trust_level == TrustLevel.trusted
+
+
 def test_delete_session_cancels_and_drains_active_runs(monkeypatch) -> None:
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "0")
 
@@ -116,7 +243,6 @@ def test_delete_session_cancels_and_drains_active_runs(monkeypatch) -> None:
             json={
                 "spec_version": "1.0",
                 "runtime": "docker",
-                "base_image": "python:3.11-slim",
                 "session_id": session_id,
                 "command": ["python", "-c", "print('queued')"],
                 "timeout_sec": 15,

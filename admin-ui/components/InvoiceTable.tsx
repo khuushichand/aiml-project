@@ -1,17 +1,10 @@
 import { Download } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { formatCents, formatDate } from '@/lib/formatters';
 import type { Invoice } from '@/types';
 
 interface InvoiceTableProps {
   invoices: Invoice[];
-}
-
-function formatCents(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 const statusVariant: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
@@ -51,7 +44,7 @@ export function InvoiceTable({ invoices }: InvoiceTableProps) {
                 <Badge variant={statusVariant[inv.status] ?? 'outline'}>{inv.status}</Badge>
               </td>
               <td className="py-2">
-                {inv.invoice_pdf && (
+                {inv.invoice_pdf && inv.invoice_pdf.startsWith('https://') && (
                   <a
                     href={inv.invoice_pdf}
                     target="_blank"

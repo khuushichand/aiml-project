@@ -186,6 +186,18 @@ export interface ACPSessionPromptResponse {
   usage?: ACPTokenUsage | null
 }
 
+export interface ACPSessionCancelRequest {
+  session_id: string
+}
+
+export interface ACPSessionCloseRequest {
+  session_id: string
+}
+
+export interface ACPSessionUpdatesResponse {
+  updates: Array<Record<string, unknown>>
+}
+
 // -----------------------------------------------------------------------------
 // Session and Update Types
 // -----------------------------------------------------------------------------
@@ -225,6 +237,7 @@ export interface ACPSessionListResponse {
 export interface ACPSessionDetailResponse extends ACPSessionListItem {
   messages: Array<Record<string, unknown>>
   cwd?: string | null
+  fork_lineage: string[]
 }
 
 export interface ACPSessionUsageResponse {
@@ -333,6 +346,71 @@ export interface ACPStructuredError {
   message: string
   suggestions: ACPErrorSuggestion[]
   data?: Record<string, unknown>
+}
+
+// -----------------------------------------------------------------------------
+// ACP Health & Agent Registry
+// -----------------------------------------------------------------------------
+
+export interface ACPHealthResponse {
+  runner: "ok" | "missing" | "error"
+  agent: "ok" | "missing" | "error"
+  api_keys: "ok" | "missing"
+  details?: string
+}
+
+export interface ACPAgentRegistryEntry {
+  type: string
+  name: string
+  description: string
+  status: "available" | "unavailable" | "requires_setup"
+  reason?: string
+  is_default?: boolean
+}
+
+// -----------------------------------------------------------------------------
+// Orchestration Types
+// -----------------------------------------------------------------------------
+
+export type OrchestrationTaskStatus = "todo" | "inprogress" | "review" | "complete" | "triage"
+export type OrchestrationRunStatus = "running" | "completed" | "failed"
+
+export interface OrchestrationProject {
+  id: number
+  name: string
+  description?: string
+  user_id: number
+  created_at: string
+  task_summary?: {
+    total_tasks: number
+    status_counts: Record<string, number>
+  }
+}
+
+export interface OrchestrationTask {
+  id: number
+  project_id: number
+  title: string
+  description?: string
+  status: OrchestrationTaskStatus
+  agent_type?: string
+  dependency_id?: number | null
+  review_count: number
+  max_review_attempts: number
+  created_at: string
+  updated_at: string
+}
+
+export interface OrchestrationRun {
+  id: number
+  task_id: number
+  session_id?: string
+  agent_type?: string
+  status: OrchestrationRunStatus
+  result_summary?: string
+  error?: string
+  started_at: string
+  completed_at?: string
 }
 
 // -----------------------------------------------------------------------------

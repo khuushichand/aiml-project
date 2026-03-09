@@ -20,7 +20,7 @@ import time
 import uuid as _uuid
 from collections.abc import AsyncIterator, Awaitable, Iterator
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -184,6 +184,7 @@ _PROVIDER_MODEL_CONFIG_FIELDS: dict[str, tuple[str, str]] = {
 }
 
 _OPENROUTER_MODEL_DISCOVERY_TIMEOUT_SECONDS = 5.0
+_DEFAULT_ASSISTANT_SYSTEM_PROMPT = "You are a helpful AI assistant."
 
 
 def _parse_tool_allow_catalog(value: str | None) -> list[str]:
@@ -258,6 +259,105 @@ def _discover_openrouter_models_for_chat(*, force_refresh: bool = False) -> tupl
             log_prefix="[OpenRouter model discovery/chat]",
         )
     )
+
+
+def _normalize_conversation_assistant_context(
+    conversation: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Normalize persisted conversation assistant identity into a small runtime dict."""
+    if not conversation:
+        return {
+            "assistant_kind": None,
+            "assistant_id": None,
+            "persona_memory_mode": None,
+        }
+
+    character_id = conversation.get("character_id")
+    assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
+    assistant_id = conversation.get("assistant_id")
+    if assistant_id is None and character_id is not None:
+        assistant_id = str(character_id)
+
+    return {
+        "assistant_kind": assistant_kind,
+        "assistant_id": assistant_id,
+        "persona_memory_mode": conversation.get("persona_memory_mode"),
+    }
+
+
+def _build_persona_chat_projection(
+    persona_profile: dict[str, Any],
+    *,
+    fallback_persona_id: str | None = None,
+) -> dict[str, Any]:
+    """Project a persona profile into the minimal assistant card ordinary chat needs."""
+    persona_name = str(persona_profile.get("name") or fallback_persona_id or "Persona").strip() or "Persona"
+    system_prompt = str(persona_profile.get("system_prompt") or "").strip() or _DEFAULT_ASSISTANT_SYSTEM_PROMPT
+    return {
+        "name": persona_name,
+        "system_prompt": system_prompt,
+        "avatar_url": None,
+        "first_message": None,
+        "extensions": None,
+    }
+
+
+async def _resolve_assistant_context_for_chat(
+    *,
+    chat_db: Any,
+    request_data: Any,
+    loop: Any,
+    conversation_id: str | None,
+) -> tuple[dict[str, Any] | None, int | None, dict[str, Any] | None, dict[str, Any]]:
+    """Resolve character or persona context for ordinary chat."""
+    existing_conversation: dict[str, Any] | None = None
+    if conversation_id:
+        existing_conversation = await loop.run_in_executor(None, chat_db.get_conversation_by_id, conversation_id)
+
+    assistant_context = _normalize_conversation_assistant_context(existing_conversation)
+    assistant_kind = assistant_context.get("assistant_kind")
+    assistant_id = assistant_context.get("assistant_id")
+
+    if assistant_kind == "persona":
+        if not assistant_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Persona-backed conversation is missing assistant_id.",
+            )
+
+        persona_owner = str(getattr(chat_db, "client_id", "") or "").strip()
+        persona_profile = await loop.run_in_executor(
+            None,
+            partial(
+                chat_db.get_persona_profile,
+                assistant_id,
+                user_id=persona_owner,
+            ),
+        )
+        if persona_profile is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Persona profile not found for persona-backed conversation.",
+            )
+        return (
+            _build_persona_chat_projection(persona_profile, fallback_persona_id=assistant_id),
+            None,
+            existing_conversation,
+            assistant_context,
+        )
+
+    character_lookup = getattr(request_data, "character_id", None)
+    if character_lookup is None and existing_conversation:
+        character_lookup = existing_conversation.get("character_id") or assistant_id
+
+    character_card, character_db_id = await get_or_create_character_context(chat_db, character_lookup, loop)
+    if character_db_id is not None:
+        assistant_context = {
+            "assistant_kind": "character",
+            "assistant_id": str(character_db_id),
+            "persona_memory_mode": assistant_context.get("persona_memory_mode"),
+        }
+    return character_card, character_db_id, existing_conversation, assistant_context
 
 
 @lru_cache(maxsize=64)
@@ -2114,24 +2214,39 @@ async def build_context_and_messages(
 
     Returns (character_card, character_db_id, final_conversation_id, conversation_created, llm_payload_messages, should_persist)
     """
-    # Character context
-    character_card, character_db_id = await get_or_create_character_context(chat_db, request_data.character_id, loop)
+    # Assistant context
+    (
+        character_card,
+        character_db_id,
+        existing_conversation,
+        assistant_context,
+    ) = await _resolve_assistant_context_for_chat(
+        chat_db=chat_db,
+        request_data=request_data,
+        loop=loop,
+        conversation_id=final_conversation_id,
+    )
     if character_card:
         system_prompt_preview = character_card.get("system_prompt")
         if system_prompt_preview:
             system_prompt_preview = system_prompt_preview[:50] + "..." if len(system_prompt_preview) > 50 else system_prompt_preview
         else:
             system_prompt_preview = "None"
-        logger.debug(f"Loaded character: {character_card.get('name')} with system_prompt: {system_prompt_preview}")
+        logger.debug(f"Loaded assistant context: {character_card.get('name')} with system_prompt: {system_prompt_preview}")
 
-    if character_card:
+    if character_card and character_db_id is not None:
         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
             metrics.track_character_access(character_id=str(request_data.character_id or "default"), cache_hit=False)
 
     if not character_card:
         logger.warning("No character context found; proceeding with ephemeral default context.")
-        character_card = {"name": DEFAULT_CHARACTER_NAME, "system_prompt": "You are a helpful AI assistant."}
+        character_card = {"name": DEFAULT_CHARACTER_NAME, "system_prompt": _DEFAULT_ASSISTANT_SYSTEM_PROMPT}
         character_db_id = None
+        assistant_context = {
+            "assistant_kind": None,
+            "assistant_id": None,
+            "persona_memory_mode": assistant_context.get("persona_memory_mode"),
+        }
 
     # Persistence decision
     requested = getattr(request_data, "save_to_db", None)
@@ -2141,23 +2256,31 @@ async def build_context_and_messages(
     client_id_from_db = getattr(chat_db, "client_id", None)
     conversation_created = False
     conv_id = final_conversation_id
-    # Ensure a valid character ID is present before attempting persistence
-    if should_persist and character_db_id is None:
+    is_existing_persona_conversation = bool(
+        existing_conversation
+        and assistant_context.get("assistant_kind") == "persona"
+        and assistant_context.get("assistant_id")
+    )
+    # Ensure a valid assistant identity is present before attempting persistence
+    if should_persist and character_db_id is None and not is_existing_persona_conversation:
         logger.warning(
-            'Persistence requested but no character ID is available; disabling persistence for conversation {}.',
+            'Persistence requested but no compatible assistant identity is available; disabling persistence for conversation {}.',
             final_conversation_id or "<new>",
         )
         should_persist = False
 
     if should_persist:
-        conv_id, conversation_created = await get_or_create_conversation(
-            chat_db,
-            conv_id,
-            character_db_id,
-            character_card.get("name", "Chat"),
-            client_id_from_db,
-            loop,
-        )
+        if is_existing_persona_conversation and conv_id:
+            conversation_created = False
+        else:
+            conv_id, conversation_created = await get_or_create_conversation(
+                chat_db,
+                conv_id,
+                character_db_id,
+                character_card.get("name", "Chat"),
+                client_id_from_db,
+                loop,
+            )
     else:
         if not conv_id:
             conv_id = str(_uuid.uuid4())
@@ -2441,10 +2564,12 @@ async def build_context_and_messages(
             continuation_metadata["assistant_prefill"] = assistant_prefill
             continuation_metadata["assistant_prefill_applied"] = True
 
-    if runtime_state is not None and continuation_spec and continuation_metadata is not None:
-        runtime_state["tldw_continuation"] = continuation_metadata
-        if assistant_parent_message_id:
-            runtime_state["assistant_parent_message_id"] = assistant_parent_message_id
+    if runtime_state is not None:
+        runtime_state["assistant_context"] = dict(assistant_context)
+        if continuation_spec and continuation_metadata is not None:
+            runtime_state["tldw_continuation"] = continuation_metadata
+            if assistant_parent_message_id:
+                runtime_state["assistant_parent_message_id"] = assistant_parent_message_id
 
     # Preserve requested history ordering (DB fetch already honors ASC/DESC).
     historical_msgs_for_payload = historical_msgs

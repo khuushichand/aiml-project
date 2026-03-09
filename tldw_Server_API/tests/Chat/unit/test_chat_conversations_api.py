@@ -106,3 +106,53 @@ def test_chat_analytics_buckets(tmp_path):
     data = resp.json()
     assert data["pagination"]["total"] >= 1
     assert data["bucket_granularity"] == "day"
+
+
+def test_conversation_endpoints_expose_normalized_assistant_identity(tmp_path):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+
+    conversation_id = db.add_conversation(
+        {
+            "assistant_kind": "persona",
+            "assistant_id": "garden-helper",
+            "persona_memory_mode": "read_only",
+            "title": "Persona conversation",
+            "client_id": "user-1",
+        }
+    )
+    assert conversation_id is not None
+
+    list_resp = app.get("/api/v1/chat/conversations")
+    assert list_resp.status_code == 200, list_resp.text
+    items = list_resp.json()["items"]
+    item = next(entry for entry in items if entry["id"] == conversation_id)
+    assert item["assistant_kind"] == "persona"
+    assert item["assistant_id"] == "garden-helper"
+    assert item["character_id"] is None
+    assert item["persona_memory_mode"] == "read_only"
+
+    conversation = db.get_conversation_by_id(conversation_id)
+    assert conversation is not None
+
+    patch_resp = app.patch(
+        f"/api/v1/chat/conversations/{conversation_id}",
+        json={
+            "version": conversation["version"],
+            "source": "api",
+        },
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    patched = patch_resp.json()
+    assert patched["assistant_kind"] == "persona"
+    assert patched["assistant_id"] == "garden-helper"
+    assert patched["character_id"] is None
+    assert patched["persona_memory_mode"] == "read_only"
+
+    tree_resp = app.get(f"/api/v1/chat/conversations/{conversation_id}/tree")
+    assert tree_resp.status_code == 200, tree_resp.text
+    metadata = tree_resp.json()["conversation"]
+    assert metadata["assistant_kind"] == "persona"
+    assert metadata["assistant_id"] == "garden-helper"
+    assert metadata["character_id"] is None

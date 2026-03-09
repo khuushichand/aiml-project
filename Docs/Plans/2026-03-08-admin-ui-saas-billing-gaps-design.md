@@ -244,7 +244,7 @@ interface Plan {
 
 interface Subscription {
   id: string
-  org_id: string
+  org_id: number
   plan_id: string
   stripe_subscription_id: string
   status: 'active' | 'past_due' | 'canceled' | 'trialing' | 'incomplete'

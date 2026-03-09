@@ -87,11 +87,12 @@ describe('PlanGuard', () => {
     expect(screen.queryByText('Hidden')).not.toBeInTheDocument();
   });
 
-  it('fails open on API error', async () => {
+  it('fails closed on API error', async () => {
     mockIsBillingEnabled.mockReturnValue(true);
     mockUseOrgContext.mockReturnValue({ selectedOrg: { id: 1, name: 'Test' }, loading: false });
     mockGetOrgSubscription.mockRejectedValue(new Error('Network error'));
-    render(<PlanGuard requiredPlan="pro"><div>Still Visible</div></PlanGuard>);
-    expect(await screen.findByText('Still Visible')).toBeInTheDocument();
+    render(<PlanGuard requiredPlan="pro" featureName="Analytics"><div>Hidden</div></PlanGuard>);
+    expect(await screen.findByText('Upgrade Plan')).toBeInTheDocument();
+    expect(screen.queryByText('Hidden')).not.toBeInTheDocument();
   });
 });
