@@ -24,7 +24,11 @@ import { UserPicker } from '@/components/users/UserPicker';
 import { PlanBadge } from '@/components/PlanBadge';
 import { UsageMeter } from '@/components/UsageMeter';
 import { InvoiceTable } from '@/components/InvoiceTable';
-import { isBillingEnabled } from '@/lib/billing';
+import {
+  formatBillingDate,
+  isBillingEnabled,
+  resolveOrganizationBillingSnapshot,
+} from '@/lib/billing';
 
 export default function OrganizationDetailPage() {
   const params = useParams();
@@ -41,6 +45,7 @@ export default function OrganizationDetailPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const successTimerRef = useRef<number | null>(null);
+  const loadRequestRef = useRef(0);
 
   // Add member dialog
   const [showAddMember, setShowAddMember] = useState(false);
@@ -80,8 +85,15 @@ export default function OrganizationDetailPage() {
   const [deletingOrg, setDeletingOrg] = useState(false);
 
   const loadData = useCallback(async () => {
+    const requestId = loadRequestRef.current + 1;
+    loadRequestRef.current = requestId;
+    const isCurrentRequest = () => loadRequestRef.current === requestId;
+
     setLoading(true);
     setError('');
+    setSubscription(null);
+    setUsageSummary(null);
+    setInvoices([]);
 
     const [orgData, membersData, teamsData, byokData] = await Promise.allSettled([
       api.getOrganization(orgId),
@@ -89,6 +101,10 @@ export default function OrganizationDetailPage() {
       api.getTeams(orgId),
       api.getOrgByokKeys(orgId),
     ]);
+
+    if (!isCurrentRequest()) {
+      return;
+    }
 
     if (orgData.status === 'fulfilled') {
       setOrg(orgData.value);
@@ -123,17 +139,25 @@ export default function OrganizationDetailPage() {
     try {
       setWatchlistLoading(true);
       const watchData = await api.getOrgWatchlistSettings(orgId);
+      if (!isCurrentRequest()) {
+        return;
+      }
       const settings = watchData as WatchlistSettings;
       setEditWatchlistEnabled(settings?.watchlists_enabled ?? false);
       setEditWatchlistThreshold(settings?.default_threshold?.toString() || '100');
       setEditWatchlistAlertOnBreach(settings?.alert_on_breach ?? true);
     } catch {
+      if (!isCurrentRequest()) {
+        return;
+      }
       // Set defaults if endpoint unavailable
       setEditWatchlistEnabled(false);
       setEditWatchlistThreshold('100');
       setEditWatchlistAlertOnBreach(true);
     } finally {
-      setWatchlistLoading(false);
+      if (isCurrentRequest()) {
+        setWatchlistLoading(false);
+      }
     }
 
     // Load billing data when enabled
@@ -143,23 +167,28 @@ export default function OrganizationDetailPage() {
         api.getOrgUsageSummary(Number(orgId)),
         api.getOrgInvoices(Number(orgId)),
       ]);
-      if (subResult.status === 'fulfilled') setSubscription(subResult.value);
-      if (usageResult.status === 'fulfilled') setUsageSummary(usageResult.value);
-      if (invoiceResult.status === 'fulfilled') setInvoices(Array.isArray(invoiceResult.value) ? invoiceResult.value : []);
+      if (!isCurrentRequest()) {
+        return;
+      }
+      const billingSnapshot = resolveOrganizationBillingSnapshot(
+        subResult,
+        usageResult,
+        invoiceResult
+      );
+      setSubscription(billingSnapshot.subscription);
+      setUsageSummary(billingSnapshot.usageSummary);
+      setInvoices(billingSnapshot.invoices);
     }
 
-    setLoading(false);
+    if (isCurrentRequest()) {
+      setLoading(false);
+    }
   }, [orgId]);
 
   useEffect(() => {
-    let isActive = true;
-    void Promise.resolve().then(() => {
-      if (isActive) {
-        void loadData();
-      }
-    });
+    void loadData();
     return () => {
-      isActive = false;
+      loadRequestRef.current += 1;
     };
   }, [loadData]);
 
@@ -1066,8 +1095,8 @@ export default function OrganizationDetailPage() {
                           <div>
                             <p className="text-muted-foreground">Current Period</p>
                             <p className="font-medium">
-                              {new Date(subscription.current_period_start).toLocaleDateString()} —{' '}
-                              {new Date(subscription.current_period_end).toLocaleDateString()}
+                              {formatBillingDate(subscription.current_period_start)} —{' '}
+                              {formatBillingDate(subscription.current_period_end)}
                             </p>
                           </div>
                         </div>

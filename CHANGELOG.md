@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.37] 2026-03-07
+
+### Changed
+
+- **Writing Playground UX overhaul** — Editor-dominant layout with collapsible drawers, based on Nielsen heuristic audit:
+  - **Editor-dominant layout (H8 fix):** Removed `PageShell` max-width constraint; editor now fills all available viewport space instead of competing with permanently-visible sidebars
+  - **Drawer-based panels:** Library and Inspector panels converted to collapsible sidebars (pinned on desktop ≥1100px, overlay Drawers on mobile <1100px) via `WritingPlaygroundShell`; toggle buttons in new compact top bar
+  - **Prominent Generate button (H1/H6 fix):** Generate button moved from buried inspector sidebar to always-visible top bar; disabled state shows tooltip explaining why (no session, no model, offline, no chat provider)
+  - **Generation visual feedback (H1 fix):** Pulsing ring animation on editor during generation; live elapsed-time counter in status bar; tok/s display
+  - **Compact top bar:** Session name, model input, Generate button, diagnostics tag, and panel toggles in a single row; replaces removed page title/subtitle
+  - **Status bar:** Token count, generation speed, elapsed time, save status, and Ctrl+Enter shortcut hint
+  - **Decluttered toolbar (H8 fix):** Toolbar reduced from 12+ always-visible buttons to icon-only Undo/Redo + view mode toggle + overflow dropdown (Read Aloud, Pause/Resume, View Chunks, Insert, Search)
+  - **Flexible editor:** Replaced fixed `rows={18}` textarea with `autoSize={{ minRows: 12 }}` and resizable styling; fixed double-scroll caused by nested overflow containers
+  - **Terminology cleanup (H2 fix):** "Basic stopping mode" → "Stop condition"; "Inspect" tab → "Analysis" (both default label and override)
+  - Updated 4 test files (32 assertions) to match new layout structure
+
 ## [0.1.36] 2026-03-08
 
 ### Added
