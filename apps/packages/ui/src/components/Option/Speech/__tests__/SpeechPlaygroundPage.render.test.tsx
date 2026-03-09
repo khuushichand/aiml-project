@@ -4,6 +4,10 @@ import React from "react"
 import { render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+type QueryOptions = {
+  queryKey?: readonly unknown[]
+}
+
 const { invalidateQueriesMock, transcribeAudioMock, getTranscriptionModelsMock } =
   vi.hoisted(() => ({
     invalidateQueriesMock: vi.fn(),
@@ -28,7 +32,7 @@ vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({
     invalidateQueries: invalidateQueriesMock,
   }),
-  useQuery: vi.fn((options: any) => {
+  useQuery: vi.fn((options: QueryOptions | undefined) => {
     if (options?.queryKey?.[0] === "fetchTTSSettings") {
       return {
         data: {
@@ -254,14 +258,14 @@ vi.mock("@/services/tldw/tts-provider-keys", () => ({
 import SpeechPlaygroundPage from "../SpeechPlaygroundPage"
 
 describe("SpeechPlaygroundPage", () => {
-  beforeEach(() => {
+  beforeEach((): void => {
     vi.clearAllMocks()
     invalidateQueriesMock.mockReset()
     transcribeAudioMock.mockReset()
     getTranscriptionModelsMock.mockClear()
   })
 
-  it("renders without triggering a temporal dead zone error", () => {
+  it("renders without triggering a temporal dead zone error", (): void => {
     render(<SpeechPlaygroundPage />)
 
     expect(screen.getByTestId("speech-page-shell")).toBeInTheDocument()

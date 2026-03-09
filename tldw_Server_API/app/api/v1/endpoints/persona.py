@@ -74,9 +74,10 @@ from tldw_Server_API.app.core.Persona.memory_integration import (
     persist_tool_outcome,
     retrieve_top_memories,
 )
-from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import (
-    PersonaExemplarPromptAssembly,
-    assemble_persona_exemplar_prompt,
+from tldw_Server_API.app.core.Persona.exemplar_runtime import (
+    append_persona_exemplar_sections,
+    build_persona_rag_why_text,
+    resolve_persona_exemplar_runtime_context,
 )
 from tldw_Server_API.app.core.Persona.exemplar_turn_classifier import classify_persona_turn
 from tldw_Server_API.app.core.Persona.exemplar_ingestion import (
@@ -190,74 +191,6 @@ def _get_persona_memory_top_k() -> int:
     except Exception:
         value = 3
     return max(1, min(value, 10))
-
-
-def _append_persona_exemplar_sections(base_text: str, sections: list[tuple[str, str, int]] | None) -> str:
-    contents = [str(base_text or "").strip()]
-    contents.extend(
-        str(content or "").strip()
-        for _, content, _ in list(sections or [])
-    )
-    return "\n\n".join(content for content in contents if content)
-
-
-def _build_persona_rag_why_text(
-    *,
-    has_state_context: bool,
-    has_memory_context: bool,
-    has_exemplar_guidance: bool,
-) -> str:
-    applied_contexts: list[str] = []
-    if has_state_context:
-        applied_contexts.append("persistent persona state")
-    if has_memory_context:
-        applied_contexts.append("personalization memories")
-    if has_exemplar_guidance:
-        applied_contexts.append("persona exemplar guidance")
-    if not applied_contexts:
-        return "Input appears to be a knowledge query."
-    if len(applied_contexts) == 1:
-        suffix = applied_contexts[0]
-    elif len(applied_contexts) == 2:
-        suffix = " and ".join(applied_contexts)
-    else:
-        suffix = f"{', '.join(applied_contexts[:-1])}, and {applied_contexts[-1]}"
-    return f"Input appears to be a knowledge query with applied {suffix}."
-
-
-def _persona_exemplar_selection_metadata(
-    *,
-    assembly: PersonaExemplarPromptAssembly,
-    classifier: Any,
-    error_reason: str | None = None,
-) -> dict[str, Any]:
-    selected_ids = [
-        str(item.get("id") or "")
-        for item in list(assembly.selected_exemplars or [])
-        if str(item.get("id") or "").strip()
-    ]
-    rejected = [
-        {
-            "id": str(item.get("id") or ""),
-            "reason": str(item.get("reason") or ""),
-        }
-        for item in list(assembly.rejected_exemplars or [])
-        if str(item.get("id") or "").strip() or str(item.get("reason") or "").strip()
-    ]
-    return {
-        "applied": bool(assembly.sections),
-        "selected_ids": selected_ids,
-        "selected_count": len(selected_ids),
-        "rejected": rejected,
-        "rejected_count": len(rejected),
-        "error_reason": str(error_reason or "").strip() or None,
-        "classifier": {
-            "scenario_tags": list(getattr(classifier, "scenario_tags", []) or []),
-            "tone": str(getattr(classifier, "tone", "neutral") or "neutral"),
-            "risk_tags": list(getattr(classifier, "risk_tags", []) or []),
-            "capability_tags": [],
-        },
-    }
 
 
 def _get_persona_state_hint_max_chars() -> int:
@@ -3200,9 +3133,9 @@ async def persona_stream(
                 if compact_memories:
                     memory_lines = "\n".join(f"- {m}" for m in compact_memories[: _get_persona_memory_top_k()])
                     query_text = f"{query_text}\n\nPersona memory hints:\n{memory_lines}"
-                query_text = _append_persona_exemplar_sections(query_text, persona_exemplar_sections)
+                query_text = append_persona_exemplar_sections(query_text, persona_exemplar_sections)
                 has_exemplar_guidance = any(str(content or "").strip() for _, content, _ in list(persona_exemplar_sections or []))
-                why_text = _build_persona_rag_why_text(
+                why_text = build_persona_rag_why_text(
                     has_state_context=bool(compact_state_lines),
                     has_memory_context=bool(compact_memories),
                     has_exemplar_guidance=has_exemplar_guidance,
@@ -3341,50 +3274,16 @@ async def persona_stream(
                         preferences=preferences_patch,
                     )
                 persona_turn_classifier = classify_persona_turn(text)
-                persona_exemplars: list[dict[str, Any]] = []
-                persona_exemplar_error_reason: str | None = None
-                if persona_scope_db is not None:
-                    try:
-                        persona_exemplars = await asyncio.to_thread(
-                            persona_scope_db.list_persona_exemplars,
-                            user_id=authenticated_user_id,
-                            persona_id=runtime_persona_id,
-                            include_disabled=False,
-                            include_deleted=False,
-                            limit=50,
-                            offset=0,
-                        )
-                    except Exception as exc:
-                        persona_exemplar_error_reason = "lookup_failed"
-                        logger.warning(
-                            "Persona websocket exemplar lookup failed for session {} persona {}: {}",
-                            session_id,
-                            runtime_persona_id,
-                            exc,
-                        )
-                persona_exemplar_assembly = PersonaExemplarPromptAssembly()
-                if persona_exemplar_error_reason is None:
-                    try:
-                        persona_exemplar_assembly = assemble_persona_exemplar_prompt(
-                            persona_id=runtime_persona_id,
-                            exemplars=persona_exemplars,
-                            requested_scenario_tags=list(persona_turn_classifier.scenario_tags),
-                            requested_tone=persona_turn_classifier.tone,
-                            current_turn_text=text,
-                        )
-                    except Exception as exc:
-                        persona_exemplar_error_reason = "assembly_failed"
-                        logger.warning(
-                            "Persona websocket exemplar assembly failed for session {} persona {}: {}",
-                            session_id,
-                            runtime_persona_id,
-                            exc,
-                        )
-                persona_exemplar_selection = _persona_exemplar_selection_metadata(
-                    assembly=persona_exemplar_assembly,
+                persona_exemplar_context = await resolve_persona_exemplar_runtime_context(
+                    persona_scope_db=persona_scope_db,
+                    user_id=authenticated_user_id,
+                    persona_id=runtime_persona_id,
                     classifier=persona_turn_classifier,
-                    error_reason=persona_exemplar_error_reason,
+                    current_turn_text=text,
+                    lookup_limit=50,
                 )
+                persona_exemplar_assembly = persona_exemplar_context.assembly
+                persona_exemplar_selection = persona_exemplar_context.selection_metadata
                 await _record_turn(
                     session_id=session_id,
                     role="user",
