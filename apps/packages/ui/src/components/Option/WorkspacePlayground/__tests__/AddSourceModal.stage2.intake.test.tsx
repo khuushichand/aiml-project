@@ -100,10 +100,10 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
 
     expect(tabLabels).toEqual([
       "Upload",
-      "Library",
+      "My Media",
       "URL",
       "Paste",
-      "Search"
+      "Search Server"
     ])
   })
 
@@ -127,9 +127,9 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
 
     expect(tabLabels).toEqual([
       "Upload",
-      "Search",
+      "Search Server",
       "URL",
-      "Library",
+      "My Media",
       "Paste"
     ])
   })
@@ -137,7 +137,7 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
   it("persists updated tab usage when switching tabs", async () => {
     render(<AddSourceModal />)
 
-    fireEvent.click(screen.getByRole("tab", { name: "Search" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Search Server" }))
 
     await waitFor(() => {
       const raw = window.localStorage.getItem(ADD_SOURCE_TAB_USAGE_STORAGE_KEY)

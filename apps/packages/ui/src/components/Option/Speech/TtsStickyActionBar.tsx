@@ -2,7 +2,7 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 import { Button, Dropdown } from "antd"
 import type { MenuProps } from "antd"
-import { Play, Square, Download, Settings } from "lucide-react"
+import { Play, Plus, Square, Download, Settings } from "lucide-react"
 import { cn } from "@/libs/utils"
 
 export type StreamStatus = "idle" | "connecting" | "streaming" | "complete" | "error"
@@ -25,6 +25,11 @@ export interface TtsStickyActionBarProps {
   inspectorBadge: BadgeType
   segmentCount: number
   provider: string
+  /** Compose & Compare: render strip controls */
+  onAddRender?: () => void
+  onPlayAllRenders?: () => void
+  renderStripCount?: number
+  hasReadyRenders?: boolean
 }
 
 const STATUS_DOT_COLORS: Record<StreamStatus, string> = {
@@ -67,6 +72,10 @@ export function TtsStickyActionBar({
   segmentCount,
   provider,
   onToggleInspector,
+  onAddRender,
+  onPlayAllRenders,
+  renderStripCount = 0,
+  hasReadyRenders = false,
 }: TtsStickyActionBarProps) {
   const { t } = useTranslation("playground")
 
@@ -128,6 +137,31 @@ export function TtsStickyActionBar({
             {t("tts.download", "Download")}
           </Button>
         </Dropdown>
+
+        {/* Compose & Compare controls */}
+        {onAddRender && (
+          <>
+            <div className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+            <Button
+              size="small"
+              icon={<Plus className="h-3.5 w-3.5" />}
+              onClick={onAddRender}
+              aria-label={t("tts.addRender", "Add Render")}
+            >
+              {t("tts.addRender", "Add Render")}
+            </Button>
+          </>
+        )}
+        {onPlayAllRenders && hasReadyRenders && renderStripCount > 1 && (
+          <Button
+            size="small"
+            icon={<Play className="h-3.5 w-3.5" />}
+            onClick={onPlayAllRenders}
+            aria-label={t("tts.playAll", "Play All")}
+          >
+            {t("tts.playAll", "Play All")}
+          </Button>
+        )}
 
         {/* Flex spacer */}
         <div className="flex-1" />

@@ -83,6 +83,9 @@ class PersonaProfileResponse(BaseModel):
     id: str
     name: str
     character_card_id: int | None = None
+    origin_character_id: int | None = None
+    origin_character_name: str | None = None
+    origin_character_snapshot_at: str | None = None
     mode: PersonaMode
     system_prompt: str | None = None
     is_active: bool = True

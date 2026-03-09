@@ -122,6 +122,18 @@ vi.mock("../StudioPane", () => ({
   StudioPane: () => <div data-testid="workspace-studio-pane">Studio</div>
 }))
 
+vi.mock("../WorkspaceStatusBar", () => ({
+  WorkspaceStatusBar: ({ activeOperations }: { activeOperations?: string[] }) => (
+    <div data-testid="workspace-status-bar">
+      {activeOperations && activeOperations.length > 0 && (
+        <div data-testid="workspace-statusbar-activity">
+          {activeOperations.join(" \u2022 ")}
+        </div>
+      )}
+    </div>
+  )
+}))
+
 if (!(globalThis as any).ResizeObserver) {
   ;(globalThis as any).ResizeObserver = class ResizeObserver {
     observe() {}
@@ -529,7 +541,7 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
 
     render(<WorkspacePlayground />)
 
-    const rail = screen.getByTestId("workspace-activity-rail")
+    const rail = screen.getByTestId("workspace-statusbar-activity")
     expect(rail).toBeInTheDocument()
     expect(rail).toHaveTextContent("Processing 1 source")
     expect(rail).toHaveTextContent("Generating summary")

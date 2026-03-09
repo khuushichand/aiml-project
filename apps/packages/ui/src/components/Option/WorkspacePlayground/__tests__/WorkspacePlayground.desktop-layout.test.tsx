@@ -170,6 +170,10 @@ vi.mock("../StudioPane", () => ({
   StudioPane: () => <div data-testid="workspace-studio-pane">Studio</div>
 }))
 
+vi.mock("../WorkspaceStatusBar", () => ({
+  WorkspaceStatusBar: () => <div data-testid="workspace-status-bar" />
+}))
+
 if (!(globalThis as any).ResizeObserver) {
   ;(globalThis as any).ResizeObserver = class ResizeObserver {
     observe() {}
