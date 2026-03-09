@@ -316,7 +316,67 @@ vi.mock('antd', async (importOriginal) => {
 })
 
 vi.mock("@/components/Common/Markdown", () => ({
-  Markdown: ({ message }: { message: string }) => <div data-testid="mock-markdown">{message}</div>
+  Markdown: ({
+    message,
+    headingAnchorIds = []
+  }: {
+    message: string
+    headingAnchorIds?: string[]
+  }) => {
+    const React = require('react') as typeof import('react')
+    let headingIndex = 0
+
+    return (
+      <div data-testid="mock-markdown">
+        {message.split('\n').map((line, index) => {
+          const headingMatch = line.match(/^(#{1,6})\s+(.+)$/)
+          if (headingMatch) {
+            const level = Math.min(headingMatch[1].length, 6)
+            const anchorId = headingAnchorIds[headingIndex]
+            headingIndex += 1
+            return React.createElement(`h${level}`, {
+              key: `${line}-${index}`,
+              ...(anchorId ? { "data-section-anchor": anchorId } : {})
+            }, headingMatch[2])
+          }
+
+          return <p key={`${line}-${index}`}>{line}</p>
+        })}
+      </div>
+    )
+  }
+}))
+
+vi.mock("@/components/Review/ContentRenderer", () => ({
+  ContentRenderer: ({
+    content,
+    headingAnchorIds = []
+  }: {
+    content: string
+    headingAnchorIds?: string[]
+  }) => {
+    const React = require('react') as typeof import('react')
+    let headingIndex = 0
+
+    return (
+      <div data-testid="mock-content-renderer">
+        {content.split('\n').map((line, index) => {
+          const headingMatch = line.match(/^(#{1,6})\s+(.+)$/)
+          if (headingMatch) {
+            const level = Math.min(headingMatch[1].length, 6)
+            const anchorId = headingAnchorIds[headingIndex]
+            headingIndex += 1
+            return React.createElement(`h${level}`, {
+              key: `${line}-${index}`,
+              ...(anchorId ? { "data-section-anchor": anchorId } : {})
+            }, headingMatch[2])
+          }
+
+          return <p key={`${line}-${index}`}>{line}</p>
+        })}
+      </div>
+    )
+  }
 }))
 
 vi.mock("@/components/Media/diff-worker-client", () => ({
@@ -489,6 +549,22 @@ describe('MediaReviewPage stage7 three-panel layout', () => {
     // Item 2 is selected (aria-selected)
     expect(getResultRowByTitle('Item 2')).toHaveAttribute('aria-selected', 'true')
     // Item 1 is NOT selected
+    expect(getResultRowByTitle('Item 1')).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('restores persisted string ids as selected result rows', async () => {
+    mocks.getSetting.mockImplementation(async (setting: { key?: string } | null) => {
+      if (setting?.key === 'mediaReviewSelection') return ['2']
+      return null
+    })
+
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('1 / 30 selected')).toBeInTheDocument()
+    })
+
+    expect(getResultRowByTitle('Item 2')).toHaveAttribute('aria-selected', 'true')
     expect(getResultRowByTitle('Item 1')).toHaveAttribute('aria-selected', 'false')
   })
 

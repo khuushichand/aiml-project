@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 import contextlib
 import hashlib
 import hmac
@@ -204,8 +205,8 @@ def _get_sandbox_upload_thread_lock(lock_path: str) -> threading.Lock:
 
 
 @contextlib.asynccontextmanager
-async def _sandbox_session_upload_lock(workspace_root: str):
-    os.makedirs(workspace_root, exist_ok=True)
+async def _sandbox_session_upload_lock(workspace_root: str) -> AsyncIterator[None]:
+    await asyncio.to_thread(os.makedirs, workspace_root, exist_ok=True)
     lock_path = _sandbox_upload_lock_path(workspace_root)
 
     if _SANDBOX_HAS_FCNTL:
@@ -1017,6 +1018,65 @@ async def upload_files(
                 return 0
             return 0
 
+        def _extract_tar_to_workspace(
+            upload_file,
+            *,
+            workspace_used: int,
+        ) -> tuple[int, int, int]:
+            file_count = 0
+            bytes_written = 0
+            with tarfile.open(fileobj=upload_file, mode="r:*") as tf:
+                for member in tf.getmembers():
+                    if member.isdev() or member.issym() or member.islnk():
+                        continue
+                    target = safe_join(ws_root, member.name)
+                    if target is None:
+                        continue
+                    if member.isdir():
+                        os.makedirs(target, exist_ok=True)
+                        continue
+                    fileobj = tf.extractfile(member)
+                    if fileobj is None:
+                        continue
+                    try:
+                        file_bytes, workspace_used = _stream_reader_to_target(
+                            target,
+                            fileobj.read,
+                            workspace_used=workspace_used,
+                        )
+                    finally:
+                        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                            fileobj.close()
+                    bytes_written += file_bytes
+                    file_count += 1
+            return file_count, bytes_written, workspace_used
+
+        def _extract_zip_to_workspace(
+            upload_file,
+            *,
+            workspace_used: int,
+        ) -> tuple[int, int, int]:
+            file_count = 0
+            bytes_written = 0
+            with zipfile.ZipFile(upload_file) as zf:
+                for member in zf.infolist():
+                    if member.is_dir():
+                        continue
+                    if (member.external_attr >> 16) & 0xF000 == 0xA000:
+                        continue
+                    target = safe_join(ws_root, member.filename)
+                    if target is None:
+                        continue
+                    with zf.open(member) as fileobj:
+                        file_bytes, workspace_used = _stream_reader_to_target(
+                            target,
+                            fileobj.read,
+                            workspace_used=workspace_used,
+                        )
+                    bytes_written += file_bytes
+                    file_count += 1
+            return file_count, bytes_written, workspace_used
+
         def _stream_reader_to_target(
             target: str,
             read_chunk,
@@ -1051,41 +1111,7 @@ async def upload_files(
                     os.unlink(temp_path)
                 raise
 
-        async def _stream_upload_to_target(
-            upload: UploadFile,
-            target: str,
-            *,
-            workspace_used: int,
-        ) -> tuple[int, int]:
-            parent = os.path.dirname(target)
-            os.makedirs(parent, exist_ok=True)
-            existing_size = _existing_file_size(target)
-            fd, temp_path = tempfile.mkstemp(
-                dir=parent,
-                prefix=f".{os.path.basename(target)}.",
-                suffix=".upload",
-            )
-            os.close(fd)
-            file_bytes = 0
-            try:
-                with open(temp_path, "wb") as out:
-                    while True:
-                        chunk = await upload.read(chunk_size)
-                        if not chunk:
-                            break
-                        next_total = workspace_used - existing_size + file_bytes + len(chunk)
-                        if next_total > cap_bytes:
-                            raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
-                        out.write(chunk)
-                        file_bytes += len(chunk)
-                os.replace(temp_path, target)
-                return file_bytes, workspace_used - existing_size + file_bytes
-            except Exception:
-                with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                    os.unlink(temp_path)
-                raise
-
-        workspace_used = _workspace_usage_bytes(ws_root)
+        workspace_used = await asyncio.to_thread(_workspace_usage_bytes, ws_root)
 
         for up in files:
             lower = (up.filename or "").lower()
@@ -1093,30 +1119,13 @@ async def upload_files(
                 try:
                     with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         await up.seek(0)
-                    with tarfile.open(fileobj=up.file, mode="r:*") as tf:
-                        for member in tf.getmembers():
-                            if member.isdev() or member.issym() or member.islnk():
-                                continue
-                            target = safe_join(ws_root, member.name)
-                            if target is None:
-                                continue
-                            if member.isdir():
-                                os.makedirs(target, exist_ok=True)
-                                continue
-                            fileobj = tf.extractfile(member)
-                            if fileobj is None:
-                                continue
-                            try:
-                                file_bytes, workspace_used = _stream_reader_to_target(
-                                    target,
-                                    fileobj.read,
-                                    workspace_used=workspace_used,
-                                )
-                            finally:
-                                with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                                    fileobj.close()
-                            written += file_bytes
-                            count += 1
+                    tar_count, tar_written, workspace_used = await asyncio.to_thread(
+                        _extract_tar_to_workspace,
+                        up.file,
+                        workspace_used=workspace_used,
+                    )
+                    count += tar_count
+                    written += tar_written
                 except HTTPException:
                     raise
                 except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
@@ -1125,23 +1134,13 @@ async def upload_files(
                 try:
                     with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         await up.seek(0)
-                    with zipfile.ZipFile(up.file) as zf:
-                        for member in zf.infolist():
-                            if member.is_dir():
-                                continue
-                            if (member.external_attr >> 16) & 0xF000 == 0xA000:
-                                continue
-                            target = safe_join(ws_root, member.filename)
-                            if target is None:
-                                continue
-                            with zf.open(member) as fileobj:
-                                file_bytes, workspace_used = _stream_reader_to_target(
-                                    target,
-                                    fileobj.read,
-                                    workspace_used=workspace_used,
-                                )
-                            written += file_bytes
-                            count += 1
+                    zip_count, zip_written, workspace_used = await asyncio.to_thread(
+                        _extract_zip_to_workspace,
+                        up.file,
+                        workspace_used=workspace_used,
+                    )
+                    count += zip_count
+                    written += zip_written
                 except HTTPException:
                     raise
                 except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
@@ -1153,9 +1152,10 @@ async def upload_files(
                 try:
                     with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         await up.seek(0)
-                    file_bytes, workspace_used = await _stream_upload_to_target(
-                        up,
+                    file_bytes, workspace_used = await asyncio.to_thread(
+                        _stream_reader_to_target,
                         target,
+                        up.file.read,
                         workspace_used=workspace_used,
                     )
                 except HTTPException:

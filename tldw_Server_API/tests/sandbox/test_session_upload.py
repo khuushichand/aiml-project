@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import io
 import os
 import tarfile
+import threading
 import zipfile
 import tempfile
 
@@ -68,14 +70,14 @@ async def test_upload_files_streams_plain_upload_without_unbounded_read(monkeypa
     monkeypatch.setattr(sb._service, "get_session_workspace_path", lambda session_id: str(tmp_path))
 
     upload = UploadFile(filename="hello.txt", file=io.BytesIO(b"hello world"))
-    original_read = upload.read
+    original_read = upload.file.read
 
-    async def _guarded_read(size: int = -1):
+    def _guarded_read(size: int = -1):
         if size in (-1, None):
             raise AssertionError("plain upload should be read in bounded chunks")
-        return await original_read(size)
+        return original_read(size)
 
-    upload.read = _guarded_read  # type: ignore[assignment]
+    upload.file.read = _guarded_read  # type: ignore[assignment]
 
     response = await sb.upload_files(
         request=None,  # type: ignore[arg-type]
@@ -205,6 +207,82 @@ async def test_upload_files_enforces_cap_against_existing_workspace_bytes(monkey
 
 
 @pytest.mark.asyncio
+async def test_upload_files_offloads_blocking_workspace_filesystem_calls(monkeypatch, tmp_path) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
+
+    monkeypatch.setattr(sb, "_require_session_owner", lambda session_id, current_user: "1")
+    monkeypatch.setattr(sb._service, "get_session_workspace_path", lambda session_id: str(tmp_path))
+
+    workspace_root = os.path.abspath(str(tmp_path))
+    main_thread_id = threading.get_ident()
+
+    original_walk = sb.os.walk
+    original_makedirs = sb.os.makedirs
+    original_mkstemp = sb.tempfile.mkstemp
+    original_replace = sb.os.replace
+    original_unlink = sb.os.unlink
+    original_open = builtins.open
+
+    def _is_workspace_path(path: object) -> bool:
+        try:
+            candidate = os.path.abspath(os.fspath(path))
+        except TypeError:
+            return False
+        return candidate.startswith(workspace_root)
+
+    def _assert_worker_thread(operation: str, path: object) -> None:
+        if _is_workspace_path(path) and threading.get_ident() == main_thread_id:
+            raise AssertionError(f"{operation} should be offloaded from the event loop thread")
+
+    def _guarded_walk(path: str, *args, **kwargs):
+        _assert_worker_thread("os.walk", path)
+        return original_walk(path, *args, **kwargs)
+
+    def _guarded_makedirs(path: str, *args, **kwargs):
+        _assert_worker_thread("os.makedirs", path)
+        return original_makedirs(path, *args, **kwargs)
+
+    def _guarded_mkstemp(*args, **kwargs):
+        directory = kwargs.get("dir")
+        if directory is not None:
+            _assert_worker_thread("tempfile.mkstemp", directory)
+        return original_mkstemp(*args, **kwargs)
+
+    def _guarded_replace(src: str, dst: str, *args, **kwargs):
+        _assert_worker_thread("os.replace", dst)
+        return original_replace(src, dst, *args, **kwargs)
+
+    def _guarded_unlink(path: str, *args, **kwargs):
+        _assert_worker_thread("os.unlink", path)
+        return original_unlink(path, *args, **kwargs)
+
+    def _guarded_open(file, mode="r", *args, **kwargs):
+        if any(flag in mode for flag in ("w", "a", "x")):
+            _assert_worker_thread("open", file)
+        return original_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(sb.os, "walk", _guarded_walk)
+    monkeypatch.setattr(sb.os, "makedirs", _guarded_makedirs)
+    monkeypatch.setattr(sb.tempfile, "mkstemp", _guarded_mkstemp)
+    monkeypatch.setattr(sb.os, "replace", _guarded_replace)
+    monkeypatch.setattr(sb.os, "unlink", _guarded_unlink)
+    monkeypatch.setattr(builtins, "open", _guarded_open)
+
+    upload = UploadFile(filename="threaded.txt", file=io.BytesIO(b"thread-safe upload"))
+
+    response = await sb.upload_files(
+        request=None,  # type: ignore[arg-type]
+        session_id="sess-threaded",
+        files=[upload],
+        current_user=_user(1),
+        audit_service=None,
+    )
+
+    assert response.bytes_received == len(b"thread-safe upload")
+    assert (tmp_path / "threaded.txt").read_bytes() == b"thread-safe upload"
+
+
+@pytest.mark.asyncio
 async def test_concurrent_uploads_are_serialized_per_session(monkeypatch, tmp_path) -> None:
     from tldw_Server_API.app.api.v1.endpoints import sandbox as sb
 
@@ -215,25 +293,25 @@ async def test_concurrent_uploads_are_serialized_per_session(monkeypatch, tmp_pa
     first = UploadFile(filename="first.bin", file=io.BytesIO(b"a" * (700 * 1024)))
     second = UploadFile(filename="second.bin", file=io.BytesIO(b"b" * (700 * 1024)))
 
-    first_entered = asyncio.Event()
-    release_first = asyncio.Event()
-    second_entered = asyncio.Event()
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
 
-    original_first_read = first.read
-    original_second_read = second.read
+    original_first_read = first.file.read
+    original_second_read = second.file.read
 
-    async def _first_read(size: int = -1):
+    def _first_read(size: int = -1):
         if not first_entered.is_set():
             first_entered.set()
-            await release_first.wait()
-        return await original_first_read(size)
+            assert release_first.wait(timeout=1.0), "first upload was never released"
+        return original_first_read(size)
 
-    async def _second_read(size: int = -1):
+    def _second_read(size: int = -1):
         second_entered.set()
-        return await original_second_read(size)
+        return original_second_read(size)
 
-    first.read = _first_read  # type: ignore[assignment]
-    second.read = _second_read  # type: ignore[assignment]
+    first.file.read = _first_read  # type: ignore[assignment]
+    second.file.read = _second_read  # type: ignore[assignment]
 
     first_task = asyncio.create_task(
         sb.upload_files(
@@ -244,7 +322,7 @@ async def test_concurrent_uploads_are_serialized_per_session(monkeypatch, tmp_pa
             audit_service=None,
         )
     )
-    await asyncio.wait_for(first_entered.wait(), timeout=1.0)
+    await asyncio.wait_for(asyncio.to_thread(first_entered.wait), timeout=1.0)
 
     second_task = asyncio.create_task(
         sb.upload_files(

@@ -271,8 +271,8 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
       if (lastIdx !== -1 && currIdx !== -1) {
         const [start, end] = lastIdx < currIdx ? [lastIdx, currIdx] : [currIdx, lastIdx]
         const rangeIds = data.slice(start, end + 1).map(r => r.id)
-        const prevSet = new Set(selectedIds)
-        const remaining = openAllLimit - prevSet.size
+        const nextSelection = [...selectedIds]
+        const remaining = openAllLimit - nextSelection.length
         if (remaining <= 0) {
           message.warning(
             t('mediaPage.selectionLimitReached', {
@@ -282,7 +282,7 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
           )
           return
         }
-        const newIds = rangeIds.filter((rid) => !prevSet.has(rid))
+        const newIds = rangeIds.filter((rid) => !includesId(nextSelection, rid))
         let toAdd = newIds
         if (newIds.length > remaining) {
           message.warning(
@@ -293,8 +293,8 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
           )
           toAdd = newIds.slice(newIds.length - remaining)
         }
-        toAdd.forEach((rid) => prevSet.add(rid))
-        setSelectedIds(Array.from(prevSet))
+        toAdd.forEach((rid) => nextSelection.push(rid))
+        setSelectedIds(nextSelection)
         toAdd.forEach((rid) => void ensureDetail(rid))
         setFocusedId(id)
         lastClickedRef.current = id

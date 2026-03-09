@@ -1,6 +1,7 @@
 import React from "react"
 import { Tag, Checkbox, Pagination, Skeleton, Empty, Button } from "antd"
 import type { MediaReviewState, MediaReviewActions } from "@/components/Review/media-review-types"
+import { includesId } from "@/components/Review/media-review-types"
 
 interface MediaReviewResultsListProps {
   state: MediaReviewState
@@ -85,7 +86,7 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
             >
               {listVirtualizer.getVirtualItems().map((virtualRow: any) => {
                 const item = allResults[virtualRow.index]
-                const isSelected = selectedIds.includes(item.id)
+                const isSelected = includesId(selectedIds, item.id)
                 const isPreviewed = previewedId != null && String(previewedId) === String(item.id)
                 return (
                   <div

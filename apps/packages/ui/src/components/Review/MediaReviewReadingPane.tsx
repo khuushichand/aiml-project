@@ -21,6 +21,7 @@ import { SectionNavigator, type ContentSection } from "@/components/Review/Secti
 import { ComparisonSplit } from "@/components/Review/ComparisonSplit"
 import type { MediaReviewState, MediaReviewActions, MediaDetail } from "@/components/Review/media-review-types"
 import { getContent, MINIMAP_COLLAPSE_THRESHOLD } from "@/components/Review/media-review-types"
+import { scrollSectionIntoView } from "@/components/Review/reading-pane-section-navigation"
 
 interface MediaReviewReadingPaneProps {
   state: MediaReviewState
@@ -761,27 +762,9 @@ export const MediaReviewReadingPane: React.FC<MediaReviewReadingPaneProps> = ({ 
             <SectionNavigator
               content={primaryContent}
               onNavigate={(section) => {
-                // Find section text in the rendered content and scroll to it
                 const contentEl = viewerRef?.current?.querySelector("[data-testid^='media-review-content-body-']")
                 if (!contentEl) return
-                // Search for headings (h1-h6) or text nodes matching the section label
-                const trimmedLabel = section.label.trim()
-                const headings = contentEl.querySelectorAll("h1, h2, h3, h4, h5, h6")
-                for (const heading of headings) {
-                  if (heading.textContent?.trim() === trimmedLabel) {
-                    heading.scrollIntoView({ behavior: "smooth", block: "start" })
-                    return
-                  }
-                }
-                // Fallback: search for timestamp text in any element
-                const walker = document.createTreeWalker(contentEl, NodeFilter.SHOW_TEXT)
-                let node: Text | null
-                while ((node = walker.nextNode() as Text | null)) {
-                  if (node.textContent && node.textContent.includes(trimmedLabel.slice(0, 20))) {
-                    node.parentElement?.scrollIntoView({ behavior: "smooth", block: "start" })
-                    return
-                  }
-                }
+                scrollSectionIntoView(contentEl, section)
               }}
               t={t}
             />
