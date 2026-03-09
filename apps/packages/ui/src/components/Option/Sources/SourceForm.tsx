@@ -31,14 +31,7 @@ const hasLockedSourceIdentity = (source?: IngestionSourceSummary | null): boolea
   if (!source) {
     return false
   }
-  if (source.last_successful_snapshot_id) {
-    return true
-  }
-  if (source.last_sync_completed_at) {
-    return true
-  }
-  const summary = source.last_successful_sync_summary
-  return Boolean(summary && Object.values(summary).some((value) => Number(value) > 0))
+  return Boolean(source.last_successful_snapshot_id)
 }
 
 const getSourceTypeLabel = (sourceType: IngestionSourceType): string =>

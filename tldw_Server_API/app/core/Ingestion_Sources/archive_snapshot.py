@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import io
 import os
+import shutil
 import stat
 import tarfile
 import tempfile
@@ -48,6 +49,7 @@ _TAR_ARCHIVE_SUFFIXES: tuple[str, ...] = (
     ".tar.xz",
     ".txz",
 )
+ARCHIVE_UPLOAD_SUFFIXES: tuple[str, ...] = _ZIP_ARCHIVE_SUFFIXES + _TAR_ARCHIVE_SUFFIXES
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,16 @@ def _archive_kind_from_filename(filename: str) -> str | None:
     if normalized.endswith(_TAR_ARCHIVE_SUFFIXES):
         return "tar"
     return None
+
+
+def validate_archive_upload_filename(filename: str) -> str:
+    normalized = str(filename or "").strip()
+    if not normalized:
+        raise ValueError("Archive upload filename is required.")
+    if _archive_kind_from_filename(normalized) is None:
+        supported = ", ".join(ARCHIVE_UPLOAD_SUFFIXES)
+        raise ValueError(f"Unsupported archive type. Supported uploads: {supported}")
+    return normalized
 
 
 async def stage_archive_candidate(
@@ -416,6 +428,53 @@ async def persist_archive_artifact(
     return artifact
 
 
+async def persist_archive_artifact_from_file(
+    db,
+    *,
+    user_id: int,
+    source_id: int,
+    snapshot_id: int,
+    filename: str,
+    staged_file_path: str | Path,
+    byte_size: int,
+    checksum: str,
+) -> dict[str, Any]:
+    storage_path = _archive_artifact_path(
+        user_id=user_id,
+        source_id=source_id,
+        filename=filename,
+    )
+    temp_storage_path = storage_path.with_suffix(f"{storage_path.suffix}.tmp")
+    source_path = Path(staged_file_path)
+    try:
+        with source_path.open("rb") as source_handle, temp_storage_path.open("wb") as target_handle:
+            shutil.copyfileobj(source_handle, target_handle, length=1024 * 1024)
+        temp_storage_path.replace(storage_path)
+        artifact = await create_source_artifact(
+            db,
+            source_id=source_id,
+            snapshot_id=snapshot_id,
+            artifact_kind="archive_upload",
+            status="staged",
+            storage_path=str(storage_path),
+            metadata={
+                "filename": filename or "archive.zip",
+                "byte_size": int(byte_size),
+                "checksum": checksum,
+            },
+        )
+    except Exception:
+        with contextlib.suppress(FileNotFoundError, OSError):
+            temp_storage_path.unlink()
+        with contextlib.suppress(FileNotFoundError, OSError):
+            storage_path.unlink()
+        raise
+    finally:
+        with contextlib.suppress(FileNotFoundError, OSError):
+            source_path.unlink()
+    return artifact
+
+
 def load_archive_artifact_bytes(artifact: dict[str, Any]) -> bytes:
     storage_path = str(artifact.get("storage_path") or "").strip()
     if not storage_path:
@@ -443,6 +502,76 @@ def build_archive_snapshot_from_bytes_with_failures(
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     members = validate_archive_members(archive_bytes, filename=filename)
     return build_archive_snapshot_with_failures(members, sink_type=sink_type)
+
+
+def inspect_archive_candidate_file(
+    *,
+    archive_path: str | Path,
+    filename: str,
+    sink_type: str,
+) -> dict[str, Any]:
+    normalized_filename = validate_archive_upload_filename(filename)
+    archive_kind = _archive_kind_from_filename(normalized_filename)
+    if archive_kind == "zip":
+        member_names = _inspect_zip_archive_file(archive_path, filename=normalized_filename)
+    elif archive_kind == "tar":
+        member_names = _inspect_tar_archive_file(archive_path, filename=normalized_filename)
+    else:
+        raise ValueError(f"Unsupported archive type. Supported uploads: {', '.join(ARCHIVE_UPLOAD_SUFFIXES)}")
+
+    supported_suffixes = _supported_archive_suffixes_for_sink(sink_type)
+    supported_names = [
+        member_name
+        for member_name in member_names
+        if PurePosixPath(member_name).suffix.lower() in supported_suffixes
+    ]
+    normalized_items = normalize_archive_members(
+        supported_names,
+        {member_name: "" for member_name in supported_names},
+    )
+    return {
+        "filename": normalized_filename,
+        "item_count": len(normalized_items),
+    }
+
+
+def _inspect_zip_archive_file(archive_path: str | Path, *, filename: str) -> list[str]:
+    try:
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            member_names: list[str] = []
+            for member in archive.infolist():
+                if member.is_dir():
+                    continue
+                if not _is_safe_archive_member_name(member.filename):
+                    raise ValueError(f"Archive contains unsafe path: {member.filename}")
+                if getattr(member, "flag_bits", 0) & 0x1:
+                    raise ValueError("Encrypted ZIP archives are not supported.")
+                external_type = (member.external_attr >> 16) & 0xFFFF
+                if external_type and stat.S_ISLNK(external_type):
+                    raise ValueError(f"Archive contains symbolic link: {member.filename}")
+                member_names.append(member.filename)
+            return member_names
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"Invalid ZIP archive: {filename}") from exc
+
+
+def _inspect_tar_archive_file(archive_path: str | Path, *, filename: str) -> list[str]:
+    try:
+        with tarfile.open(name=str(archive_path), mode="r:*") as archive:
+            member_names: list[str] = []
+            for member in archive.getmembers():
+                if member.isdir():
+                    continue
+                if not _is_safe_archive_member_name(member.name):
+                    raise ValueError(f"Archive contains unsafe path: {member.name}")
+                if member.issym() or member.islnk():
+                    raise ValueError(f"Archive contains symbolic link: {member.name}")
+                if not member.isfile():
+                    raise ValueError(f"Archive contains unsupported member type: {member.name}")
+                member_names.append(member.name)
+            return member_names
+    except (tarfile.CompressionError, tarfile.ReadError, EOFError) as exc:
+        raise ValueError(f"Invalid TAR archive: {filename}") from exc
 
 
 def _utc_now() -> datetime:

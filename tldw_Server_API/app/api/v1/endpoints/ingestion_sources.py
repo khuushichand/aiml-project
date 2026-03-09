@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -19,8 +22,9 @@ from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import (
-    apply_archive_candidate,
-    persist_archive_artifact,
+    inspect_archive_candidate_file,
+    persist_archive_artifact_from_file,
+    validate_archive_upload_filename,
 )
 from tldw_Server_API.app.core.Ingestion_Sources.jobs import enqueue_ingestion_source_job
 from tldw_Server_API.app.core.Ingestion_Sources.local_directory import validate_local_directory_source
@@ -39,13 +43,76 @@ from tldw_Server_API.app.core.Ingestion_Sources.service import (
 from tldw_Server_API.app.core.exceptions import IngestionSourceValidationError
 
 router = APIRouter(prefix="/ingestion-sources", tags=["ingestion-sources"])
+_ARCHIVE_UPLOAD_CHUNK_SIZE = 1024 * 1024
+_DEFAULT_ARCHIVE_UPLOAD_MAX_BYTES = 250 * 1024 * 1024
+
+
+def _archive_upload_max_bytes() -> int:
+    raw = os.getenv("INGESTION_SOURCES_ARCHIVE_UPLOAD_MAX_BYTES")
+    if raw is None or str(raw).strip() == "":
+        return _DEFAULT_ARCHIVE_UPLOAD_MAX_BYTES
+    try:
+        return max(1, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return _DEFAULT_ARCHIVE_UPLOAD_MAX_BYTES
+
+
+async def _stream_archive_upload_to_temp_file(
+    archive: UploadFile,
+    *,
+    filename: str,
+) -> dict[str, Any]:
+    max_bytes = _archive_upload_max_bytes()
+    suffix = "".join(Path(filename).suffixes) or ".archive"
+    hasher = hashlib.sha256()
+    byte_size = 0
+    temp_handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    temp_path = Path(temp_handle.name)
+    try:
+        while True:
+            chunk = await archive.read(_ARCHIVE_UPLOAD_CHUNK_SIZE)
+            if not chunk:
+                break
+            byte_size += len(chunk)
+            if byte_size > max_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=(
+                        "Archive upload exceeds the configured maximum size "
+                        f"of {max_bytes} bytes"
+                    ),
+                )
+            hasher.update(chunk)
+            temp_handle.write(chunk)
+        if byte_size <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Archive upload is empty",
+            )
+        temp_handle.flush()
+        return {
+            "temp_path": temp_path,
+            "byte_size": byte_size,
+            "checksum": hasher.hexdigest(),
+        }
+    except Exception:
+        with contextlib.suppress(FileNotFoundError, OSError):
+            temp_path.unlink()
+        raise
+    finally:
+        temp_handle.close()
+        with contextlib.suppress(Exception):
+            await archive.close()
 
 
 def _prepare_create_payload(payload: IngestionSourceCreateRequest) -> dict[str, Any]:
     result = payload.model_dump()
     config = dict(result.get("config") or {})
     if payload.source_type == "local_directory":
-        config["path"] = str(validate_local_directory_source(config))
+        try:
+            config["path"] = str(validate_local_directory_source(config))
+        except ValueError as exc:
+            raise IngestionSourceValidationError(str(exc)) from exc
     result["config"] = config
     return result
 
@@ -59,10 +126,14 @@ async def create_ingestion_source(
     payload: IngestionSourceCreateRequest,
     current_user: User = Depends(get_request_user),
 ):
+    try:
+        prepared_payload = _prepare_create_payload(payload)
+    except IngestionSourceValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     db_pool = await get_db_pool()
     async with db_pool.transaction() as db:
         await ensure_ingestion_sources_schema(db)
-        row = await create_source(db, user_id=int(current_user.id), payload=_prepare_create_payload(payload))
+        row = await create_source(db, user_id=int(current_user.id), payload=prepared_payload)
     return row
 
 
@@ -163,8 +234,13 @@ async def upload_ingestion_source_archive(
     archive: UploadFile = File(...),
     current_user: User = Depends(get_request_user),
 ):
-    archive_bytes = await archive.read()
+    try:
+        filename = validate_archive_upload_filename(archive.filename or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     artifact_storage_path: str | None = None
+    staged_upload_path: Path | None = None
     db_pool = await get_db_pool()
     try:
         async with db_pool.transaction() as db:
@@ -177,50 +253,70 @@ async def upload_ingestion_source_archive(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Archive upload is only supported for archive_snapshot sources",
                 )
-            current_snapshot = None
-            if row.get("last_successful_snapshot_id") is not None:
-                current_snapshot = {"id": int(row["last_successful_snapshot_id"])}
-            try:
-                staged = await apply_archive_candidate(
-                    source_id=source_id,
-                    archive_bytes=archive_bytes,
-                    filename=archive.filename or "archive.zip",
-                    current_snapshot=current_snapshot,
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            previous_snapshot_id = (
+                None
+                if row.get("last_successful_snapshot_id") is None
+                else int(row["last_successful_snapshot_id"])
+            )
+            sink_type = str(row.get("sink_type") or "notes")
 
+        staged_upload = await _stream_archive_upload_to_temp_file(
+            archive,
+            filename=filename,
+        )
+        staged_upload_path = Path(staged_upload["temp_path"])
+        try:
+            inspection = await asyncio.to_thread(
+                inspect_archive_candidate_file,
+                archive_path=staged_upload_path,
+                filename=filename,
+                sink_type=sink_type,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+        async with db_pool.transaction() as db:
+            await ensure_ingestion_sources_schema(db)
             snapshot = await create_source_snapshot(
                 db,
                 source_id=source_id,
                 snapshot_kind="archive_snapshot",
                 status="staged",
                 summary={
-                    "filename": archive.filename or "archive.zip",
-                    "previous_snapshot_id": staged["candidate_snapshot"].get("previous_snapshot_id"),
-                    "item_count": len(staged["items"]),
+                    "filename": inspection["filename"],
+                    "previous_snapshot_id": previous_snapshot_id,
+                    "item_count": int(inspection["item_count"]),
                 },
             )
-            artifact = await persist_archive_artifact(
+            artifact = await persist_archive_artifact_from_file(
                 db,
                 user_id=int(current_user.id),
                 source_id=source_id,
                 snapshot_id=int(snapshot["id"]),
-                filename=archive.filename or "archive.zip",
-                archive_bytes=archive_bytes,
+                filename=filename,
+                staged_file_path=staged_upload_path,
+                byte_size=int(staged_upload["byte_size"]),
+                checksum=str(staged_upload["checksum"]),
             )
             artifact_storage_path = str(artifact.get("storage_path") or "")
+            staged_upload_path = None
             await update_source_snapshot(
                 db,
                 snapshot_id=int(snapshot["id"]),
                 summary={"artifact_id": int(artifact["id"])},
             )
     except HTTPException:
+        if staged_upload_path is not None:
+            with contextlib.suppress(FileNotFoundError, OSError):
+                staged_upload_path.unlink()
         if artifact_storage_path:
             with contextlib.suppress(FileNotFoundError, OSError):
                 Path(artifact_storage_path).unlink()
         raise
     except Exception:
+        if staged_upload_path is not None:
+            with contextlib.suppress(FileNotFoundError, OSError):
+                staged_upload_path.unlink()
         if artifact_storage_path:
             with contextlib.suppress(FileNotFoundError, OSError):
                 Path(artifact_storage_path).unlink()

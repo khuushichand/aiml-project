@@ -44,8 +44,7 @@ def apply_notes_change(
     if event_type == "deleted":
         if binding and policy == "canonical":
             note_id = str(binding["note_id"])
-            if hasattr(notes_db, "soft_delete_note"):
-                notes_db.soft_delete_note(note_id, _expected_version(binding))
+            notes_db.soft_delete_note(note_id, _expected_version(binding))
             return {
                 "action": "archived",
                 "note_id": note_id,

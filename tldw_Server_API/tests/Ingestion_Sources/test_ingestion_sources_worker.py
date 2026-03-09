@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from contextlib import asynccontextmanager
 
 import aiosqlite
@@ -104,7 +106,14 @@ async def test_process_sync_job_local_directory_notes_source_creates_binding_and
         async def _fake_get_db_pool():
             return _SQLitePool(db)
 
+        to_thread_calls: list[str] = []
+
+        async def _fake_to_thread(func, *args, **kwargs):
+            to_thread_calls.append(getattr(func, "__name__", "<anonymous>"))
+            return func(*args, **kwargs)
+
         monkeypatch.setattr(worker, "get_db_pool", _fake_get_db_pool, raising=False)
+        monkeypatch.setattr(worker.asyncio, "to_thread", _fake_to_thread)
 
         jm = _FakeJobManager()
         await worker._process_sync_job(
@@ -123,6 +132,7 @@ async def test_process_sync_job_local_directory_notes_source_creates_binding_and
         assert jm.completed["result"]["created"] == 1
         assert jm.completed["result"]["changed"] == 0
         assert jm.completed["result"]["deleted"] == 0
+        assert to_thread_calls, "local directory snapshot loading should run on a worker thread"
 
         state_cur = await db.execute(
             "SELECT last_successful_snapshot_id, last_sync_status, active_job_id "
@@ -278,14 +288,15 @@ async def test_process_sync_job_archive_snapshot_notes_source_consumes_staged_sn
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
 
-    import hashlib
-
     import tldw_Server_API.app.services.ingestion_sources_worker as worker
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
     from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import persist_archive_artifact
     from tldw_Server_API.app.core.Ingestion_Sources.service import (
         create_source,
+        create_source_snapshot,
         ensure_ingestion_sources_schema,
+        update_source_snapshot,
     )
 
     meta_db_path = tmp_path / "ingestion_sources.sqlite3"
@@ -304,42 +315,41 @@ async def test_process_sync_job_archive_snapshot_notes_source_consumes_staged_sn
         )
 
         archive_text = "# Alpha\n\narchive body\n"
-        await db.execute(
-            """
-            INSERT INTO ingestion_source_snapshots (
-                source_id,
-                snapshot_kind,
-                status,
-                summary_json,
-                created_at
-            ) VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                int(source["id"]),
-                "archive_snapshot",
-                "staged",
-                json.dumps(
-                    {
-                        "filename": "notes.zip",
-                        "items": {
-                            "alpha.md": {
-                                "relative_path": "alpha.md",
-                                "content_hash": hashlib.sha256(archive_text.encode("utf-8")).hexdigest(),
-                                "text": archive_text,
-                                "source_format": "markdown",
-                                "raw_metadata": {},
-                            }
-                        },
-                    }
-                ),
-                "2026-03-08 12:00:00",
-            ),
+        archive_buffer = io.BytesIO()
+        with zipfile.ZipFile(archive_buffer, "w") as archive:
+            archive.writestr("export/alpha.md", archive_text)
+        staged_snapshot = await create_source_snapshot(
+            db,
+            source_id=int(source["id"]),
+            snapshot_kind="archive_snapshot",
+            status="staged",
+            summary={"filename": "notes.zip"},
+        )
+        artifact = await persist_archive_artifact(
+            db,
+            user_id=1,
+            source_id=int(source["id"]),
+            snapshot_id=int(staged_snapshot["id"]),
+            filename="notes.zip",
+            archive_bytes=archive_buffer.getvalue(),
+        )
+        await update_source_snapshot(
+            db,
+            snapshot_id=int(staged_snapshot["id"]),
+            summary={"artifact_id": int(artifact["id"])},
         )
 
         async def _fake_get_db_pool():
             return _SQLitePool(db)
 
+        to_thread_calls: list[str] = []
+
+        async def _fake_to_thread(func, *args, **kwargs):
+            to_thread_calls.append(getattr(func, "__name__", "<anonymous>"))
+            return func(*args, **kwargs)
+
         monkeypatch.setattr(worker, "get_db_pool", _fake_get_db_pool, raising=False)
+        monkeypatch.setattr(worker.asyncio, "to_thread", _fake_to_thread)
 
         jm = _FakeJobManager()
         await worker._process_sync_job(
@@ -354,6 +364,7 @@ async def test_process_sync_job_archive_snapshot_notes_source_consumes_staged_sn
         assert jm.failed is None
         assert jm.completed is not None
         assert jm.completed["result"]["created"] == 1
+        assert to_thread_calls, "archive snapshot rebuilding should run on a worker thread"
 
         snapshot_cur = await db.execute(
             "SELECT status FROM ingestion_source_snapshots WHERE source_id = ?",
@@ -374,7 +385,7 @@ async def test_process_sync_job_archive_snapshot_notes_source_consumes_staged_sn
         note = notes_db.get_note_by_id(note_id=binding["note_id"])
         assert note is not None
         assert note["title"] == "Alpha"
-        assert note["content"] == archive_text
+        assert note["content"] == archive_text.rstrip("\n")
 
 
 @pytest.mark.asyncio

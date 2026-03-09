@@ -204,6 +204,262 @@ def _apply_change_to_sink(
     )
 
 
+def _load_local_directory_snapshot_data(
+    *,
+    config: dict[str, Any],
+    sink_type: str,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    return build_local_directory_snapshot_with_failures(
+        config,
+        sink_type=sink_type,
+    )
+
+
+def _load_archive_snapshot_data(
+    *,
+    artifact: dict[str, Any],
+    filename: str,
+    sink_type: str,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    archive_bytes = load_archive_artifact_bytes(artifact)
+    return build_archive_snapshot_from_bytes_with_failures(
+        archive_bytes=archive_bytes,
+        filename=filename,
+        sink_type=sink_type,
+    )
+
+
+async def _load_current_source_snapshot(
+    *,
+    pool,
+    source: dict[str, Any],
+    source_id: int,
+    sink_type: str,
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
+    source_type = str(source.get("source_type") or "").strip().lower()
+    if source_type == "local_directory":
+        current_items, extraction_failures = await asyncio.to_thread(
+            _load_local_directory_snapshot_data,
+            config=source.get("config") or {},
+            sink_type=sink_type,
+        )
+        return current_items, extraction_failures, None, None
+
+    if source_type != "archive_snapshot":
+        raise NotImplementedError(f"Sync execution not implemented for source type '{source_type}'.")
+
+    async with pool.transaction() as db:
+        staged_snapshot = await get_latest_source_snapshot(
+            db,
+            source_id=source_id,
+            status="staged",
+        )
+    if not staged_snapshot:
+        raise ValueError(f"No staged archive snapshot is available for source {source_id}.")
+
+    snapshot_summary = staged_snapshot.get("summary") or {}
+    artifact_id = snapshot_summary.get("artifact_id")
+    if artifact_id is None:
+        current_items = {
+            str(path): dict(item)
+            for path, item in snapshot_summary.get("items", {}).items()
+        }
+        return current_items, {}, staged_snapshot, None
+
+    async with pool.transaction() as db:
+        staged_artifact = await get_source_artifact_by_id(
+            db,
+            artifact_id=int(artifact_id),
+        )
+    if not staged_artifact:
+        raise ValueError(
+            f"Archive artifact {artifact_id} is not available for source {source_id}."
+        )
+
+    current_items, extraction_failures = await asyncio.to_thread(
+        _load_archive_snapshot_data,
+        artifact=staged_artifact,
+        filename=str(
+            (staged_artifact.get("metadata") or {}).get("filename")
+            or snapshot_summary.get("filename")
+            or "archive.zip"
+        ),
+        sink_type=sink_type,
+    )
+    return current_items, extraction_failures, staged_snapshot, staged_artifact
+
+
+async def _apply_snapshot_changes(
+    *,
+    db,
+    sink_db,
+    sink_type: str,
+    policy: str,
+    source_id: int,
+    jid: int,
+    current_items: dict[str, dict[str, Any]],
+    extraction_failures: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    previous_rows = await list_source_items(db, source_id=source_id, include_absent=False)
+    all_rows = await list_source_items(db, source_id=source_id, include_absent=True)
+    previous_map = _previous_snapshot_map(previous_rows)
+    all_rows_map = {
+        str(row.get("normalized_relative_path") or ""): row
+        for row in all_rows
+        if row.get("normalized_relative_path")
+    }
+
+    diff_result = diff_snapshots(previous=previous_map, current=current_items)
+    failed_paths = set(extraction_failures)
+    if failed_paths:
+        diff_result["deleted"] = [
+            item
+            for item in diff_result.get("deleted", [])
+            if str(item.get("relative_path") or "") not in failed_paths
+        ]
+
+    result_summary: dict[str, Any] = {
+        "status": "completed",
+        "source_id": source_id,
+        "processed": 0,
+        "created": len(diff_result.get("created", [])),
+        "changed": len(diff_result.get("changed", [])),
+        "deleted": len(diff_result.get("deleted", [])),
+        "unchanged": len(diff_result.get("unchanged", [])),
+        "detached_conflicts": 0,
+        "ingestion_failed_items": len(extraction_failures),
+        "sink_failed_items": 0,
+        "degraded_items": len(extraction_failures),
+        "current_item_count": len(current_items) + len(extraction_failures),
+    }
+
+    for event_type, raw_change in _iter_changes(diff_result):
+        change = dict(raw_change)
+        change["event_type"] = event_type
+        relative_path = str(change.get("relative_path") or "").strip()
+        existing_row = all_rows_map.get(relative_path)
+        existing_binding = (
+            dict(existing_row.get("binding") or {})
+            if existing_row
+            else {}
+        )
+        try:
+            result = _apply_change_to_sink(
+                sink_db=sink_db,
+                sink_type=sink_type,
+                binding=existing_binding,
+                change=change,
+                policy=policy,
+            )
+        except _SINK_ITEM_EXCEPTIONS as exc:
+            preserved_content_hash = None if existing_row is None else existing_row.get("content_hash")
+            preserved_present_in_source = (
+                bool(existing_row.get("present_in_source"))
+                if existing_row is not None
+                else event_type != "deleted"
+            )
+            updated_row = await upsert_source_item(
+                db,
+                source_id=source_id,
+                normalized_relative_path=relative_path,
+                content_hash=None if preserved_content_hash is None else str(preserved_content_hash),
+                sync_status="degraded_sink_error",
+                binding=existing_binding,
+                present_in_source=preserved_present_in_source,
+            )
+            all_rows_map[relative_path] = updated_row
+            await record_ingestion_item_event(
+                db,
+                source_id=source_id,
+                item_path=relative_path,
+                event_type="sink_failed",
+                payload={
+                    "action": "sink_failed",
+                    "job_id": str(jid),
+                    "sync_status": "degraded_sink_error",
+                    "error": str(exc),
+                    "event_type": event_type,
+                },
+            )
+            result_summary["degraded_items"] += 1
+            result_summary["sink_failed_items"] += 1
+            continue
+
+        action = str(result.get("action") or "").strip().lower()
+        if sink_type == "notes":
+            binding = _build_notes_binding(sink_db, result, existing_binding)
+        else:
+            binding = _build_media_binding(result, existing_binding)
+        sync_status = _sync_status_for_result(
+            sink_type=sink_type,
+            event_type=event_type,
+            result=result,
+            previous_row=existing_row,
+        )
+        if sync_status == "conflict_detached":
+            result_summary["detached_conflicts"] += 1
+        present_in_source = event_type != "deleted"
+        content_hash = change.get("content_hash") if present_in_source else None
+
+        updated_row = await upsert_source_item(
+            db,
+            source_id=source_id,
+            normalized_relative_path=relative_path,
+            content_hash=None if content_hash is None else str(content_hash),
+            sync_status=sync_status,
+            binding=binding,
+            present_in_source=present_in_source,
+        )
+        all_rows_map[relative_path] = updated_row
+        await record_ingestion_item_event(
+            db,
+            source_id=source_id,
+            item_path=relative_path,
+            event_type=event_type,
+            payload={
+                "action": action,
+                "job_id": str(jid),
+                "sync_status": sync_status,
+            },
+        )
+        result_summary["processed"] += 1
+
+    for relative_path in sorted(failed_paths):
+        failure = extraction_failures[relative_path]
+        existing_row = all_rows_map.get(relative_path)
+        existing_binding = dict(existing_row.get("binding") or {}) if existing_row else {}
+        preserved_content_hash = None if existing_row is None else existing_row.get("content_hash")
+        updated_row = await upsert_source_item(
+            db,
+            source_id=source_id,
+            normalized_relative_path=relative_path,
+            content_hash=None if preserved_content_hash is None else str(preserved_content_hash),
+            sync_status="degraded_ingestion_error",
+            binding=existing_binding,
+            present_in_source=True,
+        )
+        all_rows_map[relative_path] = updated_row
+        await record_ingestion_item_event(
+            db,
+            source_id=source_id,
+            item_path=relative_path,
+            event_type="ingestion_failed",
+            payload={
+                "action": "ingestion_failed",
+                "job_id": str(jid),
+                "sync_status": "degraded_ingestion_error",
+                "error": str(failure.get("error") or ""),
+            },
+        )
+
+    return result_summary
+
+
 async def _process_sync_job(
     jm,
     jid: int,
@@ -241,205 +497,27 @@ async def _process_sync_job(
     try:
         if not source.get("enabled", True):
             raise ValueError(f"Ingestion source {source_id} is disabled.")
-        source_type = str(source.get("source_type") or "").strip().lower()
         sink_type = str(source.get("sink_type") or "").strip().lower()
         policy = str(source.get("policy") or "canonical").strip().lower()
-        extraction_failures: dict[str, dict[str, Any]] = {}
-        if source_type == "local_directory":
-            current_items, extraction_failures = build_local_directory_snapshot_with_failures(
-                source.get("config") or {},
-                sink_type=sink_type,
-            )
-        elif source_type == "archive_snapshot":
-            async with pool.transaction() as db:
-                staged_snapshot = await get_latest_source_snapshot(
-                    db,
-                    source_id=source_id,
-                    status="staged",
-                )
-            if not staged_snapshot:
-                raise ValueError(f"No staged archive snapshot is available for source {source_id}.")
-            snapshot_summary = staged_snapshot.get("summary") or {}
-            artifact_id = snapshot_summary.get("artifact_id")
-            if artifact_id is not None:
-                async with pool.transaction() as db:
-                    staged_artifact = await get_source_artifact_by_id(
-                        db,
-                        artifact_id=int(artifact_id),
-                    )
-                if not staged_artifact:
-                    raise ValueError(
-                        f"Archive artifact {artifact_id} is not available for source {source_id}."
-                    )
-                archive_bytes = load_archive_artifact_bytes(staged_artifact)
-                current_items, extraction_failures = build_archive_snapshot_from_bytes_with_failures(
-                    archive_bytes=archive_bytes,
-                    filename=str(
-                        (staged_artifact.get("metadata") or {}).get("filename")
-                        or snapshot_summary.get("filename")
-                        or "archive.zip"
-                    ),
-                    sink_type=sink_type,
-                )
-            else:
-                current_items = {
-                    str(path): dict(item)
-                    for path, item in snapshot_summary.get("items", {}).items()
-                }
-        else:
-            raise NotImplementedError(f"Sync execution not implemented for source type '{source_type}'.")
+        current_items, extraction_failures, staged_snapshot, staged_artifact = await _load_current_source_snapshot(
+            pool=pool,
+            source=source,
+            source_id=source_id,
+            sink_type=sink_type,
+        )
         sink_db = _create_sink_db(sink_type=sink_type, user_id=user_id)
 
         async with pool.transaction() as db:
-            previous_rows = await list_source_items(db, source_id=source_id, include_absent=False)
-            all_rows = await list_source_items(db, source_id=source_id, include_absent=True)
-            previous_map = _previous_snapshot_map(previous_rows)
-            all_rows_map = {
-                str(row.get("normalized_relative_path") or ""): row
-                for row in all_rows
-                if row.get("normalized_relative_path")
-            }
-
-            diff_result = diff_snapshots(previous=previous_map, current=current_items)
-            failed_paths = set(extraction_failures)
-            if failed_paths:
-                diff_result["deleted"] = [
-                    item
-                    for item in diff_result.get("deleted", [])
-                    if str(item.get("relative_path") or "") not in failed_paths
-                ]
-            result_summary: dict[str, Any] = {
-                "status": "completed",
-                "source_id": source_id,
-                "processed": 0,
-                "created": len(diff_result.get("created", [])),
-                "changed": len(diff_result.get("changed", [])),
-                "deleted": len(diff_result.get("deleted", [])),
-                "unchanged": len(diff_result.get("unchanged", [])),
-                "detached_conflicts": 0,
-                "ingestion_failed_items": len(extraction_failures),
-                "sink_failed_items": 0,
-                "degraded_items": len(extraction_failures),
-                "current_item_count": len(current_items) + len(extraction_failures),
-            }
-
-            for event_type, raw_change in _iter_changes(diff_result):
-                change = dict(raw_change)
-                change["event_type"] = event_type
-                relative_path = str(change.get("relative_path") or "").strip()
-                existing_row = all_rows_map.get(relative_path)
-                existing_binding = (
-                    dict(existing_row.get("binding") or {})
-                    if existing_row
-                    else {}
-                )
-                try:
-                    result = _apply_change_to_sink(
-                        sink_db=sink_db,
-                        sink_type=sink_type,
-                        binding=existing_binding,
-                        change=change,
-                        policy=policy,
-                    )
-                except _SINK_ITEM_EXCEPTIONS as exc:
-                    preserved_content_hash = None if existing_row is None else existing_row.get("content_hash")
-                    preserved_present_in_source = (
-                        bool(existing_row.get("present_in_source"))
-                        if existing_row is not None
-                        else event_type != "deleted"
-                    )
-                    updated_row = await upsert_source_item(
-                        db,
-                        source_id=source_id,
-                        normalized_relative_path=relative_path,
-                        content_hash=None if preserved_content_hash is None else str(preserved_content_hash),
-                        sync_status="degraded_sink_error",
-                        binding=existing_binding,
-                        present_in_source=preserved_present_in_source,
-                    )
-                    all_rows_map[relative_path] = updated_row
-                    await record_ingestion_item_event(
-                        db,
-                        source_id=source_id,
-                        item_path=relative_path,
-                        event_type="sink_failed",
-                        payload={
-                            "action": "sink_failed",
-                            "job_id": str(jid),
-                            "sync_status": "degraded_sink_error",
-                            "error": str(exc),
-                            "event_type": event_type,
-                        },
-                    )
-                    result_summary["degraded_items"] += 1
-                    result_summary["sink_failed_items"] += 1
-                    continue
-                action = str(result.get("action") or "").strip().lower()
-                if sink_type == "notes":
-                    binding = _build_notes_binding(sink_db, result, existing_binding)
-                else:
-                    binding = _build_media_binding(result, existing_binding)
-                sync_status = _sync_status_for_result(
-                    sink_type=sink_type,
-                    event_type=event_type,
-                    result=result,
-                    previous_row=existing_row,
-                )
-                if sync_status == "conflict_detached":
-                    result_summary["detached_conflicts"] += 1
-                present_in_source = event_type != "deleted"
-                content_hash = change.get("content_hash") if present_in_source else None
-
-                updated_row = await upsert_source_item(
-                    db,
-                    source_id=source_id,
-                    normalized_relative_path=relative_path,
-                    content_hash=None if content_hash is None else str(content_hash),
-                    sync_status=sync_status,
-                    binding=binding,
-                    present_in_source=present_in_source,
-                )
-                all_rows_map[relative_path] = updated_row
-                await record_ingestion_item_event(
-                    db,
-                    source_id=source_id,
-                    item_path=relative_path,
-                    event_type=event_type,
-                    payload={
-                        "action": action,
-                        "job_id": str(jid),
-                        "sync_status": sync_status,
-                    },
-                )
-                result_summary["processed"] += 1
-
-            for relative_path in sorted(failed_paths):
-                failure = extraction_failures[relative_path]
-                existing_row = all_rows_map.get(relative_path)
-                existing_binding = dict(existing_row.get("binding") or {}) if existing_row else {}
-                preserved_content_hash = None if existing_row is None else existing_row.get("content_hash")
-                updated_row = await upsert_source_item(
-                    db,
-                    source_id=source_id,
-                    normalized_relative_path=relative_path,
-                    content_hash=None if preserved_content_hash is None else str(preserved_content_hash),
-                    sync_status="degraded_ingestion_error",
-                    binding=existing_binding,
-                    present_in_source=True,
-                )
-                all_rows_map[relative_path] = updated_row
-                await record_ingestion_item_event(
-                    db,
-                    source_id=source_id,
-                    item_path=relative_path,
-                    event_type="ingestion_failed",
-                    payload={
-                        "action": "ingestion_failed",
-                        "job_id": str(jid),
-                        "sync_status": "degraded_ingestion_error",
-                        "error": str(failure.get("error") or ""),
-                    },
-                )
+            result_summary = await _apply_snapshot_changes(
+                db=db,
+                sink_db=sink_db,
+                sink_type=sink_type,
+                policy=policy,
+                source_id=source_id,
+                jid=jid,
+                current_items=current_items,
+                extraction_failures=extraction_failures,
+            )
 
             if staged_snapshot:
                 snapshot = await update_source_snapshot(

@@ -151,4 +151,41 @@ describe("SourceForm", () => {
     expect(screen.queryByLabelText("Server directory path")).not.toBeInTheDocument()
     expect(screen.queryByText("Destination")).not.toBeInTheDocument()
   })
+
+  it("keeps source identity editable until a successful snapshot exists", () => {
+    render(
+      <SourceForm
+        mode="edit"
+        source={{
+          id: "42",
+          user_id: 7,
+          source_type: "local_directory",
+          sink_type: "notes",
+          policy: "canonical",
+          enabled: true,
+          schedule_enabled: false,
+          schedule_config: {},
+          config: { path: "/srv/tldw/notes" },
+          last_successful_snapshot_id: null,
+          last_sync_completed_at: "2026-03-08T22:15:00Z",
+          last_successful_sync_summary: {
+            changed_count: 2,
+            degraded_count: 0,
+            conflict_count: 0,
+            sink_failure_count: 0,
+            ingestion_failure_count: 0,
+            created_count: 1,
+            updated_count: 1,
+            deleted_count: 0,
+            unchanged_count: 3
+          }
+        }}
+      />
+    )
+
+    expect(screen.queryByText("Locked after first successful sync")).not.toBeInTheDocument()
+    expect(screen.getByRole("radio", { name: "Archive snapshot" })).toBeInTheDocument()
+    expect(screen.getByLabelText("Server directory path")).toBeInTheDocument()
+    expect(screen.getByText("Destination")).toBeInTheDocument()
+  })
 })
