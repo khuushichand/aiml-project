@@ -1101,6 +1101,34 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/notes-title-suggest
+  - id: acp.agents.register
+    description: Register new agent types in the ACP agent registry.
+    resource_tags:
+      - acp
+      - agents
+      - registration
+    sensitivity_tier: restricted
+    rate_limit_class: admin
+    default_roles:
+      - admin
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/acp-agents-register
+  - id: acp.agents.manage
+    description: Update and deregister agent types in the ACP agent registry.
+    resource_tags:
+      - acp
+      - agents
+      - management
+    sensitivity_tier: restricted
+    rate_limit_class: admin
+    default_roles:
+      - admin
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/acp-agents-manage
 feature_flags:
   - id: media_ingest_beta
     description: Enables new media ingestion pipeline with enhanced metadata extraction.

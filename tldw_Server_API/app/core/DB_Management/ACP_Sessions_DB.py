@@ -14,7 +14,7 @@ from typing import Any
 
 from loguru import logger
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -56,6 +56,22 @@ CREATE TABLE IF NOT EXISTS session_messages (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_session_idx
     ON session_messages(session_id, message_index);
+
+CREATE TABLE IF NOT EXISTS agent_registry (
+    agent_type TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    command TEXT NOT NULL DEFAULT '',
+    args TEXT NOT NULL DEFAULT '[]',
+    env TEXT NOT NULL DEFAULT '{}',
+    requires_api_key TEXT,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    install_instructions TEXT NOT NULL DEFAULT '[]',
+    docs_url TEXT,
+    source TEXT NOT NULL DEFAULT 'api',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 # Columns that are stored as INTEGER 0/1 but should be returned as bool
@@ -112,6 +128,26 @@ class ACPSessionsDB:
             if conn is None:
                 return  # _get_conn will call us again after creating conn
             conn.executescript(_SCHEMA_SQL)
+            # Migrate from v1 -> v2: ensure agent_registry table exists
+            current_version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if current_version < _SCHEMA_VERSION:
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS agent_registry (
+                        agent_type TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        command TEXT NOT NULL DEFAULT '',
+                        args TEXT NOT NULL DEFAULT '[]',
+                        env TEXT NOT NULL DEFAULT '{}',
+                        requires_api_key TEXT,
+                        is_default INTEGER NOT NULL DEFAULT 0,
+                        install_instructions TEXT NOT NULL DEFAULT '[]',
+                        docs_url TEXT,
+                        source TEXT NOT NULL DEFAULT 'api',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                """)
             conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             conn.commit()
             self._initialized = True
@@ -673,6 +709,76 @@ class ACPSessionsDB:
         conn.commit()
         logger.info("Evicted {} expired ACP sessions", len(expired_ids))
         return len(expired_ids)
+
+    # ------------------------------------------------------------------
+    # Agent Registry CRUD
+    # ------------------------------------------------------------------
+
+    def save_agent_entry(self, entry_dict: dict[str, Any]) -> dict[str, Any]:
+        """Insert or replace an agent registry entry. Returns the saved entry."""
+        conn = self._get_conn()
+        now = _utcnow_iso()
+        agent_type = entry_dict.get("agent_type", "")
+        name = entry_dict.get("name", "")
+        description = entry_dict.get("description", "")
+        command = entry_dict.get("command", "")
+        args = entry_dict.get("args", "[]")
+        env = entry_dict.get("env", "{}")
+        requires_api_key = entry_dict.get("requires_api_key")
+        is_default = int(entry_dict.get("is_default", 0))
+        install_instructions = entry_dict.get("install_instructions", "[]")
+        docs_url = entry_dict.get("docs_url")
+        source = entry_dict.get("source", "api")
+
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO agent_registry (
+                agent_type, name, description, command, args, env,
+                requires_api_key, is_default, install_instructions, docs_url,
+                source, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                agent_type, name, description, command, args, env,
+                requires_api_key, is_default, install_instructions, docs_url,
+                source, now, now,
+            ),
+        )
+        conn.commit()
+        return self.get_agent_entry(agent_type)  # type: ignore[return-value]
+
+    def delete_agent_entry(self, agent_type: str) -> bool:
+        """Delete an agent entry. Returns True if a row was removed."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "DELETE FROM agent_registry WHERE agent_type = ?", (agent_type,)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def list_agent_entries(self, source: str | None = None) -> list[dict[str, Any]]:
+        """List agent entries, optionally filtered by source."""
+        conn = self._get_conn()
+        if source is not None:
+            rows = conn.execute(
+                "SELECT * FROM agent_registry WHERE source = ? ORDER BY name",
+                (source,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM agent_registry ORDER BY name"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_agent_entry(self, agent_type: str) -> dict[str, Any] | None:
+        """Fetch a single agent entry by type, or None."""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM agent_registry WHERE agent_type = ?", (agent_type,)
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
 
     # ------------------------------------------------------------------
     # Lifecycle

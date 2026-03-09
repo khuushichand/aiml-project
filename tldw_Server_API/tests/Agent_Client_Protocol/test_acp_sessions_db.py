@@ -349,3 +349,39 @@ class TestCascadeDelete:
         db.delete_session("s1")
         # Messages should be gone too (CASCADE)
         assert db.get_messages("s1") == []
+
+
+class TestAgentRegistry:
+    def test_save_and_get_agent_entry(self, db):
+        entry = db.save_agent_entry({
+            "agent_type": "test_agent",
+            "name": "Test Agent",
+            "command": "test-cmd",
+            "source": "api",
+        })
+        assert entry is not None
+        assert entry["agent_type"] == "test_agent"
+        fetched = db.get_agent_entry("test_agent")
+        assert fetched is not None
+        assert fetched["name"] == "Test Agent"
+
+    def test_delete_agent_entry(self, db):
+        db.save_agent_entry({"agent_type": "tmp", "name": "Tmp", "source": "api"})
+        assert db.delete_agent_entry("tmp") is True
+        assert db.get_agent_entry("tmp") is None
+        assert db.delete_agent_entry("tmp") is False
+
+    def test_list_agent_entries(self, db):
+        db.save_agent_entry({"agent_type": "a1", "name": "A1", "source": "api"})
+        db.save_agent_entry({"agent_type": "a2", "name": "A2", "source": "yaml"})
+        all_entries = db.list_agent_entries()
+        assert len(all_entries) == 2
+        api_entries = db.list_agent_entries(source="api")
+        assert len(api_entries) == 1
+        assert api_entries[0]["agent_type"] == "a1"
+
+    def test_save_agent_upsert(self, db):
+        db.save_agent_entry({"agent_type": "a1", "name": "Original", "source": "api"})
+        db.save_agent_entry({"agent_type": "a1", "name": "Updated", "source": "api"})
+        entry = db.get_agent_entry("a1")
+        assert entry["name"] == "Updated"

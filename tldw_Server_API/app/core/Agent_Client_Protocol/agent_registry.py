@@ -2,11 +2,14 @@
 
 Loads agent definitions from Config_Files/agents.yaml and provides
 runtime availability detection (binary on PATH, API keys set).
+Supports dynamic registration via REST API with SQLite persistence.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -71,9 +74,13 @@ class AgentRegistryEntry:
 
 
 class AgentRegistry:
-    """Loads and caches agent entries from agents.yaml."""
+    """Loads and caches agent entries from agents.yaml.
 
-    def __init__(self, yaml_path: str | None = None) -> None:
+    Supports dynamic registration via ``register_agent`` / ``deregister_agent``
+    backed by an optional ``ACPSessionsDB`` instance for persistence.
+    """
+
+    def __init__(self, yaml_path: str | None = None, db: Any = None) -> None:
         if yaml_path is None:
             yaml_path = os.path.join(
                 os.path.dirname(__file__),
@@ -81,6 +88,9 @@ class AgentRegistry:
             )
         self._yaml_path = os.path.abspath(yaml_path)
         self._entries: list[AgentRegistryEntry] = []
+        self._api_entries: list[AgentRegistryEntry] = []
+        self._db = db
+        self._lock = threading.RLock()
         self._default_type: str = "custom"
         self._last_load_time: float = 0
         self._last_mtime: float = 0
@@ -142,7 +152,10 @@ class AgentRegistry:
             self._last_mtime = os.path.getmtime(self._yaml_path)
         except OSError:
             pass
-        logger.debug("Loaded {} agents from registry", len(entries))
+        self._load_api_entries()
+        logger.debug("Loaded {} agents from registry ({} YAML, {} API)",
+                      len(entries) + len(self._api_entries),
+                      len(entries), len(self._api_entries))
 
     def _maybe_reload(self) -> None:
         """Reload if the file has changed."""
@@ -157,14 +170,53 @@ class AgentRegistry:
             logger.info("Agent registry file changed, reloading")
             self.load()
 
+    def _load_api_entries(self) -> None:
+        """Load dynamically registered agents from the DB (if available)."""
+        if self._db is None:
+            return
+        with self._lock:
+            try:
+                rows = self._db.list_agent_entries(source="api")
+            except Exception as exc:
+                logger.warning("Failed to load API agent entries from DB: {}", exc)
+                return
+            entries: list[AgentRegistryEntry] = []
+            for row in rows:
+                try:
+                    args = json.loads(row.get("args", "[]")) if isinstance(row.get("args"), str) else row.get("args", [])
+                    env = json.loads(row.get("env", "{}")) if isinstance(row.get("env"), str) else row.get("env", {})
+                    install = json.loads(row.get("install_instructions", "[]")) if isinstance(row.get("install_instructions"), str) else row.get("install_instructions", [])
+                except (json.JSONDecodeError, TypeError):
+                    args, env, install = [], {}, []
+                entries.append(AgentRegistryEntry(
+                    type=row["agent_type"],
+                    name=row["name"],
+                    description=row.get("description", ""),
+                    command=row.get("command", ""),
+                    args=args,
+                    env=env,
+                    requires_api_key=row.get("requires_api_key"),
+                    default=bool(row.get("is_default", 0)),
+                    install_instructions=install,
+                    docs_url=row.get("docs_url"),
+                ))
+            self._api_entries = entries
+
     @property
     def entries(self) -> list[AgentRegistryEntry]:
-        """Get all registry entries, reloading if needed."""
+        """Get all registry entries, reloading if needed.
+
+        API-registered entries override YAML entries with the same type.
+        """
         if not self._entries:
             self.load()
         else:
             self._maybe_reload()
-        return list(self._entries)
+        with self._lock:
+            api_types = {e.type for e in self._api_entries}
+            merged = [e for e in self._entries if e.type not in api_types]
+            merged.extend(self._api_entries)
+        return merged
 
     @property
     def default_type(self) -> str:
@@ -182,6 +234,90 @@ class AgentRegistry:
     def get_available_agents(self) -> list[dict[str, Any]]:
         """Get all agents with runtime availability info."""
         return [entry.check_availability() for entry in self.entries]
+
+    # ------------------------------------------------------------------
+    # Dynamic registration
+    # ------------------------------------------------------------------
+
+    def register_agent(
+        self,
+        type: str,
+        name: str,
+        command: str = "",
+        description: str = "",
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        requires_api_key: str | None = None,
+        install_instructions: list[str] | None = None,
+        docs_url: str | None = None,
+    ) -> AgentRegistryEntry:
+        """Register or update a dynamic agent entry."""
+        with self._lock:
+            entry = AgentRegistryEntry(
+                type=type,
+                name=name,
+                command=command,
+                description=description,
+                args=args or [],
+                env=env or {},
+                requires_api_key=requires_api_key,
+                install_instructions=install_instructions or [],
+                docs_url=docs_url,
+            )
+            if self._db is not None:
+                self._db.save_agent_entry({
+                    "agent_type": type,
+                    "name": name,
+                    "command": command,
+                    "description": description,
+                    "args": json.dumps(args or []),
+                    "env": json.dumps(env or {}),
+                    "requires_api_key": requires_api_key,
+                    "install_instructions": json.dumps(install_instructions or []),
+                    "docs_url": docs_url,
+                    "source": "api",
+                })
+            self._api_entries = [e for e in self._api_entries if e.type != type]
+            self._api_entries.append(entry)
+            return entry
+
+    def deregister_agent(self, agent_type: str) -> bool:
+        """Remove a dynamically registered agent. Cannot remove YAML entries."""
+        with self._lock:
+            before = len(self._api_entries)
+            self._api_entries = [e for e in self._api_entries if e.type != agent_type]
+            removed = len(self._api_entries) < before
+            if self._db is not None:
+                self._db.delete_agent_entry(agent_type)
+            return removed
+
+    def update_agent(self, agent_type: str, **kwargs: Any) -> AgentRegistryEntry | None:
+        """Update fields on an existing dynamic agent entry."""
+        with self._lock:
+            existing = None
+            for e in self._api_entries:
+                if e.type == agent_type:
+                    existing = e
+                    break
+            if existing is None:
+                return None
+            for key, value in kwargs.items():
+                if hasattr(existing, key) and key != "type":
+                    setattr(existing, key, value)
+            if self._db is not None:
+                self._db.save_agent_entry({
+                    "agent_type": existing.type,
+                    "name": existing.name,
+                    "command": existing.command,
+                    "description": existing.description,
+                    "args": json.dumps(existing.args),
+                    "env": json.dumps(existing.env),
+                    "requires_api_key": existing.requires_api_key,
+                    "install_instructions": json.dumps(existing.install_instructions),
+                    "docs_url": existing.docs_url,
+                    "source": "api",
+                })
+            return existing
 
 
 # Module-level singleton

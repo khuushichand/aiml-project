@@ -254,3 +254,85 @@ def test_registry_loads_new_agent_types():
     assert "goose" in types
     assert "continue_dev" in types
     assert "claude_code" in types
+
+
+# ---------------------------------------------------------------------------
+# Dynamic registration tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def db_registry(tmp_path):
+    """Registry backed by temp SQLite for dynamic registration tests."""
+    from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import AgentRegistry
+
+    db_path = str(tmp_path / "acp_sessions.db")
+    db = ACPSessionsDB(db_path=db_path)
+
+    yaml_content = """
+agents:
+  - type: claude_code
+    name: Claude Code
+    command: nonexistent_binary_xyz
+    requires_api_key: ANTHROPIC_API_KEY
+    default: true
+"""
+    yaml_file = tmp_path / "agents.yaml"
+    yaml_file.write_text(yaml_content)
+
+    registry = AgentRegistry(yaml_path=str(yaml_file), db=db)
+    registry.load()
+    yield registry
+    db.close()
+
+
+class TestDynamicRegistration:
+    def test_register_agent(self, db_registry):
+        entry = db_registry.register_agent(
+            type="my_agent", name="My Agent", command="my-agent-cli",
+        )
+        assert entry.type == "my_agent"
+        assert db_registry.get_entry("my_agent") is not None
+
+    def test_deregister_agent(self, db_registry):
+        db_registry.register_agent(type="tmp", name="Tmp", command="tmp")
+        assert db_registry.deregister_agent("tmp") is True
+        assert db_registry.get_entry("tmp") is None
+
+    def test_deregister_nonexistent(self, db_registry):
+        assert db_registry.deregister_agent("nonexistent") is False
+
+    def test_yaml_entries_preserved_after_register(self, db_registry):
+        assert db_registry.get_entry("claude_code") is not None
+        db_registry.register_agent(type="new", name="New", command="new")
+        assert db_registry.get_entry("claude_code") is not None
+        assert db_registry.get_entry("new") is not None
+
+    def test_api_overrides_yaml_same_type(self, db_registry):
+        db_registry.register_agent(type="claude_code", name="Custom Claude", command="my-claude")
+        entry = db_registry.get_entry("claude_code")
+        assert entry.name == "Custom Claude"
+        assert entry.command == "my-claude"
+
+    def test_update_agent(self, db_registry):
+        db_registry.register_agent(type="my_agent", name="My Agent", command="cmd")
+        updated = db_registry.update_agent("my_agent", name="Updated Agent", description="new desc")
+        assert updated is not None
+        assert updated.name == "Updated Agent"
+        assert updated.description == "new desc"
+
+    def test_update_nonexistent(self, db_registry):
+        assert db_registry.update_agent("nonexistent", name="foo") is None
+
+    def test_persistence_across_reload(self, db_registry):
+        """Registered agents survive a registry reload."""
+        db_registry.register_agent(type="persistent_agent", name="Persistent", command="persist-cmd")
+        db_registry._reload_interval = 0
+        db_registry.load()
+        entry = db_registry.get_entry("persistent_agent")
+        assert entry is not None
+        assert entry.name == "Persistent"
+
+    def test_cannot_deregister_yaml_only(self, db_registry):
+        """Deregistering a YAML-only entry returns False."""
+        assert db_registry.deregister_agent("claude_code") is False

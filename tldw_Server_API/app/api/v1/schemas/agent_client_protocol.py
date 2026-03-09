@@ -34,6 +34,31 @@ class ACPAgentListResponse(BaseModel):
     default_agent: ACPAgentType = Field(default="custom")
 
 
+class ACPAgentRegisterRequest(BaseModel):
+    """Request to register a new agent type."""
+    agent_type: str = Field(..., description="Unique agent type identifier")
+    name: str = Field(..., description="Human-readable agent name")
+    description: str = Field(default="", description="Agent description")
+    command: str = Field(default="", description="Agent CLI command")
+    args: list[str] = Field(default_factory=list, description="Command arguments")
+    env: dict[str, str] = Field(default_factory=dict, description="Environment variables")
+    requires_api_key: str | None = Field(default=None, description="Required API key env var")
+    install_instructions: list[str] = Field(default_factory=list, description="Installation steps")
+    docs_url: str | None = Field(default=None, description="Documentation URL")
+
+
+class ACPAgentUpdateRequest(BaseModel):
+    """Request to update an existing agent."""
+    name: str | None = None
+    description: str | None = None
+    command: str | None = None
+    args: list[str] | None = None
+    env: dict[str, str] | None = None
+    requires_api_key: str | None = None
+    install_instructions: list[str] | None = None
+    docs_url: str | None = None
+
+
 # -----------------------------------------------------------------------------
 # MCP Server Configuration
 # -----------------------------------------------------------------------------

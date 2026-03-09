@@ -21,6 +21,8 @@ from tldw_Server_API.app.api.v1.endpoints._in_memory_limits import SlidingWindow
 from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentInfo,
     ACPAgentListResponse,
+    ACPAgentRegisterRequest,
+    ACPAgentUpdateRequest,
     ACPHealthResponse,
     ACPSessionCancelRequest,
     ACPSessionCloseRequest,
@@ -1482,6 +1484,76 @@ async def acp_list_agents(
         agents=agents,
         default_agent=default_agent,
     )
+
+
+@router.post(
+    "/agents/register",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.agents.register"))],
+)
+async def acp_register_agent(
+    request: ACPAgentRegisterRequest,
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    """Register a new agent type dynamically."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+
+    registry = get_agent_registry()
+    entry = registry.register_agent(
+        type=request.agent_type,
+        name=request.name,
+        command=request.command,
+        description=request.description,
+        args=request.args,
+        env=request.env,
+        requires_api_key=request.requires_api_key,
+        install_instructions=request.install_instructions,
+        docs_url=request.docs_url,
+    )
+    return {"status": "registered", "agent": {"type": entry.type, "name": entry.name}}
+
+
+@router.delete(
+    "/agents/{agent_type}",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.agents.manage"))],
+)
+async def acp_deregister_agent(
+    agent_type: str,
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    """Remove a dynamically registered agent."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+
+    registry = get_agent_registry()
+    removed = registry.deregister_agent(agent_type)
+    if not removed:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent '{agent_type}' not found or is a YAML-defined agent",
+        )
+    return {"status": "deregistered", "agent_type": agent_type}
+
+
+@router.put(
+    "/agents/{agent_type}",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.agents.manage"))],
+)
+async def acp_update_agent(
+    agent_type: str,
+    request: ACPAgentUpdateRequest,
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    """Update a dynamically registered agent."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+
+    registry = get_agent_registry()
+    updates = request.model_dump(exclude_unset=True)
+    entry = registry.update_agent(agent_type, **updates)
+    if entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent '{agent_type}' not found in dynamic registry",
+        )
+    return {"status": "updated", "agent": {"type": entry.type, "name": entry.name}}
 
 
 def _generate_session_name(cwd: str) -> str:
