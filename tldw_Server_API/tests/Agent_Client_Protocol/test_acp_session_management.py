@@ -54,9 +54,11 @@ if "transformers" not in sys.modules:
 # ---- Session Store quota/TTL tests ----
 
 @pytest.fixture
-def session_store():
+def session_store(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
     from tldw_Server_API.app.services.admin_acp_sessions_service import ACPSessionStore
-    return ACPSessionStore()
+    _db = ACPSessionsDB(db_path=str(tmp_path / "session_mgmt_test.db"))
+    return ACPSessionStore(db=_db)
 
 
 @pytest.mark.asyncio
