@@ -19,7 +19,13 @@ In scope:
   - `/sources/:sourceId`
 - Admin-mounted mirror route:
   - `/admin/sources`
-- Full CRUD-style source management for the current signed-in user
+- Full management surface for the current backend-supported source operations:
+  - create source
+  - update mutable fields
+  - run manual sync
+  - upload archive refreshes
+  - inspect items
+  - reattach detached notes items
 - Archive upload and manual sync actions from the UI
 - Source item inspection and notes-item reattach actions
 - Shared data hooks and components in `apps/packages/ui`
@@ -30,6 +36,7 @@ Out of scope for v1:
 - Sidebar-only or popup-only ingestion-source flows
 - Cross-user admin management
 - Dedicated admin-only backend APIs
+- Source deletion/removal until the backend exposes a delete endpoint and lifecycle policy
 - Advanced per-run job inspection beyond the existing source/item status data
 - A separate extension-specific UI implementation
 
@@ -101,6 +108,19 @@ The ingestion-source backend currently exposes per-user source management:
 - `POST /api/v1/ingestion-sources/{source_id}/items/{item_id}/reattach`
 
 There is no admin cross-user source API yet, so the admin route in v1 must still operate on the signed-in user’s sources.
+
+There is also no delete endpoint in the current ingestion-source backend surface, so the first UI slice cannot promise delete/remove operations yet.
+
+### Shared capability detection does not cover ingestion sources yet
+
+The shared UI already uses a capability model for feature availability, but ingestion sources are not represented there today.
+
+Relevant files:
+
+- `apps/packages/ui/src/services/tldw/server-capabilities.ts`
+- `apps/packages/ui/src/hooks/useServerCapabilities.ts`
+
+That means the ingestion-sources route should add a capability flag such as `hasIngestionSources` before shipping, so older servers render a clear “feature unavailable” state instead of a raw failing page.
 
 ## Evaluated Approaches
 
@@ -190,6 +210,7 @@ This gives the best product semantics, fits the repo’s shared route architectu
 - same core workspace
 - mounted with admin page chrome and route identity
 - same per-user behavior in v1
+- `New source` and `Open detail` route into `/sources/new` and `/sources/:sourceId` until dedicated admin subroutes exist
 - reserved for future admin-only expansion once cross-user APIs exist
 
 ## UX Behavior
@@ -222,10 +243,11 @@ Quick actions:
 Full-page source creation flow with source-type-aware fields.
 
 `local_directory` mode:
-- path
+- server directory path
 - sink type
 - policy
 - schedule controls
+- advanced/self-hosted warning explaining that this path is on the tldw server host, not the browser or extension device
 
 `archive_snapshot` mode:
 - sink type
@@ -282,8 +304,8 @@ Recommended structure:
 Route wrappers in shared UI:
 
 - `routes/option-sources.tsx`
-- `routes/option-source-new.tsx`
-- `routes/option-source-detail.tsx`
+- `routes/option-sources-new.tsx`
+- `routes/option-sources-detail.tsx`
 - `routes/option-admin-sources.tsx`
 
 Web page mounts:
@@ -307,6 +329,7 @@ Required queries:
 - list sources
 - get source detail
 - list source items
+- get server capabilities for route availability and unsupported-state handling
 
 Required mutations:
 - create source
@@ -350,6 +373,10 @@ Map backend responses into actionable copy:
 ### Connection state
 
 Reuse the repo’s existing server offline/unreachable patterns. The sources workspace should degrade like other full-page options surfaces instead of inventing its own connection model.
+
+### Feature availability state
+
+If the connected server does not advertise ingestion-source support, the page should render the project’s normal “feature unavailable” treatment rather than attempting live source calls and surfacing raw API errors.
 
 ## Testing Strategy
 
