@@ -1123,37 +1123,6 @@ async def _handle_client_message(
 # Health check & setup-guide helpers
 # ---------------------------------------------------------------------------
 
-_AGENT_SETUP_GUIDES: dict[str, dict[str, Any]] = {
-    "claude_code": {
-        "name": "Claude Code",
-        "binary": "claude",
-        "install_instructions": [
-            "Install Claude Code CLI: npm install -g @anthropic-ai/claude-code",
-            "Or via pip: pip install claude-code",
-        ],
-        "required_env_vars": ["ANTHROPIC_API_KEY"],
-        "docs_url": "https://docs.anthropic.com/en/docs/claude-code",
-    },
-    "codex": {
-        "name": "OpenAI Codex CLI",
-        "binary": "codex",
-        "install_instructions": [
-            "Install Codex CLI: npm install -g @openai/codex",
-        ],
-        "required_env_vars": ["OPENAI_API_KEY"],
-        "docs_url": "https://github.com/openai/codex",
-    },
-    "opencode": {
-        "name": "OpenCode",
-        "binary": "opencode",
-        "install_instructions": [
-            "Install OpenCode: go install github.com/sst/opencode@latest",
-            "Or download from: https://github.com/sst/opencode/releases",
-        ],
-        "required_env_vars": [],
-        "docs_url": "https://github.com/sst/opencode",
-    },
-}
 
 
 def _check_runner_binary() -> dict[str, Any]:
@@ -1213,41 +1182,19 @@ def _check_runner_binary() -> dict[str, Any]:
 
 def _check_agent_availability(agent_type: str) -> dict[str, Any]:
     """Check if a downstream agent binary and API keys are available."""
-    import shutil
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
 
-    guide = _AGENT_SETUP_GUIDES.get(agent_type)
-    if not guide:
-        return {"status": "unknown", "detail": f"No setup guide for agent type: {agent_type}"}
-
-    result: dict[str, Any] = {"agent_type": agent_type, "name": guide["name"]}
-
-    # Check binary
-    binary_name = guide.get("binary", "")
-    if binary_name:
-        which_result = shutil.which(binary_name)
-        result["binary_status"] = "ok" if which_result else "missing"
-        if which_result:
-            result["binary_path"] = which_result
-    else:
-        result["binary_status"] = "not_applicable"
-
-    # Check env vars
-    missing_keys = []
-    for var in guide.get("required_env_vars", []):
-        if not os.getenv(var):
-            missing_keys.append(var)
-    result["api_keys_status"] = "ok" if not missing_keys else "missing"
-    if missing_keys:
-        result["missing_api_keys"] = missing_keys
-
-    # Overall status
-    if result.get("binary_status") == "missing":
-        result["status"] = "unavailable"
-    elif missing_keys:
-        result["status"] = "requires_setup"
-    else:
-        result["status"] = "available"
-
+    registry = get_agent_registry()
+    entry = registry.get_entry(agent_type)
+    if entry is None:
+        return {
+            "agent_type": agent_type,
+            "status": "unknown",
+            "binary_found": False,
+            "api_key_set": False,
+        }
+    result = entry.check_availability()
+    result["agent_type"] = agent_type
     return result
 
 
@@ -1272,9 +1219,20 @@ async def acp_health(
     result["runner"] = runner_status
 
     # 2. Check downstream agents
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+
+    registry = get_agent_registry()
     agents_status: list[dict[str, Any]] = []
-    for agent_type in _AGENT_SETUP_GUIDES:
-        agents_status.append(_check_agent_availability(agent_type))
+    for entry in registry.entries:
+        avail = entry.check_availability()
+        agents_status.append({
+            "agent_type": entry.type,
+            "name": entry.name,
+            "status": avail.get("status", "unknown"),
+            "binary_found": avail.get("binary_found", False),
+            "api_key_set": avail.get("api_key_set", False),
+            "is_configured": avail.get("is_configured", False),
+        })
     result["agents"] = agents_status
 
     # 3. Try to probe the runner (if binary is available)
@@ -1343,34 +1301,41 @@ async def acp_setup_guide(
         runner_guide["steps"] = ["Runner binary is available - no action needed"]
     result["runner"] = runner_guide
 
-    # Agent guides
-    guides: list[dict[str, Any]] = []
-    target_agents = [agent_type] if agent_type and agent_type in _AGENT_SETUP_GUIDES else list(_AGENT_SETUP_GUIDES)
+    # Agent guides from registry
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
 
-    for at in target_agents:
-        agent_status = _check_agent_availability(at)
-        guide_info = _AGENT_SETUP_GUIDES.get(at, {})
-        entry: dict[str, Any] = {
-            "agent_type": at,
-            "name": guide_info.get("name", at),
-            "status": agent_status.get("status", "unknown"),
+    registry = get_agent_registry()
+    guides: list[dict[str, Any]] = []
+
+    # Filter to a specific agent if requested and it exists in the registry
+    matched_entry = registry.get_entry(agent_type) if agent_type else None
+    target_entries = [matched_entry] if matched_entry else registry.entries
+
+    for reg_entry in target_entries:
+        avail = reg_entry.check_availability()
+        guide_item: dict[str, Any] = {
+            "agent_type": reg_entry.type,
+            "name": reg_entry.name,
+            "status": avail.get("status", "unknown"),
             "steps": [],
         }
 
-        if agent_status.get("binary_status") == "missing":
-            entry["steps"].extend(guide_info.get("install_instructions", []))
+        if not avail.get("binary_found", True):
+            steps = list(reg_entry.install_instructions) if reg_entry.install_instructions else []
+            if not steps:
+                steps = [f"Install {reg_entry.name} and ensure the '{reg_entry.command}' command is available"]
+            guide_item["steps"].extend(steps)
 
-        if agent_status.get("api_keys_status") == "missing":
-            for key in agent_status.get("missing_api_keys", []):
-                entry["steps"].append(f"Set {key} environment variable or add to .env file")
+        if not avail.get("api_key_set", True) and reg_entry.requires_api_key:
+            guide_item["steps"].append(f"Set {reg_entry.requires_api_key} environment variable or add to .env file")
 
-        if not entry["steps"]:
-            entry["steps"] = [f"{guide_info.get('name', at)} is fully configured"]
+        if not guide_item["steps"]:
+            guide_item["steps"] = [f"{reg_entry.name} is fully configured"]
 
-        if guide_info.get("docs_url"):
-            entry["docs_url"] = guide_info["docs_url"]
+        if reg_entry.docs_url:
+            guide_item["docs_url"] = reg_entry.docs_url
 
-        guides.append(entry)
+        guides.append(guide_item)
 
     result["guides"] = guides
     return result
