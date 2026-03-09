@@ -12,13 +12,9 @@ from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.Agent_Orchestration.models import (
-    TaskStatus,
-    RunStatus,
-)
+from tldw_Server_API.app.core.Agent_Orchestration.models import TaskStatus
 from tldw_Server_API.app.core.Agent_Orchestration.orchestration_service import (
-    CycleDependencyError,
-    get_orchestration_service,
+    get_orchestration_db,
 )
 
 router = APIRouter(prefix="/agent-orchestration", tags=["agent-orchestration"])
@@ -102,11 +98,10 @@ async def create_project(
     user: User = Depends(get_request_user),
 ) -> ProjectResponse:
     """Create a new agent project."""
-    svc = await get_orchestration_service()
-    project = await svc.create_project(
+    db = get_orchestration_db(int(user.id))
+    project = db.create_project(
         name=payload.name,
         description=payload.description,
-        user_id=user.id,
         metadata=payload.metadata,
     )
     return ProjectResponse(**project.to_dict())
@@ -121,11 +116,11 @@ async def list_projects(
     user: User = Depends(get_request_user),
 ) -> list[ProjectResponse]:
     """List all projects for the current user."""
-    svc = await get_orchestration_service()
-    projects = await svc.list_projects(user_id=user.id)
+    db = get_orchestration_db(int(user.id))
+    projects = db.list_projects()
     results = []
     for p in projects:
-        summary = await svc.get_project_summary(p.id)
+        summary = db.get_project_summary(p.id)
         d = p.to_dict()
         d["task_summary"] = summary
         results.append(ProjectResponse(**d))
@@ -142,11 +137,11 @@ async def get_project(
     user: User = Depends(get_request_user),
 ) -> ProjectResponse:
     """Get a project by ID."""
-    svc = await get_orchestration_service()
-    project = await svc.get_project(project_id)
-    if not project or project.user_id != user.id:
+    db = get_orchestration_db(int(user.id))
+    project = db.get_project(project_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    summary = await svc.get_project_summary(project_id)
+    summary = db.get_project_summary(project_id)
     d = project.to_dict()
     d["task_summary"] = summary
     return ProjectResponse(**d)
@@ -161,11 +156,11 @@ async def delete_project(
     user: User = Depends(get_request_user),
 ) -> dict[str, Any]:
     """Delete a project and all associated tasks/runs."""
-    svc = await get_orchestration_service()
-    project = await svc.get_project(project_id)
-    if not project or project.user_id != user.id:
+    db = get_orchestration_db(int(user.id))
+    project = db.get_project(project_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    await svc.delete_project(project_id)
+    db.delete_project(project_id)
     return {"deleted": True, "project_id": project_id}
 
 
@@ -186,12 +181,12 @@ async def create_task(
     user: User = Depends(get_request_user),
 ) -> TaskResponse:
     """Create a new task in a project."""
-    svc = await get_orchestration_service()
-    project = await svc.get_project(project_id)
-    if not project or project.user_id != user.id:
+    db = get_orchestration_db(int(user.id))
+    project = db.get_project(project_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     try:
-        task = await svc.create_task(
+        task = db.create_task(
             project_id=project_id,
             title=payload.title,
             description=payload.description,
@@ -200,15 +195,15 @@ async def create_task(
             reviewer_agent_type=payload.reviewer_agent_type,
             max_review_attempts=payload.max_review_attempts,
             success_criteria=payload.success_criteria,
-            user_id=user.id,
             metadata=payload.metadata,
         )
-    except CycleDependencyError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
     except ValueError as exc:
+        err_msg = str(exc).lower()
+        if "cycle" in err_msg:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return TaskResponse(**task.to_dict())
 
@@ -224,9 +219,9 @@ async def list_tasks(
     user: User = Depends(get_request_user),
 ) -> list[TaskResponse]:
     """List tasks in a project with optional status filter."""
-    svc = await get_orchestration_service()
-    project = await svc.get_project(project_id)
-    if not project or project.user_id != user.id:
+    db = get_orchestration_db(int(user.id))
+    project = db.get_project(project_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     task_status = None
     if status_filter:
@@ -234,7 +229,7 @@ async def list_tasks(
             task_status = TaskStatus(status_filter)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid status: {status_filter}")
-    tasks = await svc.list_tasks(project_id, status=task_status)
+    tasks = db.list_tasks(project_id, status=task_status)
     return [TaskResponse(**t.to_dict()) for t in tasks]
 
 
@@ -248,11 +243,11 @@ async def get_task(
     user: User = Depends(get_request_user),
 ) -> TaskResponse:
     """Get task detail including run history."""
-    svc = await get_orchestration_service()
-    task = await svc.get_task(task_id)
-    if not task or task.user_id != user.id:
+    db = get_orchestration_db(int(user.id))
+    task = db.get_task(task_id)
+    if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    runs = await svc.list_runs(task_id)
+    runs = db.list_runs(task_id)
     d = task.to_dict()
     d["runs"] = [r.to_dict() for r in runs]
     return TaskResponse(**d)
@@ -277,13 +272,13 @@ async def dispatch_run(
     Creates an ACP session, sends the task description as the initial prompt,
     and tracks the run.
     """
-    svc = await get_orchestration_service()
-    task = await svc.get_task(task_id)
-    if not task or task.user_id != user.id:
+    db = get_orchestration_db(int(user.id))
+    task = db.get_task(task_id)
+    if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
     # Check dependency
-    dep_ready = await svc.check_dependency_ready(task_id)
+    dep_ready = db.check_dependency_ready(task_id)
     if not dep_ready:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -292,7 +287,7 @@ async def dispatch_run(
 
     # Transition to in_progress
     try:
-        await svc.transition_task(task_id, TaskStatus.IN_PROGRESS)
+        db.transition_task(task_id, TaskStatus.IN_PROGRESS)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -336,16 +331,16 @@ async def dispatch_run(
     except Exception as exc:
         logger.error("Failed to create ACP session for task {}: {}", task_id, exc)
         # Create a failed run record
-        run = await svc.create_run(task_id, agent_type=agent_type)
-        await svc.fail_run(run.id, error=str(exc))
-        await svc.transition_task(task_id, TaskStatus.TRIAGE)
+        run = db.create_run(task_id, agent_type=agent_type)
+        db.fail_run(run.id, error=str(exc))
+        db.transition_task(task_id, TaskStatus.TRIAGE)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to create ACP session: {exc}",
         ) from exc
 
     # Create run record
-    run = await svc.create_run(
+    run = db.create_run(
         task_id,
         agent_type=payload.agent_type or task.agent_type,
         session_id=session_id,
@@ -362,28 +357,28 @@ async def dispatch_run(
             [{"role": "user", "content": prompt_text}],
         )
         stop_reason = result.get("stopReason", "")
-        await svc.complete_run(
+        db.complete_run(
             run.id,
             result_summary=stop_reason,
             token_usage=result.get("usage", {}),
         )
         # Transition to review if reviewer is configured, else complete
         if task.reviewer_agent_type:
-            await svc.transition_task(task_id, TaskStatus.REVIEW)
+            db.transition_task(task_id, TaskStatus.REVIEW)
         else:
-            await svc.transition_task(task_id, TaskStatus.COMPLETE)
+            db.transition_task(task_id, TaskStatus.COMPLETE)
 
     except Exception as exc:
         logger.error("ACP prompt failed for task {}: {}", task_id, exc)
-        await svc.fail_run(run.id, error=str(exc))
-        await svc.transition_task(task_id, TaskStatus.TRIAGE)
+        db.fail_run(run.id, error=str(exc))
+        db.transition_task(task_id, TaskStatus.TRIAGE)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"ACP prompt failed: {exc}",
         ) from exc
 
     # Refetch task to get post-transition status
-    updated_task = await svc.get_task(task_id)
+    updated_task = db.get_task(task_id)
     return {
         "task_id": task_id,
         "run_id": run.id,
@@ -411,12 +406,12 @@ async def submit_review(
 
     Approved → complete. Rejected → back to in_progress or triage (after max attempts).
     """
-    svc = await get_orchestration_service()
-    task = await svc.get_task(task_id)
-    if not task or task.user_id != user.id:
+    db = get_orchestration_db(int(user.id))
+    task = db.get_task(task_id)
+    if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     try:
-        updated = await svc.submit_review(task_id, payload.approved, payload.feedback)
+        updated = db.submit_review(task_id, payload.approved, payload.feedback)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return TaskResponse(**updated.to_dict())
