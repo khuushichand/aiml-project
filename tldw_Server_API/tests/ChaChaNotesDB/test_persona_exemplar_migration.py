@@ -73,3 +73,40 @@ def test_migration_v32_to_latest_creates_persona_exemplar_table(db_path: Path):
     assert "idx_persona_exemplars_enabled" in indexes
 
     migrated.close_connection()
+
+
+class _FakeTransaction:
+    def __enter__(self):
+        return object()
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeBackend:
+    def transaction(self):
+        return _FakeTransaction()
+
+    def table_exists(self, _name: str, connection=None) -> bool:
+        return True
+
+
+def test_postgres_initializer_uses_postgres_safe_v33_migration(monkeypatch):
+    db = CharactersRAGDB.__new__(CharactersRAGDB)
+    db.backend = _FakeBackend()
+    db.backend_type = object()
+
+    applied_scripts: list[str] = []
+
+    monkeypatch.setattr(db, "_get_schema_version_postgres", lambda conn: 32)
+    monkeypatch.setattr(db, "_ensure_postgres_fts", lambda conn: None)
+
+    def _record_script(script: str, conn, expected_version=None):
+        applied_scripts.append(script)
+
+    monkeypatch.setattr(db, "_apply_postgres_migration_script", _record_script)
+
+    db._initialize_schema_postgres()
+
+    assert applied_scripts[-1] == CharactersRAGDB._MIGRATION_SQL_V32_TO_V33_POSTGRES
+    assert "PRAGMA foreign_keys" not in applied_scripts[-1]

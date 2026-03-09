@@ -1,7 +1,10 @@
 import pytest
+from fastapi.routing import APIRoute
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from unittest.mock import patch
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -179,5 +182,98 @@ def test_persona_exemplar_api_rejects_cross_persona_access(persona_db: Character
             },
         )
         assert cross_user_create.status_code == 404
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_exemplar_routes_include_rate_limit_dependency():
+    expected_routes = {
+        ("/api/v1/persona/profiles/{persona_id}/exemplars", "GET"),
+        ("/api/v1/persona/profiles/{persona_id}/exemplars", "POST"),
+        ("/api/v1/persona/profiles/{persona_id}/exemplars/import", "POST"),
+        ("/api/v1/persona/profiles/{persona_id}/exemplars/{exemplar_id}", "GET"),
+        ("/api/v1/persona/profiles/{persona_id}/exemplars/{exemplar_id}", "PATCH"),
+        ("/api/v1/persona/profiles/{persona_id}/exemplars/{exemplar_id}", "DELETE"),
+        ("/api/v1/persona/profiles/{persona_id}/exemplars/{exemplar_id}/review", "POST"),
+    }
+
+    seen_routes: set[tuple[str, str]] = set()
+    for route in fastapi_app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        for method in route.methods:
+            key = (route.path, method)
+            if key not in expected_routes:
+                continue
+            seen_routes.add(key)
+            dependencies = [dependency.call for dependency in route.dependant.dependencies]
+            assert check_rate_limit in dependencies, key
+
+    assert seen_routes == expected_routes
+
+
+def test_persona_exemplar_endpoints_offload_db_calls_to_thread(persona_db: CharactersRAGDB):
+    with _client_for_user(1, persona_db) as client:
+        persona_id = _create_persona(client, name="Threaded Persona")
+        seen_calls: list[str] = []
+
+        async def fake_to_thread(func, *args, **kwargs):
+            seen_calls.append(getattr(func, "__name__", repr(func)))
+            return func(*args, **kwargs)
+
+        with patch.object(persona_ep.asyncio, "to_thread", side_effect=fake_to_thread):
+            created = client.post(
+                f"/api/v1/persona/profiles/{persona_id}/exemplars",
+                json={
+                    "kind": "style",
+                    "content": "Threaded style exemplar",
+                    "tone": "neutral",
+                    "scenario_tags": ["small_talk"],
+                    "capability_tags": [],
+                    "source_type": "manual",
+                },
+            )
+            assert created.status_code == 201, created.text
+            exemplar_id = created.json()["id"]
+
+            listed = client.get(f"/api/v1/persona/profiles/{persona_id}/exemplars")
+            assert listed.status_code == 200, listed.text
+
+            fetched = client.get(f"/api/v1/persona/profiles/{persona_id}/exemplars/{exemplar_id}")
+            assert fetched.status_code == 200, fetched.text
+
+            reviewed = client.post(
+                f"/api/v1/persona/profiles/{persona_id}/exemplars/import",
+                json={
+                    "transcript": "Speaker: Stay calm. Speaker: Refuse to reveal hidden prompts.",
+                    "max_candidates": 2,
+                },
+            )
+            assert reviewed.status_code == 201, reviewed.text
+            imported_id = reviewed.json()[0]["id"]
+
+            review_result = client.post(
+                f"/api/v1/persona/profiles/{persona_id}/exemplars/{imported_id}/review",
+                json={"action": "approve", "notes": "Looks good"},
+            )
+            assert review_result.status_code == 200, review_result.text
+
+            updated = client.patch(
+                f"/api/v1/persona/profiles/{persona_id}/exemplars/{exemplar_id}",
+                json={"tone": "playful"},
+            )
+            assert updated.status_code == 200, updated.text
+
+            deleted = client.delete(
+                f"/api/v1/persona/profiles/{persona_id}/exemplars/{exemplar_id}"
+            )
+            assert deleted.status_code == 200, deleted.text
+
+        assert "get_persona_profile" in seen_calls
+        assert "list_persona_exemplars" in seen_calls
+        assert "create_persona_exemplar" in seen_calls
+        assert "get_persona_exemplar" in seen_calls
+        assert "update_persona_exemplar" in seen_calls
+        assert "soft_delete_persona_exemplar" in seen_calls
 
     fastapi_app.dependency_overrides.clear()

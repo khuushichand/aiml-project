@@ -19,6 +19,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, WebSocket, W
 from loguru import logger
 from starlette.requests import Request as StarletteRequest
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaDeleteResponse,
@@ -346,6 +347,29 @@ def _normalize_persona_step_type(value: Any, *, tool_name: str) -> str:
     if normalized_tool == "summarize":
         return "final_answer"
     return "mcp_tool"
+
+
+async def _run_persona_db_call(func, *args, **kwargs):
+    """Offload synchronous persona DB calls from async HTTP handlers."""
+    return await asyncio.to_thread(func, *args, **kwargs)
+
+
+async def _get_persona_profile_or_404(
+    db: CharactersRAGDB,
+    *,
+    persona_id: str,
+    user_id: str,
+    include_deleted: bool,
+) -> dict[str, Any]:
+    profile = await _run_persona_db_call(
+        db.get_persona_profile,
+        persona_id,
+        user_id=user_id,
+        include_deleted=include_deleted,
+    )
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Persona profile not found")
+    return profile
 
 
 def _default_session_policy_rules() -> list[dict[str, Any]]:
@@ -1642,6 +1666,7 @@ async def delete_persona_profile(
     response_model=list[PersonaExemplarResponse],
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def list_persona_exemplars(
     persona_id: str,
@@ -1657,10 +1682,14 @@ async def list_persona_exemplars(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     try:
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=include_deleted_personas)
-        if profile is None:
-            raise HTTPException(status_code=404, detail="Persona profile not found")
-        exemplars = db.list_persona_exemplars(
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=include_deleted_personas,
+        )
+        exemplars = await _run_persona_db_call(
+            db.list_persona_exemplars,
             user_id=user_id,
             persona_id=persona_id,
             include_disabled=include_disabled,
@@ -1681,6 +1710,7 @@ async def list_persona_exemplars(
     response_model=PersonaExemplarResponse,
     tags=["persona"],
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def create_persona_exemplar(
     persona_id: str,
@@ -1692,14 +1722,18 @@ async def create_persona_exemplar(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     try:
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
-        if profile is None:
-            raise HTTPException(status_code=404, detail="Persona profile not found")
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
         create_data = payload.model_dump(exclude_none=True)
         create_data["persona_id"] = persona_id
         create_data["user_id"] = user_id
-        exemplar_id = db.create_persona_exemplar(create_data)
-        exemplar = db.get_persona_exemplar(
+        exemplar_id = await _run_persona_db_call(db.create_persona_exemplar, create_data)
+        exemplar = await _run_persona_db_call(
+            db.get_persona_exemplar,
             exemplar_id=exemplar_id,
             persona_id=persona_id,
             user_id=user_id,
@@ -1720,6 +1754,7 @@ async def create_persona_exemplar(
     response_model=list[PersonaExemplarResponse],
     tags=["persona"],
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def import_persona_exemplars(
     persona_id: str,
@@ -1731,9 +1766,12 @@ async def import_persona_exemplars(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     try:
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
-        if profile is None:
-            raise HTTPException(status_code=404, detail="Persona profile not found")
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
         candidate_rows = build_transcript_exemplar_candidates(
             transcript=payload.transcript,
             source_ref=payload.source_ref,
@@ -1745,8 +1783,9 @@ async def import_persona_exemplars(
             create_data = dict(candidate)
             create_data["persona_id"] = persona_id
             create_data["user_id"] = user_id
-            exemplar_id = db.create_persona_exemplar(create_data)
-            exemplar = db.get_persona_exemplar(
+            exemplar_id = await _run_persona_db_call(db.create_persona_exemplar, create_data)
+            exemplar = await _run_persona_db_call(
+                db.get_persona_exemplar,
                 exemplar_id=exemplar_id,
                 persona_id=persona_id,
                 user_id=user_id,
@@ -1768,6 +1807,7 @@ async def import_persona_exemplars(
     response_model=PersonaExemplarResponse,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def get_persona_exemplar(
     persona_id: str,
@@ -1782,10 +1822,14 @@ async def get_persona_exemplar(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     try:
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=include_deleted_personas)
-        if profile is None:
-            raise HTTPException(status_code=404, detail="Persona profile not found")
-        exemplar = db.get_persona_exemplar(
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=include_deleted_personas,
+        )
+        exemplar = await _run_persona_db_call(
+            db.get_persona_exemplar,
             exemplar_id=exemplar_id,
             persona_id=persona_id,
             user_id=user_id,
@@ -1807,6 +1851,7 @@ async def get_persona_exemplar(
     response_model=PersonaExemplarResponse,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def update_persona_exemplar(
     persona_id: str,
@@ -1822,10 +1867,14 @@ async def update_persona_exemplar(
     if not update_data:
         raise HTTPException(status_code=400, detail="No exemplar fields provided for update")
     try:
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
-        if profile is None:
-            raise HTTPException(status_code=404, detail="Persona profile not found")
-        ok = db.update_persona_exemplar(
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        ok = await _run_persona_db_call(
+            db.update_persona_exemplar,
             exemplar_id=exemplar_id,
             persona_id=persona_id,
             user_id=user_id,
@@ -1833,7 +1882,8 @@ async def update_persona_exemplar(
         )
         if not ok:
             raise HTTPException(status_code=404, detail="Persona exemplar not found")
-        exemplar = db.get_persona_exemplar(
+        exemplar = await _run_persona_db_call(
+            db.get_persona_exemplar,
             exemplar_id=exemplar_id,
             persona_id=persona_id,
             user_id=user_id,
@@ -1854,6 +1904,7 @@ async def update_persona_exemplar(
     response_model=PersonaExemplarResponse,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def review_persona_exemplar(
     persona_id: str,
@@ -1866,10 +1917,14 @@ async def review_persona_exemplar(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     try:
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
-        if profile is None:
-            raise HTTPException(status_code=404, detail="Persona profile not found")
-        exemplar = db.get_persona_exemplar(
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        exemplar = await _run_persona_db_call(
+            db.get_persona_exemplar,
             exemplar_id=exemplar_id,
             persona_id=persona_id,
             user_id=user_id,
@@ -1880,7 +1935,8 @@ async def review_persona_exemplar(
             raise HTTPException(status_code=404, detail="Persona exemplar not found")
         if str(exemplar.get("source_type") or "") != "generated_candidate":
             raise HTTPException(status_code=400, detail="Only generated candidates can be reviewed")
-        ok = db.update_persona_exemplar(
+        ok = await _run_persona_db_call(
+            db.update_persona_exemplar,
             exemplar_id=exemplar_id,
             persona_id=persona_id,
             user_id=user_id,
@@ -1895,7 +1951,8 @@ async def review_persona_exemplar(
         )
         if not ok:
             raise HTTPException(status_code=404, detail="Persona exemplar not found")
-        updated = db.get_persona_exemplar(
+        updated = await _run_persona_db_call(
+            db.get_persona_exemplar,
             exemplar_id=exemplar_id,
             persona_id=persona_id,
             user_id=user_id,
@@ -1916,6 +1973,7 @@ async def review_persona_exemplar(
     response_model=PersonaExemplarDeleteResponse,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def delete_persona_exemplar(
     persona_id: str,
@@ -1927,10 +1985,14 @@ async def delete_persona_exemplar(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     try:
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
-        if profile is None:
-            raise HTTPException(status_code=404, detail="Persona profile not found")
-        ok = db.soft_delete_persona_exemplar(
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        ok = await _run_persona_db_call(
+            db.soft_delete_persona_exemplar,
             exemplar_id=exemplar_id,
             persona_id=persona_id,
             user_id=user_id,

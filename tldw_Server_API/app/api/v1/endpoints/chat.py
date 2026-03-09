@@ -2838,7 +2838,8 @@ async def create_chat_completion(
             )
 
             if persona_strategy != "off" and is_persona_backed_chat:
-                persona_exemplars = chat_db.list_persona_exemplars(
+                persona_exemplars = await asyncio.to_thread(
+                    chat_db.list_persona_exemplars,
                     user_id=str(user_id),
                     persona_id=persona_assistant_id,
                     include_disabled=False,

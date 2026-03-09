@@ -3011,6 +3011,11 @@ UPDATE db_schema_version
    AND version < 33;
 """
 
+    _MIGRATION_SQL_V32_TO_V33_POSTGRES = _MIGRATION_SQL_V32_TO_V33.replace(
+        "PRAGMA foreign_keys = ON;\n\n",
+        "",
+    )
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -5527,7 +5532,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V31_TO_V32, conn, expected_version=32)
                 current_version = 32
             if current_version < 33:
-                self._apply_postgres_migration_script(self._MIGRATION_SQL_V32_TO_V33, conn, expected_version=33)
+                self._apply_postgres_migration_script(
+                    self._MIGRATION_SQL_V32_TO_V33_POSTGRES,
+                    conn,
+                    expected_version=33,
+                )
                 current_version = 33
 
             if current_version > target_version:
