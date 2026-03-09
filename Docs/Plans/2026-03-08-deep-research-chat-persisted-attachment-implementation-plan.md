@@ -14,7 +14,7 @@
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/Character_Chat/test_character_chat_endpoints.py`
-- Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/Character_Chat/test_chat_settings_endpoints.py`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/tests/Character_Chat/test_chat_settings_endpoints.py`
 
 **Step 1: Write the failing tests**
 
@@ -39,6 +39,7 @@ attachment = {
     "source_trust_summary": {"high_trust_count": 2},
     "research_url": "/research?run=run_123",
     "attached_at": "2026-03-08T20:00:00Z",
+    "updatedAt": "2026-03-08T20:00:00Z",
 }
 ```
 
@@ -91,6 +92,7 @@ Extend the backend tests so they also prove:
 - `verification_summary` only allows `unsupported_claim_count`
 - `source_trust_summary` only allows `high_trust_count`
 - list fields reject oversized payloads or invalid item shapes
+- `updatedAt` must be a valid ISO timestamp
 
 **Step 2: Run tests to verify they fail**
 
@@ -114,7 +116,7 @@ In `character_chat_sessions.py`:
   - allowed keys
   - string identity fields
   - bounded list/object shapes
-  - ISO timestamp for `attached_at`
+  - ISO timestamps for `attached_at` and `updatedAt`
 - rely on the existing overall settings byte cap for final size enforcement
 
 **Step 4: Run tests to verify they pass**
@@ -151,6 +153,8 @@ Add tests that prove:
 - malformed persisted attachment is ignored
 - normalization does not crash on unknown/partial raw settings blobs
 - the attachment shape round-trips through the package-side settings helpers
+- invalid persisted attachments are stripped before merge/write paths
+- attachment merges use `deepResearchAttachment.updatedAt` instead of only top-level `updatedAt`
 
 **Step 2: Run tests to verify they fail**
 
@@ -172,10 +176,14 @@ In `chat-session-settings.ts`:
 
 - add a typed `DeepResearchAttachmentRecord`
 - add it to `ChatSettingsRecord` as optional `deepResearchAttachment`
+- explicitly tighten the package-side settings contract for this slice instead of relying on `& Record<string, unknown>` for attachment handling
 
 In `chat-settings.ts`:
 
 - normalize `deepResearchAttachment` through a bounded coercion helper
+- strip invalid `deepResearchAttachment` values inside normalization before returning settings
+- add explicit attachment merge behavior keyed by `deepResearchAttachment.updatedAt`
+- ensure `applyChatSettingsPatch(...)` does not spread malformed attachment data back into storage/server writes
 
 In `research-chat-context.ts`:
 
@@ -211,12 +219,13 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
 
 Extend the playground integration tests to prove:
 
-- reopening a saved chat with persisted `deepResearchAttachment` restores:
+- reopening a saved chat with persisted `deepResearchAttachment` restores after settings reconciliation:
   - active attached context
   - baseline attached context
 - switching from one saved chat to another restores the correct persisted attachment for each
 - malformed persisted attachment is ignored safely
 - temporary chats do not restore persisted attachment
+- restore uses the reconciled `server:` settings copy, not a stale pre-sync local snapshot
 
 **Step 2: Run tests to verify they fail**
 
@@ -235,10 +244,11 @@ Expected:
 
 In `Playground.tsx`:
 
-- load chat settings for the current `serverChatId`
+- restore from the normalized/reconciled server-scoped chat settings entry for the current `serverChatId`
 - restore `deepResearchAttachment` into both active and baseline state
 - clear local attachment state when switching to a chat with no persisted attachment
 - guard strictly on `serverChatId`
+- do not restore before the existing server-chat settings sync path has had a chance to reconcile local/server copies
 
 **Step 4: Run tests to verify they pass**
 
@@ -274,6 +284,7 @@ Add tests that prove:
 - `Reset to Attached Run` persists the restored baseline
 - `Remove Attachment` clears `deepResearchAttachment` from settings
 - draft typing in the preview editor does not persist before `Apply`
+- unrelated chat-settings updates with newer top-level `updatedAt` do not overwrite a newer `deepResearchAttachment.updatedAt`
 
 **Step 2: Run tests to verify they fail**
 
@@ -299,6 +310,7 @@ In `Playground.tsx`:
   - reset
   - remove
 - skip persistence for temporary/local chats
+- write attachment snapshots with a fresh `deepResearchAttachment.updatedAt`
 
 Do not persist from per-keystroke draft state in `PlaygroundForm.tsx`.
 

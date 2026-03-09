@@ -105,6 +105,7 @@ Persist only the bounded attached-context snapshot, not the full research bundle
 - `source_trust_summary`
 - `research_url`
 - `attached_at`
+- `updatedAt`
 
 ### Validation Rules
 
@@ -114,6 +115,7 @@ Backend validation should enforce:
 - required identity fields are strings
 - list fields stay bounded to the same caps as the live attachment builder
 - summary objects only allow the compact count fields currently used by chat
+- `updatedAt` must be an ISO timestamp string
 - the existing overall chat-settings byte cap still applies
 
 Frontend normalization should:
@@ -121,7 +123,14 @@ Frontend normalization should:
 - accept only valid bounded attachment shape
 - ignore malformed persisted attachment safely
 - avoid crashing the thread on bad data
+- strip malformed `deepResearchAttachment` values before any merge or write-back path
 - clear malformed server-backed attachment on the next successful settings write
+
+Top-level chat settings handling should also be tightened for this slice:
+
+- do not rely on `ChatSettingsRecord & Record<string, unknown>` for the persisted attachment path
+- make `deepResearchAttachment` an explicit typed field in the package-side settings model
+- if other top-level settings remain permissive for compatibility, the persisted-attachment path must still use explicit normalization and explicit merge rules rather than blind object spread
 
 ## Integration Shape
 
@@ -145,7 +154,7 @@ Use the existing package-side settings helpers:
 
 `Playground.tsx` remains the live source of truth for the active session, but it gains persistence behavior:
 
-- restore persisted attachment on saved-thread load
+- restore persisted attachment from reconciled server-scoped chat settings on saved-thread load
 - persist active attachment on attach/apply/reset/remove
 - clear persisted attachment on remove
 - ignore persistence entirely for temporary/local chats
@@ -159,12 +168,19 @@ To avoid write churn, persistence happens only on committed attachment state cha
 
 It must not persist on every keystroke in the preview/debug draft editor.
 
+`deepResearchAttachment` also needs its own merge semantics:
+
+- treat `deepResearchAttachment.updatedAt` as the authoritative timestamp for attachment merges
+- do not let unrelated top-level `updatedAt` changes clobber a newer attachment snapshot
+- merge the attachment field explicitly inside chat-settings reconciliation instead of letting whole-object winner-take-all behavior decide
+
 ## Error Handling
 
 - Temporary or local chats: do not attempt persistence.
 - Settings fetch failure: keep local attachment behavior only; do not block the thread.
 - Settings update failure: keep the live local attachment, log/warn quietly, and allow later writes to reconcile.
 - Malformed persisted attachment: ignore locally and overwrite/clear on the next valid save path.
+- Saved-thread restore must wait for the reconciled server-scoped settings copy, not a pre-sync local snapshot.
 
 This feature is additive convenience, not a chat-critical path. Persistence failures should degrade to the existing live-session behavior.
 
@@ -176,6 +192,7 @@ This feature is additive convenience, not a chat-critical path. Persistence fail
 - unknown keys under `deepResearchAttachment` are rejected
 - oversized attachment payload is rejected by settings limits
 - get/update round-trip preserves the attachment shape
+- attachment-specific merge semantics keep a newer `deepResearchAttachment.updatedAt` even when unrelated top-level settings changed later
 
 ### Frontend
 
@@ -185,19 +202,23 @@ This feature is additive convenience, not a chat-critical path. Persistence fail
 - temporary chats never attempt persistence
 - malformed persisted attachment is ignored safely
 - preview/debug `Apply` persists the new active attachment, but draft keystrokes do not
+- restore happens only after server-chat settings reconciliation, so stale pre-sync attachment state is not flashed into the wrong thread
 
 ## Risks
 
 - write churn if persistence happens too often during editing
 - race conditions on thread switch if restore and local clear happen out of order
 - stale attachment leaking across chats if `serverChatId` guards are weak
+- newer attachment snapshots being overwritten by unrelated chat-settings merges
 
 ## Mitigations
 
 - persist only on committed state transitions
 - key restore/clear effects strictly to `serverChatId`
 - keep local active state authoritative once restored for the current session
-- use the existing normalized chat-settings helpers so local/server copies stay aligned
+- use explicit attachment normalization before merge/write so malformed values are stripped
+- use explicit attachment merge rules keyed by `deepResearchAttachment.updatedAt`
+- restore from the reconciled `server:` settings copy after `syncChatSettingsForServerChat(...)` has run
 
 ## Out of Scope
 
