@@ -193,22 +193,43 @@ def _get_persona_memory_top_k() -> int:
 
 
 def _append_persona_exemplar_sections(base_text: str, sections: list[tuple[str, str, int]] | None) -> str:
-    updated_text = str(base_text or "").strip()
-    for _, content, _ in list(sections or []):
-        content_text = str(content or "").strip()
-        if not content_text:
-            continue
-        if updated_text:
-            updated_text = f"{updated_text}\n\n{content_text}"
-        else:
-            updated_text = content_text
-    return updated_text
+    contents = [str(base_text or "").strip()]
+    contents.extend(
+        str(content or "").strip()
+        for _, content, _ in list(sections or [])
+    )
+    return "\n\n".join(content for content in contents if content)
+
+
+def _build_persona_rag_why_text(
+    *,
+    has_state_context: bool,
+    has_memory_context: bool,
+    has_exemplar_guidance: bool,
+) -> str:
+    applied_contexts: list[str] = []
+    if has_state_context:
+        applied_contexts.append("persistent persona state")
+    if has_memory_context:
+        applied_contexts.append("personalization memories")
+    if has_exemplar_guidance:
+        applied_contexts.append("persona exemplar guidance")
+    if not applied_contexts:
+        return "Input appears to be a knowledge query."
+    if len(applied_contexts) == 1:
+        suffix = applied_contexts[0]
+    elif len(applied_contexts) == 2:
+        suffix = " and ".join(applied_contexts)
+    else:
+        suffix = f"{', '.join(applied_contexts[:-1])}, and {applied_contexts[-1]}"
+    return f"Input appears to be a knowledge query with applied {suffix}."
 
 
 def _persona_exemplar_selection_metadata(
     *,
     assembly: PersonaExemplarPromptAssembly,
     classifier: Any,
+    error_reason: str | None = None,
 ) -> dict[str, Any]:
     selected_ids = [
         str(item.get("id") or "")
@@ -229,6 +250,7 @@ def _persona_exemplar_selection_metadata(
         "selected_count": len(selected_ids),
         "rejected": rejected,
         "rejected_count": len(rejected),
+        "error_reason": str(error_reason or "").strip() or None,
         "classifier": {
             "scenario_tags": list(getattr(classifier, "scenario_tags", []) or []),
             "tone": str(getattr(classifier, "tone", "neutral") or "neutral"),
@@ -3180,34 +3202,11 @@ async def persona_stream(
                     query_text = f"{query_text}\n\nPersona memory hints:\n{memory_lines}"
                 query_text = _append_persona_exemplar_sections(query_text, persona_exemplar_sections)
                 has_exemplar_guidance = any(str(content or "").strip() for _, content, _ in list(persona_exemplar_sections or []))
-                if compact_memories and compact_state_lines and has_exemplar_guidance:
-                    why_text = (
-                        "Input appears to be a knowledge query with applied persistent persona state, "
-                        "personalization memories, and persona exemplar guidance."
-                    )
-                elif compact_memories and compact_state_lines:
-                    why_text = (
-                        "Input appears to be a knowledge query with applied persistent persona state and "
-                        "personalization memories."
-                    )
-                elif compact_state_lines and has_exemplar_guidance:
-                    why_text = (
-                        "Input appears to be a knowledge query with applied persistent persona state and "
-                        "persona exemplar guidance."
-                    )
-                elif compact_memories and has_exemplar_guidance:
-                    why_text = (
-                        "Input appears to be a knowledge query with applied personalization memories and "
-                        "persona exemplar guidance."
-                    )
-                elif compact_state_lines:
-                    why_text = "Input appears to be a knowledge query with applied persistent persona state."
-                elif compact_memories:
-                    why_text = "Input appears to be a knowledge query with applied personalization memories."
-                elif has_exemplar_guidance:
-                    why_text = "Input appears to be a knowledge query with applied persona exemplar guidance."
-                else:
-                    why_text = "Input appears to be a knowledge query."
+                why_text = _build_persona_rag_why_text(
+                    has_state_context=bool(compact_state_lines),
+                    has_memory_context=bool(compact_memories),
+                    has_exemplar_guidance=has_exemplar_guidance,
+                )
                 steps.append(
                     {
                         "idx": 0,
@@ -3343,26 +3342,48 @@ async def persona_stream(
                     )
                 persona_turn_classifier = classify_persona_turn(text)
                 persona_exemplars: list[dict[str, Any]] = []
+                persona_exemplar_error_reason: str | None = None
                 if persona_scope_db is not None:
-                    persona_exemplars = await asyncio.to_thread(
-                        persona_scope_db.list_persona_exemplars,
-                        user_id=authenticated_user_id,
-                        persona_id=runtime_persona_id,
-                        include_disabled=False,
-                        include_deleted=False,
-                        limit=50,
-                        offset=0,
-                    )
-                persona_exemplar_assembly = assemble_persona_exemplar_prompt(
-                    persona_id=runtime_persona_id,
-                    exemplars=persona_exemplars,
-                    requested_scenario_tags=list(persona_turn_classifier.scenario_tags),
-                    requested_tone=persona_turn_classifier.tone,
-                    current_turn_text=text,
-                )
+                    try:
+                        persona_exemplars = await asyncio.to_thread(
+                            persona_scope_db.list_persona_exemplars,
+                            user_id=authenticated_user_id,
+                            persona_id=runtime_persona_id,
+                            include_disabled=False,
+                            include_deleted=False,
+                            limit=50,
+                            offset=0,
+                        )
+                    except Exception as exc:
+                        persona_exemplar_error_reason = "lookup_failed"
+                        logger.warning(
+                            "Persona websocket exemplar lookup failed for session {} persona {}: {}",
+                            session_id,
+                            runtime_persona_id,
+                            exc,
+                        )
+                persona_exemplar_assembly = PersonaExemplarPromptAssembly()
+                if persona_exemplar_error_reason is None:
+                    try:
+                        persona_exemplar_assembly = assemble_persona_exemplar_prompt(
+                            persona_id=runtime_persona_id,
+                            exemplars=persona_exemplars,
+                            requested_scenario_tags=list(persona_turn_classifier.scenario_tags),
+                            requested_tone=persona_turn_classifier.tone,
+                            current_turn_text=text,
+                        )
+                    except Exception as exc:
+                        persona_exemplar_error_reason = "assembly_failed"
+                        logger.warning(
+                            "Persona websocket exemplar assembly failed for session {} persona {}: {}",
+                            session_id,
+                            runtime_persona_id,
+                            exc,
+                        )
                 persona_exemplar_selection = _persona_exemplar_selection_metadata(
                     assembly=persona_exemplar_assembly,
                     classifier=persona_turn_classifier,
+                    error_reason=persona_exemplar_error_reason,
                 )
                 await _record_turn(
                     session_id=session_id,

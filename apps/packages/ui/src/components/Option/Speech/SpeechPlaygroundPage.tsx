@@ -693,6 +693,56 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const [voicePickerTargetStripId, setVoicePickerTargetStripId] = React.useState<string | null>(null)
   const multiRender = useMultiRenderState()
 
+  const { data: ttsSettings } = useQuery({
+    queryKey: ["fetchTTSSettings"],
+    queryFn: getTTSSettings
+  })
+
+  const [elevenVoiceId, setElevenVoiceId] = React.useState<string | undefined>(undefined)
+  const [elevenModelId, setElevenModelId] = React.useState<string | undefined>(undefined)
+  const [tldwModel, setTldwModel] = React.useState<string | undefined>(undefined)
+  const [tldwVoice, setTldwVoice] = React.useState<string | undefined>(undefined)
+  const [tldwFormat, setTldwFormat] = React.useState<string | undefined>(undefined)
+  const [tldwLanguage, setTldwLanguage] = React.useState<string | undefined>(undefined)
+  const [tldwStreaming, setTldwStreaming] = React.useState(false)
+  const [tldwEmotion, setTldwEmotion] = React.useState<string | undefined>(undefined)
+  const [tldwEmotionIntensity, setTldwEmotionIntensity] = React.useState<number>(1)
+  const [tldwNormalize, setTldwNormalize] = React.useState(true)
+  const [tldwNormalizeUnits, setTldwNormalizeUnits] = React.useState(false)
+  const [tldwNormalizeUrls, setTldwNormalizeUrls] = React.useState(true)
+  const [tldwNormalizeEmails, setTldwNormalizeEmails] = React.useState(true)
+  const [tldwNormalizePhones, setTldwNormalizePhones] = React.useState(true)
+  const [tldwNormalizePlurals, setTldwNormalizePlurals] = React.useState(true)
+  const [responseSplitting, setResponseSplitting] = React.useState("punctuation")
+  const [openAiModel, setOpenAiModel] = React.useState<string | undefined>(undefined)
+  const [openAiVoice, setOpenAiVoice] = React.useState<string | undefined>(undefined)
+  const provider = ttsSettings?.ttsProvider || "browser"
+  const isTldw = provider === "tldw"
+  const inferredProviderKey = React.useMemo(() => {
+    if (!isTldw) return null
+    return inferTldwProviderFromModel(tldwModel || ttsSettings?.tldwTtsModel)
+  }, [isTldw, tldwModel, ttsSettings?.tldwTtsModel])
+  const {
+    hasAudio,
+    providersInfo,
+    tldwTtsModels,
+    tldwVoiceCatalog,
+    elevenLabsData,
+    elevenLabsLoading,
+    elevenLabsError,
+    refetchElevenLabs
+  } = useTtsProviderData({
+    provider,
+    elevenLabsApiKey: ttsSettings?.elevenLabsApiKey,
+    inferredProviderKey
+  })
+
+  const { data: customVoices = [] } = useQuery<TldwCustomVoice[]>({
+    queryKey: ["tts-custom-voices"],
+    queryFn: listCustomVoices,
+    enabled: isTldw && hasAudio
+  })
+
   const handleAddRenderStrip = React.useCallback(() => {
     // Try to use last-used voice config from localStorage
     let lastVoice: { provider?: string; voice?: string; model?: string } | null = null
@@ -791,56 +841,6 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
       }
     }
   }, [voicePreviewUrl])
-
-  const { data: ttsSettings } = useQuery({
-    queryKey: ["fetchTTSSettings"],
-    queryFn: getTTSSettings
-  })
-
-  const [elevenVoiceId, setElevenVoiceId] = React.useState<string | undefined>(undefined)
-  const [elevenModelId, setElevenModelId] = React.useState<string | undefined>(undefined)
-  const [tldwModel, setTldwModel] = React.useState<string | undefined>(undefined)
-  const [tldwVoice, setTldwVoice] = React.useState<string | undefined>(undefined)
-  const [tldwFormat, setTldwFormat] = React.useState<string | undefined>(undefined)
-  const [tldwLanguage, setTldwLanguage] = React.useState<string | undefined>(undefined)
-  const [tldwStreaming, setTldwStreaming] = React.useState(false)
-  const [tldwEmotion, setTldwEmotion] = React.useState<string | undefined>(undefined)
-  const [tldwEmotionIntensity, setTldwEmotionIntensity] = React.useState<number>(1)
-  const [tldwNormalize, setTldwNormalize] = React.useState(true)
-  const [tldwNormalizeUnits, setTldwNormalizeUnits] = React.useState(false)
-  const [tldwNormalizeUrls, setTldwNormalizeUrls] = React.useState(true)
-  const [tldwNormalizeEmails, setTldwNormalizeEmails] = React.useState(true)
-  const [tldwNormalizePhones, setTldwNormalizePhones] = React.useState(true)
-  const [tldwNormalizePlurals, setTldwNormalizePlurals] = React.useState(true)
-  const [responseSplitting, setResponseSplitting] = React.useState("punctuation")
-  const [openAiModel, setOpenAiModel] = React.useState<string | undefined>(undefined)
-  const [openAiVoice, setOpenAiVoice] = React.useState<string | undefined>(undefined)
-  const provider = ttsSettings?.ttsProvider || "browser"
-  const isTldw = provider === "tldw"
-  const inferredProviderKey = React.useMemo(() => {
-    if (!isTldw) return null
-    return inferTldwProviderFromModel(tldwModel || ttsSettings?.tldwTtsModel)
-  }, [isTldw, tldwModel, ttsSettings?.tldwTtsModel])
-  const {
-    hasAudio,
-    providersInfo,
-    tldwTtsModels,
-    tldwVoiceCatalog,
-    elevenLabsData,
-    elevenLabsLoading,
-    elevenLabsError,
-    refetchElevenLabs
-  } = useTtsProviderData({
-    provider,
-    elevenLabsApiKey: ttsSettings?.elevenLabsApiKey,
-    inferredProviderKey
-  })
-
-  const { data: customVoices = [] } = useQuery<TldwCustomVoice[]>({
-    queryKey: ["tts-custom-voices"],
-    queryFn: listCustomVoices,
-    enabled: isTldw && hasAudio
-  })
 
   React.useEffect(() => {
     if (!ttsSettings) return

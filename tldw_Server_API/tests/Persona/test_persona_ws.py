@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDBError
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB, SemanticMemory
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import PersonaExemplarPromptAssembly
@@ -469,6 +470,72 @@ def test_persona_ws_user_message_without_enabled_exemplars_keeps_compact_metadat
     assert selection["selected_count"] == 0
     assert isinstance(selection["rejected"], list)
     assert all("content" not in item for item in selection["rejected"])
+
+
+def test_persona_ws_user_message_exemplar_lookup_failure_degrades_gracefully(monkeypatch, tmp_path):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            return SimpleNamespace(error=None, result={"ok": True, "tool": request.params.get("name")})
+
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_exemplar_lookup_error",
+        mode="persistent_scoped",
+    )
+
+    persisted_turns: list[dict] = []
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        if getattr(func, "__name__", "") == "list_persona_exemplars":
+            raise CharactersRAGDBError("exemplar lookup failed")
+        return func(*args, **kwargs)
+
+    def _fake_persist_persona_turn(**kwargs):
+        persisted_turns.append(kwargs)
+        return True
+
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: _FakeServer())
+    monkeypatch.setattr(persona_ep, "persist_persona_turn", _fake_persist_persona_turn)
+    monkeypatch.setattr(persona_ep, "retrieve_top_memories", lambda **kwargs: [])
+    monkeypatch.setattr(persona_ep.asyncio, "to_thread", _fake_to_thread)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_exemplar_lookup_error",
+                        "text": "Summarize the papers I uploaded last week.",
+                    }
+                )
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    rag_step = next(step for step in plan["steps"] if step["tool"] == "rag_search")
+    query_text = rag_step["args"]["query"]
+    assert "Persona Boundary Guidance" not in query_text
+    assert "Persona Exemplar Guidance" not in query_text
+
+    user_turn = next(turn for turn in persisted_turns if turn["role"] == "user")
+    selection = user_turn["metadata"]["persona_exemplar_selection"]
+    assert selection["applied"] is False
+    assert selection["selected_ids"] == []
+    assert selection["selected_count"] == 0
+    assert selection["rejected"] == []
+    assert selection["rejected_count"] == 0
+    assert selection["error_reason"] == "lookup_failed"
 
 
 def test_persona_confirm_plan_ignores_client_supplied_steps():
