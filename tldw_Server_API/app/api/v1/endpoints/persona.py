@@ -74,6 +74,11 @@ from tldw_Server_API.app.core.Persona.memory_integration import (
     persist_tool_outcome,
     retrieve_top_memories,
 )
+from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import (
+    PersonaExemplarPromptAssembly,
+    assemble_persona_exemplar_prompt,
+)
+from tldw_Server_API.app.core.Persona.exemplar_turn_classifier import classify_persona_turn
 from tldw_Server_API.app.core.Persona.exemplar_ingestion import (
     append_exemplar_review_note,
     build_transcript_exemplar_candidates,
@@ -185,6 +190,52 @@ def _get_persona_memory_top_k() -> int:
     except Exception:
         value = 3
     return max(1, min(value, 10))
+
+
+def _append_persona_exemplar_sections(base_text: str, sections: list[tuple[str, str, int]] | None) -> str:
+    updated_text = str(base_text or "").strip()
+    for _, content, _ in list(sections or []):
+        content_text = str(content or "").strip()
+        if not content_text:
+            continue
+        if updated_text:
+            updated_text = f"{updated_text}\n\n{content_text}"
+        else:
+            updated_text = content_text
+    return updated_text
+
+
+def _persona_exemplar_selection_metadata(
+    *,
+    assembly: PersonaExemplarPromptAssembly,
+    classifier: Any,
+) -> dict[str, Any]:
+    selected_ids = [
+        str(item.get("id") or "")
+        for item in list(assembly.selected_exemplars or [])
+        if str(item.get("id") or "").strip()
+    ]
+    rejected = [
+        {
+            "id": str(item.get("id") or ""),
+            "reason": str(item.get("reason") or ""),
+        }
+        for item in list(assembly.rejected_exemplars or [])
+        if str(item.get("id") or "").strip() or str(item.get("reason") or "").strip()
+    ]
+    return {
+        "applied": bool(assembly.sections),
+        "selected_ids": selected_ids,
+        "selected_count": len(selected_ids),
+        "rejected": rejected,
+        "rejected_count": len(rejected),
+        "classifier": {
+            "scenario_tags": list(getattr(classifier, "scenario_tags", []) or []),
+            "tone": str(getattr(classifier, "tone", "neutral") or "neutral"),
+            "risk_tags": list(getattr(classifier, "risk_tags", []) or []),
+            "capability_tags": [],
+        },
+    }
 
 
 def _get_persona_state_hint_max_chars() -> int:
@@ -3059,6 +3110,7 @@ async def persona_stream(
             text: str,
             memory_context: list[str] | None = None,
             persona_state_hints: dict[str, str] | None = None,
+            persona_exemplar_sections: list[tuple[str, str, int]] | None = None,
         ) -> dict:
             steps = []
             text_clean = str(text or "").strip()
@@ -3126,15 +3178,34 @@ async def persona_stream(
                 if compact_memories:
                     memory_lines = "\n".join(f"- {m}" for m in compact_memories[: _get_persona_memory_top_k()])
                     query_text = f"{query_text}\n\nPersona memory hints:\n{memory_lines}"
-                if compact_memories and compact_state_lines:
+                query_text = _append_persona_exemplar_sections(query_text, persona_exemplar_sections)
+                has_exemplar_guidance = any(str(content or "").strip() for _, content, _ in list(persona_exemplar_sections or []))
+                if compact_memories and compact_state_lines and has_exemplar_guidance:
+                    why_text = (
+                        "Input appears to be a knowledge query with applied persistent persona state, "
+                        "personalization memories, and persona exemplar guidance."
+                    )
+                elif compact_memories and compact_state_lines:
                     why_text = (
                         "Input appears to be a knowledge query with applied persistent persona state and "
                         "personalization memories."
+                    )
+                elif compact_state_lines and has_exemplar_guidance:
+                    why_text = (
+                        "Input appears to be a knowledge query with applied persistent persona state and "
+                        "persona exemplar guidance."
+                    )
+                elif compact_memories and has_exemplar_guidance:
+                    why_text = (
+                        "Input appears to be a knowledge query with applied personalization memories and "
+                        "persona exemplar guidance."
                     )
                 elif compact_state_lines:
                     why_text = "Input appears to be a knowledge query with applied persistent persona state."
                 elif compact_memories:
                     why_text = "Input appears to be a knowledge query with applied personalization memories."
+                elif has_exemplar_guidance:
+                    why_text = "Input appears to be a knowledge query with applied persona exemplar guidance."
                 else:
                     why_text = "Input appears to be a knowledge query."
                 steps.append(
@@ -3270,6 +3341,29 @@ async def persona_stream(
                         user_id=connection_user_id,
                         preferences=preferences_patch,
                     )
+                persona_turn_classifier = classify_persona_turn(text)
+                persona_exemplars: list[dict[str, Any]] = []
+                if persona_scope_db is not None:
+                    persona_exemplars = await asyncio.to_thread(
+                        persona_scope_db.list_persona_exemplars,
+                        user_id=authenticated_user_id,
+                        persona_id=runtime_persona_id,
+                        include_disabled=False,
+                        include_deleted=False,
+                        limit=50,
+                        offset=0,
+                    )
+                persona_exemplar_assembly = assemble_persona_exemplar_prompt(
+                    persona_id=runtime_persona_id,
+                    exemplars=persona_exemplars,
+                    requested_scenario_tags=list(persona_turn_classifier.scenario_tags),
+                    requested_tone=persona_turn_classifier.tone,
+                    current_turn_text=text,
+                )
+                persona_exemplar_selection = _persona_exemplar_selection_metadata(
+                    assembly=persona_exemplar_assembly,
+                    classifier=persona_turn_classifier,
+                )
                 await _record_turn(
                     session_id=session_id,
                     role="user",
@@ -3283,6 +3377,7 @@ async def persona_stream(
                         "session_policy_rule_count": len(session_policy_rules),
                         "runtime_mode": runtime_mode,
                         "session_exists": session_exists,
+                        "persona_exemplar_selection": persona_exemplar_selection,
                     },
                     persist_as_memory=False,
                     persona_id_override=runtime_persona_id,
@@ -3369,6 +3464,7 @@ async def persona_stream(
                     text,
                     memory_context=memory_context,
                     persona_state_hints=persona_state_hints,
+                    persona_exemplar_sections=persona_exemplar_assembly.sections,
                 )
                 plan_id = uuid.uuid4().hex
                 max_tool_steps = _get_persona_max_tool_steps()
