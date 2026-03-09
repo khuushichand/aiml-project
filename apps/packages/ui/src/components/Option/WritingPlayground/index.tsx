@@ -7091,6 +7091,8 @@ export const WritingPlayground = () => {
           inspectorOpen={inspectorOpen}
           onLibraryToggle={() => setLibraryOpen((prev) => !prev)}
           onInspectorToggle={() => setInspectorOpen((prev) => !prev)}
+          onLibraryClose={() => setLibraryOpen(false)}
+          onInspectorClose={() => setInspectorOpen(false)}
           libraryContent={libraryDrawerContent}
           inspectorContent={inspectorDrawerContent}>
 

@@ -16,6 +16,8 @@ type WritingPlaygroundShellProps = {
   inspectorOpen: boolean
   onLibraryToggle: () => void
   onInspectorToggle: () => void
+  onLibraryClose: () => void
+  onInspectorClose: () => void
   libraryContent: ReactNode
   inspectorContent: ReactNode
 }
@@ -26,6 +28,8 @@ export const WritingPlaygroundShell: FC<WritingPlaygroundShellProps> = ({
   inspectorOpen,
   onLibraryToggle,
   onInspectorToggle,
+  onLibraryClose,
+  onInspectorClose,
   libraryContent,
   inspectorContent
 }) => {
@@ -66,7 +70,7 @@ export const WritingPlaygroundShell: FC<WritingPlaygroundShellProps> = ({
           title="Sessions"
           placement="left"
           open={libraryOpen}
-          onClose={onLibraryToggle}
+          onClose={onLibraryClose}
           width={LIBRARY_DRAWER_WIDTH_PX}
           styles={{ body: { padding: 0 } }}>
           {libraryContent}
@@ -94,7 +98,7 @@ export const WritingPlaygroundShell: FC<WritingPlaygroundShellProps> = ({
           title="Settings"
           placement="right"
           open={inspectorOpen}
-          onClose={onInspectorToggle}
+          onClose={onInspectorClose}
           width={INSPECTOR_DRAWER_WIDTH_PX}
           styles={{ body: { padding: 0 } }}>
           {inspectorContent}
