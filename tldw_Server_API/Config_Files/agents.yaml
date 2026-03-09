@@ -1,0 +1,50 @@
+# ACP Agent Registry
+# Defines available agents for the Agent Client Protocol.
+# Each entry describes how to launch and configure an agent.
+#
+# Fields:
+#   type: Unique identifier (used in API requests)
+#   name: Human-readable display name
+#   description: Short description of the agent's capabilities
+#   command: Binary or command to execute
+#   args: Command-line arguments (list)
+#   env: Environment variables to pass (dict)
+#   requires_api_key: Env var that must be set (null if none required)
+#   default: Whether this is the default agent (only one should be true)
+
+agents:
+  - type: claude_code
+    name: Claude Code
+    description: "Anthropic's Claude Code agent for software development tasks"
+    command: claude
+    args: []
+    env: {}
+    requires_api_key: ANTHROPIC_API_KEY
+    default: true
+
+  - type: codex
+    name: OpenAI Codex CLI
+    description: "OpenAI's Codex agent for code generation and analysis"
+    command: codex
+    args: []
+    env: {}
+    requires_api_key: OPENAI_API_KEY
+    default: false
+
+  - type: opencode
+    name: OpenCode
+    description: "Open-source coding agent (github.com/sst/opencode)"
+    command: opencode
+    args: []
+    env: {}
+    requires_api_key: null
+    default: false
+
+  - type: custom
+    name: Custom Agent
+    description: "Configure a custom agent with your own settings"
+    command: ""
+    args: []
+    env: {}
+    requires_api_key: null
+    default: false

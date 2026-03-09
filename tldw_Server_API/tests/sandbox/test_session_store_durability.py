@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tldw_Server_API.app.core.config import clear_config_cache, settings as app_settings
-from tldw_Server_API.app.core.Sandbox.models import RunPhase, RuntimeType, RunSpec, SessionSpec
+from tldw_Server_API.app.core.Sandbox.models import RunPhase, RuntimeType, RunSpec, SessionSpec, TrustLevel
 from tldw_Server_API.app.core.Sandbox.orchestrator import SandboxOrchestrator
 from tldw_Server_API.app.core.Sandbox.service import SandboxService
 from tldw_Server_API.app.core.Sandbox.store import get_store
@@ -87,6 +87,56 @@ def test_clone_session_works_after_service_restart(monkeypatch, tmp_path: Path) 
     assert cloned_ws is not None
     assert restarted_service._orch.get_session_owner(cloned.id) == "user-7"
     assert (Path(str(cloned_ws)) / "notes.txt").read_text(encoding="utf-8") == "stateful data"
+
+
+def test_session_execution_defaults_roundtrip_and_clone(monkeypatch, tmp_path: Path) -> None:
+    _configure_sqlite_store(monkeypatch, tmp_path)
+
+    source_service = SandboxService()
+    spec = SessionSpec(
+        runtime=RuntimeType.docker,
+        base_image="python:3.12-slim",
+        cpu_limit=1.5,
+        memory_mb=768,
+        timeout_sec=77,
+        network_policy="deny_all",
+        env={"SESSION_TOKEN": "present"},
+        labels={"team": "sandbox"},
+        trust_level=TrustLevel.trusted,
+        persona_id="persona-77",
+        workspace_id="workspace-77",
+        workspace_group_id="wg-77",
+        scope_snapshot_id="scope-77",
+    )
+    source = source_service.create_session(
+        user_id="user-7",
+        spec=spec,
+        spec_version="1.0",
+        idem_key=None,
+        raw_body={"spec_version": "1.0", "runtime": "docker"},
+    )
+
+    restarted_service = SandboxService()
+    restored = restarted_service._orch.get_session(source.id)
+    assert restored is not None
+    assert restored.base_image == "python:3.12-slim"
+    assert restored.cpu_limit == 1.5
+    assert restored.memory_mb == 768
+    assert restored.timeout_sec == 77
+    assert restored.network_policy == "deny_all"
+    assert restored.env == {"SESSION_TOKEN": "present"}
+    assert restored.labels == {"team": "sandbox"}
+    assert restored.trust_level == TrustLevel.trusted
+
+    cloned = restarted_service.clone_session(source.id)
+    assert cloned.base_image == "python:3.12-slim"
+    assert cloned.cpu_limit == 1.5
+    assert cloned.memory_mb == 768
+    assert cloned.timeout_sec == 77
+    assert cloned.network_policy == "deny_all"
+    assert cloned.env == {"SESSION_TOKEN": "present"}
+    assert cloned.labels == {"team": "sandbox"}
+    assert cloned.trust_level == TrustLevel.trusted
 
 
 def test_cross_node_delete_invalidates_cached_session_state(monkeypatch, tmp_path: Path) -> None:

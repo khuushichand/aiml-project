@@ -12,10 +12,6 @@ function formatTokens(n: number): string {
   return n.toLocaleString();
 }
 
-function formatCents(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
-}
-
 export function UsageMeter({ used, included, overageCostCents, className }: UsageMeterProps) {
   const pct = included > 0 ? (used / included) * 100 : (used > 0 ? 100 : 0);
   const clampedPct = Math.min(pct, 100);
