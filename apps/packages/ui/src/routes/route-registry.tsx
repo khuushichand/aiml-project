@@ -192,6 +192,10 @@ const OptionWatchlists = lazy(() => import("./option-watchlists"))
 const OptionKanbanPlayground = lazy(() => import("./option-kanban-playground"))
 const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
+const OptionSources = lazy(() => import("./option-sources"))
+const OptionSourcesNew = lazy(() => import("./option-sources-new"))
+const OptionSourcesDetail = lazy(() => import("./option-sources-detail"))
+const OptionAdminSources = lazy(() => import("./option-admin-sources"))
 const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
 const OptionChatWorkflows = lazy(() => import("./option-chat-workflows"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
@@ -557,6 +561,21 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       beta: true
     }
   },
+  {
+    kind: "options",
+    path: "/sources",
+    element: <OptionSources />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.sources",
+      icon: Layers,
+      order: 9.5,
+      beta: true
+    }
+  },
+  { kind: "options", path: "/sources/new", element: <OptionSourcesNew /> },
+  { kind: "options", path: "/sources/:sourceId", element: <OptionSourcesDetail /> },
+  { kind: "options", path: "/admin/sources", element: <OptionAdminSources /> },
   {
     kind: "options",
     path: "/media",
