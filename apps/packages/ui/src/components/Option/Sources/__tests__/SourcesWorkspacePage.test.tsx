@@ -17,6 +17,10 @@ const onlineMocks = vi.hoisted(() => ({
   useServerOnline: vi.fn()
 }))
 
+const routerMocks = vi.hoisted(() => ({
+  navigate: vi.fn()
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (
@@ -47,6 +51,14 @@ vi.mock("@/hooks/use-ingestion-sources", () => ({
   useUpdateIngestionSourceMutation: (...args: unknown[]) =>
     hookMocks.useUpdateIngestionSourceMutation(...args)
 }))
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom")
+  return {
+    ...actual,
+    useNavigate: () => routerMocks.navigate
+  }
+})
 
 import { SourcesWorkspacePage } from "@/components/Option/Sources/SourcesWorkspacePage"
 
@@ -106,16 +118,16 @@ describe("SourcesWorkspacePage", () => {
     expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled()
     expect(screen.getByText(/Degraded 2/i)).toBeInTheDocument()
     expect(screen.getByText(/Detached 1/i)).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "New source" })).toHaveAttribute(
-      "href",
-      "/sources/new"
-    )
 
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }))
+    fireEvent.click(screen.getByRole("button", { name: "New source" }))
+    fireEvent.click(screen.getByRole("button", { name: "Open detail" }))
 
     await waitFor(() => {
       expect(syncMutate).toHaveBeenCalledWith("12")
     })
+    expect(routerMocks.navigate).toHaveBeenCalledWith("/sources/new")
+    expect(routerMocks.navigate).toHaveBeenCalledWith("/sources/12")
   })
 
   it("renders an offline state when the server is unavailable", () => {

@@ -27,11 +27,32 @@ type SourceFormProps = {
   source?: IngestionSourceSummary | null
 }
 
+const hasLockedSourceIdentity = (source?: IngestionSourceSummary | null): boolean => {
+  if (!source) {
+    return false
+  }
+  if (source.last_successful_snapshot_id) {
+    return true
+  }
+  if (source.last_sync_completed_at) {
+    return true
+  }
+  const summary = source.last_successful_sync_summary
+  return Boolean(summary && Object.values(summary).some((value) => Number(value) > 0))
+}
+
+const getSourceTypeLabel = (sourceType: IngestionSourceType): string =>
+  sourceType === "archive_snapshot" ? "Archive snapshot" : "Local directory"
+
+const getSinkTypeLabel = (sinkType: IngestionSourceSummary["sink_type"] | "media" | "notes"): string =>
+  sinkType === "media" ? "Media" : "Notes"
+
 export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
   const { t } = useTranslation(["sources", "common"])
   const navigate = useNavigate()
   const [form] = Form.useForm<SourceFormValues>()
   const initialSourceType = source?.source_type ?? "local_directory"
+  const identityLocked = mode === "edit" && hasLockedSourceIdentity(source)
   const [sourceType, setSourceType] = React.useState<IngestionSourceType>(initialSourceType)
   const [submitError, setSubmitError] = React.useState<string | null>(null)
 
@@ -63,15 +84,20 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
     setSubmitError(null)
 
     const payload: CreateIngestionSourceRequest = {
-      source_type: sourceType,
-      sink_type: values.sink_type,
+      source_type: identityLocked && source ? source.source_type : sourceType,
+      sink_type: identityLocked && source ? source.sink_type : values.sink_type,
       policy: values.policy,
       enabled: values.enabled,
       schedule_enabled: values.schedule_enabled,
       schedule: {},
       config:
-        sourceType === "local_directory"
-          ? { path: (values.path || "").trim() }
+        (identityLocked && source ? source.source_type : sourceType) === "local_directory"
+          ? {
+              path:
+                identityLocked && typeof source?.config?.path === "string"
+                  ? source.config.path
+                  : (values.path || "").trim()
+            }
           : {}
     }
 
@@ -107,30 +133,61 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
         onFinish={(values) => {
           void handleFinish(values)
         }}>
-        <Form.Item
-          name="source_type"
-          label={t("sources:form.sourceType", "Source type")}>
-          <Radio.Group
-            onChange={(event) => setSourceType(event.target.value as IngestionSourceType)}>
-            <Space orientation="vertical">
-              <Radio value="local_directory">
-                {t("sources:form.localDirectory", "Local directory")}
-              </Radio>
-              <Radio value="archive_snapshot">
-                {t("sources:form.archiveSnapshot", "Archive snapshot")}
-              </Radio>
-            </Space>
-          </Radio.Group>
-        </Form.Item>
-
-        <Form.Item name="sink_type" label="Destination">
-          <Select
-            options={[
-              { value: "notes", label: "Notes" },
-              { value: "media", label: "Media" }
-            ]}
+        {identityLocked && source ? (
+          <Alert
+            type="info"
+            title="Locked after first successful sync"
+            description={
+              <div className="space-y-2">
+                <div>
+                  <Typography.Text strong>
+                    {t("sources:form.sourceType", "Source type")}
+                  </Typography.Text>
+                  <div>{getSourceTypeLabel(source.source_type)}</div>
+                </div>
+                <div>
+                  <Typography.Text strong>Current destination</Typography.Text>
+                  <div>{getSinkTypeLabel(source.sink_type)}</div>
+                </div>
+                {typeof source.config?.path === "string" && source.config.path.trim().length > 0 ? (
+                  <div>
+                    <Typography.Text strong>
+                      {t("sources:form.path", "Server directory path")}
+                    </Typography.Text>
+                    <div>{source.config.path}</div>
+                  </div>
+                ) : null}
+              </div>
+            }
           />
-        </Form.Item>
+        ) : (
+          <>
+            <Form.Item
+              name="source_type"
+              label={t("sources:form.sourceType", "Source type")}>
+              <Radio.Group
+                onChange={(event) => setSourceType(event.target.value as IngestionSourceType)}>
+                <Space orientation="vertical">
+                  <Radio value="local_directory">
+                    {t("sources:form.localDirectory", "Local directory")}
+                  </Radio>
+                  <Radio value="archive_snapshot">
+                    {t("sources:form.archiveSnapshot", "Archive snapshot")}
+                  </Radio>
+                </Space>
+              </Radio.Group>
+            </Form.Item>
+
+            <Form.Item name="sink_type" label="Destination">
+              <Select
+                options={[
+                  { value: "notes", label: "Notes" },
+                  { value: "media", label: "Media" }
+                ]}
+              />
+            </Form.Item>
+          </>
+        )}
 
         <Form.Item name="policy" label="Lifecycle policy">
           <Select
@@ -145,7 +202,7 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
           <Switch />
         </Form.Item>
 
-        {sourceType === "local_directory" ? (
+        {(identityLocked && source ? source.source_type : sourceType) === "local_directory" && !identityLocked ? (
           <>
             <Form.Item
               name="path"

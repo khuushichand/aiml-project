@@ -112,4 +112,43 @@ describe("SourceForm", () => {
       expect(routerMocks.navigate).toHaveBeenCalledWith("/sources/42")
     })
   })
+
+  it("renders immutable source identity fields as summaries after first successful sync", () => {
+    render(
+      <SourceForm
+        mode="edit"
+        source={{
+          id: "42",
+          user_id: 7,
+          source_type: "local_directory",
+          sink_type: "notes",
+          policy: "canonical",
+          enabled: true,
+          schedule_enabled: false,
+          schedule_config: {},
+          config: { path: "/srv/tldw/notes" },
+          last_successful_snapshot_id: "9",
+          last_successful_sync_summary: {
+            changed_count: 2,
+            degraded_count: 0,
+            conflict_count: 0,
+            sink_failure_count: 0,
+            ingestion_failure_count: 0,
+            created_count: 1,
+            updated_count: 1,
+            deleted_count: 0,
+            unchanged_count: 3
+          }
+        }}
+      />
+    )
+
+    expect(
+      screen.getByText("Locked after first successful sync")
+    ).toBeInTheDocument()
+    expect(screen.getByText("/srv/tldw/notes")).toBeInTheDocument()
+    expect(screen.queryByRole("radio", { name: "Archive snapshot" })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Server directory path")).not.toBeInTheDocument()
+    expect(screen.queryByText("Destination")).not.toBeInTheDocument()
+  })
 })

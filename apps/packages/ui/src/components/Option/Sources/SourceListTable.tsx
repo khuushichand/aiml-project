@@ -1,6 +1,6 @@
 import React from "react"
 import { Button, Card, Empty, Space, Typography } from "antd"
-import { Link } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 
 import { useSyncIngestionSourceMutation, useUpdateIngestionSourceMutation } from "@/hooks/use-ingestion-sources"
 import type { IngestionSourceSummary } from "@/types/ingestion-sources"
@@ -39,6 +39,7 @@ type SourceListTableProps = {
 }
 
 export const SourceListTable: React.FC<SourceListTableProps> = ({ sources }) => {
+  const navigate = useNavigate()
   const syncMutation = useSyncIngestionSourceMutation()
 
   if (sources.length === 0) {
@@ -69,8 +70,11 @@ export const SourceListTable: React.FC<SourceListTableProps> = ({ sources }) => 
                 Sync now
               </Button>
               <SourceEnabledAction source={source} />
-              <Button>
-                <Link to={`/sources/${source.id}`}>Open detail</Link>
+              <Button
+                onClick={() => {
+                  navigate(`/sources/${source.id}`)
+                }}>
+                Open detail
               </Button>
             </Space>
           </div>

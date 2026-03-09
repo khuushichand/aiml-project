@@ -1,6 +1,6 @@
 import React from "react"
 import { Alert, Button, Empty, Spin, Tag, Typography } from "antd"
-import { Link } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
@@ -18,6 +18,7 @@ export const SourcesWorkspacePage: React.FC<SourcesWorkspacePageProps> = ({
   mode = "user"
 }) => {
   const { t } = useTranslation(["sources", "common", "option"])
+  const navigate = useNavigate()
   const isOnline = useServerOnline()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const sourcesQuery = useIngestionSourcesQuery()
@@ -66,8 +67,12 @@ export const SourcesWorkspacePage: React.FC<SourcesWorkspacePageProps> = ({
             )}
           </Typography.Paragraph>
         </div>
-        <Button type="primary">
-          <Link to="/sources/new">{t("sources:actions.new", "New source")}</Link>
+        <Button
+          type="primary"
+          onClick={() => {
+            navigate("/sources/new")
+          }}>
+          {t("sources:actions.new", "New source")}
         </Button>
       </div>
 
