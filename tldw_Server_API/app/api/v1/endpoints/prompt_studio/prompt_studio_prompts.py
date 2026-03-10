@@ -162,6 +162,25 @@ def _validate_message_lengths(
         )
 
 
+def _validate_total_message_length(
+    *,
+    messages: list[dict[str, str]],
+) -> None:
+    from tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_executor import PromptExecutor
+
+    total_length = sum(len(message.get("content") or "") for message in messages)
+    if total_length <= PromptExecutor.MAX_TOTAL_PROMPT_LENGTH:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            "Structured prompt exceeds maximum total length of "
+            f"{PromptExecutor.MAX_TOTAL_PROMPT_LENGTH} and would be truncated during execution"
+        ),
+    )
+
+
 def _validation_variables(definition: PromptDefinition) -> dict[str, Any]:
     variables: dict[str, Any] = {}
     for variable in definition.variables:
@@ -225,6 +244,7 @@ def _validate_prompt_content(
         messages=messages,
         security_config=security_config,
     )
+    _validate_total_message_length(messages=messages)
 
 
 def _coerce_preview_definition(
@@ -623,6 +643,7 @@ async def preview_prompt(
             messages=messages,
             security_config=security_config,
         )
+        _validate_total_message_length(messages=messages)
         preview_data = StructuredPromptPreviewResponse(
             prompt_format=prompt_format,
             prompt_schema_version=prompt_schema_version,

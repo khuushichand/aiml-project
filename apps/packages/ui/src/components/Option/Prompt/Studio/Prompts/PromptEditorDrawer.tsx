@@ -20,7 +20,8 @@ import { Button } from "@/components/Common/Button"
 import { StructuredPromptEditor } from "../../Structured/StructuredPromptEditor"
 import {
   convertLegacyPromptToStructuredDefinition,
-  createDefaultStructuredPromptDefinition
+  createDefaultStructuredPromptDefinition,
+  renderStructuredPromptLegacySnapshot
 } from "../../structured-prompt-utils"
 
 type PromptEditorDrawerProps = {
@@ -51,6 +52,11 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
   const [promptFormat, setPromptFormat] = useState<PromptFormat>("legacy")
   const [structuredDefinition, setStructuredDefinition] =
     useState<StructuredPromptDefinition>(createDefaultStructuredPromptDefinition())
+  const [hasStructuredDraft, setHasStructuredDraft] = useState(false)
+  const projectedLegacySnapshotRef = React.useRef<{
+    system_prompt: string
+    user_prompt: string
+  } | null>(null)
   const [previewResult, setPreviewResult] =
     useState<StructuredPromptPreviewResponse | null>(null)
 
@@ -88,6 +94,8 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
             existingPrompt.user_prompt
           )
       )
+      setHasStructuredDraft(existingPrompt.prompt_format === "structured")
+      projectedLegacySnapshotRef.current = null
       setPreviewResult(null)
     } else if (open && !isEditing) {
       form.resetFields()
@@ -101,6 +109,8 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
       })
       setPromptFormat("legacy")
       setStructuredDefinition(createDefaultStructuredPromptDefinition())
+      setHasStructuredDraft(false)
+      projectedLegacySnapshotRef.current = null
       setPreviewResult(null)
     }
   }, [open, isEditing, existingPrompt, form])
@@ -353,25 +363,44 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
               value={promptFormat}
               onChange={(event) => {
                 const nextFormat = event.target.value as PromptFormat
+                if (nextFormat === promptFormat) {
+                  return
+                }
+
+                if (nextFormat === "legacy") {
+                  const legacySnapshot =
+                    renderStructuredPromptLegacySnapshot(structuredDefinition)
+                  projectedLegacySnapshotRef.current = {
+                    system_prompt: legacySnapshot.systemPrompt,
+                    user_prompt: legacySnapshot.userPrompt
+                  }
+                  form.setFieldsValue({
+                    system_prompt: legacySnapshot.systemPrompt,
+                    user_prompt: legacySnapshot.userPrompt
+                  })
+                } else {
+                  const currentValues = form.getFieldsValue()
+                  const matchesProjectedLegacy =
+                    projectedLegacySnapshotRef.current !== null &&
+                    currentValues.system_prompt ===
+                      projectedLegacySnapshotRef.current.system_prompt &&
+                    currentValues.user_prompt ===
+                      projectedLegacySnapshotRef.current.user_prompt
+
+                  if (!hasStructuredDraft || !matchesProjectedLegacy) {
+                    setStructuredDefinition(
+                      convertLegacyPromptToStructuredDefinition(
+                        currentValues.system_prompt,
+                        currentValues.user_prompt
+                      )
+                    )
+                  }
+                  projectedLegacySnapshotRef.current = null
+                  setHasStructuredDraft(true)
+                }
+
                 setPromptFormat(nextFormat)
                 setPreviewResult(null)
-                if (nextFormat === "structured") {
-                  setStructuredDefinition((current) => {
-                    if (
-                      promptFormat === "structured" &&
-                      current &&
-                      Array.isArray((current as any).blocks) &&
-                      (current as any).blocks.length > 0
-                    ) {
-                      return current
-                    }
-                    const currentValues = form.getFieldsValue()
-                    return convertLegacyPromptToStructuredDefinition(
-                      currentValues.system_prompt,
-                      currentValues.user_prompt
-                    )
-                  })
-                }
               }}
             >
               <Radio.Button value="legacy">Legacy text</Radio.Button>
@@ -432,7 +461,11 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
           ) : (
             <StructuredPromptEditor
               value={structuredDefinition}
-              onChange={setStructuredDefinition}
+              onChange={(nextValue) => {
+                setStructuredDefinition(nextValue)
+                setHasStructuredDraft(true)
+                setPreviewResult(null)
+              }}
               previewResult={previewResult}
               previewLoading={previewMutation.isPending}
               onPreview={handlePreview}

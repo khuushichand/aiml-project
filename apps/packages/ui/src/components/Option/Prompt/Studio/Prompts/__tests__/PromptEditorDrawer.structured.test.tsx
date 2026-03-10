@@ -214,6 +214,33 @@ describe("PromptEditorDrawer structured prompt mode", () => {
     expect(previewMatches.length).toBeGreaterThan(0)
   })
 
+  it("projects structured edits into legacy fields and preserves them across mode switches", async () => {
+    renderDrawer()
+
+    await screen.findByTestId("structured-block-list")
+    fireEvent.click(screen.getByTestId("structured-block-item-task"))
+    fireEvent.change(screen.getByTestId("structured-block-content"), {
+      target: { value: "Summarize {{topic}} clearly" }
+    })
+
+    fireEvent.click(screen.getByRole("radio", { name: "Legacy text" }))
+
+    expect(
+      (screen.getByLabelText("System Prompt") as HTMLTextAreaElement).value
+    ).toBe("You are precise.")
+    expect(
+      (screen.getByLabelText("User Prompt Template") as HTMLTextAreaElement).value
+    ).toBe("Summarize {{topic}} clearly")
+
+    fireEvent.click(screen.getByRole("radio", { name: "Structured builder" }))
+
+    await screen.findByTestId("structured-block-content")
+    fireEvent.click(screen.getByTestId("structured-block-item-task"))
+    expect(
+      (screen.getByTestId("structured-block-content") as HTMLTextAreaElement).value
+    ).toBe("Summarize {{topic}} clearly")
+  })
+
   it("extracts template variables when switching a legacy draft to structured mode", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {

@@ -79,6 +79,31 @@ def _make_structured_prompt_definition_with_literal_user_content(
     definition["blocks"][1]["is_template"] = False
     return definition
 
+
+def _make_structured_prompt_definition_exceeding_total_runtime_limit() -> dict:
+    return {
+        "schema_version": 1,
+        "format": "structured",
+        "variables": [],
+        "blocks": [
+            {
+                "id": f"assistant_{index + 1}",
+                "name": f"Assistant Block {index + 1}",
+                "role": "assistant",
+                "content": "x" * 49000,
+                "enabled": True,
+                "order": (index + 1) * 10,
+                "is_template": False,
+            }
+            for index in range(11)
+        ],
+        "assembly_config": {
+            "legacy_system_roles": ["system", "developer"],
+            "legacy_user_roles": ["user"],
+            "block_separator": "\n\n",
+        },
+    }
+
 @pytest.fixture
 def client(mock_user, test_db):
     """Create a test client for the FastAPI app with mocked authentication."""
@@ -454,6 +479,30 @@ class TestPromptEndpoints:
         finally:
             app.dependency_overrides.pop(get_security_config, None)
 
+    def test_preview_prompt_rejects_structured_payload_exceeding_total_runtime_limit(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        response = client.post(
+            "/api/v1/prompt-studio/prompts/preview",
+            json={
+                "project_id": project_id,
+                "prompt_format": "structured",
+                "prompt_schema_version": 1,
+                "prompt_definition": _make_structured_prompt_definition_exceeding_total_runtime_limit(),
+                "variables": {},
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400, response.text
+        assert "maximum total length" in response.json()["detail"]
+
     def test_create_prompt_rejects_signature_augmented_payload_exceeding_security_limit(
         self,
         client,
@@ -652,6 +701,31 @@ class TestPromptEndpoints:
             assert "exceeds maximum length" in response.json()["detail"]
         finally:
             app.dependency_overrides.pop(get_security_config, None)
+
+    def test_create_prompt_rejects_structured_payload_exceeding_total_runtime_limit(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        response = client.post(
+            "/api/v1/prompt-studio/prompts",
+            json={
+                "project_id": project_id,
+                "name": "Aggregate Runtime Limit Prompt",
+                "prompt_format": "structured",
+                "prompt_schema_version": 1,
+                "prompt_definition": _make_structured_prompt_definition_exceeding_total_runtime_limit(),
+                "change_description": "Initial version",
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400, response.text
+        assert "maximum total length" in response.json()["detail"]
 
     def test_update_prompt_rejects_oversized_variable_default_value(
         self,
