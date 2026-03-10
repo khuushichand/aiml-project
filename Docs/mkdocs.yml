@@ -115,6 +115,7 @@ nav:
           - Reading List API: API-related/Reading_List_API.md
           - Watchlists API: API-related/Watchlists_API.md
           - Collections Feeds API: API-related/Collections_Feeds_API.md
+          - Ingestion Sources API: API-related/Ingestion_Sources_API.md
           - Storage API: API-related/Storage_API_Documentation.md
       - Processing:
           - Chunking Templates API: API-related/Chunking_Templates_API_Documentation.md
