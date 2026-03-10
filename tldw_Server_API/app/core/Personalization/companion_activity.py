@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from typing import Any
 
@@ -41,6 +43,14 @@ def _explicit_provenance(
     if source_timestamp:
         payload["source_timestamp"] = source_timestamp
     return payload
+
+
+def _payload_fingerprint(payload: dict[str, Any] | None) -> str:
+    try:
+        serialized = json.dumps(payload or {}, sort_keys=True, ensure_ascii=True, default=str)
+    except Exception:
+        serialized = json.dumps({"unserializable": True}, sort_keys=True, ensure_ascii=True)
+    return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
 
 
 def record_companion_activity(
@@ -174,6 +184,157 @@ def record_reading_item_deleted(*, user_id: str | int | None, item_id: int) -> s
             action="delete",
         ),
         metadata={"hard_delete": True},
+    )
+
+
+def record_reading_note_linked(
+    *,
+    user_id: str | int | None,
+    item_id: int,
+    note_id: str,
+    item_title: str | None = None,
+    link_created_at: str | None = None,
+) -> str | None:
+    source_id = f"{item_id}:{note_id}"
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="reading_note_linked",
+        source_type="reading_note_link",
+        source_id=source_id,
+        surface="api.reading",
+        dedupe_key=f"reading.note.link:{source_id}:{link_created_at or 'na'}",
+        provenance=_explicit_provenance(
+            route=f"/api/v1/reading/items/{item_id}/links/note",
+            action="link_note",
+            source_timestamp=link_created_at,
+        ),
+        metadata={
+            "item_id": item_id,
+            "note_id": str(note_id),
+            "title": item_title,
+            "item_title": item_title,
+        },
+    )
+
+
+def record_reading_note_unlinked(
+    *,
+    user_id: str | int | None,
+    item_id: int,
+    note_id: str,
+    item_title: str | None = None,
+    link_created_at: str | None = None,
+) -> str | None:
+    source_id = f"{item_id}:{note_id}"
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="reading_note_unlinked",
+        source_type="reading_note_link",
+        source_id=source_id,
+        surface="api.reading",
+        dedupe_key=f"reading.note.unlink:{source_id}:{link_created_at or 'na'}",
+        provenance=_explicit_provenance(
+            route=f"/api/v1/reading/items/{item_id}/links/note/{note_id}",
+            action="unlink_note",
+            source_timestamp=link_created_at,
+        ),
+        metadata={
+            "item_id": item_id,
+            "note_id": str(note_id),
+            "title": item_title,
+            "item_title": item_title,
+        },
+    )
+
+
+def _reading_highlight_metadata(highlight: Any, *, item_title: str | None = None) -> dict[str, Any]:
+    return {
+        "item_id": getattr(highlight, "item_id", None),
+        "title": item_title,
+        "item_title": item_title,
+        "quote": getattr(highlight, "quote", None),
+        "note": getattr(highlight, "note", None),
+        "color": getattr(highlight, "color", None),
+        "state": getattr(highlight, "state", None),
+        "anchor_strategy": getattr(highlight, "anchor_strategy", None),
+        "start_offset": getattr(highlight, "start_offset", None),
+        "end_offset": getattr(highlight, "end_offset", None),
+    }
+
+
+def record_reading_highlight_created(
+    *,
+    user_id: str | int | None,
+    highlight: Any,
+    item_title: str | None = None,
+) -> str | None:
+    highlight_id = str(getattr(highlight, "id"))
+    item_id = int(getattr(highlight, "item_id"))
+    created_at = getattr(highlight, "created_at", None)
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="reading_highlight_created",
+        source_type="reading_highlight",
+        source_id=highlight_id,
+        surface="api.reading",
+        dedupe_key=f"reading.highlight.create:{highlight_id}:{created_at or 'na'}",
+        provenance=_explicit_provenance(
+            route=f"/api/v1/reading/items/{item_id}/highlight",
+            action="create_highlight",
+            source_timestamp=created_at,
+        ),
+        metadata=_reading_highlight_metadata(highlight, item_title=item_title),
+    )
+
+
+def record_reading_highlight_updated(
+    *,
+    user_id: str | int | None,
+    highlight: Any,
+    item_title: str | None = None,
+    patch: dict[str, Any] | None = None,
+) -> str | None:
+    highlight_id = str(getattr(highlight, "id"))
+    fingerprint = _payload_fingerprint(patch)
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="reading_highlight_updated",
+        source_type="reading_highlight",
+        source_id=highlight_id,
+        surface="api.reading",
+        dedupe_key=f"reading.highlight.update:{highlight_id}:{fingerprint}",
+        provenance=_explicit_provenance(
+            route=f"/api/v1/reading/highlights/{highlight_id}",
+            action="update_highlight",
+            source_timestamp=getattr(highlight, "created_at", None),
+        ),
+        metadata={
+            **_reading_highlight_metadata(highlight, item_title=item_title),
+            "patch": dict(patch or {}),
+        },
+    )
+
+
+def record_reading_highlight_deleted(
+    *,
+    user_id: str | int | None,
+    highlight: Any,
+    item_title: str | None = None,
+) -> str | None:
+    highlight_id = str(getattr(highlight, "id"))
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="reading_highlight_deleted",
+        source_type="reading_highlight",
+        source_id=highlight_id,
+        surface="api.reading",
+        dedupe_key=f"reading.highlight.delete:{highlight_id}",
+        provenance=_explicit_provenance(
+            route=f"/api/v1/reading/highlights/{highlight_id}",
+            action="delete_highlight",
+            source_timestamp=getattr(highlight, "created_at", None),
+        ),
+        metadata=_reading_highlight_metadata(highlight, item_title=item_title),
     )
 
 
