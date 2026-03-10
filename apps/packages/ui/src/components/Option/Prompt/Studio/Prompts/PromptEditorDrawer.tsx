@@ -18,6 +18,10 @@ import {
 } from "@/services/prompt-studio"
 import { Button } from "@/components/Common/Button"
 import { StructuredPromptEditor } from "../../Structured/StructuredPromptEditor"
+import {
+  convertLegacyPromptToStructuredDefinition,
+  createDefaultStructuredPromptDefinition
+} from "../../structured-prompt-utils"
 
 type PromptEditorDrawerProps = {
   open: boolean
@@ -35,58 +39,6 @@ type FormValues = {
   modules_config?: string // JSON string for modules config
 }
 
-const createDefaultStructuredDefinition = (): StructuredPromptDefinition => ({
-  schema_version: 1,
-  format: "structured",
-  variables: [],
-  blocks: [
-    {
-      id: "task",
-      name: "Task",
-      role: "user",
-      content: "Describe the task here.",
-      enabled: true,
-      order: 10,
-      is_template: false
-    }
-  ]
-})
-
-const createStructuredDefinitionFromLegacy = (
-  systemPrompt?: string | null,
-  userPrompt?: string | null
-): StructuredPromptDefinition => {
-  const blocks: StructuredPromptDefinition["blocks"] = []
-  if (systemPrompt?.trim()) {
-    blocks.push({
-      id: "system",
-      name: "System Instructions",
-      role: "system",
-      content: systemPrompt.trim(),
-      enabled: true,
-      order: 10,
-      is_template: false
-    })
-  }
-  if (userPrompt?.trim()) {
-    blocks.push({
-      id: "task",
-      name: "Task",
-      role: "user",
-      content: userPrompt.trim(),
-      enabled: true,
-      order: blocks.length === 0 ? 10 : 20,
-      is_template: true
-    })
-  }
-  return {
-    schema_version: 1,
-    format: "structured",
-    variables: [],
-    blocks: blocks.length > 0 ? blocks : createDefaultStructuredDefinition().blocks
-  }
-}
-
 export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
   open,
   promptId,
@@ -98,7 +50,7 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
   const queryClient = useQueryClient()
   const [promptFormat, setPromptFormat] = useState<PromptFormat>("legacy")
   const [structuredDefinition, setStructuredDefinition] =
-    useState<StructuredPromptDefinition>(createDefaultStructuredDefinition())
+    useState<StructuredPromptDefinition>(createDefaultStructuredPromptDefinition())
   const [previewResult, setPreviewResult] =
     useState<StructuredPromptPreviewResponse | null>(null)
 
@@ -131,7 +83,7 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
       setPromptFormat(existingPrompt.prompt_format || "legacy")
       setStructuredDefinition(
         existingPrompt.prompt_definition ||
-          createStructuredDefinitionFromLegacy(
+          convertLegacyPromptToStructuredDefinition(
             existingPrompt.system_prompt,
             existingPrompt.user_prompt
           )
@@ -148,7 +100,7 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
         modules_config: ""
       })
       setPromptFormat("legacy")
-      setStructuredDefinition(createDefaultStructuredDefinition())
+      setStructuredDefinition(createDefaultStructuredPromptDefinition())
       setPreviewResult(null)
     }
   }, [open, isEditing, existingPrompt, form])
@@ -405,6 +357,7 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
                 if (nextFormat === "structured") {
                   setStructuredDefinition((current) => {
                     if (
+                      promptFormat === "structured" &&
                       current &&
                       Array.isArray((current as any).blocks) &&
                       (current as any).blocks.length > 0
@@ -412,7 +365,7 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
                       return current
                     }
                     const currentValues = form.getFieldsValue()
-                    return createStructuredDefinitionFromLegacy(
+                    return convertLegacyPromptToStructuredDefinition(
                       currentValues.system_prompt,
                       currentValues.user_prompt
                     )

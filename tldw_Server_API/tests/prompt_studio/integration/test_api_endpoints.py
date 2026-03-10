@@ -13,6 +13,8 @@ os.environ["AUTH_MODE"] = "single_user"
 os.environ["CSRF_ENABLED"] = "false"
 
 from tldw_Server_API.app.main import app
+from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_security_config
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import SecurityConfig
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db
@@ -409,6 +411,44 @@ class TestPromptEndpoints:
         assert data["prompt_definition"]["blocks"][1]["content"] == (
             "Evaluate {{input}} against {{baseline}}."
         )
+
+    def test_create_prompt_rejects_structured_payload_exceeding_security_limit(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        app.dependency_overrides[get_security_config] = lambda: SecurityConfig(
+            max_prompt_length=100,
+            allowed_models=[],
+            blocked_patterns=[],
+            rate_limits={},
+        )
+
+        try:
+            definition = _make_structured_prompt_definition_payload()
+            definition["blocks"][1]["content"] = "Evaluate " + ("x" * 140)
+
+            response = client.post(
+                "/api/v1/prompt-studio/prompts",
+                json={
+                    "project_id": project_id,
+                    "name": "Too Long Structured Prompt",
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": definition,
+                    "change_description": "Initial version",
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == 400, response.text
+            assert "exceeds maximum length" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_security_config, None)
 
 ########################################################################################################################
 # Test Case Endpoints Tests

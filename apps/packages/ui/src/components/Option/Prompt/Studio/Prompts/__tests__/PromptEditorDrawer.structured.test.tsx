@@ -211,4 +211,64 @@ describe("PromptEditorDrawer structured prompt mode", () => {
     const previewMatches = await screen.findAllByText("Summarize SQLite FTS")
     expect(previewMatches.length).toBeGreaterThan(0)
   })
+
+  it("extracts template variables when switching a legacy draft to structured mode", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false }
+      }
+    })
+
+    mocks.createPrompt.mockResolvedValue({
+      data: {
+        data: {
+          ...makeStructuredPrompt(),
+          id: 72,
+          name: "Converted prompt"
+        }
+      }
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PromptEditorDrawer
+          open
+          promptId={null}
+          projectId={9}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    fireEvent.change(screen.getByLabelText("Prompt Name"), {
+      target: { value: "Converted prompt" }
+    })
+    fireEvent.change(screen.getByLabelText("System Prompt"), {
+      target: { value: "You are precise about {{topic}}." }
+    })
+    fireEvent.change(screen.getByLabelText("User Prompt Template"), {
+      target: { value: "Summarize {{topic}} against {{baseline}}" }
+    })
+
+    fireEvent.click(screen.getByRole("radio", { name: "Structured builder" }))
+    await screen.findByTestId("structured-block-list")
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Prompt" }))
+
+    await waitFor(() => {
+      expect(mocks.createPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt_format: "structured",
+          prompt_definition: expect.objectContaining({
+            variables: expect.arrayContaining([
+              expect.objectContaining({ name: "topic", required: true }),
+              expect.objectContaining({ name: "baseline", required: true })
+            ])
+          })
+        }),
+        expect.any(String)
+      )
+    })
+  })
 })

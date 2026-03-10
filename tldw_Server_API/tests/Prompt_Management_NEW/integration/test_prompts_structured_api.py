@@ -163,3 +163,40 @@ def test_convert_prompt_returns_structured_definition_with_normalized_variables(
     assert body["prompt_definition"]["blocks"][1]["content"] == (
         "Summarize {{topic}} against {{baseline}} in {{style}}."
     )
+
+
+def test_create_structured_prompt_rejects_unknown_variable_references(test_client, auth_headers):
+    invalid_definition = _make_prompt_definition_payload()
+    invalid_definition["variables"] = []
+
+    response = test_client.post(
+        "/api/v1/prompts",
+        json={
+            "name": "Broken Structured Prompt",
+            "author": "integration-test",
+            "prompt_format": "structured",
+            "prompt_schema_version": 1,
+            "prompt_definition": invalid_definition,
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400, response.text
+    assert "Unknown variable reference" in response.json()["detail"]
+
+
+def test_create_structured_prompt_rejects_schema_version_mismatch(test_client, auth_headers):
+    response = test_client.post(
+        "/api/v1/prompts",
+        json={
+            "name": "Mismatched Structured Prompt",
+            "author": "integration-test",
+            "prompt_format": "structured",
+            "prompt_schema_version": 999,
+            "prompt_definition": _make_prompt_definition_payload(),
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400, response.text
+    assert "must match prompt_definition.schema_version" in response.json()["detail"]

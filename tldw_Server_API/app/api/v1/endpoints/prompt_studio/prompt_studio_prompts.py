@@ -47,7 +47,12 @@ from tldw_Server_API.app.api.v1.schemas.prompt_studio_project import (
     PromptVersion,
 )
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_schemas import ExecutePromptSimpleRequest
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import ConflictError, DatabaseError, InputError
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
+    ConflictError,
+    DatabaseError,
+    InputError,
+    _prepare_prompt_record_fields,
+)
 from tldw_Server_API.app.core.Prompt_Management.structured_prompts import (
     PromptDefinition,
     assemble_prompt_definition,
@@ -86,6 +91,48 @@ def _render_definition_legacy_fields(definition: PromptDefinition) -> tuple[str,
     return legacy.system_prompt, legacy.user_prompt
 
 
+def _coerce_structured_definition(
+    *,
+    prompt_schema_version: int | None,
+    prompt_definition_payload: dict[str, Any] | None,
+) -> tuple[PromptDefinition, int]:
+    if prompt_schema_version is None:
+        raise InputError("Structured prompts require prompt_schema_version.")
+    if not isinstance(prompt_definition_payload, dict):
+        raise InputError("Structured prompts require prompt_definition.")
+    definition = PromptDefinition.model_validate(prompt_definition_payload)
+    issues = validate_prompt_definition(definition)
+    if issues:
+        raise InputError(issues[0].message)
+
+    definition_schema_version = int(definition.schema_version)
+    if int(prompt_schema_version) != definition_schema_version:
+        raise InputError(
+            "prompt_schema_version must match prompt_definition.schema_version."
+        )
+
+    return definition, definition_schema_version
+
+
+def _validate_prompt_lengths(
+    *,
+    system_prompt: str | None,
+    user_prompt: str | None,
+    security_config: SecurityConfig,
+) -> None:
+    if system_prompt and len(system_prompt) > security_config.max_prompt_length:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"System prompt exceeds maximum length of {security_config.max_prompt_length}"
+        )
+
+    if user_prompt and len(user_prompt) > security_config.max_prompt_length:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"User prompt exceeds maximum length of {security_config.max_prompt_length}"
+        )
+
+
 def _coerce_preview_definition(
     *,
     prompt_format: str,
@@ -95,15 +142,11 @@ def _coerce_preview_definition(
     user_prompt: str | None,
 ) -> tuple[PromptDefinition, str, int | None]:
     if prompt_format == "structured":
-        if prompt_schema_version is None:
-            raise InputError("Structured prompts require prompt_schema_version.")
-        if not isinstance(prompt_definition_payload, dict):
-            raise InputError("Structured prompts require prompt_definition.")
-        definition = PromptDefinition.model_validate(prompt_definition_payload)
-        issues = validate_prompt_definition(definition)
-        if issues:
-            raise InputError(issues[0].message)
-        return definition, "structured", int(prompt_schema_version)
+        definition, definition_schema_version = _coerce_structured_definition(
+            prompt_schema_version=prompt_schema_version,
+            prompt_definition_payload=prompt_definition_payload,
+        )
+        return definition, "structured", definition_schema_version
 
     definition = convert_legacy_prompt_to_definition(
         system_prompt=system_prompt,
@@ -199,18 +242,18 @@ async def create_prompt(
     try:
         if not isinstance(idempotency_key, str):
             idempotency_key = None
-        # Validate prompt length
-        if prompt_data.system_prompt and len(prompt_data.system_prompt) > security_config.max_prompt_length:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"System prompt exceeds maximum length of {security_config.max_prompt_length}"
-            )
-
-        if prompt_data.user_prompt and len(prompt_data.user_prompt) > security_config.max_prompt_length:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"User prompt exceeds maximum length of {security_config.max_prompt_length}"
-            )
+        normalized_prompt_fields = _prepare_prompt_record_fields(
+            prompt_format=prompt_data.prompt_format,
+            prompt_schema_version=prompt_data.prompt_schema_version,
+            prompt_definition=prompt_data.prompt_definition,
+            system_prompt=prompt_data.system_prompt,
+            user_prompt=prompt_data.user_prompt,
+        )
+        _validate_prompt_lengths(
+            system_prompt=normalized_prompt_fields["system_prompt"],
+            user_prompt=normalized_prompt_fields["user_prompt"],
+            security_config=security_config,
+        )
 
         # Ensure write access to the project
         await require_project_write_access(prompt_data.project_id, user_context=user_context, db=db)
@@ -247,11 +290,11 @@ async def create_prompt(
             name=prompt_data.name,
             signature_id=prompt_data.signature_id,
             version_number=1,
-            system_prompt=prompt_data.system_prompt,
-            user_prompt=prompt_data.user_prompt,
-            prompt_format=prompt_data.prompt_format,
-            prompt_schema_version=prompt_data.prompt_schema_version,
-            prompt_definition=prompt_data.prompt_definition,
+            system_prompt=normalized_prompt_fields["system_prompt"],
+            user_prompt=normalized_prompt_fields["user_prompt"],
+            prompt_format=normalized_prompt_fields["prompt_format"],
+            prompt_schema_version=normalized_prompt_fields["prompt_schema_version"],
+            prompt_definition=normalized_prompt_fields["prompt_definition"],
             few_shot_examples=few_shot_payload,
             modules_config=modules_payload,
             parent_version_id=prompt_data.parent_version_id,
@@ -621,19 +664,6 @@ async def update_prompt(
         New prompt version details
     """
     try:
-        # Validate prompt lengths if provided
-        if updates.system_prompt and len(updates.system_prompt) > security_config.max_prompt_length:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"System prompt exceeds maximum length of {security_config.max_prompt_length}"
-            )
-
-        if updates.user_prompt and len(updates.user_prompt) > security_config.max_prompt_length:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"User prompt exceeds maximum length of {security_config.max_prompt_length}"
-            )
-
         current_prompt = db.get_prompt_with_project(prompt_id)
         if not current_prompt:
             raise HTTPException(
@@ -645,6 +675,20 @@ async def update_prompt(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to this prompt"
             )
+
+        normalized_prompt_fields = _prepare_prompt_record_fields(
+            prompt_format=updates.prompt_format,
+            prompt_schema_version=updates.prompt_schema_version,
+            prompt_definition=updates.prompt_definition,
+            system_prompt=updates.system_prompt,
+            user_prompt=updates.user_prompt,
+            current_prompt=current_prompt,
+        )
+        _validate_prompt_lengths(
+            system_prompt=normalized_prompt_fields["system_prompt"],
+            user_prompt=normalized_prompt_fields["user_prompt"],
+            security_config=security_config,
+        )
 
         # Create new version
         few_shot_payload = None
@@ -659,11 +703,11 @@ async def update_prompt(
             prompt_id,
             change_description=updates.change_description,
             name=updates.name,
-            system_prompt=updates.system_prompt,
-            user_prompt=updates.user_prompt,
-            prompt_format=updates.prompt_format,
-            prompt_schema_version=updates.prompt_schema_version,
-            prompt_definition=updates.prompt_definition,
+            system_prompt=normalized_prompt_fields["system_prompt"],
+            user_prompt=normalized_prompt_fields["user_prompt"],
+            prompt_format=normalized_prompt_fields["prompt_format"],
+            prompt_schema_version=normalized_prompt_fields["prompt_schema_version"],
+            prompt_definition=normalized_prompt_fields["prompt_definition"],
             few_shot_examples=few_shot_payload,
             modules_config=modules_payload,
             client_id=user_context.get("client_id"),

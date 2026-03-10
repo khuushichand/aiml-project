@@ -104,6 +104,31 @@ def _render_definition_legacy_fields(definition: PromptDefinition) -> tuple[str,
     return legacy.system_prompt, legacy.user_prompt
 
 
+def _coerce_structured_definition(
+    prompt_schema_version: int | None,
+    prompt_definition_payload: dict[str, Any] | None,
+) -> tuple[PromptDefinition, int]:
+    if prompt_schema_version is None:
+        raise InputError("Structured prompts require prompt_schema_version.")
+    if not isinstance(prompt_definition_payload, dict):
+        raise InputError("Structured prompts require prompt_definition.")
+    try:
+        definition = PromptDefinition.model_validate(prompt_definition_payload)
+    except ValidationError as exc:
+        raise InputError(f"Invalid prompt_definition: {exc}") from exc
+    issues = validate_prompt_definition(definition)
+    if issues:
+        raise InputError(issues[0].message)
+
+    definition_schema_version = int(definition.schema_version)
+    if int(prompt_schema_version) != definition_schema_version:
+        raise InputError(
+            "prompt_schema_version must match prompt_definition.schema_version."
+        )
+
+    return definition, definition_schema_version
+
+
 def _coerce_preview_definition(
     prompt_format: str,
     prompt_schema_version: int | None,
@@ -113,18 +138,11 @@ def _coerce_preview_definition(
     user_prompt: str | None,
 ) -> tuple[PromptDefinition, str, int | None]:
     if prompt_format == "structured":
-        if prompt_schema_version is None:
-            raise InputError("Structured prompts require prompt_schema_version.")
-        if not isinstance(prompt_definition_payload, dict):
-            raise InputError("Structured prompts require prompt_definition.")
-        try:
-            definition = PromptDefinition.model_validate(prompt_definition_payload)
-        except ValidationError as exc:
-            raise InputError(f"Invalid prompt_definition: {exc}") from exc
-        issues = validate_prompt_definition(definition)
-        if issues:
-            raise InputError(issues[0].message)
-        return definition, "structured", int(prompt_schema_version)
+        definition, definition_schema_version = _coerce_structured_definition(
+            prompt_schema_version,
+            prompt_definition_payload,
+        )
+        return definition, "structured", definition_schema_version
 
     definition = convert_legacy_prompt_to_definition(
         system_prompt=system_prompt,
@@ -154,21 +172,14 @@ def _prepare_prompt_storage_payload(
         prompt_definition_payload = existing_prompt.get("prompt_definition")
 
     if prompt_format == "structured":
-        if prompt_schema_version is None:
-            raise InputError("Structured prompts require prompt_schema_version.")
-        if not isinstance(prompt_definition_payload, dict):
-            raise InputError("Structured prompts require prompt_definition.")
-        try:
-            definition = PromptDefinition.model_validate(prompt_definition_payload)
-        except ValidationError as exc:
-            raise InputError(f"Invalid prompt_definition: {exc}") from exc
-        issues = validate_prompt_definition(definition)
-        if issues:
-            raise InputError(issues[0].message)
+        definition, definition_schema_version = _coerce_structured_definition(
+            prompt_schema_version,
+            prompt_definition_payload,
+        )
 
         system_prompt, user_prompt = _render_definition_legacy_fields(definition)
         payload["prompt_definition"] = definition.model_dump()
-        payload["prompt_schema_version"] = int(prompt_schema_version)
+        payload["prompt_schema_version"] = definition_schema_version
         payload["prompt_format"] = "structured"
         payload["system_prompt"] = system_prompt
         payload["user_prompt"] = user_prompt

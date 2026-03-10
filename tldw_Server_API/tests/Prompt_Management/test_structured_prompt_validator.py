@@ -120,3 +120,24 @@ def test_validator_rejects_unsupported_schema_version():
     errors = validate_prompt_definition(_make_definition(schema_version=99))
 
     assert [error.code for error in errors] == ["unsupported_schema_version"]
+
+
+def test_validator_rejects_unknown_variable_references():
+    definition = _make_definition(
+        variables=[],
+        blocks=[
+            {
+                "id": "task",
+                "name": "Task",
+                "role": "user",
+                "content": "Summarize {{missing_topic}}",
+                "enabled": True,
+                "order": 20,
+                "is_template": True,
+            }
+        ],
+    )
+
+    errors = validate_prompt_definition(definition)
+
+    assert [error.code for error in errors] == ["unknown_variable_reference"]

@@ -189,10 +189,16 @@ def _prepare_prompt_record_fields(
         if issues:
             raise InputError(issues[0].message)  # noqa: TRY003
 
+        definition_schema_version = int(definition.schema_version)
+        if int(effective_schema_version) != definition_schema_version:
+            raise InputError(
+                "prompt_schema_version must match prompt_definition.schema_version."
+            )  # noqa: TRY003
+
         derived_system_prompt, derived_user_prompt = _render_definition_legacy_fields(definition)
         return {
             "prompt_format": "structured",
-            "prompt_schema_version": int(effective_schema_version),
+            "prompt_schema_version": definition_schema_version,
             "prompt_definition": definition.model_dump(),
             "system_prompt": derived_system_prompt,
             "user_prompt": derived_user_prompt,

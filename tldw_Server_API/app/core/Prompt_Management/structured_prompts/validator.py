@@ -1,10 +1,12 @@
 from collections.abc import Mapping
+import re
 from typing import Any
 
 from .models import PromptDefinition, ValidationIssue
 
 SUPPORTED_SCHEMA_VERSION = 1
 VALID_BLOCK_ROLES = {"system", "developer", "user", "assistant"}
+_TEMPLATE_VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
@@ -18,6 +20,7 @@ def _as_mapping(value: Any) -> Mapping[str, Any]:
 def validate_prompt_definition(definition: dict[str, Any] | PromptDefinition) -> list[ValidationIssue]:
     payload = _as_mapping(definition)
     issues: list[ValidationIssue] = []
+    declared_variable_names: set[str] = set()
 
     if payload.get("schema_version") != SUPPORTED_SCHEMA_VERSION:
         issues.append(
@@ -47,6 +50,7 @@ def validate_prompt_definition(definition: dict[str, Any] | PromptDefinition) ->
                 )
                 break
             seen_variable_names.add(name)
+            declared_variable_names.add(name)
 
     blocks = payload.get("blocks", [])
     if isinstance(blocks, list):
@@ -78,5 +82,21 @@ def validate_prompt_definition(definition: dict[str, Any] | PromptDefinition) ->
                     )
                 )
                 break
+
+            if block.get("is_template") is True:
+                content = str(block.get("content") or "")
+                for match in _TEMPLATE_VARIABLE_PATTERN.finditer(content):
+                    variable_name = match.group(1)
+                    if variable_name not in declared_variable_names:
+                        issues.append(
+                            ValidationIssue(
+                                code="unknown_variable_reference",
+                                message=f"Unknown variable reference: {variable_name}",
+                                path=f"blocks[{index}].content",
+                            )
+                        )
+                        break
+                if issues:
+                    break
 
     return issues

@@ -83,6 +83,33 @@ describe("PromptDrawer structured prompts", () => {
     expect(screen.getByTestId("structured-block-list")).toBeInTheDocument()
   })
 
+  it("extracts template variables when converting a legacy prompt", async () => {
+    const onSubmit = vi.fn()
+    render(<PromptDrawer {...baseProps} onSubmit={onSubmit} />)
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /convert to structured/i })
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "managePrompts.form.btnSave.save" })
+    )
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          structuredPromptDefinition: expect.objectContaining({
+            variables: expect.arrayContaining([
+              expect.objectContaining({
+                name: "topic",
+                required: true
+              })
+            ])
+          })
+        })
+      )
+    })
+  })
+
   it("submits structured prompt state with the derived legacy snapshot", async () => {
     const onSubmit = vi.fn()
     render(<PromptDrawer {...baseProps} onSubmit={onSubmit} />)

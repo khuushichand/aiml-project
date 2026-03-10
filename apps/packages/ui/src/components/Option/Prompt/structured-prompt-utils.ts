@@ -18,6 +18,50 @@ type StructuredPromptVariable = {
   input_type?: string
 }
 
+const LEGACY_TEMPLATE_PATTERN =
+  /{{\s*([a-zA-Z0-9_]+)\s*}}|\{([a-zA-Z0-9_]+)\}|\$([a-zA-Z0-9_]+)|<([a-zA-Z0-9_]+)>/g
+
+const matchVariableName = (
+  groups: Array<string | undefined>
+): string => {
+  for (const group of groups) {
+    if (group) return group
+  }
+  return ""
+}
+
+export const extractLegacyPromptVariables = (
+  ...templates: Array<string | null | undefined>
+): string[] => {
+  const variables: string[] = []
+
+  for (const template of templates) {
+    LEGACY_TEMPLATE_PATTERN.lastIndex = 0
+    let match = LEGACY_TEMPLATE_PATTERN.exec(template || "")
+    while (match) {
+      const variableName = matchVariableName(match.slice(1))
+      if (variableName && !variables.includes(variableName)) {
+        variables.push(variableName)
+      }
+      match = LEGACY_TEMPLATE_PATTERN.exec(template || "")
+    }
+  }
+
+  return variables
+}
+
+export const normalizeLegacyPromptTemplate = (
+  template?: string | null
+): string => {
+  if (!template) return ""
+
+  LEGACY_TEMPLATE_PATTERN.lastIndex = 0
+  return template.replace(LEGACY_TEMPLATE_PATTERN, (...args) => {
+    const groups = args.slice(1, 5) as Array<string | undefined>
+    return `{{${matchVariableName(groups)}}}`
+  })
+}
+
 export const createDefaultStructuredPromptDefinition =
   (): StructuredPromptDefinition => ({
     schema_version: 1,
@@ -70,36 +114,44 @@ export const convertLegacyPromptToStructuredDefinition = (
   systemPrompt?: string | null,
   userPrompt?: string | null
 ): StructuredPromptDefinition => {
+  const variables = extractLegacyPromptVariables(systemPrompt, userPrompt)
   const blocks: StructuredPromptBlock[] = []
+  const normalizedSystemPrompt = normalizeLegacyPromptTemplate(systemPrompt)
+  const normalizedUserPrompt = normalizeLegacyPromptTemplate(userPrompt)
 
-  if (systemPrompt?.trim()) {
+  if (normalizedSystemPrompt.trim()) {
     blocks.push({
       id: "system",
       name: "System Instructions",
       role: "system",
-      content: systemPrompt.trim(),
+      content: normalizedSystemPrompt.trim(),
       enabled: true,
       order: 10,
-      is_template: false
+      is_template: normalizedSystemPrompt.includes("{{")
     })
   }
 
-  if (userPrompt?.trim()) {
+  if (normalizedUserPrompt.trim()) {
     blocks.push({
       id: "task",
       name: "Task",
       role: "user",
-      content: userPrompt.trim(),
+      content: normalizedUserPrompt.trim(),
       enabled: true,
       order: blocks.length === 0 ? 10 : 20,
-      is_template: true
+      is_template: normalizedUserPrompt.includes("{{")
     })
   }
 
   return {
     schema_version: 1,
     format: "structured",
-    variables: [],
+    variables: variables.map((variableName) => ({
+      name: variableName,
+      label: variableName.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()),
+      required: true,
+      input_type: "textarea"
+    })),
     blocks:
       blocks.length > 0
         ? blocks
