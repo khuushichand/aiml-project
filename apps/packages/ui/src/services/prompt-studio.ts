@@ -56,6 +56,9 @@ export type FewShotExample = {
   explanation?: string | null
 }
 
+export type PromptFormat = "legacy" | "structured"
+export type StructuredPromptDefinition = Record<string, any>
+
 export type Prompt = {
   id: number
   uuid?: string
@@ -63,6 +66,9 @@ export type Prompt = {
   name: string
   system_prompt?: string | null
   user_prompt?: string | null
+  prompt_format?: PromptFormat
+  prompt_schema_version?: number | null
+  prompt_definition?: StructuredPromptDefinition | null
   few_shot_examples?: FewShotExample[] | null
   modules_config?: PromptModule[] | null
   signature_id?: number | null
@@ -78,6 +84,9 @@ export type PromptCreatePayload = {
   name: string
   system_prompt?: string | null
   user_prompt?: string | null
+  prompt_format?: PromptFormat
+  prompt_schema_version?: number | null
+  prompt_definition?: StructuredPromptDefinition | null
   few_shot_examples?: FewShotExample[] | null
   modules_config?: PromptModule[] | null
   change_description?: string | null
@@ -89,6 +98,9 @@ export type PromptUpdatePayload = {
   name?: string
   system_prompt?: string | null
   user_prompt?: string | null
+  prompt_format?: PromptFormat
+  prompt_schema_version?: number | null
+  prompt_definition?: StructuredPromptDefinition | null
   few_shot_examples?: FewShotExample[] | null
   modules_config?: PromptModule[] | null
   change_description: string

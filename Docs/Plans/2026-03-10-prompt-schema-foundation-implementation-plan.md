@@ -544,6 +544,8 @@ git commit -m "feat: route prompt studio execution through structured assembly"
 
 **Files:**
 - Modify: `apps/packages/ui/src/db/dexie/types.ts`
+- Modify: `apps/packages/ui/src/db/dexie/schema.ts`
+- Modify: `apps/packages/ui/src/db/dexie/chat.ts`
 - Modify: `apps/packages/ui/src/db/dexie/helpers.ts`
 - Modify: `apps/packages/ui/src/services/prompt-sync.ts`
 - Modify: `apps/packages/ui/src/services/prompt-studio.ts`
@@ -588,7 +590,7 @@ export type Prompt = {
 }
 ```
 
-Update sync hashing and conflict detection to hash canonical structured content when present. Keep legacy hashing for legacy prompts.
+Update Dexie schema upgrades and prompt normalization to preserve the new fields locally. Update sync hashing and conflict detection to hash the canonical sync payload, including `few_shot_examples` and `modules_config`, and the structured prompt definition when present. Keep legacy-only fallback hashing for older prompt records.
 
 **Step 4: Run test to verify it passes**
 
@@ -604,6 +606,8 @@ Expected: PASS for local-to-server, server-to-local, and conflict-hash coverage.
 
 ```bash
 git add apps/packages/ui/src/db/dexie/types.ts \
+        apps/packages/ui/src/db/dexie/schema.ts \
+        apps/packages/ui/src/db/dexie/chat.ts \
         apps/packages/ui/src/db/dexie/helpers.ts \
         apps/packages/ui/src/services/prompt-sync.ts \
         apps/packages/ui/src/services/prompt-studio.ts \
