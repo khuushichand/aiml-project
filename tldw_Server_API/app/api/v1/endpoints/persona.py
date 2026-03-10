@@ -67,7 +67,11 @@ from tldw_Server_API.app.core.Persona.memory_integration import (
     persist_tool_outcome,
     retrieve_top_memories,
 )
-from tldw_Server_API.app.core.Personalization.companion_activity import record_persona_session_started
+from tldw_Server_API.app.core.Personalization.companion_activity import (
+    record_persona_session_started,
+    record_persona_session_summarized,
+    record_persona_tool_executed,
+)
 from tldw_Server_API.app.core.Personalization.companion_context import load_companion_context
 from tldw_Server_API.app.core.Persona.policy_evaluator import (
     default_allow_rules,
@@ -3463,6 +3467,17 @@ async def persona_stream(
                             or step.description
                             or "Final answer step executed."
                         )
+                        _ = await asyncio.to_thread(
+                            record_persona_session_summarized,
+                            user_id=authenticated_user_id,
+                            session_id=session_id,
+                            persona_id=runtime_persona_id,
+                            plan_id=plan_id,
+                            step_idx=step.idx,
+                            runtime_mode=runtime_mode,
+                            scope_snapshot_id=runtime_scope_snapshot_id,
+                            summary_text=assistant_text,
+                        )
                         await _emit_assistant_delta(
                             session_id=session_id,
                             step_idx=step.idx,
@@ -3513,6 +3528,19 @@ async def persona_stream(
                             if isinstance(step_policy.get("effective_allowed_tools"), list)
                             else None,
                         )
+                    _ = await asyncio.to_thread(
+                        record_persona_tool_executed,
+                        user_id=authenticated_user_id,
+                        session_id=session_id,
+                        persona_id=runtime_persona_id,
+                        plan_id=plan_id,
+                        step_idx=step.idx,
+                        step_type=step_type,
+                        tool_name=step.tool,
+                        runtime_mode=runtime_mode,
+                        scope_snapshot_id=runtime_scope_snapshot_id,
+                        outcome=result,
+                    )
                     await _emit_tool_result(
                         session_id=session_id,
                         plan_id=plan_id,

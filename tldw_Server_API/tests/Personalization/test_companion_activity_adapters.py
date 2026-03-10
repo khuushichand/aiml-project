@@ -10,6 +10,8 @@ from tldw_Server_API.app.core.Personalization.companion_activity import (
     record_note_deleted,
     record_note_restored,
     record_note_updated,
+    record_persona_session_summarized,
+    record_persona_tool_executed,
     record_reminder_task_deleted,
     record_reminder_task_updated,
     record_watchlist_source_deleted,
@@ -238,6 +240,93 @@ def test_reminder_task_update_and_delete_adapters_capture_compact_metadata(compa
     assert updated_event["metadata"]["changed_fields"] == ["enabled", "title"]
     assert updated_event["metadata"]["schedule_kind"] == "one_time"
     assert updated_event["metadata"]["link_type"] == "note"
+
+
+def test_persona_summary_and_tool_adapters_capture_compact_metadata(companion_db_env):
+    user_id = "81"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    db.update_profile(user_id, enabled=1)
+
+    summary_text = (
+        "Wrapped up the session with a concise plan for companion capture parity across "
+        "notes, reminders, watchlists, and persona. " * 3
+    ).strip()
+    summarized = record_persona_session_summarized(
+        user_id=user_id,
+        session_id="sess-81",
+        persona_id="research_assistant",
+        plan_id="plan-81",
+        step_idx=2,
+        runtime_mode="session_scoped",
+        scope_snapshot_id="scope-81",
+        summary_text=summary_text,
+    )
+    executed = record_persona_tool_executed(
+        user_id=user_id,
+        session_id="sess-81",
+        persona_id="research_assistant",
+        plan_id="plan-81",
+        step_idx=1,
+        step_type="mcp_tool",
+        tool_name="ingest_url",
+        runtime_mode="session_scoped",
+        scope_snapshot_id="scope-81",
+        outcome={
+            "ok": True,
+            "output": {
+                "saved": True,
+                "url": "https://example.com/article",
+                "secret": "do-not-store-this-raw-output",
+            },
+        },
+    )
+    skipped = record_persona_tool_executed(
+        user_id=user_id,
+        session_id="sess-81",
+        persona_id="research_assistant",
+        plan_id="plan-81",
+        step_idx=3,
+        step_type="rag_query",
+        tool_name="rag_search",
+        runtime_mode="session_scoped",
+        scope_snapshot_id="scope-81",
+        outcome={"ok": True, "output": {"matches": 4}},
+    )
+
+    assert summarized
+    assert executed
+    assert skipped is None
+
+    events, total = db.list_companion_activity_events(user_id, limit=10)
+    assert total == 2
+
+    tool_event = events[0]
+    assert tool_event["event_type"] == "persona_tool_executed"
+    assert tool_event["source_type"] == "persona_tool_step"
+    assert tool_event["surface"] == "api.persona"
+    assert tool_event["tags"] == ["research_assistant", "ingest_url"]
+    assert tool_event["metadata"]["tool_name"] == "ingest_url"
+    assert tool_event["metadata"]["step_type"] == "mcp_tool"
+    assert tool_event["metadata"]["ok"] is True
+    assert tool_event["metadata"]["output_type"] == "dict"
+    assert tool_event["metadata"]["output_item_count"] == 3
+    assert tool_event["provenance"]["route"] == "/api/v1/persona/stream"
+    assert tool_event["provenance"]["action"] == "tool_outcome"
+    assert "do-not-store-this-raw-output" not in str(tool_event["metadata"])
+
+    summary_event = events[1]
+    assert summary_event["event_type"] == "persona_session_summarized"
+    assert summary_event["source_type"] == "persona_session"
+    assert summary_event["source_id"] == "sess-81"
+    assert summary_event["tags"] == ["research_assistant"]
+    assert summary_event["metadata"]["persona_id"] == "research_assistant"
+    assert summary_event["metadata"]["plan_id"] == "plan-81"
+    assert summary_event["metadata"]["step_idx"] == 2
+    assert summary_event["metadata"]["summary_char_count"] == len(summary_text)
+    assert summary_event["metadata"]["summary_preview"].startswith("Wrapped up the session")
+    assert len(summary_event["metadata"]["summary_preview"]) < len(summary_text)
+    assert summary_event["provenance"]["route"] == "/api/v1/persona/stream"
+    assert summary_event["provenance"]["action"] == "session_summary"
 
 
 def test_watchlist_source_update_delete_and_restore_adapters_capture_compact_metadata(companion_db_env):

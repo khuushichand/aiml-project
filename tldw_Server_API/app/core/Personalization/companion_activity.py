@@ -526,6 +526,146 @@ def record_persona_session_started(
     )
 
 
+def _summarize_retention_value(value: Any) -> tuple[str, int | None, int | None, str]:
+    value_type = type(value).__name__
+    if value is None:
+        return value_type, 0, None, "na"
+    if isinstance(value, str):
+        digest = hashlib.sha1(value.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return value_type, len(value), None, digest
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value)
+        digest = hashlib.sha1(raw, usedforsecurity=False).hexdigest()[:16]
+        return value_type, len(raw), None, digest
+    if isinstance(value, dict):
+        signature = f"dict:{len(value)}"
+        digest = hashlib.sha1(signature.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return value_type, None, len(value), digest
+    if isinstance(value, (list, tuple, set)):
+        signature = f"{value_type}:{len(value)}"
+        digest = hashlib.sha1(signature.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return value_type, None, len(value), digest
+    text = str(value)
+    digest = hashlib.sha1(text.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+    return value_type, len(text), None, digest
+
+
+def _persona_tool_outcome_metadata(outcome: dict[str, Any] | None) -> dict[str, Any]:
+    payload = dict(outcome or {}) if isinstance(outcome, dict) else {"value": str(outcome)}
+    output_value = payload.get("output")
+    if "output" not in payload:
+        output_value = payload.get("result")
+    output_type, output_char_count, output_item_count, output_digest = _summarize_retention_value(output_value)
+    error_text = str(payload.get("error") or "").strip()
+    error_digest = (
+        hashlib.sha1(error_text.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        if error_text
+        else "na"
+    )
+    return {
+        "ok": bool(payload.get("ok", False)),
+        "reason_code": str(payload.get("reason_code") or ""),
+        "output_type": output_type,
+        "output_char_count": output_char_count,
+        "output_item_count": output_item_count,
+        "output_digest": output_digest,
+        "error_present": bool(error_text),
+        "error_char_count": len(error_text),
+        "error_digest": error_digest,
+    }
+
+
+def record_persona_session_summarized(
+    *,
+    user_id: str | int | None,
+    session_id: str,
+    persona_id: str,
+    plan_id: str,
+    step_idx: int,
+    runtime_mode: str | None,
+    scope_snapshot_id: str | None,
+    summary_text: str,
+) -> str | None:
+    normalized_summary = str(summary_text or "").strip()
+    if not normalized_summary:
+        return None
+    summary_digest = hashlib.sha1(
+        normalized_summary.encode("utf-8"),
+        usedforsecurity=False,
+    ).hexdigest()[:12]
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="persona_session_summarized",
+        source_type="persona_session",
+        source_id=str(session_id),
+        surface="api.persona",
+        dedupe_key=f"persona.session.summary:{session_id}:{plan_id}:{step_idx}:{summary_digest}",
+        tags=[str(persona_id)],
+        provenance=_explicit_provenance(
+            route="/api/v1/persona/stream",
+            action="session_summary",
+        ),
+        metadata={
+            "persona_id": str(persona_id),
+            "runtime_mode": runtime_mode,
+            "scope_snapshot_id": scope_snapshot_id,
+            "plan_id": str(plan_id),
+            "step_idx": int(step_idx),
+            "summary_preview": _content_preview(normalized_summary),
+            "summary_char_count": len(normalized_summary),
+        },
+    )
+
+
+def record_persona_tool_executed(
+    *,
+    user_id: str | int | None,
+    session_id: str,
+    persona_id: str,
+    plan_id: str,
+    step_idx: int,
+    step_type: str,
+    tool_name: str,
+    runtime_mode: str | None,
+    scope_snapshot_id: str | None,
+    outcome: dict[str, Any] | None,
+) -> str | None:
+    normalized_step_type = str(step_type or "").strip().lower()
+    normalized_tool_name = str(tool_name or "").strip()
+    if normalized_step_type not in {"mcp_tool", "skill"}:
+        return None
+    if not normalized_tool_name:
+        return None
+    metadata = _persona_tool_outcome_metadata(outcome)
+    if not bool(metadata.get("ok")):
+        return None
+    source_id = f"{session_id}:{plan_id}:{int(step_idx)}"
+    fingerprint = _payload_fingerprint(metadata)
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="persona_tool_executed",
+        source_type="persona_tool_step",
+        source_id=source_id,
+        surface="api.persona",
+        dedupe_key=f"persona.tool.executed:{source_id}:{normalized_tool_name}:{fingerprint}",
+        tags=[str(persona_id), normalized_tool_name],
+        provenance=_explicit_provenance(
+            route="/api/v1/persona/stream",
+            action="tool_outcome",
+        ),
+        metadata={
+            "persona_id": str(persona_id),
+            "plan_id": str(plan_id),
+            "step_idx": int(step_idx),
+            "step_type": normalized_step_type,
+            "tool_name": normalized_tool_name,
+            "runtime_mode": runtime_mode,
+            "scope_snapshot_id": scope_snapshot_id,
+            **metadata,
+        },
+    )
+
+
 def _watchlist_source_metadata(source: Any) -> dict[str, Any]:
     settings = _value(source, "settings")
     if settings is None:
