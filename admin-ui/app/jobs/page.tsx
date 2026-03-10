@@ -1521,7 +1521,7 @@ export default function JobsPage() {
                         Attachments ({jobAttachments.length})
                       </Label>
                       <div className="rounded-md border">
-                        <Table caption={`Job attachments table with ${selectedJobAttachments.length} rows.`}>
+                        <Table caption={`Job attachments table with ${jobAttachments.length} rows.`}>
                           <TableHeader>
                             <TableRow>
                               <TableHead>Name</TableHead>

@@ -231,13 +231,18 @@ export default function DashboardPage() {
       setSecurityHealthError('');
 
       const orgParams = selectedOrg ? { org_id: String(selectedOrg.id) } : undefined;
-      const auditParams = selectedOrg ? { limit: '10', org_id: String(selectedOrg.id) } : { limit: '10' };
-      const usageDailyParams = selectedOrg
-        ? { limit: '200', org_id: String(selectedOrg.id) }
-        : { limit: '200' };
-      const llmUsageSummaryParams = selectedOrg
-        ? { group_by: 'day', org_id: String(selectedOrg.id) }
-        : { group_by: 'day' };
+      const auditParams: Record<string, string> = {
+        limit: '10',
+        ...(selectedOrg ? { org_id: String(selectedOrg.id) } : {}),
+      };
+      const usageDailyParams: Record<string, string> = {
+        limit: '200',
+        ...(selectedOrg ? { org_id: String(selectedOrg.id) } : {}),
+      };
+      const llmUsageSummaryParams: Record<string, string> = {
+        group_by: 'day',
+        ...(selectedOrg ? { org_id: String(selectedOrg.id) } : {}),
+      };
       const activityQuery = getDashboardActivityQuery(activityRange);
 
       // Fetch all dashboard data in parallel

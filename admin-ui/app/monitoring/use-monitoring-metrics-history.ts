@@ -62,8 +62,8 @@ export const useMonitoringMetricsHistory = ({
 
   const loadMetricsHistoryForRange = useCallback(async (
     selectedRange: MonitoringTimeRangeOption,
-    customStart: string,
-    customEnd: string
+    customStart = customRangeStart,
+    customEnd = customRangeEnd
   ): Promise<boolean> => {
     const resolvedRange = resolveMonitoringRangeParams(selectedRange, customStart, customEnd);
     if (!resolvedRange.ok) {
@@ -119,7 +119,7 @@ export const useMonitoringMetricsHistory = ({
       }
       return false;
     }
-  }, [apiClient]);
+  }, [apiClient, customRangeEnd, customRangeStart]);
 
   useEffect(() => {
     void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);

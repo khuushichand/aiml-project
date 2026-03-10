@@ -19,9 +19,11 @@ import { api } from '@/lib/api-client';
 import { isBillingEnabled } from '@/lib/billing';
 import { Plan } from '@/types';
 
+const PLAN_TIERS = ['free', 'pro', 'enterprise'] as const;
+
 const planSchema = z.object({
   name: z.string().min(1, 'Plan name is required'),
-  tier: z.enum(['free', 'pro', 'enterprise'], { required_error: 'Tier is required' }),
+  tier: z.enum(PLAN_TIERS),
   monthly_price_cents: z.coerce.number().int().min(0, 'Price must be non-negative'),
   included_token_credits: z.coerce.number().int().min(0, 'Must be non-negative'),
   overage_rate_per_1k_tokens_cents: z.coerce.number().int().min(0, 'Must be non-negative'),
@@ -29,7 +31,8 @@ const planSchema = z.object({
   stripe_price_id: z.string().optional(),
 });
 
-type PlanFormData = z.infer<typeof planSchema>;
+type PlanFormInput = z.input<typeof planSchema>;
+type PlanFormData = z.output<typeof planSchema>;
 
 const tierOptions = [
   { value: 'free', label: 'Free' },
@@ -51,7 +54,7 @@ export default function PlansPage() {
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const form = useForm<PlanFormData>({
+  const form = useForm<PlanFormInput, unknown, PlanFormData>({
     resolver: zodResolver(planSchema),
     defaultValues: {
       name: '',

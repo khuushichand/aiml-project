@@ -50,10 +50,21 @@ function getNestedValue(obj: Record<string, unknown> | null | undefined, path: s
   }, obj);
 }
 
+function toIsoDateString(value: unknown, fallback = ''): string {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === 'string' || typeof value === 'number') {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
+  }
+  return fallback;
+}
+
 /**
  * Convert data array to CSV string
  */
-function toCSV<T>(data: T[], columns: ExportOptions<T>['columns']): string {
+function toCSV<T extends Record<string, unknown>>(data: T[], columns: ExportOptions<T>['columns']): string {
   if (!columns || columns.length === 0) {
     // Auto-generate columns from first item
     if (data.length === 0) return '';
@@ -98,7 +109,7 @@ function downloadFile(content: string, filename: string, mimeType: string): void
 /**
  * Export data to CSV or JSON file
  */
-export function exportData<T>(options: ExportOptions<T>): void {
+export function exportData<T extends Record<string, unknown>>(options: ExportOptions<T>): void {
   const { data, filename, format, columns } = options;
   const timestamp = new Date().toISOString().split('T')[0];
 
@@ -120,7 +131,7 @@ export function exportAuditLogs<T extends object>(logs: T[], format: ExportForma
     filename: 'audit-logs',
     format,
     columns: [
-      { key: 'timestamp', header: 'Timestamp', transform: (v) => v ? new Date(v).toISOString() : '' },
+      { key: 'timestamp', header: 'Timestamp', transform: (v) => toIsoDateString(v) },
       { key: 'user_id', header: 'User ID' },
       { key: 'action', header: 'Action' },
       { key: 'resource', header: 'Resource' },
@@ -134,9 +145,9 @@ export function exportAuditLogs<T extends object>(logs: T[], format: ExportForma
 /**
  * Pre-configured export for users
  */
-export function exportUsers(users: Array<Record<string, unknown>>, format: ExportFormat = 'csv'): void {
+export function exportUsers<T extends object>(users: T[], format: ExportFormat = 'csv'): void {
   exportData({
-    data: users,
+    data: users as Record<string, unknown>[],
     filename: 'users',
     format,
     columns: [
@@ -148,8 +159,8 @@ export function exportUsers(users: Array<Record<string, unknown>>, format: Expor
       { key: 'is_verified', header: 'Verified', transform: (v) => v ? 'Yes' : 'No' },
       { key: 'storage_used_mb', header: 'Storage Used (MB)' },
       { key: 'storage_quota_mb', header: 'Storage Quota (MB)' },
-      { key: 'created_at', header: 'Created At', transform: (v) => v ? new Date(v).toISOString() : '' },
-      { key: 'last_login', header: 'Last Login', transform: (v) => v ? new Date(v).toISOString() : '' },
+      { key: 'created_at', header: 'Created At', transform: (v) => toIsoDateString(v) },
+      { key: 'last_login', header: 'Last Login', transform: (v) => toIsoDateString(v) },
     ],
   });
 }
@@ -157,9 +168,9 @@ export function exportUsers(users: Array<Record<string, unknown>>, format: Expor
 /**
  * Pre-configured export for API keys
  */
-export function exportApiKeys(keys: Array<Record<string, unknown>>, format: ExportFormat = 'csv'): void {
+export function exportApiKeys<T extends object>(keys: T[], format: ExportFormat = 'csv'): void {
   exportData({
-    data: keys,
+    data: keys as Record<string, unknown>[],
     filename: 'api-keys',
     format,
     columns: [
@@ -168,9 +179,9 @@ export function exportApiKeys(keys: Array<Record<string, unknown>>, format: Expo
       { key: 'prefix', header: 'Key Prefix' },
       { key: 'user_id', header: 'User ID' },
       { key: 'is_active', header: 'Active', transform: (v) => v ? 'Yes' : 'No' },
-      { key: 'created_at', header: 'Created At', transform: (v) => v ? new Date(v).toISOString() : '' },
-      { key: 'expires_at', header: 'Expires At', transform: (v) => v ? new Date(v).toISOString() : 'Never' },
-      { key: 'last_used_at', header: 'Last Used', transform: (v) => v ? new Date(v).toISOString() : 'Never' },
+      { key: 'created_at', header: 'Created At', transform: (v) => toIsoDateString(v) },
+      { key: 'expires_at', header: 'Expires At', transform: (v) => toIsoDateString(v, 'Never') },
+      { key: 'last_used_at', header: 'Last Used', transform: (v) => toIsoDateString(v, 'Never') },
     ],
   });
 }

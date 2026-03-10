@@ -32,7 +32,7 @@ import {
 import { useUrlPagination } from '@/lib/use-url-state';
 import { usePagedResource } from '@/lib/use-paged-resource';
 import type { IncidentItem } from '@/types/incidents';
-import { RefreshCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Trash2 } from 'lucide-react';
 
 const STATUSES = ['open', 'investigating', 'mitigating', 'resolved'] as const;
 const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;

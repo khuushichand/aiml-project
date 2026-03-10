@@ -14,7 +14,7 @@
 **Goal:** Make `lint`, `build`, and the main plan-gated flows reflect the actual code quality instead of failing early on known issues or hiding type debt.
 **Success Criteria:** `bun run lint` passes, `bun run build` no longer fails on current ESLint issues, and the billing gate continues to behave correctly.
 **Tests:** `bunx vitest run components/__tests__/PlanGuard.test.tsx app/onboarding/__tests__/page.test.tsx app/plans/__tests__/page.test.tsx`, `bun run lint`, `bun run build`
-**Status:** Not Started
+**Status:** Complete
 
 ### Task 1: Fix the current lint and build blockers
 
@@ -95,7 +95,7 @@ git commit -m "fix(admin-ui): clear plan guard lint blockers"
 **Goal:** Make `bunx tsc --noEmit` and `next build` trustworthy by fixing the current strict-type failures and removing `ignoreBuildErrors`.
 **Success Criteria:** `bunx tsc --noEmit` passes, `next.config.js` no longer suppresses build type errors, and `bun run build` passes without skipping type validation.
 **Tests:** `bunx tsc --noEmit`, targeted Vitest suites for touched files, `bun run build`
-**Status:** Not Started
+**Status:** Complete
 
 ### Task 2: Restore test matcher typing and Next page-module compatibility
 

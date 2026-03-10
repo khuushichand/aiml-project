@@ -123,8 +123,8 @@ export default function MetricsChart({
                     border: '1px solid hsl(var(--border))',
                     borderRadius: '8px',
                   }}
-                  formatter={(value: unknown, _name: string, item: { dataKey?: string | number }) => {
-                    const key = String(item.dataKey ?? '');
+                  formatter={(value, name, item) => {
+                    const key = String(item?.dataKey ?? name ?? '');
                     if (['cpu', 'memory', 'diskUsage'].includes(key)) {
                       const percent = typeof value === 'number' && Number.isFinite(value) ? value.toFixed(1) : value;
                       return [`${percent}%`, SERIES_DEFINITIONS.find((series) => series.key === key)?.label ?? key];
@@ -153,4 +153,3 @@ export default function MetricsChart({
     </Card>
   );
 }
-

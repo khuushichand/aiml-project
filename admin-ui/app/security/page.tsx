@@ -156,7 +156,7 @@ const countAgedActiveKeys = (keys: ApiKeyMetadataLike[]) => {
 };
 
 const buildRiskBreakdown = (context: SecurityRiskBreakdownContext): SecurityRiskBreakdown => {
-  const factors: SecurityRiskFactor[] = [
+  const baseFactors = [
     {
       key: 'users_without_mfa',
       label: 'Users without MFA',
@@ -205,7 +205,9 @@ const buildRiskBreakdown = (context: SecurityRiskBreakdownContext): SecurityRisk
       remediationHref: '/monitoring',
       remediationLabel: 'Open monitoring alerts',
     },
-  ].map((factor) => ({
+  ] satisfies SecurityRiskFactor[];
+
+  const factors: SecurityRiskFactor[] = baseFactors.map((factor) => ({
     ...factor,
     severity: getRiskFactorSeverity(factor.contribution),
   }));

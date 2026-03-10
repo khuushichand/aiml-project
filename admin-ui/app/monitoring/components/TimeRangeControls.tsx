@@ -14,10 +14,10 @@ type TimeRangeControlsProps = {
   customRangeStart: string;
   customRangeEnd: string;
   rangeValidationError: string;
-  onSelectTimeRange: (value: MonitoringTimeRangeOption) => Promise<void> | void;
+  onSelectTimeRange: (value: MonitoringTimeRangeOption) => Promise<boolean> | boolean | void;
   onCustomRangeStartChange: (value: string) => void;
   onCustomRangeEndChange: (value: string) => void;
-  onApplyCustomRange: () => Promise<void> | void;
+  onApplyCustomRange: () => Promise<boolean> | boolean | void;
 };
 
 export default function TimeRangeControls({

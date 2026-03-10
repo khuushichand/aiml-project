@@ -81,6 +81,20 @@ export interface TeamMember {
   user?: User;
 }
 
+export interface OrgMembership {
+  org_id: number;
+  role: string;
+  org_name?: string;
+}
+
+export interface TeamMembership {
+  team_id: number;
+  org_id: number;
+  role: string;
+  team_name?: string;
+  org_name?: string;
+}
+
 export interface ApiKey {
   id: string;
   user_id: number;
@@ -91,6 +105,12 @@ export interface ApiKey {
   expires_at?: string;
   revoked_at?: string;
   last_used_at?: string;
+}
+
+export interface ApiKeyMutationResponse {
+  key?: string;
+  id?: string;
+  key_prefix?: string;
 }
 
 export interface Role {
@@ -190,6 +210,25 @@ export type SecurityHealthData = {
   last_security_scan?: string;
 };
 
+export interface SecurityAlertStatus {
+  total_alerts?: number;
+  critical_alerts?: number;
+  warning_alerts?: number;
+  unacknowledged?: number;
+  recent_alerts?: {
+    id: string;
+    severity: string;
+    message: string;
+    timestamp: string;
+    source?: string;
+  }[];
+}
+
+export interface EffectivePermissionsResponse {
+  user_id: number;
+  permissions: string[];
+}
+
 export interface AuthContextType {
   user: User | null;
   login: (username: string, password: string) => Promise<boolean>;
@@ -222,6 +261,18 @@ export interface VoiceSession {
   created_at: string;
   last_activity: string;
   turn_count: number;
+}
+
+export interface VoiceCommandListResponse {
+  commands?: VoiceCommand[];
+  items?: VoiceCommand[];
+  total?: number;
+}
+
+export interface VoiceSessionListResponse {
+  sessions?: VoiceSession[];
+  items?: VoiceSession[];
+  total?: number;
 }
 
 export interface VoiceCommandUsage {

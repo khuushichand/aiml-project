@@ -45,7 +45,8 @@ const editCommandSchema = z.object({
   requires_confirmation: z.boolean().default(false),
 });
 
-type EditCommandFormData = z.infer<typeof editCommandSchema>;
+type EditCommandFormInput = z.input<typeof editCommandSchema>;
+type EditCommandFormData = z.output<typeof editCommandSchema>;
 
 export default function VoiceCommandDetailPage({
   params,
@@ -67,7 +68,7 @@ export default function VoiceCommandDetailPage({
   const [testInput, setTestInput] = useState('');
   const [testResult, setTestResult] = useState<VoiceCommandMatchResult | null>(null);
 
-  const form = useForm<EditCommandFormData>({
+  const form = useForm<EditCommandFormInput, unknown, EditCommandFormData>({
     resolver: zodResolver(editCommandSchema),
     defaultValues: {
       name: '',

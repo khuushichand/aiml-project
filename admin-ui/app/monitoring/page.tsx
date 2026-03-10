@@ -6,7 +6,6 @@ import MonitoringFeedbackBanners from './components/MonitoringFeedbackBanners';
 import MonitoringManagementPanels from './components/MonitoringManagementPanels';
 import MonitoringMetricsSection from './components/MonitoringMetricsSection';
 import MonitoringPageHeader from './components/MonitoringPageHeader';
-import { normalizeHealthStatus } from './status-utils';
 import { useMonitoringPageController } from './use-monitoring-page-controller';
 
 export default function MonitoringPage() {

@@ -183,9 +183,9 @@ export const resolveMonitoringLoadState = ({
     ? normalizeWatchlistsPayload(settledResults.watchlistsData.value)
     : null;
 
-  const alertsDataFulfilled = settledResults.alertsData.status === 'fulfilled';
-  const normalizedAlerts = alertsDataFulfilled
-    ? normalizeMonitoringAlertsPayload(settledResults.alertsData.value)
+  const alertsResult = settledResults.alertsData;
+  const normalizedAlerts = alertsResult.status === 'fulfilled'
+    ? normalizeMonitoringAlertsPayload(alertsResult.value)
     : null;
 
   const alerts = normalizedAlerts

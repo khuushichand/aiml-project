@@ -15,7 +15,8 @@ const apiKeySchema = z.object({
   ),
 });
 
-export type ApiKeyFormData = z.infer<typeof apiKeySchema>;
+type ApiKeyFormInput = z.input<typeof apiKeySchema>;
+export type ApiKeyFormData = z.output<typeof apiKeySchema>;
 
 type ApiKeyCreateFormProps = {
   onSubmit: (data: ApiKeyFormData) => Promise<void> | void;
@@ -23,7 +24,7 @@ type ApiKeyCreateFormProps = {
   isSubmitting?: boolean;
 };
 
-const defaultValues: ApiKeyFormData = {
+const defaultValues: ApiKeyFormInput = {
   name: '',
   scope: 'read',
   expires_days: 90,
@@ -34,7 +35,7 @@ export const ApiKeyCreateForm = ({
   onCancel,
   isSubmitting = false,
 }: ApiKeyCreateFormProps) => {
-  const form = useForm<ApiKeyFormData>({
+  const form = useForm<ApiKeyFormInput, unknown, ApiKeyFormData>({
     resolver: zodResolver(apiKeySchema),
     defaultValues,
   });

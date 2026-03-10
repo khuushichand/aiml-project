@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
@@ -29,7 +29,7 @@ import {
   validateRateLimitInputs,
 } from '@/lib/rate-limits';
 import { canEditFromMemberships } from '@/lib/permissions';
-import { User, Permission, AuditLog } from '@/types';
+import { User, Permission, AuditLog, OrgMembership, TeamMembership } from '@/types';
 import Link from 'next/link';
 
 type UserRateLimits = {
@@ -59,7 +59,7 @@ type EffectivePermission = {
   id: number;
   name: string;
   source: EffectivePermissionSource;
-  sourceLabel?: string;
+  sourceLabel: string;
 };
 
 const roleOptions = [
@@ -108,20 +108,6 @@ type LoginHistoryEntry = {
   ipAddress?: string;
   userAgent?: string;
   status: LoginHistoryStatus;
-};
-
-type OrgMembership = {
-  org_id: number;
-  role: string;
-  org_name?: string;
-};
-
-type TeamMembership = {
-  team_id: number;
-  org_id: number;
-  role: string;
-  team_name?: string;
-  org_name?: string;
 };
 
 type RateLimitRecord = {
@@ -328,7 +314,7 @@ const normalizeEffectivePermissionList = (
 export default function UserDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const userId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const userId = typeof params.id === 'string' ? params.id : params.id?.[0] ?? '';
   const confirm = useConfirm();
   const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success: toastSuccess, error: showError } = useToast();
@@ -532,22 +518,13 @@ export default function UserDetailPage() {
       setOrgMembershipsLoading(true);
       setOrgMembershipsError('');
       const response = await api.getUserOrgMemberships(userId);
-      const items = Array.isArray(response) ? response : [];
-      const normalized = items
-        .map((item) => {
-          if (!item || typeof item !== 'object') return null;
-          const record = item as Record<string, unknown>;
-          const orgId = Number(record.org_id);
-          const role = String(record.role ?? '').trim();
-          const orgName = record.org_name;
-          if (!Number.isFinite(orgId) || !role) return null;
-          return {
-            org_id: orgId,
-            role,
-            org_name: typeof orgName === 'string' ? orgName : undefined,
-          };
-        })
-        .filter((entry): entry is OrgMembership => entry !== null);
+      const normalized = response
+        .filter((item) => Number.isFinite(item.org_id) && typeof item.role === 'string' && item.role.trim().length > 0)
+        .map((item) => ({
+          org_id: item.org_id,
+          role: item.role.trim(),
+          org_name: typeof item.org_name === 'string' ? item.org_name : undefined,
+        }));
       setOrgMemberships(normalized);
     } catch (err: unknown) {
       console.error('Failed to load user organizations:', err);
@@ -564,26 +541,21 @@ export default function UserDetailPage() {
       setTeamMembershipsLoading(true);
       setTeamMembershipsError('');
       const response = await api.getUserTeamMemberships(userId);
-      const items = Array.isArray(response) ? response : [];
-      const normalized = items
-        .map((item) => {
-          if (!item || typeof item !== 'object') return null;
-          const record = item as Record<string, unknown>;
-          const teamId = Number(record.team_id);
-          const orgId = Number(record.org_id);
-          const role = String(record.role ?? '').trim();
-          const teamName = record.team_name;
-          const orgName = record.org_name;
-          if (!Number.isFinite(teamId) || !Number.isFinite(orgId) || !role) return null;
-          return {
-            team_id: teamId,
-            org_id: orgId,
-            role,
-            team_name: typeof teamName === 'string' ? teamName : undefined,
-            org_name: typeof orgName === 'string' ? orgName : undefined,
-          };
-        })
-        .filter((entry): entry is TeamMembership => entry !== null);
+      const normalized = response
+        .filter(
+          (item) =>
+            Number.isFinite(item.team_id)
+            && Number.isFinite(item.org_id)
+            && typeof item.role === 'string'
+            && item.role.trim().length > 0
+        )
+        .map((item) => ({
+          team_id: item.team_id,
+          org_id: item.org_id,
+          role: item.role.trim(),
+          team_name: typeof item.team_name === 'string' ? item.team_name : undefined,
+          org_name: typeof item.org_name === 'string' ? item.org_name : undefined,
+        }));
       setTeamMemberships(normalized);
     } catch (err: unknown) {
       console.error('Failed to load user teams:', err);
@@ -1004,7 +976,7 @@ export default function UserDetailPage() {
     };
   };
 
-  let content: JSX.Element = <></>;
+  let content: ReactNode = null;
 
   if (loading) {
     content = (

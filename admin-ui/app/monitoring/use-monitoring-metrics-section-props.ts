@@ -18,10 +18,10 @@ type UseMonitoringMetricsSectionPropsArgs = {
   customRangeStart: string;
   customRangeEnd: string;
   rangeValidationError: string;
-  onSelectTimeRange: (value: MonitoringTimeRangeOption) => Promise<void> | void;
+  onSelectTimeRange: (value: MonitoringTimeRangeOption) => Promise<boolean> | boolean | void;
   onCustomRangeStartChange: (value: string) => void;
   onCustomRangeEndChange: (value: string) => void;
-  onApplyCustomRange: () => Promise<void> | void;
+  onApplyCustomRange: () => Promise<boolean> | boolean | void;
   metricsHistory: MetricsHistoryPoint[];
   rangeLabel: string;
   seriesVisibility: MonitoringMetricsSeriesVisibility;

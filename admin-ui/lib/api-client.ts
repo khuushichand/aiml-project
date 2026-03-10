@@ -3,17 +3,36 @@
 import { ApiError, requestJson, requestText } from './http';
 import { normalizeListResponse, normalizePagedResponse } from './normalize';
 import type {
+  ApiKey,
+  ApiKeyMutationResponse,
   AuditLog,
   BackupsResponse,
+  EffectivePermissionsResponse,
   FeatureRegistryEntry,
   IncidentsResponse,
   Invoice,
+  OrgMember,
+  Organization,
+  OrgMembership,
   OrgUsageSummary,
   Plan,
+  ProviderSecret,
   RegistrationCode,
   RetentionPoliciesResponse,
+  SecurityAlertStatus,
+  SecurityHealthData,
   Subscription,
+  Team,
+  TeamMembership,
+  User,
   UserWithKeyCount,
+  VoiceAnalyticsSummary,
+  VoiceCommand,
+  VoiceCommandListResponse,
+  VoiceCommandUsage,
+  VoiceSession,
+  VoiceSessionListResponse,
+  WatchlistSettings,
 } from '@/types';
 export { ApiError };
 
@@ -151,11 +170,11 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  getUser: (userId: string) => requestJson(`/admin/users/${userId}`),
-  getUserOrgMemberships: (userId: string) => requestJson(`/admin/users/${userId}/org-memberships`),
-  getUserTeamMemberships: (userId: string) => requestJson(`/admin/users/${userId}/team-memberships`),
+  getUser: (userId: string) => requestJson<User>(`/admin/users/${userId}`),
+  getUserOrgMemberships: (userId: string) => requestJson<OrgMembership[]>(`/admin/users/${userId}/org-memberships`),
+  getUserTeamMemberships: (userId: string) => requestJson<TeamMembership[]>(`/admin/users/${userId}/team-memberships`),
   getUserEffectivePermissions: (userId: string) =>
-    requestJson(`/admin/users/${userId}/effective-permissions`),
+    requestJson<EffectivePermissionsResponse>(`/admin/users/${userId}/effective-permissions`),
   getUserSessions: (userId: string) => requestJson(`/admin/users/${userId}/sessions`),
   revokeUserSession: (userId: string, sessionId: string, data: { reason: string; admin_password?: string | null }) =>
     requestJson(`/admin/users/${userId}/sessions/${sessionId}`, {
@@ -193,7 +212,7 @@ export const api = {
     method: 'DELETE',
     body: JSON.stringify(data),
   }),
-  getCurrentUser: () => requestJson('/users/me'),
+  getCurrentUser: () => requestJson<User>('/users/me'),
 
   // ============================================
   // Registration Codes
@@ -229,13 +248,13 @@ export const api = {
       query.set('include_revoked', String(params.include_revoked));
     }
     const suffix = query.toString() ? `?${query.toString()}` : '';
-    return requestJson(`/admin/users/${userId}/api-keys${suffix}`);
+    return requestJson<ApiKey[]>(`/admin/users/${userId}/api-keys${suffix}`);
   },
-  createApiKey: (userId: string, data: Record<string, unknown>) => requestJson(`/admin/users/${userId}/api-keys`, {
+  createApiKey: (userId: string, data: Record<string, unknown>) => requestJson<ApiKeyMutationResponse>(`/admin/users/${userId}/api-keys`, {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  rotateApiKey: (userId: string, keyId: string) => requestJson(`/admin/users/${userId}/api-keys/${keyId}/rotate`, {
+  rotateApiKey: (userId: string, keyId: string) => requestJson<ApiKeyMutationResponse>(`/admin/users/${userId}/api-keys/${keyId}/rotate`, {
     method: 'POST',
   }),
   revokeApiKey: (userId: string, keyId: string) => requestJson(`/admin/users/${userId}/api-keys/${keyId}`, {
@@ -250,7 +269,7 @@ export const api = {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/admin/orgs${queryParams ? `?${queryParams}` : ''}`);
   },
-  getOrganization: (orgId: string) => requestJson(`/orgs/${orgId}`),
+  getOrganization: (orgId: string) => requestJson<Organization>(`/orgs/${orgId}`),
   createOrganization: (data: Record<string, unknown>) => requestJson('/admin/orgs', {
     method: 'POST',
     body: JSON.stringify(data),
@@ -262,7 +281,7 @@ export const api = {
   deleteOrganization: (orgId: string) => requestJson(`/orgs/${orgId}`, {
     method: 'DELETE',
   }),
-  getOrgMembers: (orgId: string) => requestJson(`/admin/orgs/${orgId}/members`),
+  getOrgMembers: (orgId: string) => requestJson<OrgMember[]>(`/admin/orgs/${orgId}/members`),
   addOrgMember: (orgId: string, data: Record<string, unknown>) => requestJson(`/admin/orgs/${orgId}/members`, {
     method: 'POST',
     body: JSON.stringify(data),
@@ -287,7 +306,7 @@ export const api = {
   // Teams
   // ============================================
   getTeam,
-  getTeams: (orgId: string) => requestJson(`/admin/orgs/${orgId}/teams`),
+  getTeams: (orgId: string) => requestJson<Team[]>(`/admin/orgs/${orgId}/teams`),
   createTeam: (orgId: string, data: Record<string, unknown>) => requestJson(`/admin/orgs/${orgId}/teams`, {
     method: 'POST',
     body: JSON.stringify(data),
@@ -366,7 +385,7 @@ export const api = {
   deleteUserByokKey: (userId: string, provider: string) => requestJson(`/admin/users/${userId}/byok-keys/${provider}`, {
     method: 'DELETE',
   }),
-  getOrgByokKeys: (orgId: string) => requestJson(`/admin/orgs/${orgId}/byok-keys`),
+  getOrgByokKeys: (orgId: string) => requestJson<ProviderSecret[]>(`/admin/orgs/${orgId}/byok-keys`),
   createOrgByokKey: (orgId: string, data: Record<string, unknown>) => requestJson(`/admin/orgs/${orgId}/byok-keys`, {
     method: 'POST',
     body: JSON.stringify(data),
@@ -832,8 +851,8 @@ export const api = {
   // ============================================
   // Security Health
   // ============================================
-  getSecurityHealth: () => requestJson('/health/security'),
-  getSecurityAlertStatus: () => requestJson('/admin/security/alert-status'),
+  getSecurityHealth: () => requestJson<SecurityHealthData>('/health/security'),
+  getSecurityAlertStatus: () => requestJson<SecurityAlertStatus>('/admin/security/alert-status'),
 
   // ============================================
   // Virtual API Keys
@@ -927,7 +946,7 @@ export const api = {
   // Organization Watchlist Settings
   // ============================================
   getOrgWatchlistSettings: (orgId: string) =>
-    requestJson(`/admin/orgs/${encodeURIComponent(orgId)}/watchlists/settings`),
+    requestJson<WatchlistSettings>(`/admin/orgs/${encodeURIComponent(orgId)}/watchlists/settings`),
   updateOrgWatchlistSettings: (orgId: string, data: Record<string, unknown>) =>
     requestJson(`/admin/orgs/${encodeURIComponent(orgId)}/watchlists/settings`, {
       method: 'PATCH',
@@ -1021,17 +1040,17 @@ export const api = {
   // ============================================
   getVoiceCommands: async (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return requestJson(`/voice/commands${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson<VoiceCommandListResponse | VoiceCommand[]>(`/voice/commands${queryParams ? `?${queryParams}` : ''}`);
   },
   getVoiceCommand: (commandId: string, signal?: AbortSignal) =>
-    requestJson(`/voice/commands/${encodeURIComponent(commandId)}`, { signal }),
+    requestJson<VoiceCommand>(`/voice/commands/${encodeURIComponent(commandId)}`, { signal }),
   createVoiceCommand: (data: Record<string, unknown>) =>
-    requestJson('/voice/commands', {
+    requestJson<VoiceCommand>('/voice/commands', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
   updateVoiceCommand: (commandId: string, data: Record<string, unknown>) =>
-    requestJson(`/voice/commands/${encodeURIComponent(commandId)}`, {
+    requestJson<VoiceCommand>(`/voice/commands/${encodeURIComponent(commandId)}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
@@ -1040,7 +1059,7 @@ export const api = {
       method: 'DELETE',
     }),
   toggleVoiceCommand: (commandId: string, enabled: boolean) =>
-    requestJson(`/voice/commands/${encodeURIComponent(commandId)}/toggle`, {
+    requestJson<VoiceCommand>(`/voice/commands/${encodeURIComponent(commandId)}/toggle`, {
       method: 'POST',
       body: JSON.stringify({ enabled }),
     }),
@@ -1048,10 +1067,10 @@ export const api = {
   // Voice Sessions
   getVoiceSessions: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return requestJson(`/voice/sessions${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson<VoiceSessionListResponse | VoiceSession[]>(`/voice/sessions${queryParams ? `?${queryParams}` : ''}`);
   },
   getVoiceSession: (sessionId: string) =>
-    requestJson(`/voice/sessions/${encodeURIComponent(sessionId)}`),
+    requestJson<VoiceSession>(`/voice/sessions/${encodeURIComponent(sessionId)}`),
   deleteVoiceSession: (sessionId: string) =>
     requestJson(`/voice/sessions/${encodeURIComponent(sessionId)}`, {
       method: 'DELETE',
@@ -1064,7 +1083,7 @@ export const api = {
         .filter(([, v]) => v !== undefined)
         .map(([k, v]) => [k, String(v)])
     ).toString() : '';
-    return requestJson(`/voice/analytics${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson<VoiceAnalyticsSummary>(`/voice/analytics${queryParams ? `?${queryParams}` : ''}`);
   },
   getVoiceCommandUsage: (commandId: string, params?: { days?: number }, signal?: AbortSignal) => {
     const queryParams = params ? new URLSearchParams(
@@ -1072,7 +1091,7 @@ export const api = {
         .filter(([, v]) => v !== undefined)
         .map(([k, v]) => [k, String(v)])
     ).toString() : '';
-    return requestJson(`/voice/commands/${encodeURIComponent(commandId)}/usage${queryParams ? `?${queryParams}` : ''}`, { signal });
+    return requestJson<VoiceCommandUsage>(`/voice/commands/${encodeURIComponent(commandId)}/usage${queryParams ? `?${queryParams}` : ''}`, { signal });
   },
 
   // Voice Workflow Templates

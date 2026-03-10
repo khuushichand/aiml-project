@@ -29,7 +29,7 @@ type UseMonitoringDataLoaderArgs = {
     timeRange: MonitoringTimeRangeOption,
     customRangeStart?: string,
     customRangeEnd?: string
-  ) => Promise<void> | void;
+  ) => Promise<boolean> | boolean | void;
   markMonitoringDataUpdated: () => void;
   setLoading: (value: boolean) => void;
   setError: (value: string) => void;
