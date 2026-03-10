@@ -3,6 +3,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class PromptLegacySnapshot(BaseModel):
+    system_prompt: str
+    user_prompt: str
+
+
+class PromptAssemblyResult(BaseModel):
+    messages: list[dict[str, str]]
+    legacy: PromptLegacySnapshot
+
+
 class ValidationIssue(BaseModel):
     code: str
     message: str
