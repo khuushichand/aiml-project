@@ -127,7 +127,7 @@ class SandboxRunCreateRequest(BaseModel):
     scope_snapshot_id: str | None = Field(default=None, description="Optional scope snapshot identifier bound to this run")
 
     @model_validator(mode="after")
-    def validate_session_or_base_image(self):
+    def validate_session_or_base_image(self) -> SandboxRunCreateRequest:
         has_session = isinstance(self.session_id, str) and bool(self.session_id.strip())
         has_image = isinstance(self.base_image, str) and bool(self.base_image.strip())
         if has_session == has_image:

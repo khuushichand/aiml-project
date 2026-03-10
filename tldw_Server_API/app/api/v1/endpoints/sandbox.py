@@ -1029,7 +1029,6 @@ async def upload_files(
                 cap_mb = 256
             cap_bytes = cap_mb * 1024 * 1024
             chunk_size = 64 * 1024
-
             import tarfile
             import zipfile
 
