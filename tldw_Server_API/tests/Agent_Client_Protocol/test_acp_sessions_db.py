@@ -385,3 +385,46 @@ class TestAgentRegistry:
         db.save_agent_entry({"agent_type": "a1", "name": "Updated", "source": "api"})
         entry = db.get_agent_entry("a1")
         assert entry["name"] == "Updated"
+
+
+class TestHealthHistory:
+    def test_record_and_get_health_check(self, db):
+        db.record_health_check("claude_code", "healthy", 0, '{"status": "available"}')
+        history = db.get_health_history("claude_code")
+        assert len(history) == 1
+        assert history[0]["health"] == "healthy"
+        assert history[0]["agent_type"] == "claude_code"
+        assert history[0]["details"] == '{"status": "available"}'
+        assert history[0]["checked_at"] is not None
+
+    def test_health_history_limit(self, db):
+        for i in range(10):
+            db.record_health_check("claude_code", "healthy", 0)
+        history = db.get_health_history("claude_code", limit=3)
+        assert len(history) == 3
+
+    def test_health_history_empty(self, db):
+        assert db.get_health_history("nonexistent") == []
+
+    def test_health_history_ordered_by_checked_at_desc(self, db):
+        db.record_health_check("agent_a", "healthy", 0)
+        db.record_health_check("agent_a", "degraded", 1)
+        db.record_health_check("agent_a", "unavailable", 3)
+        history = db.get_health_history("agent_a")
+        assert len(history) == 3
+        # Most recent first
+        assert history[0]["health"] == "unavailable"
+        assert history[2]["health"] == "healthy"
+
+    def test_health_history_filters_by_agent_type(self, db):
+        db.record_health_check("agent_a", "healthy", 0)
+        db.record_health_check("agent_b", "degraded", 1)
+        history_a = db.get_health_history("agent_a")
+        assert len(history_a) == 1
+        assert history_a[0]["agent_type"] == "agent_a"
+
+    def test_health_history_consecutive_failures_stored(self, db):
+        db.record_health_check("agent_a", "degraded", 2, '{"error": "timeout"}')
+        history = db.get_health_history("agent_a")
+        assert history[0]["consecutive_failures"] == 2
+        assert history[0]["details"] == '{"error": "timeout"}'

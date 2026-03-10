@@ -14,7 +14,7 @@ from typing import Any
 
 from loguru import logger
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -72,6 +72,17 @@ CREATE TABLE IF NOT EXISTS agent_registry (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS agent_health_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_type TEXT NOT NULL,
+    health TEXT NOT NULL,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    details TEXT NOT NULL DEFAULT '{}',
+    checked_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_agent_time
+    ON agent_health_history(agent_type, checked_at DESC);
 """
 
 # Columns that are stored as INTEGER 0/1 but should be returned as bool
@@ -128,9 +139,9 @@ class ACPSessionsDB:
             if conn is None:
                 return  # _get_conn will call us again after creating conn
             conn.executescript(_SCHEMA_SQL)
-            # Migrate from v1 -> v2: ensure agent_registry table exists
+            # Migrate schema forward as needed
             current_version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if current_version < _SCHEMA_VERSION:
+            if current_version < 2:
                 conn.executescript("""
                     CREATE TABLE IF NOT EXISTS agent_registry (
                         agent_type TEXT PRIMARY KEY,
@@ -147,6 +158,19 @@ class ACPSessionsDB:
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
                     );
+                """)
+            if current_version < 3:
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS agent_health_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        agent_type TEXT NOT NULL,
+                        health TEXT NOT NULL,
+                        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                        details TEXT NOT NULL DEFAULT '{}',
+                        checked_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_health_agent_time
+                        ON agent_health_history(agent_type, checked_at DESC);
                 """)
             conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             conn.commit()
@@ -791,6 +815,41 @@ class ACPSessionsDB:
         if row is None:
             return None
         return dict(row)
+
+    # ------------------------------------------------------------------
+    # Health History
+    # ------------------------------------------------------------------
+
+    def record_health_check(
+        self,
+        agent_type: str,
+        health: str,
+        consecutive_failures: int = 0,
+        details: str = "{}",
+    ) -> None:
+        """Record a health check result."""
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT INTO agent_health_history
+               (agent_type, health, consecutive_failures, details, checked_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (agent_type, health, consecutive_failures, details, _utcnow_iso()),
+        )
+        conn.commit()
+
+    def get_health_history(
+        self,
+        agent_type: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Get recent health check history for an agent."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            """SELECT * FROM agent_health_history
+               WHERE agent_type = ? ORDER BY checked_at DESC LIMIT ?""",
+            (agent_type, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Lifecycle

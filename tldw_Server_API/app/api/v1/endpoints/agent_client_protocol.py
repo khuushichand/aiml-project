@@ -1556,6 +1556,33 @@ async def acp_update_agent(
     return {"status": "updated", "agent": {"type": entry.type, "name": entry.name}}
 
 
+@router.get(
+    "/agents/health",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.agents.health"))],
+)
+async def acp_agents_health(
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    """Get health status for all monitored agents."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.health_monitor import get_health_monitor
+
+    monitor = get_health_monitor()
+    statuses = monitor.get_all_statuses()
+    return {
+        "agents": [
+            {
+                "agent_type": s.agent_type,
+                "health": s.health,
+                "consecutive_failures": s.consecutive_failures,
+                "last_check": s.last_check,
+                "last_healthy": s.last_healthy,
+                "details": s.details,
+            }
+            for s in statuses
+        ]
+    }
+
+
 def _generate_session_name(cwd: str) -> str:
     """Generate a session name from the working directory."""
     from datetime import datetime

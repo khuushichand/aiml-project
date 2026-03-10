@@ -1129,6 +1129,21 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/acp-agents-manage
+  - id: acp.agents.health
+    description: View health status for all monitored ACP agents.
+    resource_tags:
+      - acp
+      - agents
+      - health
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - user
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/acp-agents-health
 feature_flags:
   - id: media_ingest_beta
     description: Enables new media ingestion pipeline with enhanced metadata extraction.
