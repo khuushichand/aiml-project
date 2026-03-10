@@ -93,6 +93,20 @@ def test_collect_macos_diagnostics_uses_optional_operator_metadata_env(monkeypat
     assert data["templates"]["vz_linux"]["source"] == "/tmp/vz-linux.img"
 
 
+def test_collect_macos_diagnostics_treats_ready_helper_as_configured_without_path(monkeypatch) -> None:
+    monkeypatch.setattr(diagnostics_module.sys, "platform", "darwin")
+    monkeypatch.setattr(diagnostics_module.platform, "machine", lambda: "arm64")
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_MACOS_HELPER_READY", "1")
+    monkeypatch.delenv("TLDW_SANDBOX_MACOS_HELPER_PATH", raising=False)
+
+    data = diagnostics_module.collect_macos_diagnostics()
+
+    assert data["helper"]["configured"] is True
+    assert data["helper"]["ready"] is True
+    assert "macos_helper_path_unconfigured" not in data["helper"]["reasons"]
+
+
 def test_service_macos_diagnostics_returns_probe_payload(monkeypatch) -> None:
     from tldw_Server_API.app.core.Sandbox.service import SandboxService
 

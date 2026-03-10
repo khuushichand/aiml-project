@@ -68,10 +68,10 @@ def probe_host() -> dict[str, object]:
 def probe_helper() -> dict[str, object]:
     raw_path = str(os.getenv("TLDW_SANDBOX_MACOS_HELPER_PATH") or "").strip()
     path = raw_path or None
-    configured = bool(path)
+    ready = _truthy(os.getenv("TLDW_SANDBOX_MACOS_HELPER_READY"))
+    configured = bool(path) or ready
     exists = bool(path and Path(path).exists())
     executable = bool(path and exists and os.access(path, os.X_OK))
-    ready = _truthy(os.getenv("TLDW_SANDBOX_MACOS_HELPER_READY"))
     reasons: list[str] = []
 
     if not configured:
