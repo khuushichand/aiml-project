@@ -86,4 +86,33 @@ describe("ModelParamsPanel llama.cpp controls", () => {
     expect(screen.getByText("Grammar source")).toBeInTheDocument()
     expect(screen.getByText("Thinking budget")).toBeInTheDocument()
   })
+
+  it("warns when raw extra body contains reserved llama.cpp keys", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false }
+      }
+    })
+
+    useStoreChatModelSettings.getState().updateSettings({
+      extraBody: '{"grammar":"root ::= \\"raw\\""}',
+      llamaGrammarMode: "inline",
+      llamaGrammarInline: 'root ::= "ui"'
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ModelParamsPanel selectedModel="llama.cpp/local-model" />
+      </QueryClientProvider>
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Provider & API" }))
+
+    expect(
+      await screen.findByText(
+        "First-class llama.cpp controls override reserved raw extra body keys."
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByText("grammar")).toBeInTheDocument()
+  })
 })

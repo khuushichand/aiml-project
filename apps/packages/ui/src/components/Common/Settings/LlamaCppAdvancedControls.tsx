@@ -39,6 +39,19 @@ const normalizeResolvedProvider = (value: string | null | undefined) => {
   return normalized || null
 }
 
+const parseJsonRecord = (value: string | null | undefined): Record<string, unknown> | null => {
+  if (!value || !value.trim()) return null
+  try {
+    const parsed = JSON.parse(value)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
 const extractLlamaCppControls = (payload: any): LlamaCppControlsMetadata | null => {
   const providers = payload?.providers
   if (!providers) return null
@@ -75,6 +88,7 @@ export function LlamaCppAdvancedControls({
   const grammarOverride = useStoreChatModelSettings(
     (state) => state.llamaGrammarOverride
   )
+  const extraBody = useStoreChatModelSettings((state) => state.extraBody)
   const [libraryOpen, setLibraryOpen] = React.useState(false)
   const [derivedProvider, setDerivedProvider] = React.useState<string | null>(
     normalizeResolvedProvider(resolvedProvider)
@@ -116,18 +130,27 @@ export function LlamaCppAdvancedControls({
     enabled: isLlamaCpp
   })
 
-  if (!isLlamaCpp) {
-    return null
-  }
-
   const controls = extractLlamaCppControls(providersQuery.data)
   const grammarSupported = controls?.grammar?.supported !== false
   const thinkingSupported = controls?.thinking_budget?.supported === true
+  const conflictingExtraBodyKeys = React.useMemo(() => {
+    const reservedKeys = controls?.reserved_extra_body_keys ?? []
+    if (!reservedKeys.length) return []
+    const parsedExtraBody = parseJsonRecord(extraBody)
+    if (!parsedExtraBody) return []
+    return reservedKeys.filter((key) =>
+      Object.prototype.hasOwnProperty.call(parsedExtraBody, key)
+    )
+  }, [controls?.reserved_extra_body_keys, extraBody])
   const grammarOptions =
     grammarsQuery.data?.items?.map((item: LlamaGrammarRecord) => ({
       label: item.name,
       value: item.id
     })) ?? []
+
+  if (!isLlamaCpp) {
+    return null
+  }
 
   return (
     <div className={className}>
@@ -153,7 +176,19 @@ export function LlamaCppAdvancedControls({
           <Alert
             type="info"
             showIcon
-            message={controls.grammar.effective_reason}
+            title={controls.grammar.effective_reason}
+          />
+        ) : null}
+
+        {conflictingExtraBodyKeys.length > 0 ? (
+          <Alert
+            type="warning"
+            showIcon
+            title={t(
+              "sidepanel:llamaControls.extraBodyConflictTitle",
+              "First-class llama.cpp controls override reserved raw extra body keys."
+            )}
+            description={conflictingExtraBodyKeys.join(", ")}
           />
         ) : null}
 
