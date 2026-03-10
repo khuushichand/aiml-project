@@ -32,6 +32,7 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.api.v1.schemas.sandbox_schemas import (
+    SandboxAdminMacOSDiagnosticsResponse,
     ArtifactListResponse,
     CancelResponse,
     SandboxAdminIdempotencyItem,
@@ -2219,6 +2220,19 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
 # -----------------------
 # Admin API (list/details)
 # -----------------------
+
+@router.get(
+    "/admin/macos-diagnostics",
+    response_model=SandboxAdminMacOSDiagnosticsResponse,
+    summary="Admin: macOS sandbox diagnostics",
+)
+async def admin_macos_diagnostics(
+    principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
+    current_user: User = Depends(get_request_user),
+) -> SandboxAdminMacOSDiagnosticsResponse:
+    del principal
+    del current_user
+    return SandboxAdminMacOSDiagnosticsResponse.model_validate(_service.macos_diagnostics())
 
 @router.get(
     "/admin/runs",
