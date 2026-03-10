@@ -105,7 +105,7 @@ class _FakePolicyService:
         self.approval_decisions = []
 
     async def list_permission_profiles(self, **_kwargs):
-        return list(self.permission_profiles)
+        return self.permission_profiles
 
     async def get_permission_profile(self, profile_id: int):
         for profile in self.permission_profiles:
