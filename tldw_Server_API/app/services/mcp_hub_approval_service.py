@@ -145,9 +145,12 @@ class McpHubApprovalService:
         if existing:
             normalized_decision = str(existing.get("decision") or "").strip().lower()
             if normalized_decision == "approved":
+                if existing.get("expires_at") is not None:
+                    await self.repo.expire_approval_decision(
+                        int(existing.get("id")),
+                        expires_at=datetime.now(timezone.utc),
+                    )
                 return {"status": "allow", "reason": "active_approval", "decision": existing}
-            if normalized_decision == "denied":
-                return {"status": "deny", "reason": "approval_denied", "decision": existing}
 
         should_require = False
         reason = "outside_profile"

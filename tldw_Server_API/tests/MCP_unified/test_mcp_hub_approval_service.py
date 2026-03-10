@@ -62,6 +62,19 @@ class _FakeApprovalRepo:
         self.decisions.append(row)
         return row
 
+    async def expire_approval_decision(
+        self,
+        approval_decision_id: int,
+        *,
+        expires_at: datetime,
+    ) -> dict | None:
+        for row in self.decisions:
+            if int(row.get("id") or 0) != int(approval_decision_id):
+                continue
+            row["expires_at"] = expires_at
+            return dict(row)
+        return None
+
 
 @pytest.mark.asyncio
 async def test_approval_service_requires_approval_for_outside_profile_call() -> None:
@@ -148,6 +161,116 @@ async def test_approval_service_allows_call_with_active_elevation() -> None:
 
     assert result["status"] == "allow"
     assert result["reason"] == "active_approval"
+
+
+@pytest.mark.asyncio
+async def test_approval_service_consumes_single_use_approval_after_first_match() -> None:
+    from tldw_Server_API.app.services.mcp_hub_approval_service import McpHubApprovalService
+
+    repo = _FakeApprovalRepo()
+    svc = McpHubApprovalService(repo=repo)
+    context = SimpleNamespace(
+        user_id="7",
+        session_id="sess-1",
+        metadata={"persona_id": "researcher"},
+    )
+
+    initial = await svc.evaluate_tool_call(
+        effective_policy={
+            "enabled": True,
+            "allowed_tools": ["notes.search"],
+            "approval_policy_id": 1,
+        },
+        tool_name="Bash",
+        tool_args={"command": "git status"},
+        context=context,
+        tool_def={"name": "Bash", "metadata": {"category": "management"}},
+        is_write=False,
+        within_effective_policy=False,
+    )
+    approval = initial["approval"]
+
+    await svc.record_decision(
+        approval_policy_id=1,
+        context_key=approval["context_key"],
+        conversation_id=approval["conversation_id"],
+        tool_name=approval["tool_name"],
+        scope_key=approval["scope_key"],
+        decision="approved",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+        actor_id=7,
+    )
+
+    first_retry = await svc.evaluate_tool_call(
+        effective_policy={
+            "enabled": True,
+            "allowed_tools": ["notes.search"],
+            "approval_policy_id": 1,
+        },
+        tool_name="Bash",
+        tool_args={"command": "git status"},
+        context=context,
+        tool_def={"name": "Bash", "metadata": {"category": "management"}},
+        is_write=False,
+        within_effective_policy=False,
+    )
+    assert first_retry["status"] == "allow"
+    assert first_retry["reason"] == "active_approval"
+
+    second_retry = await svc.evaluate_tool_call(
+        effective_policy={
+            "enabled": True,
+            "allowed_tools": ["notes.search"],
+            "approval_policy_id": 1,
+        },
+        tool_name="Bash",
+        tool_args={"command": "git status"},
+        context=context,
+        tool_def={"name": "Bash", "metadata": {"category": "management"}},
+        is_write=False,
+        within_effective_policy=False,
+    )
+    assert second_retry["status"] == "approval_required"
+
+
+@pytest.mark.asyncio
+async def test_approval_service_does_not_reuse_denied_decisions() -> None:
+    from tldw_Server_API.app.services.mcp_hub_approval_service import McpHubApprovalService
+
+    repo = _FakeApprovalRepo()
+    svc = McpHubApprovalService(repo=repo)
+    context = SimpleNamespace(
+        user_id="7",
+        session_id="sess-1",
+        metadata={"persona_id": "researcher"},
+    )
+
+    await repo.create_approval_decision(
+        approval_policy_id=1,
+        context_key="user:7|group:|persona:researcher",
+        conversation_id="sess-1",
+        tool_name="Bash",
+        scope_key="tool:Bash|command:a74e4c46f8e9a0f6",
+        decision="denied",
+        expires_at=None,
+        actor_id=7,
+    )
+
+    result = await svc.evaluate_tool_call(
+        effective_policy={
+            "enabled": True,
+            "allowed_tools": ["notes.search"],
+            "approval_policy_id": 1,
+        },
+        tool_name="Bash",
+        tool_args={"command": "git status"},
+        context=context,
+        tool_def={"name": "Bash", "metadata": {"category": "management"}},
+        is_write=False,
+        within_effective_policy=False,
+    )
+
+    assert result["status"] == "approval_required"
 
 
 @pytest.mark.asyncio

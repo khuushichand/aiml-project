@@ -1059,6 +1059,37 @@ class McpHubRepo:
             return normalized
         return None
 
+    async def expire_approval_decision(
+        self,
+        approval_decision_id: int,
+        *,
+        expires_at: datetime | str,
+    ) -> dict[str, Any] | None:
+        normalized_expires_at = expires_at
+        if isinstance(expires_at, datetime) and getattr(self.db_pool, "pool", None) is None:
+            normalized_expires_at = expires_at.isoformat()
+        await self.db_pool.execute(
+            """
+            UPDATE mcp_approval_decisions
+            SET expires_at = ?
+            WHERE id = ?
+            """,
+            (
+                normalized_expires_at,
+                int(approval_decision_id),
+            ),
+        )
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, approval_policy_id, context_key, conversation_id, tool_name, scope_key,
+                   decision, expires_at, created_by, created_at
+            FROM mcp_approval_decisions
+            WHERE id = ?
+            """,
+            (int(approval_decision_id),),
+        )
+        return self._normalize_approval_decision_row(self._row_to_dict(row) if row else None)
+
     async def upsert_external_server(
         self,
         *,

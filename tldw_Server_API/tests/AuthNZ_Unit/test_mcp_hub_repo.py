@@ -316,5 +316,21 @@ async def test_repo_can_crud_approval_policy_and_match_active_decision(tmp_path,
     assert matched["decision"] == "approved"
     assert matched["tool_name"] == "Bash"
 
+    expired = await repo.expire_approval_decision(
+        int(decision["id"]),
+        expires_at=datetime.now(timezone.utc),
+    )
+    assert expired is not None
+
+    after_consume = await repo.find_active_approval_decision(
+        approval_policy_id=int(policy["id"]),
+        context_key="user:7|persona:researcher",
+        conversation_id="sess-1",
+        tool_name="Bash",
+        scope_key="tool:Bash|command:git-status",
+        now=datetime.now(timezone.utc),
+    )
+    assert after_consume is None
+
     deleted = await repo.delete_approval_policy(int(policy["id"]))
     assert deleted is True

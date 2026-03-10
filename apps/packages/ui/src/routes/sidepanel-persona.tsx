@@ -160,7 +160,13 @@ const _approvalRequestKey = (
     String(payload.step_idx ?? "").trim()
   ].join("|")
 
-const _approvalDurationExpiry = (duration: string): string | null => {
+const _approvalDecisionExpiresAt = (
+  decision: "approved" | "denied",
+  duration: string
+): string | null => {
+  if (decision === "denied") {
+    return new Date().toISOString()
+  }
   const normalized = String(duration || "").trim().toLowerCase()
   if (normalized === "once") {
     return new Date(Date.now() + 60_000).toISOString()
@@ -1149,10 +1155,7 @@ const SidepanelPersona = () => {
               tool_name: approval.tool_name,
               scope_key: approval.scope_key,
               decision,
-              expires_at:
-                decision === "approved"
-                  ? _approvalDurationExpiry(approval.selected_duration)
-                  : null
+              expires_at: _approvalDecisionExpiresAt(decision, approval.selected_duration)
             }
           }
         )
