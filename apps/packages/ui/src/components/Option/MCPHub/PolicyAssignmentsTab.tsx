@@ -5,13 +5,12 @@ import {
   createPolicyAssignment,
   deletePolicyAssignmentOverride,
   deletePolicyAssignment,
+  getToolRegistrySummary,
   getEffectivePolicy,
   getPolicyAssignmentOverride,
   listApprovalPolicies,
   listPermissionProfiles,
   listPolicyAssignments,
-  listToolRegistry,
-  listToolRegistryModules,
   upsertPolicyAssignmentOverride,
   updatePolicyAssignment,
   type McpHubApprovalPolicy,
@@ -108,10 +107,10 @@ export const PolicyAssignmentsTab = () => {
     let cancelled = false
     const loadRegistry = async () => {
       try {
-        const [entries, modules] = await Promise.all([listToolRegistry(), listToolRegistryModules()])
+        const summary = await getToolRegistrySummary()
         if (!cancelled) {
-          setRegistryEntries(Array.isArray(entries) ? entries : [])
-          setRegistryModules(Array.isArray(modules) ? modules : [])
+          setRegistryEntries(Array.isArray(summary?.entries) ? summary.entries : [])
+          setRegistryModules(Array.isArray(summary?.modules) ? summary.modules : [])
         }
       } catch {
         if (!cancelled) {

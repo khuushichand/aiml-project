@@ -36,6 +36,7 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     PolicyOverrideUpsertRequest,
     ToolRegistryEntryResponse,
     ToolRegistryModuleResponse,
+    ToolRegistrySummaryResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
@@ -144,7 +145,7 @@ def _require_grant_authority(principal: AuthPrincipal, policy_document: dict[str
     if "*" in granted:
         return
 
-    raw_capabilities = policy_document.get("capabilities") or []
+    raw_capabilities = _as_str_list(policy_document.get("capabilities"))
     capabilities = {
         str(capability).strip().lower()
         for capability in raw_capabilities
@@ -153,7 +154,7 @@ def _require_grant_authority(principal: AuthPrincipal, policy_document: dict[str
     if any(
         str(entry).strip()
         for key in _TOOL_GRANT_KEYS
-        for entry in (policy_document.get(key) or [])
+        for entry in _as_str_list(policy_document.get(key))
     ):
         capabilities.add("tool.invoke")
     missing = [
@@ -169,6 +170,7 @@ def _require_grant_authority(principal: AuthPrincipal, policy_document: dict[str
 
 
 def _as_str_list(value: Any) -> list[str]:
+    """Normalize a loose scalar-or-sequence value into a cleaned string list."""
     if isinstance(value, str):
         cleaned = value.strip()
         return [cleaned] if cleaned else []
@@ -183,6 +185,7 @@ def _as_str_list(value: Any) -> list[str]:
 
 
 def _unique(items: list[str]) -> list[str]:
+    """Preserve order while removing duplicate string values."""
     seen: set[str] = set()
     out: list[str] = []
     for item in items:
@@ -194,6 +197,7 @@ def _unique(items: list[str]) -> list[str]:
 
 
 def _merge_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Merge overlay policy fields into a base document using union semantics for allowlists."""
     merged = deepcopy(base)
     for key, value in overlay.items():
         if key in _UNION_POLICY_KEYS:
@@ -210,6 +214,7 @@ def _merge_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> di
 
 
 def _tool_grant_entries(policy_document: dict[str, Any]) -> set[str]:
+    """Collect every tool-grant entry across the supported allowlist keys."""
     entries: set[str] = set()
     for key in _TOOL_GRANT_KEYS:
         entries.update(_as_str_list(policy_document.get(key)))
@@ -217,6 +222,7 @@ def _tool_grant_entries(policy_document: dict[str, Any]) -> set[str]:
 
 
 def _grant_authority_delta(base_policy_document: dict[str, Any], merged_policy_document: dict[str, Any]) -> dict[str, Any]:
+    """Extract the broadened-access delta that requires explicit grant authority."""
     base_capabilities = {entry.lower() for entry in _as_str_list(base_policy_document.get("capabilities"))}
     merged_capabilities = {entry.lower() for entry in _as_str_list(merged_policy_document.get("capabilities"))}
     next_document: dict[str, Any] = {}
@@ -235,6 +241,7 @@ def _grant_authority_delta(base_policy_document: dict[str, Any], merged_policy_d
 
 
 def _grant_authority_snapshot(principal: AuthPrincipal, delta_document: dict[str, Any]) -> dict[str, Any]:
+    """Capture granted and required permissions for an override broadening audit record."""
     granted_permissions = sorted(
         {
             str(permission).strip().lower()
@@ -560,9 +567,10 @@ async def _get_visible_policy_assignment_or_404(
     principal: AuthPrincipal,
     svc: McpHubService,
 ) -> dict[str, Any]:
+    """Fetch a policy assignment and ensure the principal can access its owner scope."""
     assignment = await svc.get_policy_assignment(assignment_id)
     if assignment is None:
-        raise HTTPException(status_code=404, detail="mcp_policy_assignment not found")
+        raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
     _resolve_visible_scope_filters(
         principal=principal,
         owner_scope_type=str(assignment.get("owner_scope_type") or "global"),
@@ -576,6 +584,7 @@ async def _assignment_base_policy_document(
     svc: McpHubService,
     assignment: dict[str, Any],
 ) -> tuple[int | None, dict[str, Any]]:
+    """Resolve the merged profile-plus-inline base policy for an assignment."""
     base_document: dict[str, Any] = {}
     profile_id = assignment.get("profile_id")
     if profile_id is not None:
@@ -608,6 +617,19 @@ async def list_tool_registry_modules(
 ) -> list[ToolRegistryModuleResponse]:
     """List grouped MCP tool metadata summaries by module."""
     return [ToolRegistryModuleResponse.model_validate(row) for row in await registry.list_modules()]
+
+
+@router.get("/tool-registry/summary", response_model=ToolRegistrySummaryResponse)
+async def get_tool_registry_summary(
+    _principal: AuthPrincipal = Depends(get_auth_principal),
+    registry: McpHubToolRegistryService = Depends(get_mcp_hub_tool_registry_dep),
+) -> ToolRegistrySummaryResponse:
+    """Return tool entries and module summaries from a single registry enumeration."""
+    summary = await registry.get_summary()
+    return ToolRegistrySummaryResponse(
+        entries=[ToolRegistryEntryResponse.model_validate(row) for row in summary.get("entries", [])],
+        modules=[ToolRegistryModuleResponse.model_validate(row) for row in summary.get("modules", [])],
+    )
 
 
 @router.post("/permission-profiles", response_model=PermissionProfileResponse, status_code=201)
@@ -803,14 +825,17 @@ async def get_policy_assignment_override(
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> PolicyOverrideResponse:
     """Fetch the single override attached to a policy assignment."""
-    await _get_visible_policy_assignment_or_404(
-        assignment_id=assignment_id,
-        principal=principal,
-        svc=svc,
-    )
-    row = await svc.get_policy_override(assignment_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="mcp_policy_override not found")
+    try:
+        await _get_visible_policy_assignment_or_404(
+            assignment_id=assignment_id,
+            principal=principal,
+            svc=svc,
+        )
+        row = await svc.get_policy_override(assignment_id)
+        if not row:
+            raise ResourceNotFoundError("mcp_policy_override", identifier=str(assignment_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _policy_override_row_to_response(row)
 
 
@@ -826,33 +851,36 @@ async def upsert_policy_assignment_override(
 ) -> PolicyOverrideResponse:
     """Create or replace the single override attached to a policy assignment."""
     _require_mutation_permission(principal)
-    assignment = await _get_visible_policy_assignment_or_404(
-        assignment_id=assignment_id,
-        principal=principal,
-        svc=svc,
-    )
-    profile_id, base_document = await _assignment_base_policy_document(
-        svc=svc,
-        assignment=assignment,
-    )
-    merged_document = _merge_policy_documents(base_document, payload.override_policy_document)
-    delta_document = _grant_authority_delta(base_document, merged_document)
-    if delta_document:
-        _require_grant_authority(principal, delta_document)
-    row = await svc.upsert_policy_override(
-        assignment_id,
-        override_policy_document=payload.override_policy_document,
-        is_active=payload.is_active,
-        broadens_access=bool(delta_document),
-        grant_authority_snapshot={
-            **_grant_authority_snapshot(principal, delta_document),
-            "assignment_id": assignment_id,
-            "profile_id": profile_id,
-        },
-        actor_id=principal.user_id,
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="mcp_policy_assignment not found")
+    try:
+        assignment = await _get_visible_policy_assignment_or_404(
+            assignment_id=assignment_id,
+            principal=principal,
+            svc=svc,
+        )
+        profile_id, base_document = await _assignment_base_policy_document(
+            svc=svc,
+            assignment=assignment,
+        )
+        merged_document = _merge_policy_documents(base_document, payload.override_policy_document)
+        delta_document = _grant_authority_delta(base_document, merged_document)
+        if delta_document:
+            _require_grant_authority(principal, delta_document)
+        row = await svc.upsert_policy_override(
+            assignment_id,
+            override_policy_document=payload.override_policy_document,
+            is_active=payload.is_active,
+            broadens_access=bool(delta_document),
+            grant_authority_snapshot={
+                **_grant_authority_snapshot(principal, delta_document),
+                "assignment_id": assignment_id,
+                "profile_id": profile_id,
+            },
+            actor_id=principal.user_id,
+        )
+        if not row:
+            raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _policy_override_row_to_response(row)
 
 
@@ -867,14 +895,17 @@ async def delete_policy_assignment_override(
 ) -> MCPHubDeleteResponse:
     """Delete the override attached to a policy assignment."""
     _require_mutation_permission(principal)
-    await _get_visible_policy_assignment_or_404(
-        assignment_id=assignment_id,
-        principal=principal,
-        svc=svc,
-    )
-    deleted = await svc.delete_policy_override(assignment_id, actor_id=principal.user_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="mcp_policy_override not found")
+    try:
+        await _get_visible_policy_assignment_or_404(
+            assignment_id=assignment_id,
+            principal=principal,
+            svc=svc,
+        )
+        deleted = await svc.delete_policy_override(assignment_id, actor_id=principal.user_id)
+        if not deleted:
+            raise ResourceNotFoundError("mcp_policy_override", identifier=str(assignment_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return MCPHubDeleteResponse(ok=True)
 
 

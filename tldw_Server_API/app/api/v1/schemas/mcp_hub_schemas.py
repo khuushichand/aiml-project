@@ -267,6 +267,11 @@ class ToolRegistryModuleResponse(BaseModel):
     metadata_warnings: list[str] = Field(default_factory=list)
 
 
+class ToolRegistrySummaryResponse(BaseModel):
+    entries: list[ToolRegistryEntryResponse] = Field(default_factory=list)
+    modules: list[ToolRegistryModuleResponse] = Field(default_factory=list)
+
+
 class ExternalServerCreateRequest(BaseModel):
     server_id: str = Field(..., min_length=1, max_length=128)
     name: str = Field(..., min_length=1, max_length=200)

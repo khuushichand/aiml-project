@@ -13,8 +13,7 @@ const mocks = vi.hoisted(() => ({
   listPermissionProfiles: vi.fn(),
   listApprovalPolicies: vi.fn(),
   getEffectivePolicy: vi.fn(),
-  listToolRegistry: vi.fn(),
-  listToolRegistryModules: vi.fn()
+  getToolRegistrySummary: vi.fn()
 }))
 
 vi.mock("@/services/tldw/mcp-hub", () => ({
@@ -27,8 +26,7 @@ vi.mock("@/services/tldw/mcp-hub", () => ({
   listPermissionProfiles: (...args: unknown[]) => mocks.listPermissionProfiles(...args),
   listApprovalPolicies: (...args: unknown[]) => mocks.listApprovalPolicies(...args),
   getEffectivePolicy: (...args: unknown[]) => mocks.getEffectivePolicy(...args),
-  listToolRegistry: (...args: unknown[]) => mocks.listToolRegistry(...args),
-  listToolRegistryModules: (...args: unknown[]) => mocks.listToolRegistryModules(...args)
+  getToolRegistrySummary: (...args: unknown[]) => mocks.getToolRegistrySummary(...args)
 }))
 
 import { PolicyAssignmentsTab } from "../PolicyAssignmentsTab"
@@ -143,34 +141,36 @@ describe("PolicyAssignmentsTab", () => {
         }
       ]
     })
-    mocks.listToolRegistry.mockResolvedValue([
-      {
-        tool_name: "sandbox.run",
-        display_name: "sandbox.run",
-        module: "sandbox",
-        category: "execution",
-        risk_class: "high",
-        capabilities: ["process.execute"],
-        mutates_state: true,
-        uses_filesystem: true,
-        uses_processes: true,
-        uses_network: false,
-        uses_credentials: false,
-        supports_arguments_preview: true,
-        path_boundable: false,
-        metadata_source: "heuristic",
-        metadata_warnings: []
-      }
-    ])
-    mocks.listToolRegistryModules.mockResolvedValue([
-      {
-        module: "sandbox",
-        display_name: "sandbox",
-        tool_count: 1,
-        risk_summary: { low: 0, medium: 0, high: 1, unclassified: 0 },
-        metadata_warnings: []
-      }
-    ])
+    mocks.getToolRegistrySummary.mockResolvedValue({
+      entries: [
+        {
+          tool_name: "sandbox.run",
+          display_name: "sandbox.run",
+          module: "sandbox",
+          category: "execution",
+          risk_class: "high",
+          capabilities: ["process.execute"],
+          mutates_state: true,
+          uses_filesystem: true,
+          uses_processes: true,
+          uses_network: false,
+          uses_credentials: false,
+          supports_arguments_preview: true,
+          path_boundable: false,
+          metadata_source: "heuristic",
+          metadata_warnings: []
+        }
+      ],
+      modules: [
+        {
+          module: "sandbox",
+          display_name: "sandbox",
+          tool_count: 1,
+          risk_summary: { low: 0, medium: 0, high: 1, unclassified: 0 },
+          metadata_warnings: []
+        }
+      ]
+    })
   })
 
   it("loads assignments and shows the current effective preview", async () => {

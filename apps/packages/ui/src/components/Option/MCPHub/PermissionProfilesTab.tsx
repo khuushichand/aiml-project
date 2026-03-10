@@ -4,9 +4,8 @@ import { Alert, Button, Card, Checkbox, Empty, List, Space, Tag, Typography } fr
 import {
   createPermissionProfile,
   deletePermissionProfile,
+  getToolRegistrySummary,
   listPermissionProfiles,
-  listToolRegistry,
-  listToolRegistryModules,
   updatePermissionProfile,
   type McpHubPermissionPolicyDocument,
   type McpHubPermissionProfile,
@@ -57,10 +56,10 @@ export const PermissionProfilesTab = () => {
     let cancelled = false
     const loadRegistry = async () => {
       try {
-        const [entries, modules] = await Promise.all([listToolRegistry(), listToolRegistryModules()])
+        const summary = await getToolRegistrySummary()
         if (!cancelled) {
-          setRegistryEntries(Array.isArray(entries) ? entries : [])
-          setRegistryModules(Array.isArray(modules) ? modules : [])
+          setRegistryEntries(Array.isArray(summary?.entries) ? summary.entries : [])
+          setRegistryModules(Array.isArray(summary?.modules) ? summary.modules : [])
         }
       } catch {
         if (!cancelled) {

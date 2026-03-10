@@ -377,6 +377,7 @@ class _FakePolicyResolver:
 
 class _FakeToolRegistryService:
     def __init__(self) -> None:
+        self.list_entries_calls = 0
         self.entries = [
             {
                 "tool_name": "notes.search",
@@ -415,25 +416,33 @@ class _FakeToolRegistryService:
         ]
 
     async def list_entries(self):
+        self.list_entries_calls += 1
         return list(self.entries)
 
     async def list_modules(self):
-        return [
-            {
-                "module": "notes",
-                "display_name": "notes",
-                "tool_count": 1,
-                "risk_summary": {"low": 1, "medium": 0, "high": 0, "unclassified": 0},
-                "metadata_warnings": [],
-            },
-            {
-                "module": "sandbox",
-                "display_name": "sandbox",
-                "tool_count": 1,
-                "risk_summary": {"low": 0, "medium": 0, "high": 1, "unclassified": 0},
-                "metadata_warnings": ["Derived metadata present"],
-            },
-        ]
+        return (await self.get_summary())["modules"]
+
+    async def get_summary(self):
+        entries = await self.list_entries()
+        return {
+            "entries": entries,
+            "modules": [
+                {
+                    "module": "notes",
+                    "display_name": "notes",
+                    "tool_count": 1,
+                    "risk_summary": {"low": 1, "medium": 0, "high": 0, "unclassified": 0},
+                    "metadata_warnings": [],
+                },
+                {
+                    "module": "sandbox",
+                    "display_name": "sandbox",
+                    "tool_count": 1,
+                    "risk_summary": {"low": 0, "medium": 0, "high": 1, "unclassified": 0},
+                    "metadata_warnings": ["Derived metadata present"],
+                },
+            ],
+        }
 
 
 def _build_app(
@@ -484,6 +493,31 @@ def test_create_permission_profile_requires_grant_authority_for_capabilities() -
                 "owner_scope_id": 7,
                 "mode": "custom",
                 "policy_document": {"capabilities": ["process.execute"]},
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 403
+    assert "grant.process.execute" in resp.json()["detail"]
+
+
+def test_create_permission_profile_rejects_string_capability_without_grant_authority() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/permission-profiles",
+            json={
+                "name": "Process Exec",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "mode": "custom",
+                "policy_document": {"capabilities": "process.execute"},
                 "is_active": True,
             },
         )
@@ -913,6 +947,26 @@ def test_list_tool_registry_modules_returns_grouped_summary() -> None:
     assert payload[0]["tool_count"] == 1
     assert payload[1]["module"] == "sandbox"
     assert payload[1]["risk_summary"]["high"] == 1
+
+
+def test_get_tool_registry_summary_returns_entries_and_modules_from_one_scan() -> None:
+    registry = _FakeToolRegistryService()
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[],
+        ),
+        tool_registry=registry,
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/tool-registry/summary")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert len(payload["entries"]) == 2
+    assert len(payload["modules"]) == 2
+    assert registry.list_entries_calls == 1
 
 
 def test_list_permission_profiles_returns_visible_rows() -> None:

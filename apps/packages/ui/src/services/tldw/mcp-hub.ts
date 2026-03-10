@@ -268,6 +268,11 @@ export type McpHubToolRegistryModule = {
   metadata_warnings: string[]
 }
 
+export type McpHubToolRegistrySummary = {
+  entries: McpHubToolRegistryEntry[]
+  modules: McpHubToolRegistryModule[]
+}
+
 export type McpHubExternalServer = {
   id: string
   name: string
@@ -443,6 +448,13 @@ export const listToolRegistry = async (): Promise<McpHubToolRegistryEntry[]> => 
 export const listToolRegistryModules = async (): Promise<McpHubToolRegistryModule[]> => {
   return await bgRequestClient<McpHubToolRegistryModule[]>({
     path: "/api/v1/mcp/hub/tool-registry/modules",
+    method: "GET"
+  })
+}
+
+export const getToolRegistrySummary = async (): Promise<McpHubToolRegistrySummary> => {
+  return await bgRequestClient<McpHubToolRegistrySummary>({
+    path: "/api/v1/mcp/hub/tool-registry/summary",
     method: "GET"
   })
 }

@@ -2,8 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { Alert, Card, Empty, Space, Tag, Typography } from "antd"
 
 import {
-  listToolRegistry,
-  listToolRegistryModules,
+  getToolRegistrySummary,
   type McpHubToolRegistryEntry,
   type McpHubToolRegistryModule
 } from "@/services/tldw/mcp-hub"
@@ -23,10 +22,10 @@ export const ToolCatalogsTab = () => {
       setLoading(true)
       setErrorMessage(null)
       try {
-        const [entryRows, moduleRows] = await Promise.all([listToolRegistry(), listToolRegistryModules()])
+        const summary = await getToolRegistrySummary()
         if (!cancelled) {
-          setEntries(Array.isArray(entryRows) ? entryRows : [])
-          setModules(Array.isArray(moduleRows) ? moduleRows : [])
+          setEntries(Array.isArray(summary?.entries) ? summary.entries : [])
+          setModules(Array.isArray(summary?.modules) ? summary.modules : [])
         }
       } catch {
         if (!cancelled) {

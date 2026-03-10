@@ -95,7 +95,10 @@ _STRONG_EXPLICIT_KEYS = frozenset(
     }
 )
 _CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("execution", ("bash", "command", "execute", "exec", "process", "run", "sandbox", "shell")),
+    (
+        "execution",
+        ("bash", "command", "execute", "exec", "process", "run", "sandbox", "shell"),
+    ),
     ("management", ("create", "delete", "import", "remove", "update", "write")),
     ("ingestion", ("ingest", "upload")),
     ("search", ("find", "list", "query", "search")),
@@ -155,6 +158,7 @@ class McpHubToolRegistryService:
         self._module_registry = module_registry or get_module_registry()
 
     async def list_entries(self) -> list[dict[str, Any]]:
+        """Return normalized tool metadata entries for every live MCP tool."""
         modules = await self._module_registry.get_all_modules()
         entries: list[dict[str, Any]] = []
 
@@ -172,9 +176,23 @@ class McpHubToolRegistryService:
         return entries
 
     async def list_modules(self) -> list[dict[str, Any]]:
+        """Return module-level summaries derived from the normalized tool registry."""
+        return self._module_rows_from_entries(await self.list_entries())
+
+    async def get_summary(self) -> dict[str, list[dict[str, Any]]]:
+        """Return tool entries and module summaries from a single registry enumeration."""
+        entries = await self.list_entries()
+        return {
+            "entries": entries,
+            "modules": self._module_rows_from_entries(entries),
+        }
+
+    @staticmethod
+    def _module_rows_from_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Build module summary rows from pre-normalized tool entries."""
         module_rows: dict[str, dict[str, Any]] = {}
 
-        for entry in await self.list_entries():
+        for entry in entries:
             module_key = entry["module"]
             row = module_rows.setdefault(
                 module_key,
@@ -299,4 +317,3 @@ class McpHubToolRegistryService:
         if risk_class == "unclassified":
             warnings.append("Tool risk class requires manual review")
         return _unique(warnings)
-
