@@ -35,6 +35,7 @@ from .models import (
     RuntimeType,
     Session,
     SessionSpec,
+    TrustLevel,
 )
 from .orchestrator import SandboxOrchestrator, SessionActiveRunsConflict
 from .policy import SandboxPolicy, SandboxPolicyConfig, compute_policy_hash
@@ -42,6 +43,9 @@ from .runtime_capabilities import RuntimePreflightResult, collect_runtime_prefli
 from .runners.docker_runner import DockerRunner, docker_available
 from .runners.firecracker_runner import FirecrackerRunner, firecracker_available, firecracker_real_enabled
 from .runners.lima_runner import LimaRunner, lima_available
+from .runners.seatbelt_runner import SeatbeltRunner
+from .runners.vz_linux_runner import VZLinuxRunner
+from .runners.vz_macos_runner import VZMacOSRunner
 from .snapshots import SnapshotManager
 from .store import get_store_mode
 from .streams import get_hub
@@ -268,6 +272,44 @@ class SandboxService:
         self._validate_lima_policy(runtime=spec.runtime, network_policy=spec.network_policy)
         return LimaRunner().start_run(run_id, spec, workspace_path)
 
+    def _start_vz_linux_run_with_execution_preflight(
+        self,
+        run_id: str,
+        spec: RunSpec,
+        workspace_path: str | None,
+    ) -> RunStatus:
+        preflight = VZLinuxRunner().preflight(network_policy=spec.network_policy)
+        if not preflight.available:
+            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.vz_linux, reasons=list(preflight.reasons or []))
+        return VZLinuxRunner().start_run(run_id, spec, workspace_path)
+
+    def _start_vz_macos_run_with_execution_preflight(
+        self,
+        run_id: str,
+        spec: RunSpec,
+        workspace_path: str | None,
+    ) -> RunStatus:
+        preflight = VZMacOSRunner().preflight(network_policy=spec.network_policy)
+        if not preflight.available:
+            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.vz_macos, reasons=list(preflight.reasons or []))
+        return VZMacOSRunner().start_run(run_id, spec, workspace_path)
+
+    def _start_seatbelt_run_with_execution_preflight(
+        self,
+        run_id: str,
+        spec: RunSpec,
+        workspace_path: str | None,
+    ) -> RunStatus:
+        preflight = SeatbeltRunner().preflight(network_policy=spec.network_policy)
+        if not preflight.available:
+            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.seatbelt, reasons=list(preflight.reasons or []))
+        self.policy._require_trust_level_supported(
+            RuntimeType.seatbelt,
+            spec.trust_level or TrustLevel.standard,
+            runtime_preflights={RuntimeType.seatbelt: preflight},
+        )
+        return SeatbeltRunner().start_run(run_id, spec, workspace_path)
+
     def _effective_claim_lease_seconds(self) -> int:
         try:
             raw = os.getenv("SANDBOX_RUN_CLAIM_LEASE_SEC")
@@ -294,6 +336,22 @@ class SandboxService:
                 RuntimeType.lima: RuntimePreflightResult(
                     runtime=RuntimeType.lima,
                     available=bool(lima_available()),
+                ),
+                RuntimeType.seatbelt: RuntimePreflightResult(
+                    runtime=RuntimeType.seatbelt,
+                    available=False,
+                    reasons=["seatbelt_unavailable"],
+                    supported_trust_levels=["trusted"],
+                ),
+                RuntimeType.vz_linux: RuntimePreflightResult(
+                    runtime=RuntimeType.vz_linux,
+                    available=False,
+                    reasons=["vz_linux_unavailable"],
+                ),
+                RuntimeType.vz_macos: RuntimePreflightResult(
+                    runtime=RuntimeType.vz_macos,
+                    available=False,
+                    reasons=["vz_macos_unavailable"],
                 ),
             }
 
@@ -633,6 +691,50 @@ class SandboxService:
         with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
             get_hub().publish_event(status.id, "end", {"exit_code": None, "reason": reason})
 
+    def _execute_single_runtime_scaffold(
+        self,
+        *,
+        status: RunStatus,
+        spec: RunSpec,
+        workspace_path: str | None,
+        start_run_fn,
+        policy_failed_reason: str,
+        failed_reason: str,
+        policy_exceptions: tuple[type[BaseException], ...],
+    ) -> RunStatus:
+        try:
+            admitted = self._admit_run_starting(status.id)
+            if admitted is None:
+                existing = self._orch.get_run(status.id)
+                return existing or status
+            if admitted.phase != RunPhase.starting:
+                return admitted
+            self._apply_admitted_status(status, admitted)
+            try:
+                real = self._run_with_claim_lease(
+                    status.id,
+                    lambda: start_run_fn(status.id, spec, workspace_path),
+                )
+            except policy_exceptions:
+                status.phase = RunPhase.failed
+                status.message = policy_failed_reason
+                status.finished_at = datetime.utcnow()
+                self._orch.update_run(status.id, status)
+                return status
+            real.id = status.id
+            status.phase = real.phase
+            status.exit_code = real.exit_code
+            status.started_at = real.started_at
+            status.finished_at = real.finished_at
+            status.message = real.message
+            status.image_digest = real.image_digest
+            status.runtime_version = real.runtime_version
+            self._orch.update_run(status.id, status)
+            return status
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            self._mark_run_failed(status, reason=failed_reason)
+            return status
+
     def feature_discovery(self) -> list[dict]:
         images = [
             "python:3.11-slim",
@@ -695,10 +797,25 @@ class SandboxService:
         docker_preflight = runtime_preflights.get(RuntimeType.docker)
         firecracker_preflight = runtime_preflights.get(RuntimeType.firecracker)
         lima_preflight = runtime_preflights.get(RuntimeType.lima)
+        vz_linux_preflight = runtime_preflights.get(RuntimeType.vz_linux)
+        vz_macos_preflight = runtime_preflights.get(RuntimeType.vz_macos)
+        seatbelt_preflight = runtime_preflights.get(RuntimeType.seatbelt)
         lima_enforcement_ready = dict((lima_preflight.enforcement_ready if lima_preflight else {}) or {})
         # Allowlist enforcement is not implemented for Lima runtime execution.
         lima_enforcement_ready["allowlist"] = False
         lima_host = dict((lima_preflight.host if lima_preflight else {}) or {})
+
+        def _preflight_fields(preflight: RuntimePreflightResult | None) -> dict[str, object]:
+            enforcement_ready = dict((preflight.enforcement_ready if preflight else {}) or {})
+            return {
+                "available": bool(preflight.available) if preflight is not None else False,
+                "reasons": list((preflight.reasons if preflight else []) or []),
+                "supported_trust_levels": list((preflight.supported_trust_levels if preflight else []) or []),
+                "strict_deny_all_supported": bool(enforcement_ready.get("deny_all")),
+                "strict_allowlist_supported": bool(enforcement_ready.get("allowlist")),
+                "enforcement_ready": enforcement_ready,
+                "host": dict((preflight.host if preflight else {}) or {}),
+            }
 
         return [
             {
@@ -789,6 +906,60 @@ class SandboxService:
                 "host": lima_host,
                 "store_mode": store_mode,
                 "notes": "Full VM isolation via Lima; recommended for macOS",
+            },
+            {
+                "name": "vz_linux",
+                "default_images": ["ubuntu-24.04"],
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
+                "notes": "Linux guest VM via Virtualization.framework on Apple silicon hosts",
+                **_preflight_fields(vz_linux_preflight),
+            },
+            {
+                "name": "vz_macos",
+                "default_images": ["macos-15"],
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
+                "notes": "macOS guest VM via Virtualization.framework on Apple silicon hosts",
+                **_preflight_fields(vz_macos_preflight),
+            },
+            {
+                "name": "seatbelt",
+                "default_images": ["host-local"],
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
+                "notes": "Host-local seatbelt process isolation for trusted workflows on macOS",
+                **_preflight_fields(seatbelt_preflight),
             },
         ]
 
@@ -1480,6 +1651,39 @@ class SandboxService:
                         get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code, "reason": "lima_failed"})
                 except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                     pass
+        elif execute_enabled and spec.runtime == RuntimeType.vz_linux:
+            ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+            return self._execute_single_runtime_scaffold(
+                status=status,
+                spec=spec,
+                workspace_path=ws,
+                start_run_fn=self._start_vz_linux_run_with_execution_preflight,
+                policy_failed_reason="vz_linux_policy_failed",
+                failed_reason="vz_linux_failed",
+                policy_exceptions=(SandboxPolicy.RuntimeUnavailable,),
+            )
+        elif execute_enabled and spec.runtime == RuntimeType.vz_macos:
+            ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+            return self._execute_single_runtime_scaffold(
+                status=status,
+                spec=spec,
+                workspace_path=ws,
+                start_run_fn=self._start_vz_macos_run_with_execution_preflight,
+                policy_failed_reason="vz_macos_policy_failed",
+                failed_reason="vz_macos_failed",
+                policy_exceptions=(SandboxPolicy.RuntimeUnavailable,),
+            )
+        elif execute_enabled and spec.runtime == RuntimeType.seatbelt:
+            ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+            return self._execute_single_runtime_scaffold(
+                status=status,
+                spec=spec,
+                workspace_path=ws,
+                start_run_fn=self._start_seatbelt_run_with_execution_preflight,
+                policy_failed_reason="seatbelt_policy_failed",
+                failed_reason="seatbelt_failed",
+                policy_exceptions=(SandboxPolicy.RuntimeUnavailable, SandboxPolicy.PolicyUnsupported),
+            )
         else:
             # Stub artifacts even without execution
             artifacts: dict[str, bytes] = {}
@@ -1531,6 +1735,12 @@ class SandboxService:
                 cancelled = DockerRunner.cancel_run(run_id)
             elif st.runtime == RuntimeType.lima:
                 cancelled = LimaRunner.cancel_run(run_id)
+            elif st.runtime == RuntimeType.seatbelt:
+                cancelled = SeatbeltRunner.cancel_run(run_id)
+            elif st.runtime == RuntimeType.vz_linux:
+                cancelled = VZLinuxRunner.cancel_run(run_id)
+            elif st.runtime == RuntimeType.vz_macos:
+                cancelled = VZMacOSRunner.cancel_run(run_id)
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"cancel_run failed: {e}")
             cancelled = False

@@ -1,53 +1,80 @@
 # Sandbox
 
-## 1. Descriptive of Current Feature Set
+## Current Feature Set
 
-- Purpose: An isolated execution scaffold with sessions, queued runs, idempotency, and artifact streaming.
+- Purpose: isolated execution with sessions, queued runs, idempotency, artifact streaming, and capability-driven runtime admission.
+- Core runtimes:
+  - `docker`
+  - `firecracker`
+  - `lima`
+  - `vz_linux`
+  - `vz_macos`
+  - `seatbelt`
 - Capabilities:
-  - Create/destroy sessions; upload files to session
-  - Queue runs with TTL and capacity limits; cancelation support
-  - Stream run events via WebSocket; secure artifact download URLs
-- Inputs/Outputs:
-  - Inputs: JSON payloads for sessions/runs; file uploads; WS control frames
-  - Outputs: run statuses, artifacts, stream frames, health states
-- Related Endpoints:
-  - `tldw_Server_API/app/api/v1/endpoints/sandbox.py:82` (router + endpoints: health, sessions, runs, stream, admin)
-- Related Models:
-  - `tldw_Server_API/app/api/v1/schemas/sandbox_schemas.py:1`
+  - Create and destroy sessions
+  - Queue runs with TTL and capacity limits
+  - Stream run events over WebSocket
+  - Serve guarded artifact download URLs
+  - Expose runtime discovery with preflight reasons, host facts, and supported trust levels
 
-## 2. Technical Details of Features
+## Runtime Model
 
-- Architecture & Data Flow:
-  - `SandboxOrchestrator` manages sessions, runs, idempotency storage via `store`; queue pruning by TTL
-- Key Classes/Functions:
-  - Orchestrator: `core/Sandbox/orchestrator.py:1`; Policy/config in `core/Sandbox/policy.py`; store/cache/streams modules
-- Dependencies:
-  - Internal: Metrics counters; Audit logging; feature flags
-- Data Models & DB:
-  - In-memory store by default (pluggable via `store`)
-- Configuration:
-  - Queue: `SANDBOX_QUEUE_MAX_LENGTH`, `SANDBOX_QUEUE_TTL_SEC`, `SANDBOX_QUEUE_ESTIMATED_WAIT_PER_RUN_SEC`
-  - Idempotency TTL: `SANDBOX_IDEMPOTENCY_TTL_SEC`
-- Concurrency & Performance:
-  - Lock-guarded maps; minimal O(1) operations; histograms for durations
-- Error Handling:
-  - Idempotency conflict surfaces original id and created_at; safe streaming cleanup on exceptions
-- Security:
-  - Artifact path guard to prevent traversal; route class wrapper for download URLs
+- `docker`: general-purpose default runtime with existing interactive support.
+- `firecracker`: VM-oriented Linux isolation path.
+- `lima`: strict macOS-host VM path with explicit deny-all readiness checks.
+- `vz_linux`: Apple `Virtualization.framework` Linux guest scaffold on Apple silicon macOS hosts.
+- `vz_macos`: Apple `Virtualization.framework` macOS guest scaffold on Apple silicon macOS hosts.
+- `seatbelt`: host-local process isolation scaffold for conservative macOS trusted workflows.
 
-## 3. Developer-Related/Relevant Information for Contributors
+Trust-level rules:
 
-- Folder Structure:
-  - `Sandbox/` with `models.py`, `orchestrator.py`, `service.py`, `store.py`, `streams.py`, `policy.py`, runner stubs
-- Extension Points:
-  - Implement durable stores and real runners (docker/firecracker runners are stubs here)
-- Coding Patterns:
-  - Keep API thin; push logic into orchestrator/service; add metrics/audit labels consistently
-- Tests:
-  - (Scaffold) Add end-to-end tests using WS and queue limits as the module matures
-- Local Dev Tips:
-  - Use `/api/v1/sandbox/health` and `/api/v1/sandbox/runs` for quick validation; enable synthetic test frames in config when available
-- Pitfalls & Gotchas:
-  - Queue backpressure and TTL pruning; large artifact payloads
-- Roadmap/TODOs:
-  - Pluggable backends for store and runners; per-tenant quotas
+- `untrusted` requires a VM runtime.
+- `seatbelt` is rejected for `untrusted`.
+- `seatbelt` defaults to `trusted` only; `standard` requires `TLDW_SANDBOX_SEATBELT_STANDARD_ENABLED=1`.
+- `vz_linux` and `vz_macos` advertise `trusted`, `standard`, and `untrusted`.
+
+## Technical Notes
+
+- `SandboxOrchestrator` owns session/run lifecycle, queueing, idempotency, and artifact storage.
+- `SandboxService` is the integration point for policy admission, runtime preflights, execution dispatch, and runtime discovery.
+- Runtime capability snapshots are collected in `runtime_capabilities.py`.
+- macOS scaffolding currently includes:
+  - fake-backed helper contract in `macos_virtualization/`
+  - manifest/image-store contract in `image_store.py`
+  - fake-backed runners for `vz_linux`, `vz_macos`, and `seatbelt`
+
+Current limitations:
+
+- Real `Virtualization.framework` execution is not implemented yet.
+- `vz_linux` and `vz_macos` require helper/template readiness plus `*_FAKE_EXEC=1`; otherwise discovery reports `real_execution_not_implemented`.
+- Strict allowlist networking is not implemented for `vz_linux`, `vz_macos`, or `seatbelt`.
+- Warm session VM reuse is not implemented yet.
+- `seatbelt` is intentionally conservative and should not be treated as equivalent to a VM boundary.
+
+## Operations And Development
+
+- Main API surface: `tldw_Server_API/app/api/v1/endpoints/sandbox.py`
+- Main schemas: `tldw_Server_API/app/api/v1/schemas/sandbox_schemas.py`
+- ACP integration: `tldw_Server_API/app/core/Agent_Client_Protocol/sandbox_runner_client.py`
+- Recommended validation endpoints:
+  - `/api/v1/sandbox/health`
+  - `/api/v1/sandbox/runtimes`
+  - `/api/v1/sandbox/runs`
+
+Selected configuration knobs:
+
+- Queue and idempotency:
+  - `SANDBOX_QUEUE_MAX_LENGTH`
+  - `SANDBOX_QUEUE_TTL_SEC`
+  - `SANDBOX_IDEMPOTENCY_TTL_SEC`
+- macOS scaffolding:
+  - `TLDW_SANDBOX_MACOS_HELPER_READY`
+  - `TLDW_SANDBOX_VZ_LINUX_AVAILABLE`
+  - `TLDW_SANDBOX_VZ_LINUX_FAKE_EXEC`
+  - `TLDW_SANDBOX_VZ_LINUX_TEMPLATE_READY`
+  - `TLDW_SANDBOX_VZ_MACOS_AVAILABLE`
+  - `TLDW_SANDBOX_VZ_MACOS_FAKE_EXEC`
+  - `TLDW_SANDBOX_VZ_MACOS_TEMPLATE_READY`
+  - `TLDW_SANDBOX_SEATBELT_AVAILABLE`
+  - `TLDW_SANDBOX_SEATBELT_FAKE_EXEC`
+  - `TLDW_SANDBOX_SEATBELT_STANDARD_ENABLED`
