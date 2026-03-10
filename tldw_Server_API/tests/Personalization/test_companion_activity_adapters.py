@@ -14,6 +14,8 @@ from tldw_Server_API.app.core.Personalization.companion_activity import (
     record_persona_tool_executed,
     record_reminder_task_deleted,
     record_reminder_task_updated,
+    record_watchlist_item_added,
+    record_watchlist_item_updated,
     record_watchlist_source_deleted,
     record_watchlist_source_restored,
     record_watchlist_source_updated,
@@ -394,3 +396,76 @@ def test_watchlist_source_update_delete_and_restore_adapters_capture_compact_met
     assert updated_event["metadata"]["changed_fields"] == ["active", "tags"]
     assert updated_event["metadata"]["group_ids"] == [7, 9]
     assert updated_event["provenance"]["action"] == "update"
+
+
+def test_watchlist_item_add_and_update_adapters_capture_compact_metadata(companion_db_env):
+    user_id = "82"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    db.update_profile(user_id, enabled=1)
+
+    item = {
+        "id": 404,
+        "run_id": 12,
+        "job_id": 21,
+        "source_id": 202,
+        "media_id": 11,
+        "media_uuid": "1d2602cb-2a5a-4c9c-b253-c8090bce89d8",
+        "url": "https://example.com/watch/security-story",
+        "title": "Security Story",
+        "summary": (
+            "A long summary that should be compacted before it is written into the "
+            "companion activity ledger so the ledger does not store the full item body. "
+            * 3
+        ).strip(),
+        "published_at": "2026-03-10T12:00:00Z",
+        "status": "ingested",
+        "reviewed": 0,
+        "queued_for_briefing": 0,
+        "created_at": "2026-03-10T12:01:00Z",
+        "tags": ["security", "flagged"],
+    }
+
+    added = record_watchlist_item_added(
+        user_id=user_id,
+        item=item,
+        route="/api/v1/watchlists/jobs/21/run",
+    )
+    updated = record_watchlist_item_updated(
+        user_id=user_id,
+        item={**item, "reviewed": 1, "queued_for_briefing": 1},
+        patch={"reviewed": True, "queued_for_briefing": True},
+        event_timestamp="2026-03-10T12:05:00Z",
+    )
+
+    assert added
+    assert updated
+
+    events, total = db.list_companion_activity_events(user_id, limit=10)
+    assert total == 2
+
+    updated_event = events[0]
+    assert updated_event["event_type"] == "watchlist_item_updated"
+    assert updated_event["source_type"] == "watchlist_item"
+    assert updated_event["surface"] == "api.watchlists"
+    assert updated_event["metadata"]["run_id"] == 12
+    assert updated_event["metadata"]["job_id"] == 21
+    assert updated_event["metadata"]["source_id"] == 202
+    assert updated_event["metadata"]["reviewed"] is True
+    assert updated_event["metadata"]["queued_for_briefing"] is True
+    assert updated_event["metadata"]["changed_fields"] == ["queued_for_briefing", "reviewed"]
+    assert updated_event["metadata"]["summary_preview"].startswith("A long summary")
+    assert len(updated_event["metadata"]["summary_preview"]) < len(item["summary"])
+    assert "summary" not in updated_event["metadata"]
+    assert updated_event["provenance"]["route"] == "/api/v1/watchlists/items/404"
+    assert updated_event["provenance"]["action"] == "update"
+
+    added_event = events[1]
+    assert added_event["event_type"] == "watchlist_item_added"
+    assert added_event["tags"] == ["security", "flagged"]
+    assert added_event["metadata"]["status"] == "ingested"
+    assert added_event["metadata"]["media_id"] == 11
+    assert added_event["metadata"]["media_uuid"] == "1d2602cb-2a5a-4c9c-b253-c8090bce89d8"
+    assert added_event["metadata"]["summary_preview"].startswith("A long summary")
+    assert len(added_event["metadata"]["summary_preview"]) < len(item["summary"])
+    assert added_event["provenance"]["route"] == "/api/v1/watchlists/jobs/21/run"
+    assert added_event["provenance"]["action"] == "item_ingested"

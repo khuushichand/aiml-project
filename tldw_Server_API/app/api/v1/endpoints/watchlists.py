@@ -64,6 +64,7 @@ from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _g
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.exceptions import TemplateValidationError
 from tldw_Server_API.app.core.Personalization.companion_activity import (
+    record_watchlist_item_updated,
     record_watchlist_source_created,
     record_watchlist_source_deleted,
     record_watchlist_source_restored,
@@ -1732,6 +1733,8 @@ async def check_sources_now(
                 int(current_user.id),
                 manual_job_id,
                 source_ids_override=active_source_ids,
+                capture_companion_activity=True,
+                companion_route="/api/v1/watchlists/sources/check-now",
             )
             raw_run_id = run_result.get("run_id") if isinstance(run_result, dict) else None
             run_id = int(raw_run_id) if raw_run_id is not None else None
@@ -3495,7 +3498,12 @@ async def trigger_run(
         raise HTTPException(status_code=404, detail="job_not_found") from None
 
     try:
-        result = await run_watchlist_job(int(current_user.id), job_id)
+        result = await run_watchlist_job(
+            int(current_user.id),
+            job_id,
+            capture_companion_activity=True,
+            companion_route=f"/api/v1/watchlists/jobs/{job_id}/run",
+        )
         run_id = int(result.get("run_id"))
         run = db.get_run(run_id)
     except KeyError:
@@ -4486,6 +4494,11 @@ async def update_scraped_item(
     db = Depends(get_watchlists_db_for_user),
 ):
     try:
+        before = db.get_item(item_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="item_not_found") from None
+
+    try:
         row = db.update_item_flags(
             item_id,
             reviewed=payload.reviewed,
@@ -4494,6 +4507,25 @@ async def update_scraped_item(
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="item_not_found") from None
+
+    changed_patch: dict[str, Any] = {}
+    if payload.reviewed is not None and bool(getattr(before, "reviewed", 0)) != bool(getattr(row, "reviewed", 0)):
+        changed_patch["reviewed"] = bool(getattr(row, "reviewed", 0))
+    if payload.status is not None and getattr(before, "status", None) != getattr(row, "status", None):
+        changed_patch["status"] = getattr(row, "status", None)
+    if (
+        payload.queued_for_briefing is not None
+        and bool(getattr(before, "queued_for_briefing", 0)) != bool(getattr(row, "queued_for_briefing", 0))
+    ):
+        changed_patch["queued_for_briefing"] = bool(getattr(row, "queued_for_briefing", 0))
+
+    if changed_patch:
+        record_watchlist_item_updated(
+            user_id=current_user.id,
+            item=row,
+            patch=changed_patch,
+            event_timestamp=_utcnow_iso(),
+        )
     return _row_to_scraped_item(row)
 
 

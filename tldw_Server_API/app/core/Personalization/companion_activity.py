@@ -802,6 +802,109 @@ def record_watchlist_source_restored(
     )
 
 
+def _watchlist_item_tags(item: Any) -> list[str]:
+    tags_value = _value(item, "tags")
+    if isinstance(tags_value, list):
+        return [str(tag) for tag in tags_value if str(tag).strip()]
+
+    tags_fn = getattr(item, "tags", None)
+    if callable(tags_fn):
+        try:
+            tags = tags_fn()
+            if isinstance(tags, list):
+                return [str(tag) for tag in tags if str(tag).strip()]
+        except Exception as exc:
+            logger.debug("watchlist item tags() lookup skipped: {}", exc)
+
+    raw_tags_json = _value(item, "tags_json")
+    if isinstance(raw_tags_json, str) and raw_tags_json.strip():
+        try:
+            parsed = json.loads(raw_tags_json)
+            if isinstance(parsed, list):
+                return [str(tag) for tag in parsed if str(tag).strip()]
+        except Exception as exc:
+            logger.debug("watchlist item tags_json parse skipped: {}", exc)
+
+    return []
+
+
+def _watchlist_item_metadata(item: Any) -> dict[str, Any]:
+    return {
+        "run_id": _value(item, "run_id"),
+        "job_id": _value(item, "job_id"),
+        "source_id": _value(item, "source_id"),
+        "media_id": _value(item, "media_id"),
+        "media_uuid": _value(item, "media_uuid"),
+        "url": _value(item, "url"),
+        "title": _value(item, "title"),
+        "summary_preview": _content_preview(_value(item, "summary"), max_chars=200),
+        "published_at": _value(item, "published_at"),
+        "status": _value(item, "status"),
+        "reviewed": bool(_value(item, "reviewed", False)),
+        "queued_for_briefing": bool(_value(item, "queued_for_briefing", False)),
+    }
+
+
+def _watchlist_item_timestamp(item: Any) -> str | None:
+    return _value(item, "created_at")
+
+
+def record_watchlist_item_added(
+    *,
+    user_id: str | int | None,
+    item: Any,
+    route: str,
+) -> str | None:
+    item_id = str(_value(item, "id"))
+    source_timestamp = _watchlist_item_timestamp(item)
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="watchlist_item_added",
+        source_type="watchlist_item",
+        source_id=item_id,
+        surface="api.watchlists",
+        dedupe_key=f"watchlists.item.add:{item_id}",
+        tags=_watchlist_item_tags(item),
+        provenance=_explicit_provenance(
+            route=route,
+            action="item_ingested",
+            source_timestamp=source_timestamp,
+        ),
+        metadata=_watchlist_item_metadata(item),
+    )
+
+
+def record_watchlist_item_updated(
+    *,
+    user_id: str | int | None,
+    item: Any,
+    patch: dict[str, Any] | None = None,
+    event_timestamp: str | None = None,
+) -> str | None:
+    item_id = str(_value(item, "id"))
+    source_timestamp = event_timestamp or _watchlist_item_timestamp(item)
+    fingerprint = _payload_fingerprint(patch)
+    changed_fields = sorted(str(key) for key in dict(patch or {}).keys())
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="watchlist_item_updated",
+        source_type="watchlist_item",
+        source_id=item_id,
+        surface="api.watchlists",
+        dedupe_key=f"watchlists.item.update:{item_id}:{source_timestamp or 'na'}:{fingerprint}",
+        tags=_watchlist_item_tags(item),
+        provenance=_explicit_provenance(
+            route=f"/api/v1/watchlists/items/{item_id}",
+            action="update",
+            source_timestamp=source_timestamp,
+        ),
+        metadata={
+            **_watchlist_item_metadata(item),
+            "changed_fields": changed_fields,
+        },
+    )
+
+
 def _reminder_task_metadata(task: Any) -> dict[str, Any]:
     return {
         "title": _value(task, "title"),

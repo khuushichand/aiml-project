@@ -137,3 +137,92 @@ def test_watchlist_source_update_delete_and_restore_record_companion_events(watc
     assert updated_event["metadata"]["active"] is False
     assert updated_event["metadata"]["changed_fields"] == ["active", "tags"]
     assert updated_event["tags"] == ["security", "analysis"]
+
+
+def test_watchlist_item_run_and_flag_updates_record_companion_events(watchlists_app):
+    app, personalization_db = watchlists_app
+
+    with TestClient(app) as client:
+        source_response = client.post(
+            "/api/v1/watchlists/sources",
+            json={
+                "name": "Security Feed",
+                "url": "https://example.com/security.xml",
+                "source_type": "rss",
+                "tags": ["security", "daily"],
+            },
+        )
+        assert source_response.status_code == 200, source_response.text
+        source_id = source_response.json()["id"]
+
+        job_response = client.post(
+            "/api/v1/watchlists/jobs",
+            json={
+                "name": "Security Digest",
+                "scope": {"sources": [source_id]},
+                "schedule_expr": None,
+                "timezone": "UTC",
+                "active": True,
+            },
+        )
+        assert job_response.status_code == 200, job_response.text
+        job_id = job_response.json()["id"]
+
+        run_response = client.post(f"/api/v1/watchlists/jobs/{job_id}/run")
+        assert run_response.status_code == 200, run_response.text
+        run_id = run_response.json()["id"]
+
+        items_response = client.get("/api/v1/watchlists/items", params={"run_id": run_id})
+        assert items_response.status_code == 200, items_response.text
+        items = items_response.json()["items"]
+        ingested_item = next((item for item in items if item["status"] == "ingested"), None)
+        assert ingested_item is not None
+        item_id = ingested_item["id"]
+
+        reviewed_response = client.patch(
+            f"/api/v1/watchlists/items/{item_id}",
+            json={"reviewed": True},
+        )
+        assert reviewed_response.status_code == 200, reviewed_response.text
+
+        queued_response = client.patch(
+            f"/api/v1/watchlists/items/{item_id}",
+            json={"queued_for_briefing": True},
+        )
+        assert queued_response.status_code == 200, queued_response.text
+
+        noop_response = client.patch(
+            f"/api/v1/watchlists/items/{item_id}",
+            json={"reviewed": True},
+        )
+        assert noop_response.status_code == 200, noop_response.text
+
+    events, total = personalization_db.list_companion_activity_events("906", limit=20)
+    assert total >= 4
+
+    item_added_events = [
+        event
+        for event in events
+        if event["event_type"] == "watchlist_item_added" and event["source_id"] == str(item_id)
+    ]
+    assert len(item_added_events) == 1
+    added_event = item_added_events[0]
+    assert added_event["source_id"] == str(item_id)
+    assert added_event["source_type"] == "watchlist_item"
+    assert added_event["surface"] == "api.watchlists"
+    assert added_event["provenance"]["route"] == f"/api/v1/watchlists/jobs/{job_id}/run"
+    assert added_event["provenance"]["action"] == "item_ingested"
+    assert added_event["metadata"]["run_id"] == run_id
+    assert added_event["metadata"]["job_id"] == job_id
+    assert added_event["metadata"]["source_id"] == source_id
+    assert added_event["metadata"]["status"] == "ingested"
+
+    item_updated_events = [event for event in events if event["event_type"] == "watchlist_item_updated"]
+    assert len(item_updated_events) == 2
+    changed_fields = [event["metadata"]["changed_fields"] for event in item_updated_events]
+    assert changed_fields == [["queued_for_briefing"], ["reviewed"]]
+    assert all(event["source_id"] == str(item_id) for event in item_updated_events)
+    assert all(
+        event["provenance"]["route"] == f"/api/v1/watchlists/items/{item_id}"
+        for event in item_updated_events
+    )

@@ -49,6 +49,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_datab
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import SourceRow, WatchlistsDatabase
+from tldw_Server_API.app.core.Personalization.companion_activity import record_watchlist_item_added
 from tldw_Server_API.app.core.Watchlists.fetchers import (
     fetch_rss_feed,
     fetch_rss_feed_history,
@@ -550,6 +551,8 @@ async def run_watchlist_job(
     job_id: int,
     *,
     source_ids_override: list[int] | None = None,
+    capture_companion_activity: bool = False,
+    companion_route: str | None = None,
 ) -> dict[str, Any]:
     """Run the watchlist fetch→ingest pipeline for this user/job.
 
@@ -745,7 +748,7 @@ async def run_watchlist_job(
                     _src=src,
                 ) -> None:
                     try:
-                        db.record_scraped_item(
+                        item = db.record_scraped_item(
                             run_id=run.id,
                             job_id=job_id,
                             source_id=int(_src.id),
@@ -759,6 +762,12 @@ async def run_watchlist_job(
                             tags=_keywords_for_source(_src),
                             status=status,
                         )
+                        if capture_companion_activity and companion_route and status == "ingested":
+                            record_watchlist_item_added(
+                                user_id=user_id,
+                                item=item,
+                                route=companion_route,
+                            )
                     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as rec_err:
                         logger.debug(f"record_scraped_item failed (source_id={getattr(_src, 'id', '?')}): {rec_err}")
 
