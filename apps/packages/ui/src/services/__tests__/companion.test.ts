@@ -11,6 +11,7 @@ vi.mock("@/services/background-proxy", () => ({
 import {
   createCompanionGoal,
   fetchCompanionWorkspaceSnapshot,
+  recordCompanionCheckIn,
   recordExplicitCompanionCapture,
   setCompanionGoalStatus
 } from "../companion"
@@ -278,6 +279,46 @@ describe("companion service", () => {
             page_url: "https://example.com/article",
             page_title: "Example article"
           }
+        }
+      })
+    )
+  })
+
+  it("records manual check-ins through the dedicated companion endpoint", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      id: "activity-checkin-1",
+      event_type: "companion_check_in_recorded",
+      source_type: "companion_check_in",
+      source_id: "checkin-1",
+      surface: "companion.workspace",
+      tags: ["planning", "focus"],
+      provenance: {
+        capture_mode: "explicit",
+        route: "/api/v1/companion/check-ins",
+        action: "manual_check_in"
+      },
+      metadata: {
+        title: "Morning reset",
+        summary: "Re-focused on the companion capture backlog before lunch."
+      },
+      created_at: "2026-03-10T14:30:00Z"
+    })
+
+    await recordCompanionCheckIn({
+      title: "Morning reset",
+      summary: "Re-focused on the companion capture backlog before lunch.",
+      tags: ["planning", "focus"]
+    })
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/companion/check-ins",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: {
+          title: "Morning reset",
+          summary: "Re-focused on the companion capture backlog before lunch.",
+          tags: ["planning", "focus"]
         }
       })
     )

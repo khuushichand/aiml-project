@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
@@ -14,6 +15,7 @@ from tldw_Server_API.app.api.v1.schemas.companion import (
     CompanionActivityCreate,
     CompanionActivityListResponse,
     CompanionActivityItem,
+    CompanionCheckInCreate,
     CompanionGoal,
     CompanionGoalCreate,
     CompanionGoalListResponse,
@@ -22,6 +24,7 @@ from tldw_Server_API.app.api.v1.schemas.companion import (
 )
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.feature_flags import is_personalization_enabled
+from tldw_Server_API.app.core.Personalization.companion_activity import build_manual_check_in_activity
 
 
 router = APIRouter()
@@ -82,6 +85,47 @@ async def create_companion_activity(
         provenance=dict(payload.provenance),
         metadata=dict(payload.metadata or {}),
         created_at=datetime.now(timezone.utc),
+    )
+
+
+@router.post(
+    "/check-ins",
+    response_model=CompanionActivityItem,
+    tags=["companion"],
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_companion_check_in(
+    payload: CompanionCheckInCreate = Body(...),
+    db: PersonalizationDB = Depends(get_personalization_db_for_user),
+    log: UsageEventLogger = Depends(get_usage_event_logger),
+) -> CompanionActivityItem:
+    _ensure_personalization_enabled()
+    created_at = datetime.now(timezone.utc)
+    source_id = f"checkin-{uuid4().hex}"
+    activity_payload = build_manual_check_in_activity(
+        source_id=source_id,
+        title=payload.title,
+        summary=payload.summary,
+        tags=payload.tags,
+        event_timestamp=created_at.isoformat(),
+    )
+    event_id = db.insert_companion_activity_event(user_id=log.user_id, **activity_payload)
+    log.log_event(
+        "companion.checkins.create",
+        resource_id=event_id,
+        tags=list(activity_payload["tags"] or []),
+        metadata={"source_id": source_id},
+    )
+    return CompanionActivityItem(
+        id=event_id,
+        event_type=activity_payload["event_type"],
+        source_type=activity_payload["source_type"],
+        source_id=activity_payload["source_id"],
+        surface=activity_payload["surface"],
+        tags=list(activity_payload["tags"] or []),
+        provenance=dict(activity_payload["provenance"]),
+        metadata=dict(activity_payload["metadata"] or {}),
+        created_at=created_at,
     )
 
 

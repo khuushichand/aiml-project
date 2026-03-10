@@ -25,7 +25,8 @@ const mocks = vi.hoisted(() => ({
   },
   fetchSnapshot: vi.fn(),
   setGoalStatus: vi.fn(),
-  createGoal: vi.fn()
+  createGoal: vi.fn(),
+  recordCheckIn: vi.fn()
 }))
 
 vi.mock("@/components/Layouts/Layout", () => ({
@@ -68,7 +69,8 @@ vi.mock("@/services/companion", () => ({
   fetchCompanionWorkspaceSnapshot: (...args: unknown[]) =>
     mocks.fetchSnapshot(...args),
   setCompanionGoalStatus: (...args: unknown[]) => mocks.setGoalStatus(...args),
-  createCompanionGoal: (...args: unknown[]) => mocks.createGoal(...args)
+  createCompanionGoal: (...args: unknown[]) => mocks.createGoal(...args),
+  recordCompanionCheckIn: (...args: unknown[]) => mocks.recordCheckIn(...args)
 }))
 
 import OptionCompanion from "../option-companion"
@@ -201,6 +203,24 @@ describe("option companion route", () => {
       created_at: "2026-03-10T14:00:00Z",
       updated_at: "2026-03-10T14:00:00Z"
     })
+    mocks.recordCheckIn.mockResolvedValue({
+      id: "activity-checkin-1",
+      event_type: "companion_check_in_recorded",
+      source_type: "companion_check_in",
+      source_id: "checkin-1",
+      surface: "companion.workspace",
+      tags: ["planning", "focus"],
+      provenance: {
+        capture_mode: "explicit",
+        route: "/api/v1/companion/check-ins",
+        action: "manual_check_in"
+      },
+      metadata: {
+        title: "Morning reset",
+        summary: "Re-focused on the companion capture backlog before lunch."
+      },
+      created_at: "2026-03-10T14:30:00Z"
+    })
   })
 
   it("renders the companion workspace inside the option layout", async () => {
@@ -233,6 +253,64 @@ describe("option companion route", () => {
     })
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument()
+    })
+  })
+
+  it("records a manual check-in and refreshes the activity list", async () => {
+    const checkInSnapshot = {
+      ...activeSnapshot,
+      activity: [
+        {
+          id: "activity-checkin-1",
+          event_type: "companion_check_in_recorded",
+          source_type: "companion_check_in",
+          source_id: "checkin-1",
+          surface: "companion.workspace",
+          tags: ["planning", "focus"],
+          provenance: {
+            capture_mode: "explicit",
+            route: "/api/v1/companion/check-ins",
+            action: "manual_check_in"
+          },
+          metadata: {
+            title: "Morning reset",
+            summary: "Re-focused on the companion capture backlog before lunch."
+          },
+          created_at: "2026-03-10T14:30:00Z"
+        },
+        ...activeSnapshot.activity
+      ],
+      activityTotal: 2
+    }
+    mocks.fetchSnapshot.mockResolvedValueOnce(activeSnapshot).mockResolvedValueOnce(
+      checkInSnapshot
+    )
+
+    renderRoute()
+
+    await screen.findByText("Example article")
+    fireEvent.change(screen.getByLabelText("Check-in title"), {
+      target: { value: "Morning reset" }
+    })
+    fireEvent.change(screen.getByLabelText("Summary"), {
+      target: {
+        value: "Re-focused on the companion capture backlog before lunch."
+      }
+    })
+    fireEvent.change(screen.getByLabelText("Tags"), {
+      target: { value: "planning, focus" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save check-in" }))
+
+    await waitFor(() => {
+      expect(mocks.recordCheckIn).toHaveBeenCalledWith({
+        title: "Morning reset",
+        summary: "Re-focused on the companion capture backlog before lunch.",
+        tags: ["planning", "focus"]
+      })
+    })
+    await waitFor(() => {
+      expect(screen.getByText("Morning reset")).toBeInTheDocument()
     })
   })
 

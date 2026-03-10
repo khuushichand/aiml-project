@@ -135,6 +135,34 @@ def test_companion_activity_create_rejects_missing_provenance(
     assert response.status_code == 422, response.text
 
 
+def test_companion_check_in_create_records_explicit_capture(client_with_companion_db) -> None:
+    client, db = client_with_companion_db
+
+    response = client.post(
+        "/api/v1/companion/check-ins",
+        json={
+            "title": "Morning reset",
+            "summary": "Re-focused on the companion capture backlog before lunch.",
+            "tags": ["planning", "focus"],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["event_type"] == "companion_check_in_recorded"
+    assert payload["source_type"] == "companion_check_in"
+    assert payload["surface"] == "companion.workspace"
+    assert payload["metadata"]["title"] == "Morning reset"
+    assert payload["metadata"]["summary"] == "Re-focused on the companion capture backlog before lunch."
+    assert payload["provenance"]["route"] == "/api/v1/companion/check-ins"
+    assert payload["provenance"]["action"] == "manual_check_in"
+
+    rows, total = db.list_companion_activity_events("1", limit=10, offset=0)
+    assert total == 1
+    assert rows[0]["event_type"] == "companion_check_in_recorded"
+    assert rows[0]["tags"] == ["planning", "focus"]
+
+
 def test_companion_goals_create_and_list(client_with_companion_db) -> None:
     client, _db = client_with_companion_db
 

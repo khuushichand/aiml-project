@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class CompanionActivityItem(BaseModel):
@@ -41,6 +41,36 @@ class CompanionActivityCreate(BaseModel):
     def validate_provenance(self) -> "CompanionActivityCreate":
         if not self.provenance:
             raise ValueError("provenance is required")
+        return self
+
+
+class CompanionCheckInCreate(BaseModel):
+    title: str | None = None
+    summary: str
+    tags: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("title", "summary", mode="before")
+    @classmethod
+    def _strip_text(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _normalize_tags(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise TypeError("tags must be a list")
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @model_validator(mode="after")
+    def validate_summary(self) -> "CompanionCheckInCreate":
+        if not self.summary:
+            raise ValueError("summary is required")
+        if self.title == "":
+            self.title = None
         return self
 
 

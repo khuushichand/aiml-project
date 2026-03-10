@@ -7,6 +7,7 @@ import { useServerOnline } from "@/hooks/useServerOnline"
 import {
   createCompanionGoal,
   fetchCompanionWorkspaceSnapshot,
+  recordCompanionCheckIn,
   setCompanionGoalStatus,
   type CompanionActivityItem,
   type CompanionGoal,
@@ -32,8 +33,18 @@ const describeActivity = (item: CompanionActivityItem): string => {
   if (typeof rawTitle === "string" && rawTitle.trim().length > 0) {
     return rawTitle.trim()
   }
+  const rawSummary = item.metadata?.summary
+  if (typeof rawSummary === "string" && rawSummary.trim().length > 0) {
+    return rawSummary.trim()
+  }
   return titleCase(item.event_type)
 }
+
+const parseTagInput = (value: string): string[] =>
+  value
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
 
 const summarizeProgress = (goal: CompanionGoal): string => {
   const completed = Number(goal.progress?.completed_count)
@@ -72,6 +83,10 @@ export const CompanionPage = () => {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [reloadToken, setReloadToken] = React.useState(0)
+  const [checkInTitle, setCheckInTitle] = React.useState("")
+  const [checkInSummary, setCheckInSummary] = React.useState("")
+  const [checkInTags, setCheckInTags] = React.useState("")
+  const [savingCheckIn, setSavingCheckIn] = React.useState(false)
   const [goalTitle, setGoalTitle] = React.useState("")
   const [goalDescription, setGoalDescription] = React.useState("")
   const [creatingGoal, setCreatingGoal] = React.useState(false)
@@ -159,6 +174,35 @@ export const CompanionPage = () => {
       )
     } finally {
       setUpdatingGoalId(null)
+    }
+  }
+
+  const handleCreateCheckIn = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const trimmedTitle = checkInTitle.trim()
+    const trimmedSummary = checkInSummary.trim()
+    if (!trimmedSummary) return
+
+    setSavingCheckIn(true)
+    setError(null)
+    try {
+      await recordCompanionCheckIn({
+        title: trimmedTitle || undefined,
+        summary: trimmedSummary,
+        tags: parseTagInput(checkInTags)
+      })
+      setCheckInTitle("")
+      setCheckInSummary("")
+      setCheckInTags("")
+      handleRefresh()
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Failed to save companion check-in."
+      )
+    } finally {
+      setSavingCheckIn(false)
     }
   }
 
@@ -399,6 +443,62 @@ export const CompanionPage = () => {
         </div>
 
         <div className="space-y-6">
+          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-950">Manual check-in</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Capture an intentional update in your own words so the companion has a
+                durable, explicit state change to reference later.
+              </p>
+            </div>
+
+            <form className="mt-5 space-y-3" onSubmit={handleCreateCheckIn}>
+              <div>
+                <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Check-in title
+                </label>
+                <input
+                  aria-label="Check-in title"
+                  className="w-full rounded-2xl border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:border-slate-500"
+                  onChange={(event) => setCheckInTitle(event.target.value)}
+                  placeholder="Morning reset"
+                  value={checkInTitle}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Summary
+                </label>
+                <textarea
+                  aria-label="Summary"
+                  className="min-h-[100px] w-full rounded-2xl border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:border-slate-500"
+                  onChange={(event) => setCheckInSummary(event.target.value)}
+                  placeholder="Re-focused on the companion capture backlog before lunch."
+                  value={checkInSummary}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Tags
+                </label>
+                <input
+                  aria-label="Tags"
+                  className="w-full rounded-2xl border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:border-slate-500"
+                  onChange={(event) => setCheckInTags(event.target.value)}
+                  placeholder="planning, focus"
+                  value={checkInTags}
+                />
+              </div>
+              <button
+                className="rounded-full border border-slate-900 bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-300"
+                disabled={savingCheckIn || !checkInSummary.trim()}
+                type="submit"
+              >
+                {savingCheckIn ? "Saving..." : "Save check-in"}
+              </button>
+            </form>
+          </section>
+
           <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex items-center justify-between gap-4">
               <div>

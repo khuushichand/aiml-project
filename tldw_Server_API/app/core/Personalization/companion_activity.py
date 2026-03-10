@@ -96,6 +96,67 @@ def record_companion_activity(
         return None
 
 
+def _truncate_text(value: str | None, *, max_length: int) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if len(normalized) <= max_length:
+        return normalized
+    return normalized[: max_length - 3].rstrip() + "..."
+
+
+def _normalize_companion_tags(tags: list[str] | None) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for raw_tag in tags or []:
+        tag = str(raw_tag).strip()
+        if not tag:
+            continue
+        if tag in seen:
+            continue
+        seen.add(tag)
+        normalized.append(tag)
+    return normalized
+
+
+def build_manual_check_in_activity(
+    *,
+    source_id: str,
+    title: str | None,
+    summary: str,
+    tags: list[str] | None = None,
+    event_timestamp: str | None = None,
+    route: str = "/api/v1/companion/check-ins",
+    surface: str = "companion.workspace",
+) -> dict[str, Any]:
+    normalized_summary = str(summary or "").strip()
+    if not normalized_summary:
+        raise ValueError("summary is required")
+    normalized_title = _truncate_text(title, max_length=120)
+    display_title = normalized_title or _truncate_text(normalized_summary, max_length=120)
+    normalized_tags = _normalize_companion_tags(tags)
+    return {
+        "event_type": "companion_check_in_recorded",
+        "source_type": "companion_check_in",
+        "source_id": str(source_id),
+        "surface": surface,
+        "dedupe_key": f"companion.check_in:{source_id}",
+        "tags": normalized_tags,
+        "provenance": _explicit_provenance(
+            route=route,
+            action="manual_check_in",
+            source_timestamp=event_timestamp,
+        ),
+        "metadata": {
+            "title": display_title,
+            "summary": _truncate_text(normalized_summary, max_length=1000),
+            "check_in_title": normalized_title,
+        },
+    }
+
+
 def record_reading_item_saved(*, user_id: str | int | None, item: Any) -> str | None:
     item_id = str(getattr(item, "id"))
     source_timestamp = getattr(item, "updated_at", None) or getattr(item, "created_at", None)

@@ -23,6 +23,12 @@ export type CompanionActivityCreate = {
   metadata?: Record<string, unknown>
 }
 
+export type CompanionCheckInCreate = {
+  title?: string
+  summary: string
+  tags?: string[]
+}
+
 export type CompanionKnowledgeCard = {
   id: string
   card_type: string
@@ -185,6 +191,17 @@ export const recordExplicitCompanionCapture = async (
 ): Promise<CompanionActivityItem> => {
   return bgRequest<CompanionActivityItem>({
     path: "/api/v1/companion/activity" as any,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: payload
+  })
+}
+
+export const recordCompanionCheckIn = async (
+  payload: CompanionCheckInCreate
+): Promise<CompanionActivityItem> => {
+  return bgRequest<CompanionActivityItem>({
+    path: "/api/v1/companion/check-ins" as any,
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: payload
