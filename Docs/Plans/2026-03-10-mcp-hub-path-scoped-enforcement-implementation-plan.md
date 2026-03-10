@@ -8,6 +8,17 @@
 
 **Tech Stack:** FastAPI, existing MCP Hub/AuthNZ services, MCP Unified runtime, sandbox services, React, Ant Design, pytest, Vitest, Bandit
 
+## Status
+
+- Task 1: Complete
+- Task 2: Complete
+- Task 3: Complete
+- Task 4: Complete
+- Task 5: Complete
+- Task 6: Complete
+- Task 7: Complete
+- Task 8: Verification complete; follow-up notes recorded below
+
 ---
 
 ### Task 1: Add failing tests for path-scope policy fields and registry schema support
@@ -190,9 +201,9 @@ git commit -m "feat: add MCP Hub sandbox path scope resolver"
 ### Task 5: Add the tool path extractor and first-wave path enforcement
 
 **Files:**
-- Create: `tldw_Server_API/app/services/mcp_hub_path_enforcement.py`
+- Create: `tldw_Server_API/app/services/mcp_hub_path_enforcement_service.py`
 - Modify: `tldw_Server_API/app/services/mcp_hub_approval_service.py`
-- Modify: `tldw_Server_API/tests/MCP_unified/test_mcp_hub_path_enforcement.py`
+- Modify: `tldw_Server_API/tests/MCP_unified/test_mcp_hub_path_enforcement_service.py`
 - Modify: `tldw_Server_API/tests/MCP_unified/test_mcp_hub_approval_service.py`
 
 **Step 1: Add failing enforcement tests**
@@ -236,7 +247,7 @@ Do not reuse the generic coarse approval key for this path-specific branch.
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest tldw_Server_API/tests/MCP_unified/test_mcp_hub_path_enforcement.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_approval_service.py -k "path or scope" -v
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/MCP_unified/test_mcp_hub_path_enforcement_service.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_approval_service.py -k "path or scope" -v
 ```
 
 Expected: PASS.
@@ -244,7 +255,7 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/services/mcp_hub_path_enforcement.py tldw_Server_API/app/services/mcp_hub_approval_service.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_path_enforcement.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_approval_service.py
+git add tldw_Server_API/app/services/mcp_hub_path_enforcement_service.py tldw_Server_API/app/services/mcp_hub_approval_service.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_path_enforcement_service.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_approval_service.py
 git commit -m "feat: add MCP Hub path-scoped tool enforcement"
 ```
 
@@ -252,7 +263,7 @@ git commit -m "feat: add MCP Hub path-scoped tool enforcement"
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/MCP_unified/protocol.py`
-- Modify: `tldw_Server_API/tests/MCP_unified/test_protocol.py`
+- Create: `tldw_Server_API/tests/MCP_unified/test_mcp_protocol_path_scope.py`
 - Modify: `tldw_Server_API/tests/Persona/test_persona_ws.py`
 
 **Step 1: Add failing runtime tests**
@@ -280,7 +291,7 @@ Ensure this PR does not change behavior for:
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest tldw_Server_API/tests/MCP_unified/test_protocol.py tldw_Server_API/tests/Persona/test_persona_ws.py -k "path_scope or approval" -v
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/MCP_unified/test_mcp_protocol_path_scope.py tldw_Server_API/tests/Persona/test_persona_ws.py -k "path_scope or approval" -v
 ```
 
 Expected: PASS.
@@ -288,7 +299,7 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/core/MCP_unified/protocol.py tldw_Server_API/tests/MCP_unified/test_protocol.py tldw_Server_API/tests/Persona/test_persona_ws.py
+git add tldw_Server_API/app/core/MCP_unified/protocol.py tldw_Server_API/tests/MCP_unified/test_mcp_protocol_path_scope.py tldw_Server_API/tests/Persona/test_persona_ws.py
 git commit -m "feat: enforce MCP Hub path scope at runtime"
 ```
 
@@ -353,7 +364,7 @@ git commit -m "feat: add MCP Hub path scope editor and summaries"
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest tldw_Server_API/tests/MCP_unified/test_mcp_hub_tool_registry.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_policy_api.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_policy_resolver.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_path_scope_service.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_path_enforcement.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_approval_service.py tldw_Server_API/tests/MCP_unified/test_protocol.py tldw_Server_API/tests/Persona/test_persona_ws.py -v
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/MCP_unified/test_mcp_hub_tool_registry.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_policy_api.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_policy_resolver.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_path_scope_service.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_path_enforcement_service.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_approval_service.py tldw_Server_API/tests/MCP_unified/test_mcp_protocol_path_scope.py tldw_Server_API/tests/Persona/test_persona_ws.py -v
 ```
 
 Run:
@@ -367,7 +378,7 @@ bunx vitest run apps/packages/ui/src/components/Option/MCPHub/__tests__
 Run:
 
 ```bash
-source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/mcp_hub_tool_registry.py tldw_Server_API/app/services/mcp_hub_path_scope_service.py tldw_Server_API/app/services/mcp_hub_path_enforcement.py tldw_Server_API/app/services/mcp_hub_approval_service.py tldw_Server_API/app/core/MCP_unified/protocol.py -f json -o /tmp/bandit_mcp_hub_path_scope.json
+source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/mcp_hub_tool_registry.py tldw_Server_API/app/services/mcp_hub_path_scope_service.py tldw_Server_API/app/services/mcp_hub_path_enforcement_service.py tldw_Server_API/app/services/mcp_hub_approval_service.py tldw_Server_API/app/core/MCP_unified/protocol.py -f json -o /tmp/bandit_mcp_hub_path_scope.json
 ```
 
 Fix new findings in changed code before finishing.
@@ -380,6 +391,13 @@ Document any intentionally deferred work, especially:
 - arbitrary path allowlists
 - multi-root workspace support
 - broader direct MCP/API caller support
+
+## Deferred Follow-Ups
+
+- Add a generic non-sandbox `workspace_id -> absolute root` resolver so path scope can cover direct MCP/API callers.
+- Expand beyond workspace-derived scopes into explicit path allowlists once the runtime and UI can explain them safely.
+- Add multi-root workspace support with per-root path-boundary selection and approval scoping.
+- Grow the explicit first-wave `path_boundable` metadata beyond the current conservative set once individual tools have proven path extraction coverage.
 
 **Step 4: Commit**
 

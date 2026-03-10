@@ -55,13 +55,13 @@ describe("PermissionProfilesTab", () => {
           risk_class: "low",
           capabilities: ["filesystem.read"],
           mutates_state: false,
-          uses_filesystem: false,
+          uses_filesystem: true,
           uses_processes: false,
           uses_network: false,
           uses_credentials: false,
           supports_arguments_preview: true,
-          path_boundable: false,
-          path_argument_hints: [],
+          path_boundable: true,
+          path_argument_hints: ["path"],
           metadata_source: "explicit",
           metadata_warnings: []
         }
@@ -89,5 +89,8 @@ describe("PermissionProfilesTab", () => {
     expect(screen.getByLabelText(/profile name/i)).toBeTruthy()
     expect(screen.getByText(/allowed modules and tools/i)).toBeTruthy()
     expect(screen.getByText(/no additional restrictions/i)).toBeTruthy()
+    await user.click(screen.getByRole("checkbox", { name: /notes\.search/i }))
+    expect(screen.getByText(/local file scope/i)).toBeTruthy()
+    expect(screen.getByText(/workspace root/i)).toBeTruthy()
   })
 })

@@ -83,8 +83,17 @@ class SandboxModule(BaseModule):
                     ],
                     "additionalProperties": False
                 },
-                # Categorize as management to enable policy enforcement and validator checks
-                "metadata": {"category": "management", "notes": "Session-based vs one-shot per PRD"}
+                # Categorize as management and mark filesystem/process usage explicitly.
+                # Path scoping must fail closed here because the command can touch
+                # arbitrary workspace paths beyond any inline file list.
+                "metadata": {
+                    "category": "management",
+                    "notes": "Session-based vs one-shot per PRD",
+                    "uses_filesystem": True,
+                    "uses_processes": True,
+                    "path_boundable": False,
+                    "path_argument_hints": ["cwd", "files[].path"],
+                },
             }
         ]
 

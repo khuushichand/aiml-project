@@ -2,6 +2,7 @@ import type {
   McpHubApprovalDuration,
   McpHubApprovalMode,
   McpHubAssignmentTargetType,
+  McpHubPathScopeMode,
   McpHubPermissionPolicyDocument,
   McpHubProfileMode,
   McpHubScopeType,
@@ -42,6 +43,15 @@ export const MCP_HUB_APPROVAL_DURATION_OPTIONS: Array<{
   { label: "Once", value: "once" },
   { label: "Session", value: "session" },
   { label: "Conversation", value: "conversation" }
+]
+
+export const MCP_HUB_PATH_SCOPE_OPTIONS: Array<{
+  label: string
+  value: McpHubPathScopeMode
+}> = [
+  { label: "No additional path restriction", value: "none" },
+  { label: "Workspace root", value: "workspace_root" },
+  { label: "Current folder and descendants", value: "cwd_descendants" }
 ]
 
 export const parseLineList = (value: string): string[] =>
@@ -173,4 +183,12 @@ export const createPresetSelection = (
     .sort()
 
   return { selectedTools }
+}
+
+export const getPathScopeLabel = (value: McpHubPathScopeMode | string | null | undefined): string | null => {
+  const normalized = String(value || "").trim()
+  if (!normalized || normalized === "none") {
+    return null
+  }
+  return MCP_HUB_PATH_SCOPE_OPTIONS.find((option) => option.value === normalized)?.label || normalized
 }

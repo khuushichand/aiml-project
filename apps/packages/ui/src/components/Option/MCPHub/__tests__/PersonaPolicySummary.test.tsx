@@ -22,7 +22,10 @@ describe("PersonaPolicySummary", () => {
       capabilities: ["process.execute"],
       approval_policy_id: 17,
       approval_mode: "ask_outside_profile",
-      policy_document: {},
+      policy_document: {
+        path_scope_mode: "workspace_root",
+        path_scope_enforcement: "approval_required_when_unenforceable"
+      },
       sources: [],
       provenance: [
         {
@@ -45,6 +48,8 @@ describe("PersonaPolicySummary", () => {
     expect(screen.getByText("Bash(git *)")).toBeTruthy()
     expect(screen.getByText("Bash(rm *)")).toBeTruthy()
     expect(screen.getByText("Override active")).toBeTruthy()
+    expect(screen.getByText("Workspace root")).toBeTruthy()
+    expect(screen.getByText("Path approval fallback")).toBeTruthy()
     expect(screen.getByRole("link", { name: /open mcp hub/i })).toBeTruthy()
   })
 })

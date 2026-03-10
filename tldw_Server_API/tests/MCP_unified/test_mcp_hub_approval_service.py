@@ -160,6 +160,37 @@ def test_scope_key_for_tool_call_hashes_list_commands_distinctly() -> None:
     assert first == repeated
 
 
+def test_scope_key_for_tool_call_includes_path_scope_context() -> None:
+    from tldw_Server_API.app.services.mcp_hub_approval_service import _scope_key_for_tool_call
+
+    first = _scope_key_for_tool_call(
+        "files.read",
+        {"path": "../README.md"},
+        scope_payload={
+            "path_scope_mode": "cwd_descendants",
+            "workspace_root": "/tmp/project",
+            "scope_root": "/tmp/project/src",
+            "normalized_paths": ["/tmp/project/README.md"],
+            "reason": "path_outside_current_folder_scope",
+        },
+    )
+    second = _scope_key_for_tool_call(
+        "files.read",
+        {"path": "../README.md"},
+        scope_payload={
+            "path_scope_mode": "cwd_descendants",
+            "workspace_root": "/tmp/project",
+            "scope_root": "/tmp/project/src",
+            "normalized_paths": ["/tmp/project/docs/README.md"],
+            "reason": "path_outside_current_folder_scope",
+        },
+    )
+
+    assert first.startswith("tool:files.read|args:")
+    assert second.startswith("tool:files.read|args:")
+    assert first != second
+
+
 def test_arguments_summary_redacts_sensitive_tool_args() -> None:
     from tldw_Server_API.app.services.mcp_hub_approval_service import _arguments_summary
 
@@ -351,6 +382,55 @@ async def test_approval_service_does_not_reuse_denied_decisions() -> None:
     )
 
     assert result["status"] == "approval_required"
+
+
+@pytest.mark.asyncio
+async def test_approval_service_forces_path_scope_approval_with_scope_context() -> None:
+    from tldw_Server_API.app.services.mcp_hub_approval_service import McpHubApprovalService
+
+    repo = _FakeApprovalRepo()
+    svc = McpHubApprovalService(repo=repo)
+    context = SimpleNamespace(
+        user_id="7",
+        session_id="sess-1",
+        metadata={"persona_id": "researcher"},
+    )
+    scope_payload = {
+        "path_scope_mode": "cwd_descendants",
+        "workspace_root": "/tmp/project",
+        "scope_root": "/tmp/project/src",
+        "normalized_paths": ["/tmp/project/README.md"],
+        "reason": "path_outside_current_folder_scope",
+    }
+
+    result = await svc.evaluate_tool_call(
+        effective_policy={
+            "enabled": True,
+            "allowed_tools": ["files.read"],
+            "approval_policy_id": 1,
+        },
+        tool_name="files.read",
+        tool_args={"path": "../README.md"},
+        context=context,
+        tool_def={
+            "name": "files.read",
+            "metadata": {
+                "category": "retrieval",
+                "uses_filesystem": True,
+                "path_boundable": True,
+                "path_argument_hints": ["path"],
+            },
+        },
+        is_write=False,
+        within_effective_policy=True,
+        force_approval=True,
+        approval_reason="path_outside_current_folder_scope",
+        scope_payload=scope_payload,
+    )
+
+    assert result["status"] == "approval_required"
+    assert result["approval"]["reason"] == "path_outside_current_folder_scope"
+    assert result["approval"]["scope_context"] == scope_payload
 
 
 @pytest.mark.asyncio

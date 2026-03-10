@@ -1688,6 +1688,9 @@ class MCPProtocol:
         tool_def: dict[str, Any] | None,
         is_write: bool | None,
         within_effective_policy: bool,
+        force_approval: bool = False,
+        approval_reason: str | None = None,
+        scope_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         policy = dict(effective_policy or {})
         if not bool(policy.get("enabled", False)):
@@ -1708,12 +1711,69 @@ class MCPProtocol:
                 tool_def=tool_def,
                 is_write=is_write,
                 within_effective_policy=within_effective_policy,
+                force_approval=force_approval,
+                approval_reason=approval_reason,
+                scope_payload=scope_payload,
             )
         except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Failed to evaluate MCP Hub runtime approval: {}", exc)
             if policy.get("approval_policy_id") is not None or policy.get("approval_mode"):
                 return {"status": "deny", "reason": "approval_unavailable"}
             return {"status": "allow" if within_effective_policy else "deny", "reason": "approval_not_configured"}
+
+    async def _evaluate_path_scope(
+        self,
+        *,
+        effective_policy: dict[str, Any] | None,
+        tool_name: str,
+        tool_args: Any,
+        context: RequestContext,
+        tool_def: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        policy = dict(effective_policy or {})
+        policy_document = dict(policy.get("policy_document") or {})
+        path_scope_mode = str(policy_document.get("path_scope_mode") or "").strip()
+        if not bool(policy.get("enabled", False)) or not path_scope_mode or path_scope_mode == "none":
+            return {
+                "enabled": False,
+                "within_scope": True,
+                "reason": None,
+                "force_approval": False,
+                "normalized_paths": [],
+                "scope_payload": None,
+            }
+        if str(policy.get("resolution_error") or "").strip():
+            return {
+                "enabled": True,
+                "within_scope": False,
+                "reason": "policy_unavailable",
+                "force_approval": False,
+                "normalized_paths": [],
+                "scope_payload": {"path_scope_mode": path_scope_mode, "reason": "policy_unavailable"},
+            }
+        try:
+            from tldw_Server_API.app.services.mcp_hub_path_enforcement_service import (
+                get_mcp_hub_path_enforcement_service,
+            )
+
+            path_service = await get_mcp_hub_path_enforcement_service()
+            return await path_service.evaluate_tool_call(
+                effective_policy=policy,
+                context=context,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                tool_def=tool_def,
+            )
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("Failed to evaluate MCP Hub path scope: {}", exc)
+            return {
+                "enabled": True,
+                "within_scope": False,
+                "reason": "path_scope_unavailable",
+                "force_approval": True,
+                "normalized_paths": [],
+                "scope_payload": {"path_scope_mode": path_scope_mode, "reason": "path_scope_unavailable"},
+            }
 
     async def _handle_tools_call(
         self,
@@ -1879,6 +1939,15 @@ class MCPProtocol:
             # by raising a sentinel exception handled by process_request
             raise InvalidParamsException(str(ve)) from ve
 
+        path_scope_result = await self._evaluate_path_scope(
+            effective_policy=effective_policy,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            context=context,
+            tool_def=tool_def if isinstance(tool_def, dict) else None,
+        )
+        within_resolved_scope = bool(path_scope_result.get("within_scope", True))
+
         approval_result = await self._evaluate_runtime_approval(
             effective_policy=effective_policy,
             tool_name=tool_name,
@@ -1886,7 +1955,12 @@ class MCPProtocol:
             context=context,
             tool_def=tool_def if isinstance(tool_def, dict) else None,
             is_write=is_write,
-            within_effective_policy=within_effective_policy,
+            within_effective_policy=within_effective_policy and within_resolved_scope,
+            force_approval=bool(path_scope_result.get("force_approval", False)),
+            approval_reason=str(path_scope_result.get("reason") or "").strip() or None,
+            scope_payload=path_scope_result.get("scope_payload")
+            if isinstance(path_scope_result.get("scope_payload"), dict)
+            else None,
         )
         approval_status = str(approval_result.get("status") or "allow").strip().lower()
         if approval_status == "approval_required":

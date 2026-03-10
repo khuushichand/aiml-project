@@ -23,7 +23,7 @@ import {
   type McpHubToolRegistryModule
 } from "@/services/tldw/mcp-hub"
 
-import { MCP_HUB_SCOPE_OPTIONS, MCP_HUB_TARGET_OPTIONS } from "./policyHelpers"
+import { getPathScopeLabel, MCP_HUB_SCOPE_OPTIONS, MCP_HUB_TARGET_OPTIONS } from "./policyHelpers"
 import { PolicyDocumentEditor } from "./PolicyDocumentEditor"
 
 const PROVENANCE_LABELS = {
@@ -449,6 +449,12 @@ export const PolicyAssignmentsTab = () => {
               {effectivePolicy.approval_mode ? (
                 <Tag color="gold">{effectivePolicy.approval_mode}</Tag>
               ) : null}
+              {getPathScopeLabel(effectivePolicy.policy_document?.path_scope_mode) ? (
+                <Tag color="cyan">{getPathScopeLabel(effectivePolicy.policy_document?.path_scope_mode)}</Tag>
+              ) : null}
+              {effectivePolicy.policy_document?.path_scope_enforcement ? (
+                <Tag color="orange">Path approval fallback</Tag>
+              ) : null}
             </Space>
             {effectivePolicy.provenance.length > 0 ? (
               <Space orientation="vertical" size={4} style={{ width: "100%" }}>
@@ -504,6 +510,9 @@ export const PolicyAssignmentsTab = () => {
                     {tool}
                   </Tag>
                 ))}
+                {getPathScopeLabel(assignment.inline_policy_document.path_scope_mode) ? (
+                  <Tag color="cyan">{getPathScopeLabel(assignment.inline_policy_document.path_scope_mode)}</Tag>
+                ) : null}
               </Space>
             </Space>
           </List.Item>

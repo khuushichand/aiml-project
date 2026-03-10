@@ -127,7 +127,10 @@ describe("PolicyAssignmentsTab", () => {
       capabilities: ["process.execute", "network.external"],
       approval_policy_id: 17,
       approval_mode: "ask_outside_profile",
-      policy_document: {},
+      policy_document: {
+        path_scope_mode: "workspace_root",
+        path_scope_enforcement: "approval_required_when_unenforceable"
+      },
       sources: [],
       provenance: [
         {
@@ -157,7 +160,7 @@ describe("PolicyAssignmentsTab", () => {
           uses_credentials: false,
           supports_arguments_preview: true,
           path_boundable: false,
-          path_argument_hints: [],
+          path_argument_hints: ["cwd", "files[].path"],
           metadata_source: "heuristic",
           metadata_warnings: []
         }
@@ -185,10 +188,14 @@ describe("PolicyAssignmentsTab", () => {
     expect(screen.getByText("Why This Applies")).toBeTruthy()
     expect(screen.getByText(/allowed_tools/i)).toBeTruthy()
     expect(screen.getByText(/assignment override/i)).toBeTruthy()
+    expect(screen.getByText("Workspace root")).toBeTruthy()
+    expect(screen.getByText("Path approval fallback")).toBeTruthy()
 
     await user.click(screen.getByRole("button", { name: /new assignment/i }))
     expect(screen.getByLabelText(/target type/i)).toBeTruthy()
     expect(screen.getByText(/allowed modules and tools/i)).toBeTruthy()
+    await user.click(screen.getByRole("checkbox", { name: /sandbox\.run/i }))
+    expect(screen.getByText(/local file scope/i)).toBeTruthy()
   })
 
   it("loads the assignment override editor and saves the override independently", async () => {
@@ -200,6 +207,7 @@ describe("PolicyAssignmentsTab", () => {
 
     expect(await screen.findByText("Assignment Override")).toBeTruthy()
     expect(screen.getByText("Base Assignment Policy")).toBeTruthy()
+    expect(screen.getAllByText(/approval fallback/i).length).toBeGreaterThan(0)
     expect(mocks.getPolicyAssignmentOverride).toHaveBeenCalledWith(11)
 
     await user.click(screen.getByRole("button", { name: /save override/i }))

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Alert, Button, Card, Checkbox, Empty, Space, Tag, Typography } from "antd"
+import { Alert, Button, Card, Checkbox, Empty, Radio, Space, Tag, Typography } from "antd"
 
 import type {
   McpHubPermissionPolicyDocument,
@@ -13,8 +13,10 @@ import {
   getAdvancedPolicyKeys,
   getDerivedCapabilities,
   getKnownRegistryCapabilities,
+  getPathScopeLabel,
   getPolicyAllowedToolSelection,
   getToolEntriesByModule,
+  MCP_HUB_PATH_SCOPE_OPTIONS,
   joinList,
   parseLineList
 } from "./policyHelpers"
@@ -57,12 +59,32 @@ export const PolicyDocumentEditor = ({
     () => getPolicyAllowedToolSelection(policy.allowed_tools, registryEntries),
     [policy.allowed_tools, registryEntries]
   )
+  const selectedRegistryTools = useMemo(
+    () =>
+      registryEntries.filter((entry) =>
+        selection.selectedTools.includes(entry.tool_name)
+      ),
+    [registryEntries, selection.selectedTools]
+  )
   const derivedCapabilities = useMemo(
     () => getDerivedCapabilities(selection.selectedTools, registryEntries, policy.capabilities),
     [policy.capabilities, registryEntries, selection.selectedTools]
   )
   const advancedKeys = useMemo(() => getAdvancedPolicyKeys(policy), [policy])
   const deniedToolsText = useMemo(() => joinList(policy.denied_tools), [policy.denied_tools])
+  const pathScopeMode = policy.path_scope_mode || "none"
+  const localFilesystemTools = useMemo(
+    () => selectedRegistryTools.filter((entry) => entry.uses_filesystem),
+    [selectedRegistryTools]
+  )
+  const showPathScopeControls =
+    localFilesystemTools.length > 0 ||
+    derivedCapabilities.some((capability) => capability.startsWith("filesystem.")) ||
+    pathScopeMode !== "none"
+  const approvalFallbackTools = useMemo(
+    () => localFilesystemTools.filter((entry) => !entry.path_boundable),
+    [localFilesystemTools]
+  )
 
   useEffect(() => {
     setAdvancedText(JSON.stringify(policy, null, 2))
@@ -103,6 +125,21 @@ export const PolicyDocumentEditor = ({
 
   const handleDeniedToolsChange = (value: string) => {
     applySimpleSelection(selection.selectedTools, value)
+  }
+
+  const handlePathScopeChange = (value: string) => {
+    if (value === "none") {
+      const next = { ...policy }
+      delete next.path_scope_mode
+      delete next.path_scope_enforcement
+      onChange(next)
+      return
+    }
+    onChange({
+      ...policy,
+      path_scope_mode: value,
+      path_scope_enforcement: "approval_required_when_unenforceable"
+    })
   }
 
   const handleAdvancedChange = (value: string) => {
@@ -181,6 +218,47 @@ export const PolicyDocumentEditor = ({
             )}
           </Card>
 
+          {showPathScopeControls ? (
+            <Card size="small" title="Local File Scope">
+              <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                <Typography.Text type="secondary">
+                  Restrict local file access to the selected workspace boundary. Tools that cannot be
+                  path-scoped safely will require approval instead of bypassing the policy.
+                </Typography.Text>
+                <Radio.Group
+                  aria-label="Local File Scope"
+                  value={pathScopeMode}
+                  onChange={(event) => handlePathScopeChange(event.target.value)}
+                >
+                  <Space orientation="vertical">
+                    {MCP_HUB_PATH_SCOPE_OPTIONS.map((option) => (
+                      <Radio key={option.value} value={option.value}>
+                        {option.label}
+                      </Radio>
+                    ))}
+                  </Space>
+                </Radio.Group>
+                {pathScopeMode !== "none" ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message={`${getPathScopeLabel(pathScopeMode)} requires a trusted workspace root at runtime.`}
+                  />
+                ) : null}
+                {approvalFallbackTools.length > 0 && pathScopeMode !== "none" ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message={`Approval fallback: ${approvalFallbackTools
+                      .map((tool) => tool.display_name)
+                      .join(", ")}`}
+                    description="These selected tools touch local files but are not path-enforceable yet."
+                  />
+                ) : null}
+              </Space>
+            </Card>
+          ) : null}
+
           <Card size="small" title="Allowed Modules And Tools">
             {modules.length > 0 ? (
               <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
@@ -223,6 +301,12 @@ export const PolicyDocumentEditor = ({
                               <Tag color={tool.risk_class === "high" ? "red" : tool.risk_class === "medium" ? "gold" : "green"}>
                                 {tool.risk_class}
                               </Tag>
+                              {tool.uses_filesystem && tool.path_boundable ? (
+                                <Tag color="cyan">path-enforceable</Tag>
+                              ) : null}
+                              {tool.uses_filesystem && !tool.path_boundable ? (
+                                <Tag color="orange">approval fallback</Tag>
+                              ) : null}
                             </Space>
                           </Checkbox>
                         ))}

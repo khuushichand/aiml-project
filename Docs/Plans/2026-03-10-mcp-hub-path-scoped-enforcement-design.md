@@ -392,3 +392,15 @@ Ship this PR as:
 
 Do not expand to arbitrary path allowlists or non-session traffic in the same PR.
 
+## Implementation Notes
+
+- The first implementation stayed conservative:
+  - sandbox-backed session roots only
+  - workspace-derived scope modes only
+  - path-aware approval scoping keyed by normalized path context
+  - explicit live metadata on `sandbox.run` so path-scoped profiles escalate rather than silently bypass
+- Deferred on purpose:
+  - generic non-sandbox workspace-root resolution
+  - arbitrary path allowlists
+  - multi-root workspaces
+  - broader direct MCP/API caller coverage

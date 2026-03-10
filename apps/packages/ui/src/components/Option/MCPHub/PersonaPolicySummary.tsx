@@ -3,6 +3,8 @@ import { Alert, Button, Card, Empty, Space, Tag, Typography } from "antd"
 
 import { getEffectivePolicy, type McpHubEffectivePolicy } from "@/services/tldw/mcp-hub"
 
+import { getPathScopeLabel } from "./policyHelpers"
+
 type PersonaPolicySummaryProps = {
   personaId?: string | null
 }
@@ -60,11 +62,22 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
         <Typography.Text type="secondary">Loading effective policy...</Typography.Text>
       ) : policy ? (
         <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+          {getPathScopeLabel(policy.policy_document?.path_scope_mode) ? (
+            <Typography.Text type="secondary">
+              {`Local file scope: ${getPathScopeLabel(policy.policy_document?.path_scope_mode)}`}
+            </Typography.Text>
+          ) : null}
           <Space wrap>
             {policy.capabilities.map((capability) => (
               <Tag key={capability}>{capability}</Tag>
             ))}
             {policy.approval_mode ? <Tag color="gold">{policy.approval_mode}</Tag> : null}
+            {getPathScopeLabel(policy.policy_document?.path_scope_mode) ? (
+              <Tag color="cyan">{getPathScopeLabel(policy.policy_document?.path_scope_mode)}</Tag>
+            ) : null}
+            {policy.policy_document?.path_scope_enforcement ? (
+              <Tag color="orange">Path approval fallback</Tag>
+            ) : null}
             {policy.provenance.some((entry) => entry.source_kind === "assignment_override") ? (
               <Tag color="cyan">Override active</Tag>
             ) : null}
