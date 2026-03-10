@@ -10,6 +10,8 @@ from tldw_Server_API.app.core.Personalization.companion_activity import (
     record_note_deleted,
     record_note_restored,
     record_note_updated,
+    record_reminder_task_deleted,
+    record_reminder_task_updated,
 )
 from tldw_Server_API.app.core.config import settings
 
@@ -180,3 +182,56 @@ def test_note_delete_and_restore_adapters_capture_state_changes(companion_db_env
     assert deleted_event["metadata"]["hard_delete"] is False
     assert deleted_event["metadata"]["content_preview"].startswith("A note that is about to be removed")
     assert "content" not in deleted_event["metadata"]
+
+
+def test_reminder_task_update_and_delete_adapters_capture_compact_metadata(companion_db_env):
+    user_id = "80"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    db.update_profile(user_id, enabled=1)
+
+    updated_task = {
+        "id": "task-1",
+        "title": "Review companion signals",
+        "body": "Check the explicit activity backlog before the next reflection run.",
+        "schedule_kind": "one_time",
+        "run_at": "2026-03-10T18:00:00Z",
+        "cron": None,
+        "timezone": None,
+        "enabled": False,
+        "link_type": "note",
+        "link_id": "note-22",
+        "link_url": None,
+        "created_at": "2026-03-10T09:00:00Z",
+        "updated_at": "2026-03-10T09:30:00Z",
+    }
+
+    updated = record_reminder_task_updated(
+        user_id=user_id,
+        task=updated_task,
+        patch={"enabled": False, "title": "Review companion signals"},
+    )
+    deleted = record_reminder_task_deleted(user_id=user_id, task=updated_task)
+
+    assert updated
+    assert deleted
+
+    events, total = db.list_companion_activity_events(user_id, limit=10)
+    assert total == 2
+
+    deleted_event = events[0]
+    assert deleted_event["event_type"] == "reminder_task_deleted"
+    assert deleted_event["source_type"] == "reminder_task"
+    assert deleted_event["surface"] == "api.tasks"
+    assert deleted_event["provenance"]["action"] == "delete"
+    assert deleted_event["metadata"]["title"] == "Review companion signals"
+    assert deleted_event["metadata"]["hard_delete"] is True
+    assert deleted_event["metadata"]["enabled"] is False
+    assert deleted_event["metadata"]["body_preview"].startswith("Check the explicit activity backlog")
+    assert "body" not in deleted_event["metadata"]
+
+    updated_event = events[1]
+    assert updated_event["event_type"] == "reminder_task_updated"
+    assert updated_event["provenance"]["route"] == "/api/v1/tasks/task-1"
+    assert updated_event["metadata"]["changed_fields"] == ["enabled", "title"]
+    assert updated_event["metadata"]["schedule_kind"] == "one_time"
+    assert updated_event["metadata"]["link_type"] == "note"

@@ -14,7 +14,11 @@ from tldw_Server_API.app.api.v1.schemas.reminders_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import TASKS_CONTROL, TASKS_READ
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase, ReminderTaskRow
-from tldw_Server_API.app.core.Personalization.companion_activity import record_reminder_task_created
+from tldw_Server_API.app.core.Personalization.companion_activity import (
+    record_reminder_task_created,
+    record_reminder_task_deleted,
+    record_reminder_task_updated,
+)
 from tldw_Server_API.app.services.reminders_scheduler import get_reminders_scheduler
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -149,7 +153,10 @@ async def update_task(
     try:
         updated = db.update_reminder_task(task_id, patch)
         await _reconcile_task_best_effort(task_id=task_id, user_id=int(db.user_id))
-        return _row_to_response(updated)
+        response = _row_to_response(updated)
+        if patch:
+            record_reminder_task_updated(user_id=db.user_id, task=response, patch=patch)
+        return response
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task_not_found") from exc
 
@@ -164,7 +171,14 @@ async def delete_task(
     db: CollectionsDatabase = Depends(get_collections_db_for_user),
     _principal=Depends(require_permissions(TASKS_CONTROL)),  # noqa: B008
 ) -> ReminderTaskDeleteResponse:
+    existing_task = None
+    try:
+        existing_task = _row_to_response(db.get_reminder_task(task_id))
+    except KeyError:
+        existing_task = None
     deleted = db.delete_reminder_task(task_id)
     if deleted:
         await _unschedule_task_best_effort(task_id=task_id)
+        if existing_task is not None:
+            record_reminder_task_deleted(user_id=db.user_id, task=existing_task)
     return ReminderTaskDeleteResponse(deleted=deleted)

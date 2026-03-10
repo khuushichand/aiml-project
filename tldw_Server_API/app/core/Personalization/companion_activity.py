@@ -550,9 +550,25 @@ def record_watchlist_source_created(*, user_id: str | int | None, source: Any) -
     )
 
 
+def _reminder_task_metadata(task: Any) -> dict[str, Any]:
+    return {
+        "title": _value(task, "title"),
+        "body_preview": _content_preview(_value(task, "body"), max_chars=160),
+        "schedule_kind": _value(task, "schedule_kind"),
+        "enabled": _value(task, "enabled"),
+        "link_type": _value(task, "link_type"),
+        "link_id": _value(task, "link_id"),
+        "link_url": _value(task, "link_url"),
+    }
+
+
+def _reminder_task_timestamp(task: Any) -> str | None:
+    return _value(task, "updated_at") or _value(task, "created_at")
+
+
 def record_reminder_task_created(*, user_id: str | int | None, task: Any) -> str | None:
-    task_id = str(getattr(task, "id"))
-    source_timestamp = getattr(task, "updated_at", None) or getattr(task, "created_at", None)
+    task_id = str(_value(task, "id"))
+    source_timestamp = _reminder_task_timestamp(task)
     return record_companion_activity(
         user_id=user_id,
         event_type="reminder_task_created",
@@ -565,9 +581,56 @@ def record_reminder_task_created(*, user_id: str | int | None, task: Any) -> str
             action="create",
             source_timestamp=source_timestamp,
         ),
+        metadata=_reminder_task_metadata(task),
+    )
+
+
+def record_reminder_task_updated(
+    *,
+    user_id: str | int | None,
+    task: Any,
+    patch: dict[str, Any] | None = None,
+) -> str | None:
+    task_id = str(_value(task, "id"))
+    source_timestamp = _reminder_task_timestamp(task)
+    fingerprint = _payload_fingerprint(patch)
+    changed_fields = sorted(str(key) for key in dict(patch or {}).keys())
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="reminder_task_updated",
+        source_type="reminder_task",
+        source_id=task_id,
+        surface="api.tasks",
+        dedupe_key=f"reminder.task.update:{task_id}:{source_timestamp or 'na'}:{fingerprint}",
+        provenance=_explicit_provenance(
+            route=f"/api/v1/tasks/{task_id}",
+            action="update",
+            source_timestamp=source_timestamp,
+        ),
         metadata={
-            "title": getattr(task, "title", None),
-            "schedule_kind": getattr(task, "schedule_kind", None),
-            "enabled": getattr(task, "enabled", None),
+            **_reminder_task_metadata(task),
+            "changed_fields": changed_fields,
+        },
+    )
+
+
+def record_reminder_task_deleted(*, user_id: str | int | None, task: Any) -> str | None:
+    task_id = str(_value(task, "id"))
+    source_timestamp = _reminder_task_timestamp(task)
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="reminder_task_deleted",
+        source_type="reminder_task",
+        source_id=task_id,
+        surface="api.tasks",
+        dedupe_key=f"reminder.task.delete:{task_id}:{source_timestamp or 'na'}",
+        provenance=_explicit_provenance(
+            route=f"/api/v1/tasks/{task_id}",
+            action="delete",
+            source_timestamp=source_timestamp,
+        ),
+        metadata={
+            **_reminder_task_metadata(task),
+            "hard_delete": True,
         },
     )
