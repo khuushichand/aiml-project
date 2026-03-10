@@ -95,7 +95,18 @@ describe("PermissionProfilesTab", () => {
         secret_configured: true,
         server_source: "managed",
         binding_count: 1,
-        runtime_executable: true
+        runtime_executable: true,
+        credential_slots: [
+          {
+            server_id: "docs-managed",
+            slot_name: "token_readonly",
+            display_name: "Read-only token",
+            secret_kind: "bearer_token",
+            privilege_class: "read",
+            is_required: true,
+            secret_configured: true
+          }
+        ]
       },
       {
         id: "legacy-search",
@@ -107,7 +118,8 @@ describe("PermissionProfilesTab", () => {
         secret_configured: false,
         server_source: "legacy",
         binding_count: 0,
-        runtime_executable: false
+        runtime_executable: false,
+        credential_slots: []
       },
       {
         id: "search-api",
@@ -119,7 +131,18 @@ describe("PermissionProfilesTab", () => {
         secret_configured: false,
         server_source: "managed",
         binding_count: 0,
-        runtime_executable: true
+        runtime_executable: true,
+        credential_slots: [
+          {
+            server_id: "search-api",
+            slot_name: "token_write",
+            display_name: "Write token",
+            secret_kind: "bearer_token",
+            privilege_class: "write",
+            is_required: true,
+            secret_configured: false
+          }
+        ]
       }
     ])
     mocks.listProfileCredentialBindings.mockResolvedValue([
@@ -128,7 +151,8 @@ describe("PermissionProfilesTab", () => {
         binding_target_type: "permission_profile",
         binding_target_id: "5",
         external_server_id: "docs-managed",
-        credential_ref: "server:docs-managed",
+        slot_name: "token_readonly",
+        credential_ref: "slot",
         binding_mode: "grant",
         usage_rules: {}
       }
@@ -138,7 +162,8 @@ describe("PermissionProfilesTab", () => {
       binding_target_type: "permission_profile",
       binding_target_id: "5",
       external_server_id: "search-api",
-      credential_ref: "server:search-api",
+      slot_name: "token_write",
+      credential_ref: "slot",
       binding_mode: "grant",
       usage_rules: {}
     })
@@ -168,12 +193,13 @@ describe("PermissionProfilesTab", () => {
     await user.click(screen.getByRole("button", { name: "Edit" }))
 
     expect(await screen.findByText("External Service Bindings")).toBeTruthy()
-    expect(screen.getByRole("checkbox", { name: /Docs Managed/ })).toBeTruthy()
-    expect(screen.getByRole("checkbox", { name: /Search API/ })).toBeTruthy()
+    expect(screen.getByRole("checkbox", { name: /Read-only token/ })).toBeTruthy()
+    expect(screen.getByRole("checkbox", { name: /Write token/ })).toBeTruthy()
     expect(screen.queryByRole("checkbox", { name: /Legacy Search/ })).toBeNull()
+    expect(screen.getByText(/slot secret missing/i)).toBeTruthy()
 
-    await user.click(screen.getByRole("checkbox", { name: /Search API/ }))
+    await user.click(screen.getByRole("checkbox", { name: /Write token/ }))
 
-    expect(mocks.upsertProfileCredentialBinding).toHaveBeenCalledWith(5, "search-api")
+    expect(mocks.upsertProfileCredentialBinding).toHaveBeenCalledWith(5, "search-api", "token_write")
   })
 })

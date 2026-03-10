@@ -79,6 +79,17 @@ class _FakeService:
                 "superseded_by_server_id": None,
                 "binding_count": 2,
                 "runtime_executable": True,
+                "credential_slots": [
+                    {
+                        "server_id": "docs",
+                        "slot_name": "token_readonly",
+                        "display_name": "Read-only token",
+                        "secret_kind": "bearer_token",
+                        "privilege_class": "read",
+                        "is_required": True,
+                        "secret_configured": True,
+                    }
+                ],
                 "created_by": 1,
                 "updated_by": 1,
                 "created_at": None,
@@ -118,6 +129,7 @@ class _FakeService:
                 "binding_target_type": "profile",
                 "binding_target_id": "7",
                 "external_server_id": "docs",
+                "slot_name": "token_readonly",
                 "credential_ref": "server",
                 "binding_mode": "grant",
                 "usage_rules": {},
@@ -133,16 +145,19 @@ class _FakeService:
         *,
         profile_id: int,
         external_server_id: str,
+        slot_name: str | None = None,
         actor_id: int | None,
     ) -> dict[str, Any]:
         assert profile_id == 7
         assert external_server_id == "docs"
+        assert slot_name in {None, "token_readonly"}
         assert actor_id == 1
         return {
             "id": 1,
             "binding_target_type": "profile",
             "binding_target_id": "7",
             "external_server_id": "docs",
+            "slot_name": slot_name or "token_readonly",
             "credential_ref": "server",
             "binding_mode": "grant",
             "usage_rules": {},
@@ -157,10 +172,12 @@ class _FakeService:
         *,
         profile_id: int,
         external_server_id: str,
+        slot_name: str | None = None,
         actor_id: int | None,
     ) -> bool:
         assert profile_id == 7
         assert external_server_id == "docs"
+        assert slot_name in {None, "token_readonly"}
         assert actor_id == 1
         return True
 
@@ -172,6 +189,7 @@ class _FakeService:
                 "binding_target_type": "assignment",
                 "binding_target_id": "11",
                 "external_server_id": "docs",
+                "slot_name": "token_write",
                 "credential_ref": "server",
                 "binding_mode": "disable",
                 "usage_rules": {},
@@ -187,11 +205,13 @@ class _FakeService:
         *,
         assignment_id: int,
         external_server_id: str,
+        slot_name: str | None = None,
         binding_mode: str,
         actor_id: int | None,
     ) -> dict[str, Any]:
         assert assignment_id == 11
         assert external_server_id == "docs"
+        assert slot_name in {None, "token_write"}
         assert binding_mode == "disable"
         assert actor_id == 1
         return {
@@ -199,6 +219,7 @@ class _FakeService:
             "binding_target_type": "assignment",
             "binding_target_id": "11",
             "external_server_id": "docs",
+            "slot_name": slot_name or "token_write",
             "credential_ref": "server",
             "binding_mode": "disable",
             "usage_rules": {},
@@ -213,10 +234,12 @@ class _FakeService:
         *,
         assignment_id: int,
         external_server_id: str,
+        slot_name: str | None = None,
         actor_id: int | None,
     ) -> bool:
         assert assignment_id == 11
         assert external_server_id == "docs"
+        assert slot_name in {None, "token_write"}
         assert actor_id == 1
         return True
 
@@ -240,6 +263,26 @@ class _FakeService:
                     "secret_available": True,
                     "runtime_executable": False,
                     "blocked_reason": "disabled_by_assignment",
+                    "slots": [
+                        {
+                            "slot_name": "token_readonly",
+                            "display_name": "Read-only token",
+                            "granted_by": "profile",
+                            "disabled_by_assignment": False,
+                            "secret_available": True,
+                            "runtime_usable": True,
+                            "blocked_reason": None,
+                        },
+                        {
+                            "slot_name": "token_write",
+                            "display_name": "Write token",
+                            "granted_by": "assignment",
+                            "disabled_by_assignment": True,
+                            "secret_available": True,
+                            "runtime_usable": False,
+                            "blocked_reason": "disabled_by_assignment",
+                        },
+                    ],
                 }
             ]
         }
@@ -254,6 +297,117 @@ class _FakeService:
             "key_hint": "cdef",
             "updated_at": None,
         }
+
+    async def list_external_server_credential_slots(self, *, server_id: str) -> list[dict[str, Any]]:
+        assert server_id == "docs"
+        return [
+            {
+                "server_id": "docs",
+                "slot_name": "token_readonly",
+                "display_name": "Read-only token",
+                "secret_kind": "bearer_token",
+                "privilege_class": "read",
+                "is_required": True,
+                "secret_configured": True,
+            }
+        ]
+
+    async def create_external_server_credential_slot(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        display_name: str,
+        secret_kind: str,
+        privilege_class: str,
+        is_required: bool,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        assert server_id == "docs"
+        assert slot_name == "token_readonly"
+        assert display_name == "Read-only token"
+        assert secret_kind == "bearer_token"
+        assert privilege_class == "read"
+        assert is_required is True
+        assert actor_id == 1
+        return {
+            "server_id": server_id,
+            "slot_name": slot_name,
+            "display_name": display_name,
+            "secret_kind": secret_kind,
+            "privilege_class": privilege_class,
+            "is_required": is_required,
+            "secret_configured": False,
+        }
+
+    async def update_external_server_credential_slot(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        display_name: str | None = None,
+        secret_kind: str | None = None,
+        privilege_class: str | None = None,
+        is_required: bool | None = None,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        assert server_id == "docs"
+        assert slot_name == "token_readonly"
+        assert display_name == "Updated read-only token"
+        assert actor_id == 1
+        return {
+            "server_id": server_id,
+            "slot_name": slot_name,
+            "display_name": display_name,
+            "secret_kind": secret_kind or "bearer_token",
+            "privilege_class": privilege_class or "read",
+            "is_required": True if is_required is None else is_required,
+            "secret_configured": True,
+        }
+
+    async def delete_external_server_credential_slot(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        actor_id: int | None,
+    ) -> bool:
+        assert server_id == "docs"
+        assert slot_name == "token_readonly"
+        assert actor_id == 1
+        return True
+
+    async def set_external_server_slot_secret(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        secret_value: str,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        assert server_id == "docs"
+        assert slot_name == "token_readonly"
+        assert secret_value == "abc123secret"
+        assert actor_id == 1
+        return {
+            "server_id": server_id,
+            "slot_name": slot_name,
+            "secret_configured": True,
+            "key_hint": "cdef",
+            "updated_at": None,
+        }
+
+    async def clear_external_server_slot_secret(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        actor_id: int | None,
+    ) -> bool:
+        assert server_id == "docs"
+        assert slot_name == "token_readonly"
+        assert actor_id == 1
+        return True
 
 
 def _build_app(
@@ -414,3 +568,104 @@ async def test_assignment_credential_binding_and_external_access_endpoints_round
     assert put_resp.json()["binding_mode"] == "disable"
     assert preview_resp.status_code == 200
     assert preview_resp.json()["servers"][0]["blocked_reason"] == "disabled_by_assignment"
+
+
+@pytest.mark.asyncio
+async def test_external_server_credential_slot_endpoints_round_trip() -> None:
+    app = _build_app(
+        principal=_make_principal(roles=["admin"], permissions=[]),
+        fail_with_401=False,
+    )
+    with TestClient(app) as client:
+        list_resp = client.get("/api/v1/mcp/hub/external-servers/docs/credential-slots")
+        create_resp = client.post(
+            "/api/v1/mcp/hub/external-servers/docs/credential-slots",
+            json={
+                "slot_name": "token_readonly",
+                "display_name": "Read-only token",
+                "secret_kind": "bearer_token",
+                "privilege_class": "read",
+                "is_required": True,
+            },
+        )
+        update_resp = client.put(
+            "/api/v1/mcp/hub/external-servers/docs/credential-slots/token_readonly",
+            json={"display_name": "Updated read-only token"},
+        )
+        set_secret_resp = client.post(
+            "/api/v1/mcp/hub/external-servers/docs/credential-slots/token_readonly/secret",
+            json={"secret": "abc123secret"},
+        )
+        clear_secret_resp = client.delete(
+            "/api/v1/mcp/hub/external-servers/docs/credential-slots/token_readonly/secret"
+        )
+        delete_resp = client.delete(
+            "/api/v1/mcp/hub/external-servers/docs/credential-slots/token_readonly"
+        )
+
+    assert list_resp.status_code == 200
+    assert list_resp.json()[0]["slot_name"] == "token_readonly"
+    assert create_resp.status_code == 201
+    assert create_resp.json()["secret_configured"] is False
+    assert update_resp.status_code == 200
+    assert update_resp.json()["display_name"] == "Updated read-only token"
+    assert set_secret_resp.status_code == 200
+    assert set_secret_resp.json()["slot_name"] == "token_readonly"
+    assert clear_secret_resp.status_code == 200
+    assert clear_secret_resp.json()["ok"] is True
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_slot_binding_endpoints_round_trip() -> None:
+    app = _build_app(
+        principal=_make_principal(roles=["admin"], permissions=[]),
+        fail_with_401=False,
+    )
+    with TestClient(app) as client:
+        profile_put_resp = client.put(
+            "/api/v1/mcp/hub/permission-profiles/7/credential-bindings/docs/token_readonly"
+        )
+        profile_delete_resp = client.delete(
+            "/api/v1/mcp/hub/permission-profiles/7/credential-bindings/docs/token_readonly"
+        )
+        assignment_put_resp = client.put(
+            "/api/v1/mcp/hub/policy-assignments/11/credential-bindings/docs/token_write",
+            json={"binding_mode": "disable"},
+        )
+        assignment_delete_resp = client.delete(
+            "/api/v1/mcp/hub/policy-assignments/11/credential-bindings/docs/token_write"
+        )
+        preview_resp = client.get("/api/v1/mcp/hub/policy-assignments/11/external-access")
+
+    assert profile_put_resp.status_code == 200
+    assert profile_put_resp.json()["slot_name"] == "token_readonly"
+    assert profile_delete_resp.status_code == 200
+    assert profile_delete_resp.json()["ok"] is True
+    assert assignment_put_resp.status_code == 200
+    assert assignment_put_resp.json()["slot_name"] == "token_write"
+    assert assignment_delete_resp.status_code == 200
+    assert assignment_delete_resp.json()["ok"] is True
+    assert preview_resp.status_code == 200
+    assert preview_resp.json()["servers"][0]["slots"][1]["blocked_reason"] == "disabled_by_assignment"
+
+
+@pytest.mark.asyncio
+async def test_set_external_secret_alias_bad_request_maps_to_400_for_multislot_server() -> None:
+    class _AmbiguousSecretService(_FakeService):
+        async def set_external_server_secret(self, *, server_id: str, secret_value: str, actor_id: int | None):
+            raise BadRequestError("Server-level secret alias is only valid for default-slot servers")
+
+    app = _build_app(
+        principal=_make_principal(roles=["admin"], permissions=[]),
+        fail_with_401=False,
+    )
+    app.dependency_overrides[mcp_hub_management.get_mcp_hub_service] = lambda: _AmbiguousSecretService()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/external-servers/docs/secret",
+            json={"secret": "abc123secret"},
+        )
+
+    assert resp.status_code == 400

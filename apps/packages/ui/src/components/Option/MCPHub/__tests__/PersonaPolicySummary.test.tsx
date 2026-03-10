@@ -66,7 +66,18 @@ describe("PersonaPolicySummary", () => {
           server_source: "managed",
           secret_available: true,
           runtime_executable: true,
-          blocked_reason: "disabled_by_assignment"
+          blocked_reason: "disabled_by_assignment",
+          slots: [
+            {
+              slot_name: "token_readonly",
+              display_name: "Read-only token",
+              granted_by: "profile",
+              disabled_by_assignment: true,
+              secret_available: true,
+              runtime_usable: false,
+              blocked_reason: "slot_disabled_by_assignment"
+            }
+          ]
         },
         {
           server_id: "search-api",
@@ -76,7 +87,18 @@ describe("PersonaPolicySummary", () => {
           server_source: "managed",
           secret_available: false,
           runtime_executable: true,
-          blocked_reason: "missing_secret"
+          blocked_reason: "missing_secret",
+          slots: [
+            {
+              slot_name: "token_write",
+              display_name: "Write token",
+              granted_by: "assignment",
+              disabled_by_assignment: false,
+              secret_available: false,
+              runtime_usable: false,
+              blocked_reason: "missing_required_slot_secret"
+            }
+          ]
         }
       ]
     })
@@ -93,8 +115,10 @@ describe("PersonaPolicySummary", () => {
     expect(screen.getByText("Path approval fallback")).toBeTruthy()
     expect(screen.getByText("Docs Managed")).toBeTruthy()
     expect(screen.getByText("Search API")).toBeTruthy()
-    expect(screen.getByText(/disabled by assignment/i)).toBeTruthy()
-    expect(screen.getByText(/missing secret/i)).toBeTruthy()
+    expect(screen.getByText("Read-only token")).toBeTruthy()
+    expect(screen.getByText("Write token")).toBeTruthy()
+    expect(screen.getAllByText(/disabled by assignment/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/missing secret/i).length).toBeGreaterThan(0)
     expect(screen.getByRole("link", { name: /open mcp hub/i })).toBeTruthy()
   })
 })

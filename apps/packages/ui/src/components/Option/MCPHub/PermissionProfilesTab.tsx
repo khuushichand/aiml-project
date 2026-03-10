@@ -20,7 +20,9 @@ import {
 } from "@/services/tldw/mcp-hub"
 
 import {
+  getCredentialBindingKey,
   getManagedExternalServers,
+  getManagedExternalServerSlots,
   MCP_HUB_PROFILE_MODE_OPTIONS,
   MCP_HUB_SCOPE_OPTIONS
 } from "./policyHelpers"
@@ -49,8 +51,13 @@ export const PermissionProfilesTab = () => {
     () => getManagedExternalServers(externalServers),
     [externalServers]
   )
-  const grantedServerIds = useMemo(
-    () => new Set(profileBindings.map((binding) => binding.external_server_id)),
+  const grantedBindingKeys = useMemo(
+    () =>
+      new Set(
+        profileBindings.map((binding) =>
+          getCredentialBindingKey(binding.external_server_id, binding.slot_name)
+        )
+      ),
     [profileBindings]
   )
 
@@ -185,15 +192,19 @@ export const PermissionProfilesTab = () => {
     }
   }
 
-  const handleToggleExternalServer = async (serverId: string, checked: boolean) => {
+  const handleToggleExternalServer = async (
+    serverId: string,
+    checked: boolean,
+    slotName?: string | null
+  ) => {
     if (!editingId) return
-    setBindingServerId(serverId)
+    setBindingServerId(getCredentialBindingKey(serverId, slotName))
     setErrorMessage(null)
     try {
       if (checked) {
-        await upsertProfileCredentialBinding(editingId, serverId)
+        await upsertProfileCredentialBinding(editingId, serverId, slotName)
       } else {
-        await deleteProfileCredentialBinding(editingId, serverId)
+        await deleteProfileCredentialBinding(editingId, serverId, slotName)
       }
       const [bindingRows, serverRows] = await Promise.all([
         listProfileCredentialBindings(editingId),
@@ -294,28 +305,61 @@ export const PermissionProfilesTab = () => {
                     <Typography.Text type="secondary">Loading external service bindings...</Typography.Text>
                   ) : managedExternalServers.length > 0 ? (
                     <Space orientation="vertical" size="small" style={{ width: "100%" }}>
-                      {managedExternalServers.map((server) => (
-                        <Checkbox
-                          key={server.id}
-                          checked={grantedServerIds.has(server.id)}
-                          disabled={bindingServerId === server.id}
-                          onChange={(event) =>
-                            void handleToggleExternalServer(server.id, event.target.checked)
-                          }
-                        >
-                          <Space wrap size={4}>
-                            <span>{server.name}</span>
-                            {server.secret_configured ? (
-                              <Tag color="green">secret configured</Tag>
-                            ) : (
-                              <Tag>no secret</Tag>
-                            )}
-                            {server.binding_count ? (
-                              <Tag>{`${server.binding_count} bindings`}</Tag>
-                            ) : null}
-                          </Space>
-                        </Checkbox>
-                      ))}
+                      {managedExternalServers.map((server) => {
+                        const slots = getManagedExternalServerSlots(server)
+                        return (
+                          <Card key={server.id} size="small" title={server.name}>
+                            <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+                              <Space wrap size={4}>
+                                {server.secret_configured ? (
+                                  <Tag color="green">secret configured</Tag>
+                                ) : (
+                                  <Tag>no secret</Tag>
+                                )}
+                                {server.binding_count ? (
+                                  <Tag>{`${server.binding_count} bindings`}</Tag>
+                                ) : null}
+                              </Space>
+                              {slots.length > 0 ? (
+                                <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+                                  {slots.map((slot) => {
+                                    const bindingKey = getCredentialBindingKey(server.id, slot.slot_name)
+                                    return (
+                                      <Checkbox
+                                        key={bindingKey}
+                                        checked={grantedBindingKeys.has(bindingKey)}
+                                        disabled={bindingServerId === bindingKey}
+                                        onChange={(event) =>
+                                          void handleToggleExternalServer(
+                                            server.id,
+                                            event.target.checked,
+                                            slot.slot_name
+                                          )
+                                        }
+                                      >
+                                        <Space wrap size={4}>
+                                          <span>{slot.display_name}</span>
+                                          <Tag>{slot.slot_name}</Tag>
+                                          <Tag>{slot.privilege_class}</Tag>
+                                          {slot.secret_configured ? (
+                                            <Tag color="green">slot secret configured</Tag>
+                                          ) : (
+                                            <Tag>slot secret missing</Tag>
+                                          )}
+                                        </Space>
+                                      </Checkbox>
+                                    )
+                                  })}
+                                </Space>
+                              ) : (
+                                <Typography.Text type="secondary">
+                                  Define credential slots in External Servers before binding this service.
+                                </Typography.Text>
+                              )}
+                            </Space>
+                          </Card>
+                        )
+                      })}
                     </Space>
                   ) : (
                     <Empty description="No managed external servers are available yet." />

@@ -3,6 +3,7 @@ import type {
   McpHubApprovalMode,
   McpHubAssignmentTargetType,
   McpHubEffectiveExternalAccessEntry,
+  McpHubExternalServerCredentialSlot,
   McpHubExternalServer,
   McpHubPathScopeMode,
   McpHubPermissionPolicyDocument,
@@ -202,6 +203,16 @@ export const getManagedExternalServers = (
     (server) => server.server_source !== "legacy" && !server.superseded_by_server_id
   )
 
+export const getManagedExternalServerSlots = (
+  server: McpHubExternalServer | null | undefined
+): McpHubExternalServerCredentialSlot[] =>
+  Array.isArray(server?.credential_slots) ? server.credential_slots : []
+
+export const getCredentialBindingKey = (
+  serverId: string,
+  slotName?: string | null
+): string => `${serverId}::${slotName || ""}`
+
 export const getExternalBlockedReasonLabel = (
   value: McpHubEffectiveExternalAccessEntry["blocked_reason"] | string | null | undefined
 ): string | null => {
@@ -223,6 +234,15 @@ export const getExternalBlockedReasonLabel = (
   }
   if (normalized === "external_capability_not_granted") {
     return "External capability not granted"
+  }
+  if (normalized === "missing_required_slot_secret") {
+    return "Missing required slot secret"
+  }
+  if (normalized === "required_slot_not_granted") {
+    return "Required slot not granted"
+  }
+  if (normalized === "slot_disabled_by_assignment") {
+    return "Slot disabled by assignment"
   }
   return normalized.replaceAll("_", " ")
 }

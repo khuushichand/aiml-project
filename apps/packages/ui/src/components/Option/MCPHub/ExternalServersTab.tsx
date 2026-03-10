@@ -2,16 +2,25 @@ import { useEffect, useMemo, useState } from "react"
 import { Alert, Button, Card, Checkbox, Empty, List, Space, Tag, Typography } from "antd"
 
 import {
+  clearExternalServerSlotSecret,
   createExternalServer,
+  createExternalServerCredentialSlot,
   deleteExternalServer,
+  deleteExternalServerCredentialSlot,
   importExternalServer,
   listExternalServers,
   setExternalServerSecret,
+  setExternalServerSlotSecret,
   updateExternalServer,
-  type McpHubExternalServer
+  updateExternalServerCredentialSlot,
+  type McpHubExternalServer,
+  type McpHubExternalServerCredentialSlot
 } from "@/services/tldw/mcp-hub"
 
-import { getManagedExternalServers } from "./policyHelpers"
+import { getManagedExternalServers, getManagedExternalServerSlots } from "./policyHelpers"
+
+const DEFAULT_SLOT_SECRET_KIND = "bearer_token"
+const DEFAULT_SLOT_PRIVILEGE_CLASS = "read"
 
 export const ExternalServersTab = () => {
   const [servers, setServers] = useState<McpHubExternalServer[]>([])
@@ -20,7 +29,7 @@ export const ExternalServersTab = () => {
   const [secretValue, setSecretValue] = useState("")
   const [saving, setSaving] = useState(false)
   const [importingServerId, setImportingServerId] = useState<string | null>(null)
-  const [configured, setConfigured] = useState(false)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [serverFormOpen, setServerFormOpen] = useState(false)
   const [editingServerId, setEditingServerId] = useState<string | null>(null)
@@ -31,11 +40,36 @@ export const ExternalServersTab = () => {
   const [enabledValue, setEnabledValue] = useState(true)
   const [configText, setConfigText] = useState("{}")
   const [serverSaving, setServerSaving] = useState(false)
+  const [slotFormOpen, setSlotFormOpen] = useState(false)
+  const [editingSlotName, setEditingSlotName] = useState<string | null>(null)
+  const [slotNameValue, setSlotNameValue] = useState("")
+  const [slotDisplayNameValue, setSlotDisplayNameValue] = useState("")
+  const [slotSecretKindValue, setSlotSecretKindValue] = useState(DEFAULT_SLOT_SECRET_KIND)
+  const [slotPrivilegeClassValue, setSlotPrivilegeClassValue] = useState(DEFAULT_SLOT_PRIVILEGE_CLASS)
+  const [slotIsRequiredValue, setSlotIsRequiredValue] = useState(true)
+  const [slotSaving, setSlotSaving] = useState(false)
+  const [slotDeletingKey, setSlotDeletingKey] = useState<string | null>(null)
+  const [activeSlotName, setActiveSlotName] = useState("")
+  const [slotSecretValue, setSlotSecretValue] = useState("")
+  const [slotSecretSaving, setSlotSecretSaving] = useState(false)
+  const [slotSecretClearing, setSlotSecretClearing] = useState(false)
   const managedServers = useMemo(() => getManagedExternalServers(servers), [servers])
+  const activeManagedServer = useMemo(
+    () => managedServers.find((server) => server.id === activeServerId) || null,
+    [activeServerId, managedServers]
+  )
+  const activeSlots = useMemo(
+    () => getManagedExternalServerSlots(activeManagedServer),
+    [activeManagedServer]
+  )
 
   const canSave = useMemo(
     () => activeServerId.trim().length > 0 && secretValue.trim().length > 0 && !saving,
     [activeServerId, secretValue, saving]
+  )
+  const canSaveSlotSecret = useMemo(
+    () => activeServerId.trim().length > 0 && activeSlotName.trim().length > 0 && slotSecretValue.trim().length > 0 && !slotSecretSaving,
+    [activeServerId, activeSlotName, slotSecretValue, slotSecretSaving]
   )
 
   const loadServers = async () => {
@@ -43,8 +77,9 @@ export const ExternalServersTab = () => {
     setErrorMessage(null)
     try {
       const rows = await listExternalServers()
-      setServers(Array.isArray(rows) ? rows : [])
-      const managedRows = getManagedExternalServers(rows)
+      const nextServers = Array.isArray(rows) ? rows : []
+      setServers(nextServers)
+      const managedRows = getManagedExternalServers(nextServers)
       if (managedRows.some((server) => server.id === activeServerId)) {
         return
       }
@@ -62,14 +97,37 @@ export const ExternalServersTab = () => {
     void loadServers()
   }, [])
 
+  useEffect(() => {
+    if (activeSlots.length === 0) {
+      setActiveSlotName("")
+      return
+    }
+    if (!activeSlots.some((slot) => slot.slot_name === activeSlotName)) {
+      setActiveSlotName(activeSlots[0]?.slot_name || "")
+    }
+  }, [activeSlotName, activeSlots])
+
+  const resetSlotForm = () => {
+    setSlotFormOpen(false)
+    setEditingSlotName(null)
+    setSlotNameValue("")
+    setSlotDisplayNameValue("")
+    setSlotSecretKindValue(DEFAULT_SLOT_SECRET_KIND)
+    setSlotPrivilegeClassValue(DEFAULT_SLOT_PRIVILEGE_CLASS)
+    setSlotIsRequiredValue(true)
+    setSlotSaving(false)
+  }
+
   const handleSaveSecret = async () => {
     if (!canSave) return
     setSaving(true)
     setErrorMessage(null)
+    setSuccessMessage(null)
     try {
       await setExternalServerSecret(activeServerId, secretValue)
       setSecretValue("")
-      setConfigured(true)
+      setSuccessMessage("Secret configured")
+      await loadServers()
     } catch {
       setErrorMessage("Failed to save external server secret.")
     } finally {
@@ -77,14 +135,48 @@ export const ExternalServersTab = () => {
     }
   }
 
+  const handleSaveSlotSecret = async () => {
+    if (!canSaveSlotSecret) return
+    setSlotSecretSaving(true)
+    setErrorMessage(null)
+    setSuccessMessage(null)
+    try {
+      await setExternalServerSlotSecret(activeServerId, activeSlotName, slotSecretValue)
+      setSlotSecretValue("")
+      setSuccessMessage("Slot secret configured")
+      await loadServers()
+    } catch {
+      setErrorMessage("Failed to save slot secret.")
+    } finally {
+      setSlotSecretSaving(false)
+    }
+  }
+
+  const handleClearSlotSecret = async () => {
+    if (!activeServerId || !activeSlotName) return
+    setSlotSecretClearing(true)
+    setErrorMessage(null)
+    setSuccessMessage(null)
+    try {
+      await clearExternalServerSlotSecret(activeServerId, activeSlotName)
+      setSuccessMessage("Slot secret cleared")
+      await loadServers()
+    } catch {
+      setErrorMessage("Failed to clear slot secret.")
+    } finally {
+      setSlotSecretClearing(false)
+    }
+  }
+
   const handleImport = async (serverId: string) => {
     setImportingServerId(serverId)
     setErrorMessage(null)
+    setSuccessMessage(null)
     try {
       const imported = await importExternalServer(serverId)
-      setConfigured(false)
       await loadServers()
       setActiveServerId(imported.id)
+      setSuccessMessage("Legacy server imported")
     } catch {
       setErrorMessage("Failed to import legacy external server.")
     } finally {
@@ -142,6 +234,7 @@ export const ExternalServersTab = () => {
 
     setServerSaving(true)
     setErrorMessage(null)
+    setSuccessMessage(null)
     try {
       const payload = {
         name: serverNameValue.trim(),
@@ -160,6 +253,7 @@ export const ExternalServersTab = () => {
       }
       resetServerForm()
       await loadServers()
+      setSuccessMessage(editingServerId ? "Server updated" : "Server created")
     } catch {
       setErrorMessage(editingServerId ? "Failed to update external server." : "Failed to create external server.")
     } finally {
@@ -172,11 +266,90 @@ export const ExternalServersTab = () => {
       return
     }
     setErrorMessage(null)
+    setSuccessMessage(null)
     try {
       await deleteExternalServer(serverId)
       await loadServers()
+      setSuccessMessage("Server deleted")
     } catch {
       setErrorMessage("Failed to delete external server.")
+    }
+  }
+
+  const openCreateSlotForm = () => {
+    resetSlotForm()
+    setSlotFormOpen(true)
+  }
+
+  const openEditSlotForm = (slot: McpHubExternalServerCredentialSlot) => {
+    setSlotFormOpen(true)
+    setEditingSlotName(slot.slot_name)
+    setSlotNameValue(slot.slot_name)
+    setSlotDisplayNameValue(slot.display_name)
+    setSlotSecretKindValue(slot.secret_kind)
+    setSlotPrivilegeClassValue(slot.privilege_class)
+    setSlotIsRequiredValue(slot.is_required)
+  }
+
+  const handleSaveSlot = async () => {
+    if (!activeManagedServer) return
+    if (!slotDisplayNameValue.trim() || !slotSecretKindValue.trim() || !slotPrivilegeClassValue.trim()) {
+      setErrorMessage("Slot display name, secret kind, and privilege class are required.")
+      return
+    }
+    if (!editingSlotName && !slotNameValue.trim()) {
+      setErrorMessage("Slot name is required.")
+      return
+    }
+    setSlotSaving(true)
+    setErrorMessage(null)
+    setSuccessMessage(null)
+    try {
+      if (editingSlotName) {
+        await updateExternalServerCredentialSlot(activeManagedServer.id, editingSlotName, {
+          display_name: slotDisplayNameValue.trim(),
+          secret_kind: slotSecretKindValue.trim(),
+          privilege_class: slotPrivilegeClassValue.trim(),
+          is_required: slotIsRequiredValue
+        })
+      } else {
+        await createExternalServerCredentialSlot(activeManagedServer.id, {
+          slot_name: slotNameValue.trim(),
+          display_name: slotDisplayNameValue.trim(),
+          secret_kind: slotSecretKindValue.trim(),
+          privilege_class: slotPrivilegeClassValue.trim(),
+          is_required: slotIsRequiredValue
+        })
+      }
+      const nextActiveSlot = editingSlotName || slotNameValue.trim()
+      resetSlotForm()
+      await loadServers()
+      setActiveSlotName(nextActiveSlot)
+      setSuccessMessage(editingSlotName ? "Credential slot updated" : "Credential slot created")
+    } catch {
+      setErrorMessage(editingSlotName ? "Failed to update credential slot." : "Failed to create credential slot.")
+    } finally {
+      setSlotSaving(false)
+    }
+  }
+
+  const handleDeleteSlot = async (slot: McpHubExternalServerCredentialSlot) => {
+    if (!activeManagedServer) return
+    if (typeof window !== "undefined" && !window.confirm("Delete this credential slot?")) {
+      return
+    }
+    const slotKey = `${activeManagedServer.id}:${slot.slot_name}`
+    setSlotDeletingKey(slotKey)
+    setErrorMessage(null)
+    setSuccessMessage(null)
+    try {
+      await deleteExternalServerCredentialSlot(activeManagedServer.id, slot.slot_name)
+      await loadServers()
+      setSuccessMessage("Credential slot deleted")
+    } catch {
+      setErrorMessage("Failed to delete credential slot.")
+    } finally {
+      setSlotDeletingKey(null)
     }
   }
 
@@ -187,6 +360,7 @@ export const ExternalServersTab = () => {
         visible as read-only inventory until they are imported into MCP Hub.
       </Typography.Text>
       {errorMessage ? <Alert type="error" title={errorMessage} showIcon /> : null}
+      {successMessage ? <Alert type="success" title={successMessage} showIcon /> : null}
 
       <Button type="primary" onClick={openCreateForm}>
         New Managed Server
@@ -300,22 +474,172 @@ export const ExternalServersTab = () => {
         />
       )}
 
-      <Space orientation="vertical" style={{ width: "100%" }}>
-        <label htmlFor="mcp-external-secret">Secret</label>
-        <input
-          id="mcp-external-secret"
-          aria-label="Secret"
-          type="password"
-          value={secretValue}
-          onChange={(event) => setSecretValue(event.target.value)}
-          placeholder="Paste secret token"
-        />
-        <Button type="primary" onClick={handleSaveSecret} disabled={!canSave} loading={saving}>
-          Save Secret
-        </Button>
-      </Space>
+      {activeManagedServer && activeSlots.length > 0 ? (
+        <>
+          <Card size="small" title="Credential Slots" extra={<Button onClick={openCreateSlotForm}>Add Slot</Button>}>
+            <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+              {slotFormOpen ? (
+                <Card size="small" title={editingSlotName ? "Edit Credential Slot" : "Create Credential Slot"}>
+                  <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                    {!editingSlotName ? (
+                      <Space orientation="vertical" style={{ width: "100%" }}>
+                        <label htmlFor="mcp-external-slot-name">Slot Name</label>
+                        <input
+                          id="mcp-external-slot-name"
+                          aria-label="Slot Name"
+                          value={slotNameValue}
+                          onChange={(event) => setSlotNameValue(event.target.value)}
+                          placeholder="token_readonly"
+                        />
+                      </Space>
+                    ) : null}
+                    <Space orientation="vertical" style={{ width: "100%" }}>
+                      <label htmlFor="mcp-external-slot-display-name">Slot Display Name</label>
+                      <input
+                        id="mcp-external-slot-display-name"
+                        aria-label="Slot Display Name"
+                        value={slotDisplayNameValue}
+                        onChange={(event) => setSlotDisplayNameValue(event.target.value)}
+                        placeholder="Read-only token"
+                      />
+                    </Space>
+                    <Space>
+                      <Space orientation="vertical">
+                        <label htmlFor="mcp-external-slot-secret-kind">Secret Kind</label>
+                        <select
+                          id="mcp-external-slot-secret-kind"
+                          aria-label="Secret Kind"
+                          value={slotSecretKindValue}
+                          onChange={(event) => setSlotSecretKindValue(event.target.value)}
+                        >
+                          <option value="bearer_token">bearer_token</option>
+                          <option value="api_key">api_key</option>
+                          <option value="client_secret">client_secret</option>
+                        </select>
+                      </Space>
+                      <Space orientation="vertical">
+                        <label htmlFor="mcp-external-slot-privilege-class">Privilege Class</label>
+                        <select
+                          id="mcp-external-slot-privilege-class"
+                          aria-label="Privilege Class"
+                          value={slotPrivilegeClassValue}
+                          onChange={(event) => setSlotPrivilegeClassValue(event.target.value)}
+                        >
+                          <option value="read">read</option>
+                          <option value="write">write</option>
+                          <option value="admin">admin</option>
+                        </select>
+                      </Space>
+                    </Space>
+                    <Checkbox checked={slotIsRequiredValue} onChange={(event) => setSlotIsRequiredValue(event.target.checked)}>
+                      Required
+                    </Checkbox>
+                    <Space>
+                      <Button type="primary" onClick={handleSaveSlot} loading={slotSaving}>
+                        {editingSlotName ? "Update Slot" : "Save Slot"}
+                      </Button>
+                      <Button onClick={resetSlotForm}>Cancel</Button>
+                    </Space>
+                  </Space>
+                </Card>
+              ) : null}
 
-      {configured ? <Alert type="success" title="Secret configured" showIcon /> : null}
+              <List
+                bordered
+                dataSource={activeSlots}
+                locale={{ emptyText: <Empty description="No credential slots yet." /> }}
+                renderItem={(slot) => {
+                  const slotKey = `${activeManagedServer.id}:${slot.slot_name}`
+                  return (
+                    <List.Item>
+                      <Space wrap size="small" style={{ width: "100%", justifyContent: "space-between" }}>
+                        <Space wrap size="small">
+                          <Typography.Text strong>{slot.display_name}</Typography.Text>
+                          <Tag>{slot.slot_name}</Tag>
+                          <Tag>{slot.secret_kind}</Tag>
+                          <Tag color={slot.privilege_class === "read" ? "green" : slot.privilege_class === "write" ? "gold" : "red"}>
+                            {slot.privilege_class}
+                          </Tag>
+                          {slot.is_required ? <Tag color="blue">required</Tag> : <Tag>optional</Tag>}
+                          {slot.secret_configured ? <Tag color="green">secret configured</Tag> : <Tag>no secret</Tag>}
+                        </Space>
+                        <Space>
+                          <Button size="small" aria-label={`Edit ${slot.display_name}`} onClick={() => openEditSlotForm(slot)}>
+                            Edit
+                          </Button>
+                          <Button
+                            size="small"
+                            danger
+                            aria-label={`Delete ${slot.display_name}`}
+                            loading={slotDeletingKey === slotKey}
+                            onClick={() => void handleDeleteSlot(slot)}
+                          >
+                            Delete
+                          </Button>
+                        </Space>
+                      </Space>
+                    </List.Item>
+                  )
+                }}
+              />
+            </Space>
+          </Card>
+
+          <Card size="small" title="Slot Secret">
+            <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+              <Space>
+                <label htmlFor="mcp-external-slot">Slot</label>
+                <select
+                  id="mcp-external-slot"
+                  aria-label="Credential Slot"
+                  value={activeSlotName}
+                  onChange={(event) => setActiveSlotName(event.target.value)}
+                >
+                  {activeSlots.map((slot) => (
+                    <option key={slot.slot_name} value={slot.slot_name}>
+                      {slot.display_name}
+                    </option>
+                  ))}
+                </select>
+              </Space>
+              <Space orientation="vertical" style={{ width: "100%" }}>
+                <label htmlFor="mcp-external-slot-secret">Slot Secret</label>
+                <input
+                  id="mcp-external-slot-secret"
+                  aria-label="Slot Secret"
+                  type="password"
+                  value={slotSecretValue}
+                  onChange={(event) => setSlotSecretValue(event.target.value)}
+                  placeholder="Paste slot secret"
+                />
+              </Space>
+              <Space>
+                <Button type="primary" onClick={handleSaveSlotSecret} disabled={!canSaveSlotSecret} loading={slotSecretSaving}>
+                  Save Slot Secret
+                </Button>
+                <Button onClick={handleClearSlotSecret} disabled={!activeSlotName} loading={slotSecretClearing}>
+                  Clear Slot Secret
+                </Button>
+              </Space>
+            </Space>
+          </Card>
+        </>
+      ) : (
+        <Space orientation="vertical" style={{ width: "100%" }}>
+          <label htmlFor="mcp-external-secret">Secret</label>
+          <input
+            id="mcp-external-secret"
+            aria-label="Secret"
+            type="password"
+            value={secretValue}
+            onChange={(event) => setSecretValue(event.target.value)}
+            placeholder="Paste secret token"
+          />
+          <Button type="primary" onClick={handleSaveSecret} disabled={!canSave} loading={saving}>
+            Save Secret
+          </Button>
+        </Space>
+      )}
 
       <List
         bordered
@@ -335,6 +659,9 @@ export const ExternalServersTab = () => {
                 {server.secret_configured ? <Tag color="green">secret configured</Tag> : <Tag>no secret</Tag>}
                 {server.runtime_executable ? <Tag color="green">runtime executable</Tag> : <Tag>inventory only</Tag>}
                 <Tag>{`${server.binding_count || 0} ${(server.binding_count || 0) === 1 ? "binding" : "bindings"}`}</Tag>
+                {server.credential_slots?.length ? (
+                  <Tag color="blue">{`${server.credential_slots.length} slot${server.credential_slots.length === 1 ? "" : "s"}`}</Tag>
+                ) : null}
                 {server.superseded_by_server_id ? (
                   <Tag color="blue">{`superseded by ${server.superseded_by_server_id}`}</Tag>
                 ) : null}

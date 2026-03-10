@@ -294,6 +294,35 @@ class ExternalServerUpdateRequest(BaseModel):
     enabled: bool | None = None
 
 
+class ExternalServerCredentialSlotCreateRequest(BaseModel):
+    slot_name: str = Field(..., min_length=1, max_length=128)
+    display_name: str = Field(..., min_length=1, max_length=200)
+    secret_kind: str = Field(..., min_length=1, max_length=64)
+    privilege_class: str = Field(..., min_length=1, max_length=64)
+    is_required: bool = True
+
+
+class ExternalServerCredentialSlotUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    secret_kind: str | None = Field(default=None, min_length=1, max_length=64)
+    privilege_class: str | None = Field(default=None, min_length=1, max_length=64)
+    is_required: bool | None = None
+
+
+class ExternalServerCredentialSlotResponse(BaseModel):
+    server_id: str
+    slot_name: str
+    display_name: str
+    secret_kind: str
+    privilege_class: str
+    is_required: bool
+    secret_configured: bool = False
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
 class ExternalServerResponse(BaseModel):
     id: str
     name: str
@@ -309,6 +338,7 @@ class ExternalServerResponse(BaseModel):
     superseded_by_server_id: str | None = None
     binding_count: int = 0
     runtime_executable: bool = True
+    credential_slots: list[ExternalServerCredentialSlotResponse] = Field(default_factory=list)
     created_by: int | None = None
     updated_by: int | None = None
     created_at: datetime | str | None = None
@@ -326,11 +356,20 @@ class ExternalSecretSetResponse(BaseModel):
     updated_at: datetime | str | None = None
 
 
+class ExternalServerSlotSecretSetResponse(BaseModel):
+    server_id: str
+    slot_name: str
+    secret_configured: bool
+    key_hint: str | None = None
+    updated_at: datetime | str | None = None
+
+
 class CredentialBindingResponse(BaseModel):
     id: int
     binding_target_type: str
     binding_target_id: str
     external_server_id: str
+    slot_name: str | None = None
     credential_ref: str
     binding_mode: str
     usage_rules: dict[str, Any] = Field(default_factory=dict)
@@ -344,6 +383,16 @@ class AssignmentCredentialBindingUpsertRequest(BaseModel):
     binding_mode: str = Field(default="grant", pattern="^(grant|disable)$")
 
 
+class EffectiveExternalAccessSlotResponse(BaseModel):
+    slot_name: str
+    display_name: str | None = None
+    granted_by: str | None = None
+    disabled_by_assignment: bool = False
+    secret_available: bool = False
+    runtime_usable: bool = False
+    blocked_reason: str | None = None
+
+
 class EffectiveExternalAccessEntryResponse(BaseModel):
     server_id: str
     server_name: str | None = None
@@ -354,6 +403,7 @@ class EffectiveExternalAccessEntryResponse(BaseModel):
     secret_available: bool = False
     runtime_executable: bool = False
     blocked_reason: str | None = None
+    slots: list[EffectiveExternalAccessSlotResponse] = Field(default_factory=list)
 
 
 class EffectiveExternalAccessResponse(BaseModel):

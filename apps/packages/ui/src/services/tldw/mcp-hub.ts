@@ -18,6 +18,7 @@ export type McpHubPathScopeMode = "none" | "workspace_root" | "cwd_descendants"
 export type McpHubPathScopeEnforcement = "approval_required_when_unenforceable"
 export type McpHubExternalServerSource = "managed" | "legacy"
 export type McpHubCredentialBindingMode = "grant" | "disable"
+export type McpHubCredentialSlotPrivilegeClass = "read" | "write" | "admin" | "custom" | string
 
 export type McpHubProfile = {
   id: number
@@ -295,10 +296,40 @@ export type McpHubExternalServer = {
   superseded_by_server_id?: string | null
   binding_count?: number
   runtime_executable?: boolean
+  credential_slots?: McpHubExternalServerCredentialSlot[]
   created_by?: number | null
   updated_by?: number | null
   created_at?: string | null
   updated_at?: string | null
+}
+
+export type McpHubExternalServerCredentialSlot = {
+  server_id: string
+  slot_name: string
+  display_name: string
+  secret_kind: string
+  privilege_class: McpHubCredentialSlotPrivilegeClass
+  is_required: boolean
+  secret_configured: boolean
+  created_by?: number | null
+  updated_by?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type McpHubExternalServerCredentialSlotCreateInput = {
+  slot_name: string
+  display_name: string
+  secret_kind: string
+  privilege_class: McpHubCredentialSlotPrivilegeClass
+  is_required?: boolean
+}
+
+export type McpHubExternalServerCredentialSlotUpdateInput = {
+  display_name?: string
+  secret_kind?: string
+  privilege_class?: McpHubCredentialSlotPrivilegeClass
+  is_required?: boolean
 }
 
 export type McpHubExternalServerCreateInput = {
@@ -327,11 +358,20 @@ export type McpHubSecretSetResponse = {
   updated_at?: string | null
 }
 
+export type McpHubSlotSecretSetResponse = {
+  server_id: string
+  slot_name: string
+  secret_configured: boolean
+  key_hint?: string | null
+  updated_at?: string | null
+}
+
 export type McpHubCredentialBinding = {
   id: number
   binding_target_type: string
   binding_target_id: string
   external_server_id: string
+  slot_name?: string | null
   credential_ref: string
   binding_mode: McpHubCredentialBindingMode
   usage_rules: Record<string, unknown>
@@ -350,6 +390,17 @@ export type McpHubEffectiveExternalAccessEntry = {
   superseded_by_server_id?: string | null
   secret_available: boolean
   runtime_executable: boolean
+  blocked_reason?: string | null
+  slots: McpHubEffectiveExternalAccessSlot[]
+}
+
+export type McpHubEffectiveExternalAccessSlot = {
+  slot_name: string
+  display_name?: string | null
+  granted_by?: string | null
+  disabled_by_assignment: boolean
+  secret_available: boolean
+  runtime_usable: boolean
   blocked_reason?: string | null
 }
 
@@ -476,6 +527,70 @@ export const setExternalServerSecret = async (
   })
 }
 
+export const listExternalServerCredentialSlots = async (
+  serverId: string
+): Promise<McpHubExternalServerCredentialSlot[]> => {
+  return await bgRequestClient<McpHubExternalServerCredentialSlot[]>({
+    path: `/api/v1/mcp/hub/external-servers/${encodeURIComponent(serverId)}/credential-slots`,
+    method: "GET"
+  })
+}
+
+export const createExternalServerCredentialSlot = async (
+  serverId: string,
+  payload: McpHubExternalServerCredentialSlotCreateInput
+): Promise<McpHubExternalServerCredentialSlot> => {
+  return await bgRequestClient<McpHubExternalServerCredentialSlot>({
+    path: `/api/v1/mcp/hub/external-servers/${encodeURIComponent(serverId)}/credential-slots`,
+    method: "POST",
+    body: payload
+  })
+}
+
+export const updateExternalServerCredentialSlot = async (
+  serverId: string,
+  slotName: string,
+  payload: McpHubExternalServerCredentialSlotUpdateInput
+): Promise<McpHubExternalServerCredentialSlot> => {
+  return await bgRequestClient<McpHubExternalServerCredentialSlot>({
+    path: `/api/v1/mcp/hub/external-servers/${encodeURIComponent(serverId)}/credential-slots/${encodeURIComponent(slotName)}`,
+    method: "PUT",
+    body: payload
+  })
+}
+
+export const deleteExternalServerCredentialSlot = async (
+  serverId: string,
+  slotName: string
+): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/external-servers/${encodeURIComponent(serverId)}/credential-slots/${encodeURIComponent(slotName)}`,
+    method: "DELETE"
+  })
+}
+
+export const setExternalServerSlotSecret = async (
+  serverId: string,
+  slotName: string,
+  secret: string
+): Promise<McpHubSlotSecretSetResponse> => {
+  return await bgRequestClient<McpHubSlotSecretSetResponse>({
+    path: `/api/v1/mcp/hub/external-servers/${encodeURIComponent(serverId)}/credential-slots/${encodeURIComponent(slotName)}/secret`,
+    method: "POST",
+    body: { secret }
+  })
+}
+
+export const clearExternalServerSlotSecret = async (
+  serverId: string,
+  slotName: string
+): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/external-servers/${encodeURIComponent(serverId)}/credential-slots/${encodeURIComponent(slotName)}/secret`,
+    method: "DELETE"
+  })
+}
+
 export const listProfileCredentialBindings = async (
   profileId: number
 ): Promise<McpHubCredentialBinding[]> => {
@@ -487,20 +602,24 @@ export const listProfileCredentialBindings = async (
 
 export const upsertProfileCredentialBinding = async (
   profileId: number,
-  serverId: string
+  serverId: string,
+  slotName?: string | null
 ): Promise<McpHubCredentialBinding> => {
+  const suffix = slotName ? `/${encodeURIComponent(slotName)}` : ""
   return await bgRequestClient<McpHubCredentialBinding>({
-    path: `/api/v1/mcp/hub/permission-profiles/${profileId}/credential-bindings/${encodeURIComponent(serverId)}`,
+    path: `/api/v1/mcp/hub/permission-profiles/${profileId}/credential-bindings/${encodeURIComponent(serverId)}${suffix}`,
     method: "PUT"
   })
 }
 
 export const deleteProfileCredentialBinding = async (
   profileId: number,
-  serverId: string
+  serverId: string,
+  slotName?: string | null
 ): Promise<{ ok: boolean }> => {
+  const suffix = slotName ? `/${encodeURIComponent(slotName)}` : ""
   return await bgRequestClient<{ ok: boolean }>({
-    path: `/api/v1/mcp/hub/permission-profiles/${profileId}/credential-bindings/${encodeURIComponent(serverId)}`,
+    path: `/api/v1/mcp/hub/permission-profiles/${profileId}/credential-bindings/${encodeURIComponent(serverId)}${suffix}`,
     method: "DELETE"
   })
 }
@@ -517,10 +636,12 @@ export const listAssignmentCredentialBindings = async (
 export const upsertAssignmentCredentialBinding = async (
   assignmentId: number,
   serverId: string,
-  payload: { binding_mode: McpHubCredentialBindingMode }
+  payload: { binding_mode: McpHubCredentialBindingMode },
+  slotName?: string | null
 ): Promise<McpHubCredentialBinding> => {
+  const suffix = slotName ? `/${encodeURIComponent(slotName)}` : ""
   return await bgRequestClient<McpHubCredentialBinding>({
-    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/credential-bindings/${encodeURIComponent(serverId)}`,
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/credential-bindings/${encodeURIComponent(serverId)}${suffix}`,
     method: "PUT",
     body: payload
   })
@@ -528,10 +649,12 @@ export const upsertAssignmentCredentialBinding = async (
 
 export const deleteAssignmentCredentialBinding = async (
   assignmentId: number,
-  serverId: string
+  serverId: string,
+  slotName?: string | null
 ): Promise<{ ok: boolean }> => {
+  const suffix = slotName ? `/${encodeURIComponent(slotName)}` : ""
   return await bgRequestClient<{ ok: boolean }>({
-    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/credential-bindings/${encodeURIComponent(serverId)}`,
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/credential-bindings/${encodeURIComponent(serverId)}${suffix}`,
     method: "DELETE"
   })
 }

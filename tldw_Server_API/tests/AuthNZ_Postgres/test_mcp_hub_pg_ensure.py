@@ -22,7 +22,9 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
             'mcp_approval_policies',
             'mcp_credential_bindings',
             'mcp_external_servers',
+            'mcp_external_server_credential_slots',
             'mcp_external_server_secrets',
+            'mcp_external_server_slot_secrets',
             'mcp_permission_profiles',
             'mcp_policy_assignments',
             'mcp_policy_audit_history',
@@ -37,7 +39,9 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     assert "mcp_approval_policies" in names
     assert "mcp_credential_bindings" in names
     assert "mcp_external_servers" in names
+    assert "mcp_external_server_credential_slots" in names
     assert "mcp_external_server_secrets" in names
+    assert "mcp_external_server_slot_secrets" in names
     assert "mcp_permission_profiles" in names
     assert "mcp_policy_assignments" in names
     assert "mcp_policy_audit_history" in names
@@ -88,11 +92,42 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
         FROM information_schema.columns
         WHERE table_schema = 'public'
           AND table_name = 'mcp_credential_bindings'
-          AND column_name IN ('binding_mode')
+          AND column_name IN ('binding_mode', 'slot_name')
         """
     )
     binding_column_names = {str(row["column_name"]) for row in binding_column_rows}
     assert "binding_mode" in binding_column_names
+    assert "slot_name" in binding_column_names
+
+    slot_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_external_server_credential_slots'
+          AND column_name IN ('slot_name', 'display_name', 'secret_kind', 'privilege_class', 'is_required')
+        """
+    )
+    slot_column_names = {str(row["column_name"]) for row in slot_column_rows}
+    assert "slot_name" in slot_column_names
+    assert "display_name" in slot_column_names
+    assert "secret_kind" in slot_column_names
+    assert "privilege_class" in slot_column_names
+    assert "is_required" in slot_column_names
+
+    slot_secret_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_external_server_slot_secrets'
+          AND column_name IN ('slot_id', 'encrypted_blob', 'key_hint')
+        """
+    )
+    slot_secret_column_names = {str(row["column_name"]) for row in slot_secret_column_rows}
+    assert "slot_id" in slot_secret_column_names
+    assert "encrypted_blob" in slot_secret_column_names
+    assert "key_hint" in slot_secret_column_names
 
     binding_index_rows = await test_db_pool.fetch(
         """
@@ -100,8 +135,20 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
         FROM pg_indexes
         WHERE schemaname = 'public'
           AND tablename = 'mcp_credential_bindings'
-          AND indexname = 'uq_mcp_credential_bindings_target_server'
+          AND indexname = 'uq_mcp_credential_bindings_target_server_slot'
         """
     )
     binding_index_names = {str(row["indexname"]) for row in binding_index_rows}
-    assert "uq_mcp_credential_bindings_target_server" in binding_index_names
+    assert "uq_mcp_credential_bindings_target_server_slot" in binding_index_names
+
+    slot_index_rows = await test_db_pool.fetch(
+        """
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND tablename = 'mcp_external_server_credential_slots'
+          AND indexname = 'uq_mcp_external_server_slots_server_slot'
+        """
+    )
+    slot_index_names = {str(row["indexname"]) for row in slot_index_rows}
+    assert "uq_mcp_external_server_slots_server_slot" in slot_index_names

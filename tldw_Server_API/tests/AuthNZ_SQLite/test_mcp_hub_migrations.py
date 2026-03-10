@@ -29,6 +29,8 @@ async def test_mcp_hub_tables_exist_after_authnz_migrations_sqlite(tmp_path, mon
     assert "mcp_acp_profiles" in names
     assert "mcp_external_servers" in names
     assert "mcp_external_server_secrets" in names
+    assert "mcp_external_server_credential_slots" in names
+    assert "mcp_external_server_slot_secrets" in names
     assert "mcp_permission_profiles" in names
     assert "mcp_policy_assignments" in names
     assert "mcp_policy_overrides" in names
@@ -55,6 +57,21 @@ async def test_mcp_hub_tables_exist_after_authnz_migrations_sqlite(tmp_path, mon
     binding_columns = await pool.fetchall("PRAGMA table_info(mcp_credential_bindings)")
     binding_column_names = {str(row["name"]) for row in binding_columns}
     assert "binding_mode" in binding_column_names
+    assert "slot_name" in binding_column_names
+
+    slot_columns = await pool.fetchall("PRAGMA table_info(mcp_external_server_credential_slots)")
+    slot_column_names = {str(row["name"]) for row in slot_columns}
+    assert "slot_name" in slot_column_names
+    assert "display_name" in slot_column_names
+    assert "secret_kind" in slot_column_names
+    assert "privilege_class" in slot_column_names
+    assert "is_required" in slot_column_names
+
+    slot_secret_columns = await pool.fetchall("PRAGMA table_info(mcp_external_server_slot_secrets)")
+    slot_secret_column_names = {str(row["name"]) for row in slot_secret_columns}
+    assert "slot_id" in slot_secret_column_names
+    assert "encrypted_blob" in slot_secret_column_names
+    assert "key_hint" in slot_secret_column_names
 
     binding_indexes = await pool.fetchall("PRAGMA index_list(mcp_credential_bindings)")
     unique_binding_indexes = {
@@ -62,4 +79,12 @@ async def test_mcp_hub_tables_exist_after_authnz_migrations_sqlite(tmp_path, mon
         for row in binding_indexes
         if int(row["unique"]) == 1
     }
-    assert "uq_mcp_credential_bindings_target_server" in unique_binding_indexes
+    assert "uq_mcp_credential_bindings_target_server_slot" in unique_binding_indexes
+
+    slot_indexes = await pool.fetchall("PRAGMA index_list(mcp_external_server_credential_slots)")
+    unique_slot_indexes = {
+        str(row["name"])
+        for row in slot_indexes
+        if int(row["unique"]) == 1
+    }
+    assert "uq_mcp_external_server_slots_server_slot" in unique_slot_indexes

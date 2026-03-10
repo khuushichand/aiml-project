@@ -25,6 +25,10 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     EffectiveExternalAccessResponse,
     ExternalSecretSetRequest,
     ExternalSecretSetResponse,
+    ExternalServerCredentialSlotCreateRequest,
+    ExternalServerCredentialSlotResponse,
+    ExternalServerCredentialSlotUpdateRequest,
+    ExternalServerSlotSecretSetResponse,
     ExternalServerCreateRequest,
     ExternalServerResponse,
     ExternalServerUpdateRequest,
@@ -395,6 +399,11 @@ def _profile_row_to_response(row: dict[str, Any]) -> ACPProfileResponse:
 
 
 def _external_row_to_response(row: dict[str, Any]) -> ExternalServerResponse:
+    slots = [
+        ExternalServerCredentialSlotResponse.model_validate(slot)
+        for slot in (row.get("credential_slots") or [])
+        if isinstance(slot, dict)
+    ]
     return ExternalServerResponse(
         id=str(row.get("id") or ""),
         name=str(row.get("name") or ""),
@@ -414,6 +423,7 @@ def _external_row_to_response(row: dict[str, Any]) -> ExternalServerResponse:
             if row.get("runtime_executable") is not None
             else True
         ),
+        credential_slots=slots,
         created_by=row.get("created_by"),
         updated_by=row.get("updated_by"),
         created_at=row.get("created_at"),
@@ -648,6 +658,11 @@ def _binding_row_to_response(row: dict[str, Any]) -> CredentialBindingResponse:
         binding_target_type=str(row.get("binding_target_type") or ""),
         binding_target_id=str(row.get("binding_target_id") or ""),
         external_server_id=str(row.get("external_server_id") or ""),
+        slot_name=(
+            str(row.get("slot_name") or "").strip()
+            if str(row.get("slot_name") or "").strip()
+            else None
+        ),
         credential_ref=str(row.get("credential_ref") or "server"),
         binding_mode=str(row.get("binding_mode") or "grant"),
         usage_rules=_load_json_object(row.get("usage_rules")),
@@ -1287,6 +1302,155 @@ async def import_external_server(
     return _external_row_to_response(row)
 
 
+@router.get(
+    "/external-servers/{server_id}/credential-slots",
+    response_model=list[ExternalServerCredentialSlotResponse],
+)
+async def list_external_server_credential_slots(
+    server_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[ExternalServerCredentialSlotResponse]:
+    """List credential slots configured on a managed external server."""
+    _ = principal
+    try:
+        rows = await svc.list_external_server_credential_slots(server_id=server_id)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [ExternalServerCredentialSlotResponse.model_validate(row) for row in rows]
+
+
+@router.post(
+    "/external-servers/{server_id}/credential-slots",
+    response_model=ExternalServerCredentialSlotResponse,
+    status_code=201,
+)
+async def create_external_server_credential_slot(
+    server_id: str,
+    payload: ExternalServerCredentialSlotCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ExternalServerCredentialSlotResponse:
+    """Create a credential slot on a managed external server."""
+    _require_mutation_permission(principal)
+    try:
+        row = await svc.create_external_server_credential_slot(
+            server_id=server_id,
+            slot_name=payload.slot_name,
+            display_name=payload.display_name,
+            secret_kind=payload.secret_kind,
+            privilege_class=payload.privilege_class,
+            is_required=payload.is_required,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ExternalServerCredentialSlotResponse.model_validate(row)
+
+
+@router.put(
+    "/external-servers/{server_id}/credential-slots/{slot_name}",
+    response_model=ExternalServerCredentialSlotResponse,
+)
+async def update_external_server_credential_slot(
+    server_id: str,
+    slot_name: str,
+    payload: ExternalServerCredentialSlotUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ExternalServerCredentialSlotResponse:
+    """Update credential slot metadata on a managed external server."""
+    _require_mutation_permission(principal)
+    try:
+        row = await svc.update_external_server_credential_slot(
+            server_id=server_id,
+            slot_name=slot_name,
+            display_name=payload.display_name,
+            secret_kind=payload.secret_kind,
+            privilege_class=payload.privilege_class,
+            is_required=payload.is_required,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ExternalServerCredentialSlotResponse.model_validate(row)
+
+
+@router.delete(
+    "/external-servers/{server_id}/credential-slots/{slot_name}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_external_server_credential_slot(
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete a credential slot from a managed external server."""
+    _require_mutation_permission(principal)
+    deleted = await svc.delete_external_server_credential_slot(
+        server_id=server_id,
+        slot_name=slot_name,
+        actor_id=principal.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential slot not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.post(
+    "/external-servers/{server_id}/credential-slots/{slot_name}/secret",
+    response_model=ExternalServerSlotSecretSetResponse,
+)
+async def set_external_server_slot_secret(
+    server_id: str,
+    slot_name: str,
+    payload: ExternalSecretSetRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ExternalServerSlotSecretSetResponse:
+    """Set or rotate the secret value for an external server credential slot."""
+    _require_mutation_permission(principal)
+    try:
+        out = await svc.set_external_server_slot_secret(
+            server_id=server_id,
+            slot_name=slot_name,
+            secret_value=payload.secret,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ExternalServerSlotSecretSetResponse(**out)
+
+
+@router.delete(
+    "/external-servers/{server_id}/credential-slots/{slot_name}/secret",
+    response_model=MCPHubDeleteResponse,
+)
+async def clear_external_server_slot_secret(
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Clear the stored secret for an external server credential slot."""
+    _require_mutation_permission(principal)
+    deleted = await svc.clear_external_server_slot_secret(
+        server_id=server_id,
+        slot_name=slot_name,
+        actor_id=principal.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential slot secret not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
 @router.get("/permission-profiles/{profile_id}/credential-bindings", response_model=list[CredentialBindingResponse])
 async def list_profile_credential_bindings(
     profile_id: int,
@@ -1325,6 +1489,34 @@ async def upsert_profile_credential_binding(
     return _binding_row_to_response(row)
 
 
+@router.put(
+    "/permission-profiles/{profile_id}/credential-bindings/{server_id}/{slot_name}",
+    response_model=CredentialBindingResponse,
+)
+async def upsert_profile_slot_credential_binding(
+    profile_id: int,
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> CredentialBindingResponse:
+    """Grant a managed external server slot to a permission profile."""
+    _require_mutation_permission(principal)
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    try:
+        row = await svc.upsert_profile_credential_binding(
+            profile_id=profile_id,
+            external_server_id=server_id,
+            slot_name=slot_name,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _binding_row_to_response(row)
+
+
 @router.delete(
     "/permission-profiles/{profile_id}/credential-bindings/{server_id}",
     response_model=MCPHubDeleteResponse,
@@ -1341,6 +1533,31 @@ async def delete_profile_credential_binding(
     deleted = await svc.delete_profile_credential_binding(
         profile_id=profile_id,
         external_server_id=server_id,
+        actor_id=principal.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential binding not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.delete(
+    "/permission-profiles/{profile_id}/credential-bindings/{server_id}/{slot_name}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_profile_slot_credential_binding(
+    profile_id: int,
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete an external server slot binding from a permission profile."""
+    _require_mutation_permission(principal)
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    deleted = await svc.delete_profile_credential_binding(
+        profile_id=profile_id,
+        external_server_id=server_id,
+        slot_name=slot_name,
         actor_id=principal.user_id,
     )
     if not deleted:
@@ -1388,6 +1605,36 @@ async def upsert_assignment_credential_binding(
     return _binding_row_to_response(row)
 
 
+@router.put(
+    "/policy-assignments/{assignment_id}/credential-bindings/{server_id}/{slot_name}",
+    response_model=CredentialBindingResponse,
+)
+async def upsert_assignment_slot_credential_binding(
+    assignment_id: int,
+    server_id: str,
+    slot_name: str,
+    payload: AssignmentCredentialBindingUpsertRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> CredentialBindingResponse:
+    """Create or update an external server slot binding on a policy assignment."""
+    _require_mutation_permission(principal)
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    try:
+        row = await svc.upsert_assignment_credential_binding(
+            assignment_id=assignment_id,
+            external_server_id=server_id,
+            slot_name=slot_name,
+            binding_mode=payload.binding_mode,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _binding_row_to_response(row)
+
+
 @router.delete(
     "/policy-assignments/{assignment_id}/credential-bindings/{server_id}",
     response_model=MCPHubDeleteResponse,
@@ -1404,6 +1651,31 @@ async def delete_assignment_credential_binding(
     deleted = await svc.delete_assignment_credential_binding(
         assignment_id=assignment_id,
         external_server_id=server_id,
+        actor_id=principal.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential binding not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.delete(
+    "/policy-assignments/{assignment_id}/credential-bindings/{server_id}/{slot_name}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_assignment_slot_credential_binding(
+    assignment_id: int,
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete an external server slot binding from a policy assignment."""
+    _require_mutation_permission(principal)
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    deleted = await svc.delete_assignment_credential_binding(
+        assignment_id=assignment_id,
+        external_server_id=server_id,
+        slot_name=slot_name,
         actor_id=principal.user_id,
     )
     if not deleted:

@@ -158,6 +158,16 @@ class McpHubService:
             out["auth"] = auth
         return out
 
+    async def _attach_slot_summary(self, row: dict[str, Any]) -> dict[str, Any]:
+        out = dict(row)
+        if str(out.get("server_source") or "managed") == "managed":
+            out["credential_slots"] = await self.repo.list_external_server_credential_slots(
+                server_id=str(out.get("id") or "")
+            )
+        else:
+            out["credential_slots"] = []
+        return out
+
     async def create_permission_profile(
         self,
         *,
@@ -753,6 +763,7 @@ class McpHubService:
                 "superseded_by_server_id": item.get("superseded_by_server_id"),
                 "binding_count": 0,
                 "runtime_executable": False,
+                "credential_slots": [],
                 "created_by": None,
                 "updated_by": None,
                 "created_at": None,
@@ -761,7 +772,173 @@ class McpHubService:
             for item in await self._list_legacy_inventory()
             if str(item.get("id") or "") not in managed_ids
         ]
-        return [*rows, *legacy_rows]
+        managed_rows = [await self._attach_slot_summary(row) for row in rows]
+        return [*managed_rows, *legacy_rows]
+
+    async def list_external_server_credential_slots(
+        self,
+        *,
+        server_id: str,
+    ) -> list[dict[str, Any]]:
+        server = await self.repo.get_external_server(server_id)
+        if not server:
+            raise ResourceNotFoundError("mcp_external_server", identifier=server_id)
+        return await self.repo.list_external_server_credential_slots(server_id=server_id)
+
+    async def create_external_server_credential_slot(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        display_name: str,
+        secret_kind: str,
+        privilege_class: str,
+        is_required: bool,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        server = await self.repo.get_external_server(server_id)
+        if not server:
+            raise ResourceNotFoundError("mcp_external_server", identifier=server_id)
+        row = await self.repo.create_external_server_credential_slot(
+            server_id=server_id,
+            slot_name=slot_name,
+            display_name=display_name,
+            secret_kind=secret_kind,
+            privilege_class=privilege_class,
+            is_required=is_required,
+            actor_id=actor_id,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.external_server_slot.create",
+                actor_id=actor_id,
+                resource_type="mcp_external_server",
+                resource_id=server_id,
+                metadata={"slot_name": row.get("slot_name")},
+            )
+        )
+        return row
+
+    async def update_external_server_credential_slot(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        display_name: str | None = None,
+        secret_kind: str | None = None,
+        privilege_class: str | None = None,
+        is_required: bool | None = None,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "server_id": server_id,
+            "slot_name": slot_name,
+            "actor_id": actor_id,
+        }
+        if display_name is not None:
+            kwargs["display_name"] = display_name
+        if secret_kind is not None:
+            kwargs["secret_kind"] = secret_kind
+        if privilege_class is not None:
+            kwargs["privilege_class"] = privilege_class
+        if is_required is not None:
+            kwargs["is_required"] = is_required
+        row = await self.repo.update_external_server_credential_slot(**kwargs)
+        if not row:
+            raise ResourceNotFoundError("mcp_external_server_slot", identifier=f"{server_id}/{slot_name}")
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.external_server_slot.update",
+                actor_id=actor_id,
+                resource_type="mcp_external_server",
+                resource_id=server_id,
+                metadata={"slot_name": row.get("slot_name")},
+            )
+        )
+        return row
+
+    async def delete_external_server_credential_slot(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        actor_id: int | None,
+    ) -> bool:
+        deleted = await self.repo.delete_external_server_credential_slot(
+            server_id=server_id,
+            slot_name=slot_name,
+        )
+        if deleted:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.external_server_slot.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_external_server",
+                    resource_id=server_id,
+                    metadata={"slot_name": slot_name},
+                )
+            )
+        return deleted
+
+    async def set_external_server_slot_secret(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        secret_value: str,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        slot = await self.repo.get_external_server_credential_slot(server_id=server_id, slot_name=slot_name)
+        if not slot:
+            raise ResourceNotFoundError("mcp_external_server_slot", identifier=f"{server_id}/{slot_name}")
+        secret = (secret_value or "").strip()
+        if not secret:
+            raise BadRequestError("Secret value is required")
+        secret_payload = build_secret_payload(secret)
+        envelope = encrypt_byok_payload(secret_payload)
+        stored = await self.repo.upsert_external_server_slot_secret(
+            server_id=server_id,
+            slot_name=slot_name,
+            encrypted_blob=dumps_envelope(envelope),
+            key_hint=key_hint_for_api_key(secret),
+            actor_id=actor_id,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.external_server_slot_secret.update",
+                actor_id=actor_id,
+                resource_type="mcp_external_server",
+                resource_id=server_id,
+                metadata={"slot_name": slot_name, "key_hint": stored.get("key_hint")},
+            )
+        )
+        return {
+            "server_id": server_id,
+            "slot_name": slot_name,
+            "secret_configured": bool(stored),
+            "key_hint": stored.get("key_hint"),
+            "updated_at": stored.get("updated_at"),
+        }
+
+    async def clear_external_server_slot_secret(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        actor_id: int | None,
+    ) -> bool:
+        cleared = await self.repo.clear_external_server_slot_secret(server_id=server_id, slot_name=slot_name)
+        if cleared:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.external_server_slot_secret.clear",
+                    actor_id=actor_id,
+                    resource_type="mcp_external_server",
+                    resource_id=server_id,
+                    metadata={"slot_name": slot_name},
+                )
+            )
+        return cleared
 
     async def import_legacy_external_server(
         self,
@@ -815,6 +992,7 @@ class McpHubService:
         *,
         profile_id: int,
         external_server_id: str,
+        slot_name: str | None = None,
         actor_id: int | None,
     ) -> dict[str, Any]:
         target_row = await self._resolve_binding_target(binding_target_type="profile", binding_target_id=profile_id)
@@ -826,7 +1004,8 @@ class McpHubService:
             binding_target_type="profile",
             binding_target_id=str(profile_id),
             external_server_id=external_server_id,
-            credential_ref="server",
+            slot_name=slot_name,
+            credential_ref="slot" if slot_name else "server",
             binding_mode="grant",
             usage_rules={},
             actor_id=actor_id,
@@ -837,7 +1016,7 @@ class McpHubService:
                 actor_id=actor_id,
                 resource_type="mcp_permission_profile",
                 resource_id=str(profile_id),
-                metadata={"external_server_id": external_server_id, "binding_mode": "grant"},
+                metadata={"external_server_id": external_server_id, "slot_name": slot_name, "binding_mode": "grant"},
             )
         )
         return row
@@ -847,6 +1026,7 @@ class McpHubService:
         *,
         profile_id: int,
         external_server_id: str,
+        slot_name: str | None = None,
         actor_id: int | None,
     ) -> bool:
         await self._resolve_binding_target(binding_target_type="profile", binding_target_id=profile_id)
@@ -854,17 +1034,18 @@ class McpHubService:
             binding_target_type="profile",
             binding_target_id=str(profile_id),
             external_server_id=external_server_id,
+            slot_name=slot_name,
         )
         if deleted:
             await _await_if_needed(
                 emit_mcp_hub_audit(
-                    action="mcp_hub.profile_credential_binding.delete",
-                    actor_id=actor_id,
-                    resource_type="mcp_permission_profile",
-                    resource_id=str(profile_id),
-                    metadata={"external_server_id": external_server_id},
-                )
+                action="mcp_hub.profile_credential_binding.delete",
+                actor_id=actor_id,
+                resource_type="mcp_permission_profile",
+                resource_id=str(profile_id),
+                metadata={"external_server_id": external_server_id, "slot_name": slot_name},
             )
+        )
         return deleted
 
     async def list_assignment_credential_bindings(
@@ -883,6 +1064,7 @@ class McpHubService:
         *,
         assignment_id: int,
         external_server_id: str,
+        slot_name: str | None = None,
         binding_mode: str,
         actor_id: int | None,
     ) -> dict[str, Any]:
@@ -895,7 +1077,8 @@ class McpHubService:
             binding_target_type="assignment",
             binding_target_id=str(assignment_id),
             external_server_id=external_server_id,
-            credential_ref="server",
+            slot_name=slot_name,
+            credential_ref="slot" if slot_name else "server",
             binding_mode=binding_mode,
             usage_rules={},
             actor_id=actor_id,
@@ -906,7 +1089,7 @@ class McpHubService:
                 actor_id=actor_id,
                 resource_type="mcp_policy_assignment",
                 resource_id=str(assignment_id),
-                metadata={"external_server_id": external_server_id, "binding_mode": binding_mode},
+                metadata={"external_server_id": external_server_id, "slot_name": slot_name, "binding_mode": binding_mode},
             )
         )
         return row
@@ -916,6 +1099,7 @@ class McpHubService:
         *,
         assignment_id: int,
         external_server_id: str,
+        slot_name: str | None = None,
         actor_id: int | None,
     ) -> bool:
         await self._resolve_binding_target(binding_target_type="assignment", binding_target_id=assignment_id)
@@ -923,17 +1107,18 @@ class McpHubService:
             binding_target_type="assignment",
             binding_target_id=str(assignment_id),
             external_server_id=external_server_id,
+            slot_name=slot_name,
         )
         if deleted:
             await _await_if_needed(
                 emit_mcp_hub_audit(
-                    action="mcp_hub.assignment_credential_binding.delete",
-                    actor_id=actor_id,
-                    resource_type="mcp_policy_assignment",
-                    resource_id=str(assignment_id),
-                    metadata={"external_server_id": external_server_id},
-                )
+                action="mcp_hub.assignment_credential_binding.delete",
+                actor_id=actor_id,
+                resource_type="mcp_policy_assignment",
+                resource_id=str(assignment_id),
+                metadata={"external_server_id": external_server_id, "slot_name": slot_name},
             )
+        )
         return deleted
 
     async def resolve_effective_external_access(
@@ -1000,6 +1185,31 @@ class McpHubService:
         secret = (secret_value or "").strip()
         if not secret:
             raise BadRequestError("Secret value is required")
+
+        slots = await self.repo.list_external_server_credential_slots(server_id=server_id)
+        if slots:
+            default_slot = await self.repo.get_external_server_default_slot(server_id=server_id)
+            if default_slot is None:
+                raise BadRequestError("Server-level secret alias is only valid for default-slot servers")
+            slot_row = await self.set_external_server_slot_secret(
+                server_id=server_id,
+                slot_name=str(default_slot.get("slot_name") or ""),
+                secret_value=secret,
+                actor_id=actor_id,
+            )
+            stored = await self.repo.upsert_external_secret(
+                server_id=server_id,
+                encrypted_blob=dumps_envelope(encrypt_byok_payload(build_secret_payload(secret))),
+                key_hint=key_hint_for_api_key(secret),
+                actor_id=actor_id,
+            )
+            return {
+                "server_id": server_id,
+                "slot_name": slot_row.get("slot_name"),
+                "secret_configured": bool(stored),
+                "key_hint": stored.get("key_hint"),
+                "updated_at": stored.get("updated_at"),
+            }
 
         secret_payload = build_secret_payload(secret)
         envelope = encrypt_byok_payload(secret_payload)

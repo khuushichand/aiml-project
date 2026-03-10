@@ -153,3 +153,82 @@ async def test_external_federation_module_ignores_legacy_file_config_for_runtime
     assert "external.servers.list" in tool_names
     assert "external.tools.refresh" in tool_names
     assert not any(name.startswith("ext.legacy-docs.") for name in tool_names)
+
+
+@pytest.mark.asyncio
+async def test_managed_external_registry_service_hydrates_named_slot_template(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
+        build_secret_payload,
+        dumps_envelope,
+        encrypt_byok_payload,
+    )
+    from tldw_Server_API.app.services.mcp_hub_external_registry_service import (
+        McpHubExternalRegistryService,
+    )
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("BYOK_ENCRYPTION_KEY", _b64_key(b"k"))
+
+    reset_settings()
+    await reset_db_pool()
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    await repo.upsert_external_server(
+        server_id="docs",
+        name="Docs",
+        transport="websocket",
+        config_json=json.dumps(
+            {
+                "websocket": {"url": "wss://docs.example/ws"},
+                "auth": {
+                    "mode": "bearer_token",
+                    "required_slots": ["token_readonly"],
+                    "slot_bindings": {
+                        "token_readonly": {
+                            "inject": "header",
+                            "header_name": "Authorization",
+                            "prefix": "Bearer ",
+                        }
+                    },
+                },
+            }
+        ),
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        server_source="managed",
+        actor_id=1,
+    )
+    await repo.create_external_server_credential_slot(
+        server_id="docs",
+        slot_name="token_readonly",
+        display_name="Read-only token",
+        secret_kind="bearer_token",
+        privilege_class="read",
+        is_required=True,
+        actor_id=1,
+    )
+    await repo.upsert_external_server_slot_secret(
+        server_id="docs",
+        slot_name="token_readonly",
+        encrypted_blob=dumps_envelope(
+            encrypt_byok_payload(build_secret_payload("super-secret-token"))
+        ),
+        key_hint="oken",
+        actor_id=1,
+    )
+
+    service = McpHubExternalRegistryService(repo=repo)
+    servers = await service.list_runtime_servers()
+
+    assert [server.id for server in servers] == ["docs"]
+    assert servers[0].websocket is not None
+    assert servers[0].websocket.headers["Authorization"] == "Bearer super-secret-token"

@@ -32,7 +32,9 @@ import {
 } from "@/services/tldw/mcp-hub"
 
 import {
+  getCredentialBindingKey,
   getManagedExternalServers,
+  getManagedExternalServerSlots,
   getPathScopeLabel,
   MCP_HUB_SCOPE_OPTIONS,
   MCP_HUB_TARGET_OPTIONS
@@ -84,7 +86,10 @@ export const PolicyAssignmentsTab = () => {
   const bindingModes = useMemo(
     () =>
       new Map(
-        assignmentBindings.map((binding) => [binding.external_server_id, binding.binding_mode] as const)
+        assignmentBindings.map((binding) => [
+          getCredentialBindingKey(binding.external_server_id, binding.slot_name),
+          binding.binding_mode
+        ] as const)
       ),
     [assignmentBindings]
   )
@@ -317,22 +322,29 @@ export const PolicyAssignmentsTab = () => {
 
   const handleAssignmentBindingModeChange = async (
     serverId: string,
+    slotName: string | null | undefined,
     nextMode: "inherit" | "grant" | "disable"
   ) => {
     if (!editingId) return
-    const currentMode = bindingModes.get(serverId) || "inherit"
+    const bindingKey = getCredentialBindingKey(serverId, slotName)
+    const currentMode = bindingModes.get(bindingKey) || "inherit"
     if (currentMode === nextMode) {
       return
     }
-    setBindingServerId(serverId)
+    setBindingServerId(bindingKey)
     setErrorMessage(null)
     try {
       if (nextMode === "inherit") {
-        if (bindingModes.has(serverId)) {
-          await deleteAssignmentCredentialBinding(editingId, serverId)
+        if (bindingModes.has(bindingKey)) {
+          await deleteAssignmentCredentialBinding(editingId, serverId, slotName)
         }
       } else {
-        await upsertAssignmentCredentialBinding(editingId, serverId, { binding_mode: nextMode })
+        await upsertAssignmentCredentialBinding(
+          editingId,
+          serverId,
+          { binding_mode: nextMode },
+          slotName
+        )
       }
       await loadAssignmentExternalState(editingId)
     } catch {
@@ -457,34 +469,64 @@ export const PolicyAssignmentsTab = () => {
                     <Typography.Text type="secondary">Loading external service bindings...</Typography.Text>
                   ) : managedExternalServers.length > 0 ? (
                     <Space orientation="vertical" size="small" style={{ width: "100%" }}>
-                      {managedExternalServers.map((server) => (
-                        <Space
-                          key={server.id}
-                          wrap
-                          size="small"
-                          style={{ width: "100%", justifyContent: "space-between" }}
-                        >
-                          <Space wrap size={4}>
-                            <Typography.Text strong>{server.name}</Typography.Text>
-                            {server.secret_configured ? <Tag color="green">secret configured</Tag> : <Tag>no secret</Tag>}
-                          </Space>
-                          <select
-                            aria-label={server.name}
-                            value={bindingModes.get(server.id) || "inherit"}
-                            disabled={bindingServerId === server.id}
-                            onChange={(event) =>
-                              void handleAssignmentBindingModeChange(
-                                server.id,
-                                event.target.value as "inherit" | "grant" | "disable"
-                              )
-                            }
-                          >
-                            <option value="inherit">Inherit</option>
-                            <option value="grant">Grant</option>
-                            <option value="disable">Disable</option>
-                          </select>
-                        </Space>
-                      ))}
+                      {managedExternalServers.map((server) => {
+                        const slots = getManagedExternalServerSlots(server)
+                        return (
+                          <Card key={server.id} size="small" title={server.name}>
+                            <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+                              <Space wrap size={4}>
+                                {server.secret_configured ? <Tag color="green">secret configured</Tag> : <Tag>no secret</Tag>}
+                              </Space>
+                              {slots.length > 0 ? (
+                                <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+                                  {slots.map((slot) => {
+                                    const bindingKey = getCredentialBindingKey(server.id, slot.slot_name)
+                                    return (
+                                      <Space
+                                        key={bindingKey}
+                                        wrap
+                                        size="small"
+                                        style={{ width: "100%", justifyContent: "space-between" }}
+                                      >
+                                        <Space wrap size={4}>
+                                          <Typography.Text>{slot.display_name}</Typography.Text>
+                                          <Tag>{slot.slot_name}</Tag>
+                                          <Tag>{slot.privilege_class}</Tag>
+                                          {slot.secret_configured ? (
+                                            <Tag color="green">slot secret configured</Tag>
+                                          ) : (
+                                            <Tag>slot secret missing</Tag>
+                                          )}
+                                        </Space>
+                                        <select
+                                          aria-label={`${server.name} ${slot.display_name}`}
+                                          value={bindingModes.get(bindingKey) || "inherit"}
+                                          disabled={bindingServerId === bindingKey}
+                                          onChange={(event) =>
+                                            void handleAssignmentBindingModeChange(
+                                              server.id,
+                                              slot.slot_name,
+                                              event.target.value as "inherit" | "grant" | "disable"
+                                            )
+                                          }
+                                        >
+                                          <option value="inherit">Inherit</option>
+                                          <option value="grant">Grant</option>
+                                          <option value="disable">Disable</option>
+                                        </select>
+                                      </Space>
+                                    )
+                                  })}
+                                </Space>
+                              ) : (
+                                <Typography.Text type="secondary">
+                                  Define credential slots in External Servers before using slot-level assignment bindings.
+                                </Typography.Text>
+                              )}
+                            </Space>
+                          </Card>
+                        )
+                      })}
                     </Space>
                   ) : (
                     <Empty description="No managed external servers are available yet." />

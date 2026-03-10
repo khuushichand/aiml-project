@@ -49,6 +49,14 @@ class McpHubExternalRegistryService:
                 )
         return runtime_servers
 
+    @staticmethod
+    def _extract_secret_value(secret_payload: dict[str, Any]) -> str:
+        return str(
+            secret_payload.get("secret")
+            or secret_payload.get("api_key")
+            or ""
+        ).strip()
+
     async def _build_runtime_payload(self, row: dict[str, Any]) -> dict[str, Any] | None:
         if str(row.get("server_source") or "managed") != "managed":
             return None
@@ -62,10 +70,41 @@ class McpHubExternalRegistryService:
         mode = str(auth.get("mode") or "none").strip().lower()
 
         if mode not in {"", "none"}:
-            secret_row = await self.repo.get_external_secret(str(row.get("id") or ""))
-            if not secret_row or not str(secret_row.get("encrypted_blob") or "").strip():
-                raise ValueError("managed external server requires a configured secret")
-            secret_payload = decrypt_byok_payload(loads_envelope(str(secret_row.get("encrypted_blob") or "")))
+            server_id = str(row.get("id") or "")
+            required_slots = [
+                str(slot).strip().lower()
+                for slot in (auth.get("required_slots") or [])
+                if str(slot or "").strip()
+            ]
+            if required_slots:
+                slot_payloads: dict[str, str] = {}
+                default_slot = await self.repo.get_external_server_default_slot(server_id=server_id)
+                default_slot_name = str(default_slot.get("slot_name") or "") if default_slot else ""
+                for slot_name in required_slots:
+                    secret_row = await self.repo.get_external_server_slot_secret(
+                        server_id=server_id,
+                        slot_name=slot_name,
+                    )
+                    if secret_row and str(secret_row.get("encrypted_blob") or "").strip():
+                        decrypted = decrypt_byok_payload(loads_envelope(str(secret_row.get("encrypted_blob") or "")))
+                        slot_secret = self._extract_secret_value(decrypted)
+                    elif slot_name == default_slot_name:
+                        legacy_secret = await self.repo.get_external_secret(server_id)
+                        if not legacy_secret or not str(legacy_secret.get("encrypted_blob") or "").strip():
+                            raise ValueError(f"managed external server requires a configured slot secret: {slot_name}")
+                        decrypted = decrypt_byok_payload(loads_envelope(str(legacy_secret.get("encrypted_blob") or "")))
+                        slot_secret = self._extract_secret_value(decrypted)
+                    else:
+                        raise ValueError(f"managed external server requires a configured slot secret: {slot_name}")
+                    if not slot_secret:
+                        raise ValueError(f"managed external server requires a configured slot secret: {slot_name}")
+                    slot_payloads[slot_name] = slot_secret
+                secret_payload = {"slots": slot_payloads}
+            else:
+                secret_row = await self.repo.get_external_secret(server_id)
+                if not secret_row or not str(secret_row.get("encrypted_blob") or "").strip():
+                    raise ValueError("managed external server requires a configured secret")
+                secret_payload = decrypt_byok_payload(loads_envelope(str(secret_row.get("encrypted_blob") or "")))
             runtime_auth = await self.auth_bridge.hydrate_runtime_auth(
                 server_config=row,
                 secret_payload=secret_payload,

@@ -6,19 +6,29 @@ import userEvent from "@testing-library/user-event"
 const mocks = vi.hoisted(() => ({
   listExternalServers: vi.fn(),
   setExternalServerSecret: vi.fn(),
+  setExternalServerSlotSecret: vi.fn(),
+  clearExternalServerSlotSecret: vi.fn(),
   importExternalServer: vi.fn(),
   createExternalServer: vi.fn(),
   updateExternalServer: vi.fn(),
-  deleteExternalServer: vi.fn()
+  deleteExternalServer: vi.fn(),
+  createExternalServerCredentialSlot: vi.fn(),
+  updateExternalServerCredentialSlot: vi.fn(),
+  deleteExternalServerCredentialSlot: vi.fn()
 }))
 
 vi.mock("@/services/tldw/mcp-hub", () => ({
   listExternalServers: (...args: unknown[]) => mocks.listExternalServers(...args),
   setExternalServerSecret: (...args: unknown[]) => mocks.setExternalServerSecret(...args),
+  setExternalServerSlotSecret: (...args: unknown[]) => mocks.setExternalServerSlotSecret(...args),
+  clearExternalServerSlotSecret: (...args: unknown[]) => mocks.clearExternalServerSlotSecret(...args),
   importExternalServer: (...args: unknown[]) => mocks.importExternalServer(...args),
   createExternalServer: (...args: unknown[]) => mocks.createExternalServer(...args),
   updateExternalServer: (...args: unknown[]) => mocks.updateExternalServer(...args),
-  deleteExternalServer: (...args: unknown[]) => mocks.deleteExternalServer(...args)
+  deleteExternalServer: (...args: unknown[]) => mocks.deleteExternalServer(...args),
+  createExternalServerCredentialSlot: (...args: unknown[]) => mocks.createExternalServerCredentialSlot(...args),
+  updateExternalServerCredentialSlot: (...args: unknown[]) => mocks.updateExternalServerCredentialSlot(...args),
+  deleteExternalServerCredentialSlot: (...args: unknown[]) => mocks.deleteExternalServerCredentialSlot(...args)
 }))
 
 import { ExternalServersTab } from "../ExternalServersTab"
@@ -37,7 +47,18 @@ describe("ExternalServersTab", () => {
         secret_configured: false,
         server_source: "managed",
         binding_count: 2,
-        runtime_executable: true
+        runtime_executable: true,
+        credential_slots: [
+          {
+            server_id: "docs-managed",
+            slot_name: "token_readonly",
+            display_name: "Read-only token",
+            secret_kind: "bearer_token",
+            privilege_class: "read",
+            is_required: true,
+            secret_configured: false
+          }
+        ]
       },
       {
         id: "search-legacy",
@@ -69,6 +90,12 @@ describe("ExternalServersTab", () => {
       server_id: "docs-managed",
       secret_configured: true
     })
+    mocks.setExternalServerSlotSecret.mockResolvedValue({
+      server_id: "docs-managed",
+      slot_name: "token_readonly",
+      secret_configured: true
+    })
+    mocks.clearExternalServerSlotSecret.mockResolvedValue({ ok: true })
     mocks.importExternalServer.mockResolvedValue({
       id: "search-legacy",
       name: "Search Legacy",
@@ -79,7 +106,8 @@ describe("ExternalServersTab", () => {
       secret_configured: false,
       server_source: "managed",
       binding_count: 0,
-      runtime_executable: true
+      runtime_executable: true,
+      credential_slots: []
     })
     mocks.createExternalServer.mockResolvedValue({
       id: "new-managed",
@@ -91,7 +119,8 @@ describe("ExternalServersTab", () => {
       secret_configured: false,
       server_source: "managed",
       binding_count: 0,
-      runtime_executable: true
+      runtime_executable: true,
+      credential_slots: []
     })
     mocks.updateExternalServer.mockResolvedValue({
       id: "docs-managed",
@@ -103,8 +132,38 @@ describe("ExternalServersTab", () => {
       secret_configured: false,
       server_source: "managed",
       binding_count: 2,
-      runtime_executable: true
+      runtime_executable: true,
+      credential_slots: [
+        {
+          server_id: "docs-managed",
+          slot_name: "token_readonly",
+          display_name: "Read-only token",
+          secret_kind: "bearer_token",
+          privilege_class: "read",
+          is_required: true,
+          secret_configured: true
+        }
+      ]
     })
+    mocks.createExternalServerCredentialSlot.mockResolvedValue({
+      server_id: "docs-managed",
+      slot_name: "token_write",
+      display_name: "Write token",
+      secret_kind: "bearer_token",
+      privilege_class: "write",
+      is_required: false,
+      secret_configured: false
+    })
+    mocks.updateExternalServerCredentialSlot.mockResolvedValue({
+      server_id: "docs-managed",
+      slot_name: "token_readonly",
+      display_name: "Read-only token updated",
+      secret_kind: "bearer_token",
+      privilege_class: "read",
+      is_required: true,
+      secret_configured: true
+    })
+    mocks.deleteExternalServerCredentialSlot.mockResolvedValue({ ok: true })
     mocks.deleteExternalServer.mockResolvedValue({ ok: true })
     vi.stubGlobal("confirm", vi.fn(() => true))
   })
@@ -118,24 +177,63 @@ describe("ExternalServersTab", () => {
     expect(screen.getByText("Docs Legacy")).toBeTruthy()
     expect(screen.getByText(/superseded by docs-managed/i)).toBeTruthy()
     expect(screen.getByText(/2 bindings/i)).toBeTruthy()
+    expect(screen.getByText(/1 slot/i)).toBeTruthy()
+    expect(screen.getAllByText("Read-only token").length).toBeGreaterThan(0)
+
+    const secretInput = (await screen.findByLabelText(/slot secret/i)) as HTMLInputElement
+    await user.type(secretInput, "super-secret")
+    await user.click(screen.getByRole("button", { name: /save slot secret/i }))
+
+    expect(mocks.setExternalServerSlotSecret).toHaveBeenCalledWith(
+      "docs-managed",
+      "token_readonly",
+      "super-secret"
+    )
+    expect(await screen.findByText(/slot secret configured/i)).toBeTruthy()
+    expect(secretInput.value).toBe("")
+    expect(screen.queryByDisplayValue("super-secret")).toBeNull()
 
     await user.click(screen.getByRole("button", { name: /import to mcp hub/i }))
     expect(mocks.importExternalServer).toHaveBeenCalledWith("search-legacy")
-
-    const secretInput = (await screen.findByLabelText(/secret/i)) as HTMLInputElement
-    await user.type(secretInput, "super-secret")
-    await user.click(screen.getByRole("button", { name: /save secret/i }))
-
-    expect(await screen.findByText(/secret configured/i)).toBeTruthy()
-    expect(secretInput.value).toBe("")
-    expect(screen.queryByDisplayValue("super-secret")).toBeNull()
   })
 
-  it("creates, edits, and deletes managed servers", async () => {
+  it("creates, edits, and deletes managed servers and credential slots", async () => {
     const user = userEvent.setup()
     render(<ExternalServersTab />)
 
     await screen.findByText("Docs Legacy")
+
+    await user.click(screen.getByRole("button", { name: /add slot/i }))
+    await user.type(screen.getByLabelText(/slot name/i), "token_write")
+    await user.type(screen.getByLabelText(/slot display name/i), "Write token")
+    await user.selectOptions(screen.getByLabelText(/privilege class/i), "write")
+    await user.click(screen.getByRole("button", { name: /^save slot$/i }))
+
+    expect(mocks.createExternalServerCredentialSlot).toHaveBeenCalledWith("docs-managed", {
+      slot_name: "token_write",
+      display_name: "Write token",
+      secret_kind: "bearer_token",
+      privilege_class: "write",
+      is_required: true
+    })
+
+    await user.click(screen.getByRole("button", { name: /edit read-only token/i }))
+    const slotNameInput = screen.queryByLabelText(/slot name/i)
+    expect(slotNameInput).toBeNull()
+    const displayNameInput = screen.getByLabelText(/slot display name/i)
+    await user.clear(displayNameInput)
+    await user.type(displayNameInput, "Read-only token updated")
+    await user.click(screen.getByRole("button", { name: /update slot/i }))
+
+    expect(mocks.updateExternalServerCredentialSlot).toHaveBeenCalledWith("docs-managed", "token_readonly", {
+      display_name: "Read-only token updated",
+      secret_kind: "bearer_token",
+      privilege_class: "read",
+      is_required: true
+    })
+
+    await user.click(screen.getByRole("button", { name: /delete read-only token/i }))
+    expect(mocks.deleteExternalServerCredentialSlot).toHaveBeenCalledWith("docs-managed", "token_readonly")
 
     await user.click(screen.getByRole("button", { name: /new managed server/i }))
     await user.type(screen.getByLabelText(/server id/i), "new-managed")

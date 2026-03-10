@@ -1671,6 +1671,165 @@ def migration_059_harden_mcp_external_binding_schema(conn: sqlite3.Connection) -
     logger.info("Migration 059: Hardened MCP external binding schema")
 
 
+def _infer_default_external_slot(config_json: str | None) -> tuple[str, str] | None:
+    """Infer a safe default slot for obvious single-secret managed auth modes."""
+    try:
+        config = json.loads(config_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(config, dict):
+        return None
+    auth = config.get("auth")
+    if not isinstance(auth, dict):
+        return None
+    mode = str(auth.get("mode") or "").strip().lower()
+    if mode == "bearer_token":
+        return ("bearer_token", "bearer_token")
+    if mode == "api_key_header":
+        return ("api_key", "api_key")
+    return None
+
+
+def migration_060_add_mcp_external_credential_slots(conn: sqlite3.Connection) -> None:
+    """Add external credential slot tables and evolve bindings to be slot-aware."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_credential_slots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id TEXT NOT NULL,
+            slot_name TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            secret_kind TEXT NOT NULL,
+            privilege_class TEXT NOT NULL DEFAULT 'default',
+            is_required INTEGER DEFAULT 0,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (server_id) REFERENCES mcp_external_servers(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_external_server_slots_server_slot "
+        "ON mcp_external_server_credential_slots(server_id, slot_name)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_slots_server "
+        "ON mcp_external_server_credential_slots(server_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_slot_secrets (
+            slot_id INTEGER PRIMARY KEY,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT,
+            updated_by INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (slot_id) REFERENCES mcp_external_server_credential_slots(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_slot_secrets_updated_at "
+        "ON mcp_external_server_slot_secrets(updated_at)"
+    )
+
+    binding_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_credential_bindings)").fetchall()
+    }
+    if "slot_name" not in binding_columns:
+        conn.execute(
+            "ALTER TABLE mcp_credential_bindings ADD COLUMN slot_name TEXT NOT NULL DEFAULT ''"
+        )
+
+    conn.execute("DROP INDEX IF EXISTS uq_mcp_credential_bindings_target_server")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_credential_bindings_target_server_slot "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id, external_server_id, slot_name)"
+    )
+
+    rows = conn.execute(
+        """
+        SELECT id, config_json, created_by, updated_by, created_at, updated_at
+        FROM mcp_external_servers
+        WHERE COALESCE(server_source, 'managed') = 'managed'
+          AND superseded_by_server_id IS NULL
+        """
+    ).fetchall()
+    for row in rows:
+        server_id = str(row[0] or "")
+        inferred = _infer_default_external_slot(row[1])
+        if not server_id or inferred is None:
+            continue
+        slot_name, secret_kind = inferred
+        display_name = slot_name.replace("_", " ").title()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO mcp_external_server_credential_slots (
+                server_id, slot_name, display_name, secret_kind, privilege_class, is_required,
+                created_by, updated_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                server_id,
+                slot_name,
+                display_name,
+                secret_kind,
+                "default",
+                1,
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE mcp_credential_bindings
+            SET slot_name = ?
+            WHERE external_server_id = ?
+              AND COALESCE(TRIM(slot_name), '') = ''
+            """,
+            (slot_name, server_id),
+        )
+        slot_row = conn.execute(
+            """
+            SELECT id
+            FROM mcp_external_server_credential_slots
+            WHERE server_id = ?
+              AND slot_name = ?
+            """,
+            (server_id, slot_name),
+        ).fetchone()
+        if slot_row is None:
+            continue
+        slot_id = int(slot_row[0])
+        secret_row = conn.execute(
+            """
+            SELECT encrypted_blob, key_hint, updated_by, updated_at
+            FROM mcp_external_server_secrets
+            WHERE server_id = ?
+            """,
+            (server_id,),
+        ).fetchone()
+        if secret_row is None:
+            continue
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO mcp_external_server_slot_secrets (
+                slot_id, encrypted_blob, key_hint, updated_by, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (slot_id, secret_row[0], secret_row[1], secret_row[2], secret_row[3]),
+        )
+
+    conn.commit()
+    logger.info("Migration 060: Added MCP external credential slot schema")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
@@ -3123,6 +3282,11 @@ def get_authnz_migrations() -> list[Migration]:
             59,
             "Harden MCP external binding schema",
             migration_059_harden_mcp_external_binding_schema,
+        ),
+        Migration(
+            60,
+            "Add MCP external credential slots",
+            migration_060_add_mcp_external_credential_slots,
         ),
     ]
 

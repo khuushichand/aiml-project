@@ -196,7 +196,18 @@ describe("PolicyAssignmentsTab", () => {
         secret_configured: true,
         server_source: "managed",
         binding_count: 1,
-        runtime_executable: true
+        runtime_executable: true,
+        credential_slots: [
+          {
+            server_id: "docs-managed",
+            slot_name: "token_readonly",
+            display_name: "Read-only token",
+            secret_kind: "bearer_token",
+            privilege_class: "read",
+            is_required: true,
+            secret_configured: true
+          }
+        ]
       },
       {
         id: "search-api",
@@ -208,7 +219,18 @@ describe("PolicyAssignmentsTab", () => {
         secret_configured: false,
         server_source: "managed",
         binding_count: 0,
-        runtime_executable: true
+        runtime_executable: true,
+        credential_slots: [
+          {
+            server_id: "search-api",
+            slot_name: "token_write",
+            display_name: "Write token",
+            secret_kind: "bearer_token",
+            privilege_class: "write",
+            is_required: true,
+            secret_configured: false
+          }
+        ]
       },
       {
         id: "legacy-search",
@@ -220,7 +242,8 @@ describe("PolicyAssignmentsTab", () => {
         secret_configured: false,
         server_source: "legacy",
         binding_count: 0,
-        runtime_executable: false
+        runtime_executable: false,
+        credential_slots: []
       }
     ])
     mocks.listAssignmentCredentialBindings.mockResolvedValue([
@@ -229,7 +252,8 @@ describe("PolicyAssignmentsTab", () => {
         binding_target_type: "policy_assignment",
         binding_target_id: "11",
         external_server_id: "docs-managed",
-        credential_ref: "server:docs-managed",
+        slot_name: "token_readonly",
+        credential_ref: "slot",
         binding_mode: "disable",
         usage_rules: {}
       }
@@ -239,7 +263,8 @@ describe("PolicyAssignmentsTab", () => {
       binding_target_type: "policy_assignment",
       binding_target_id: "11",
       external_server_id: "search-api",
-      credential_ref: "server:search-api",
+      slot_name: "token_write",
+      credential_ref: "slot",
       binding_mode: "grant",
       usage_rules: {}
     })
@@ -253,7 +278,18 @@ describe("PolicyAssignmentsTab", () => {
           server_source: "managed",
           secret_available: true,
           runtime_executable: true,
-          blocked_reason: "disabled_by_assignment"
+          blocked_reason: "disabled_by_assignment",
+          slots: [
+            {
+              slot_name: "token_readonly",
+              display_name: "Read-only token",
+              granted_by: "profile",
+              disabled_by_assignment: true,
+              secret_available: true,
+              runtime_usable: false,
+              blocked_reason: "slot_disabled_by_assignment"
+            }
+          ]
         },
         {
           server_id: "search-api",
@@ -263,7 +299,18 @@ describe("PolicyAssignmentsTab", () => {
           server_source: "managed",
           secret_available: false,
           runtime_executable: true,
-          blocked_reason: "missing_secret"
+          blocked_reason: "missing_secret",
+          slots: [
+            {
+              slot_name: "token_write",
+              display_name: "Write token",
+              granted_by: "assignment",
+              disabled_by_assignment: false,
+              secret_available: false,
+              runtime_usable: false,
+              blocked_reason: "missing_required_slot_secret"
+            }
+          ]
         }
       ]
     })
@@ -321,16 +368,21 @@ describe("PolicyAssignmentsTab", () => {
     await user.click(screen.getByRole("button", { name: "Edit" }))
 
     expect(await screen.findByText("External Service Bindings")).toBeTruthy()
-    expect(screen.getByLabelText("Docs Managed")).toBeTruthy()
-    expect(screen.getByLabelText("Search API")).toBeTruthy()
+    expect(screen.getByLabelText("Docs Managed Read-only token")).toBeTruthy()
+    expect(screen.getByLabelText("Search API Write token")).toBeTruthy()
     expect(screen.queryByText("Legacy Search")).toBeNull()
-    expect(screen.getByText(/disabled by assignment/i)).toBeTruthy()
-    expect(screen.getByText(/missing secret/i)).toBeTruthy()
+    expect(screen.getAllByText(/disabled by assignment/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/missing secret/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Read-only token").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Write token").length).toBeGreaterThan(0)
 
-    await user.selectOptions(screen.getByLabelText("Search API"), "grant")
+    await user.selectOptions(screen.getByLabelText("Search API Write token"), "grant")
 
-    expect(mocks.upsertAssignmentCredentialBinding).toHaveBeenCalledWith(11, "search-api", {
-      binding_mode: "grant"
-    })
+    expect(mocks.upsertAssignmentCredentialBinding).toHaveBeenCalledWith(
+      11,
+      "search-api",
+      { binding_mode: "grant" },
+      "token_write"
+    )
   })
 })

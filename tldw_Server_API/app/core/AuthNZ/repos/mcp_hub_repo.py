@@ -81,6 +81,15 @@ def _normalize_credential_binding_mode(mode: str | None) -> str:
     return value
 
 
+def _normalize_slot_name(slot_name: str | None, *, allow_blank: bool = False) -> str:
+    value = str(slot_name or "").strip().lower()
+    if not value:
+        if allow_blank:
+            return ""
+        raise ValueError("slot_name is required")
+    return value
+
+
 def _load_json_dict(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return dict(raw)
@@ -120,18 +129,23 @@ class McpHubRepo:
                 "mcp_approval_policies",
                 "mcp_credential_bindings",
                 "mcp_external_servers",
+                "mcp_external_server_credential_slots",
                 "mcp_external_server_secrets",
+                "mcp_external_server_slot_secrets",
                 "mcp_permission_profiles",
                 "mcp_policy_assignments",
                 "mcp_policy_audit_history",
                 "mcp_policy_overrides",
             }
-            placeholders = ", ".join("?" for _ in required)
             rows = await self.db_pool.fetchall(
-                f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
-                tuple(required),
+                "SELECT name FROM sqlite_master WHERE type='table'",
+                (),
             )
-            existing = {str(row["name"]) for row in rows}
+            existing = {
+                str(name)
+                for row in rows
+                if (name := self._row_to_dict(row).get("name")) and str(name) in required
+            }
             missing = required - existing
             if missing:
                 raise RuntimeError(
@@ -185,6 +199,19 @@ class McpHubRepo:
             else (out["server_source"] == "managed" and out["enabled"])
         )
         out["config"] = _load_json_dict(out.get("config_json"))
+        return out
+
+    @staticmethod
+    def _normalize_external_slot_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        out = dict(row)
+        out["slot_name"] = _normalize_slot_name(out.get("slot_name"))
+        out["display_name"] = str(out.get("display_name") or out["slot_name"])
+        out["secret_kind"] = str(out.get("secret_kind") or "secret")
+        out["privilege_class"] = str(out.get("privilege_class") or "default")
+        out["is_required"] = _to_bool(out.get("is_required"))
+        out["secret_configured"] = _to_bool(out.get("secret_configured"))
         return out
 
     @staticmethod
@@ -246,6 +273,7 @@ class McpHubRepo:
         out = dict(row)
         usage_rules = _load_json_dict(out.pop("usage_rules_json", None))
         out["usage_rules"] = usage_rules
+        out["slot_name"] = _normalize_slot_name(out.get("slot_name"), allow_blank=True) or None
         out["binding_mode"] = str(
             out.get("binding_mode") or usage_rules.get("binding_mode") or "grant"
         )
@@ -1517,15 +1545,39 @@ class McpHubRepo:
                    s.updated_by,
                    s.created_at,
                    s.updated_at,
-                   CASE WHEN sec.server_id IS NULL THEN 0 ELSE 1 END AS secret_configured,
+                   CASE
+                     WHEN EXISTS (
+                       SELECT 1 FROM mcp_external_server_secrets sec WHERE sec.server_id = s.id
+                     ) THEN 1
+                     WHEN EXISTS (
+                       SELECT 1
+                       FROM mcp_external_server_slot_secrets slot_sec
+                       JOIN mcp_external_server_credential_slots slot ON slot.id = slot_sec.slot_id
+                       WHERE slot.server_id = s.id
+                     ) THEN 1
+                     ELSE 0
+                   END AS secret_configured,
                    (
                        SELECT COUNT(*)
                        FROM mcp_credential_bindings b
                        WHERE b.external_server_id = s.id
                    ) AS binding_count,
-                   sec.key_hint
+                   COALESCE(
+                       (
+                           SELECT sec.key_hint
+                           FROM mcp_external_server_secrets sec
+                           WHERE sec.server_id = s.id
+                           LIMIT 1
+                       ),
+                       (
+                           SELECT slot_sec.key_hint
+                           FROM mcp_external_server_slot_secrets slot_sec
+                           JOIN mcp_external_server_credential_slots slot ON slot.id = slot_sec.slot_id
+                           WHERE slot.server_id = s.id
+                           LIMIT 1
+                       )
+                   ) AS key_hint
             FROM mcp_external_servers s
-            LEFT JOIN mcp_external_server_secrets sec ON sec.server_id = s.id
             WHERE s.id = ?
             """,
             (server_id.strip(),),
@@ -1562,15 +1614,39 @@ class McpHubRepo:
                    s.updated_by,
                    s.created_at,
                    s.updated_at,
-                   CASE WHEN sec.server_id IS NULL THEN 0 ELSE 1 END AS secret_configured,
+                   CASE
+                     WHEN EXISTS (
+                       SELECT 1 FROM mcp_external_server_secrets sec WHERE sec.server_id = s.id
+                     ) THEN 1
+                     WHEN EXISTS (
+                       SELECT 1
+                       FROM mcp_external_server_slot_secrets slot_sec
+                       JOIN mcp_external_server_credential_slots slot ON slot.id = slot_sec.slot_id
+                       WHERE slot.server_id = s.id
+                     ) THEN 1
+                     ELSE 0
+                   END AS secret_configured,
                    (
                        SELECT COUNT(*)
                        FROM mcp_credential_bindings b
                        WHERE b.external_server_id = s.id
                    ) AS binding_count,
-                   sec.key_hint
+                   COALESCE(
+                       (
+                           SELECT sec.key_hint
+                           FROM mcp_external_server_secrets sec
+                           WHERE sec.server_id = s.id
+                           LIMIT 1
+                       ),
+                       (
+                           SELECT slot_sec.key_hint
+                           FROM mcp_external_server_slot_secrets slot_sec
+                           JOIN mcp_external_server_credential_slots slot ON slot.id = slot_sec.slot_id
+                           WHERE slot.server_id = s.id
+                           LIMIT 1
+                       )
+                   ) AS key_hint
             FROM mcp_external_servers s
-            LEFT JOIN mcp_external_server_secrets sec ON sec.server_id = s.id
             WHERE (? IS NULL OR s.owner_scope_type = ?)
               AND (? IS NULL OR s.owner_scope_id = ?)
             ORDER BY s.name, s.id
@@ -1646,12 +1722,300 @@ class McpHubRepo:
         rowcount = getattr(cursor, "rowcount", 0)
         return bool(rowcount and rowcount > 0)
 
+    async def create_external_server_credential_slot(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        display_name: str,
+        secret_kind: str,
+        privilege_class: str,
+        is_required: bool,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        server = await self.get_external_server(server_id)
+        if not server:
+            raise ValueError(f"Unknown external server: {server_id}")
+        normalized_slot_name = _normalize_slot_name(slot_name)
+        existing = await self.get_external_server_credential_slot(
+            server_id=server_id,
+            slot_name=normalized_slot_name,
+        )
+        if existing is not None:
+            raise ValueError(f"External server slot already exists: {server_id}/{normalized_slot_name}")
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        required_value: bool | int = is_required if getattr(self.db_pool, "pool", None) is not None else int(is_required)
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_external_server_credential_slots (
+                server_id, slot_name, display_name, secret_kind, privilege_class, is_required,
+                created_by, updated_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                server_id.strip(),
+                normalized_slot_name,
+                str(display_name or normalized_slot_name).strip(),
+                str(secret_kind or "secret").strip().lower(),
+                str(privilege_class or "default").strip().lower(),
+                required_value,
+                actor_id,
+                actor_id,
+                ts,
+                ts,
+            ),
+        )
+        row = await self.get_external_server_credential_slot(
+            server_id=server_id,
+            slot_name=normalized_slot_name,
+        )
+        return row or {}
+
+    async def get_external_server_credential_slot(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+    ) -> dict[str, Any] | None:
+        row = await self.db_pool.fetchone(
+            """
+            SELECT slot.id,
+                   slot.server_id,
+                   slot.slot_name,
+                   slot.display_name,
+                   slot.secret_kind,
+                   slot.privilege_class,
+                   slot.is_required,
+                   slot.created_by,
+                   slot.updated_by,
+                   slot.created_at,
+                   slot.updated_at,
+                   CASE WHEN slot_sec.slot_id IS NULL THEN 0 ELSE 1 END AS secret_configured,
+                   slot_sec.key_hint
+            FROM mcp_external_server_credential_slots slot
+            LEFT JOIN mcp_external_server_slot_secrets slot_sec ON slot_sec.slot_id = slot.id
+            WHERE slot.server_id = ?
+              AND slot.slot_name = ?
+            """,
+            (server_id.strip(), _normalize_slot_name(slot_name)),
+        )
+        return self._normalize_external_slot_row(self._row_to_dict(row) if row else None)
+
+    async def list_external_server_credential_slots(
+        self,
+        *,
+        server_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT slot.id,
+                   slot.server_id,
+                   slot.slot_name,
+                   slot.display_name,
+                   slot.secret_kind,
+                   slot.privilege_class,
+                   slot.is_required,
+                   slot.created_by,
+                   slot.updated_by,
+                   slot.created_at,
+                   slot.updated_at,
+                   CASE WHEN slot_sec.slot_id IS NULL THEN 0 ELSE 1 END AS secret_configured,
+                   slot_sec.key_hint
+            FROM mcp_external_server_credential_slots slot
+            LEFT JOIN mcp_external_server_slot_secrets slot_sec ON slot_sec.slot_id = slot.id
+            WHERE slot.server_id = ?
+            ORDER BY slot.slot_name, slot.id
+            """,
+            (server_id.strip(),),
+        )
+        return [
+            self._normalize_external_slot_row(self._row_to_dict(row)) or {}
+            for row in rows
+        ]
+
+    async def update_external_server_credential_slot(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        display_name: str | object = _UNSET,
+        secret_kind: str | object = _UNSET,
+        privilege_class: str | object = _UNSET,
+        is_required: bool | object = _UNSET,
+        actor_id: int | None,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_external_server_credential_slot(server_id=server_id, slot_name=slot_name)
+        if not existing:
+            return None
+        next_display_name = (
+            str(existing.get("display_name") or existing.get("slot_name"))
+            if display_name is _UNSET
+            else str(display_name or existing.get("slot_name") or "").strip()
+        )
+        next_secret_kind = (
+            str(existing.get("secret_kind") or "secret")
+            if secret_kind is _UNSET
+            else str(secret_kind or "secret").strip().lower()
+        )
+        next_privilege_class = (
+            str(existing.get("privilege_class") or "default")
+            if privilege_class is _UNSET
+            else str(privilege_class or "default").strip().lower()
+        )
+        next_required = (
+            _to_bool(existing.get("is_required"))
+            if is_required is _UNSET
+            else _to_bool(is_required)
+        )
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        required_value: bool | int = next_required if getattr(self.db_pool, "pool", None) is not None else int(next_required)
+        cursor = await self.db_pool.execute(
+            """
+            UPDATE mcp_external_server_credential_slots
+            SET display_name = ?,
+                secret_kind = ?,
+                privilege_class = ?,
+                is_required = ?,
+                updated_by = ?,
+                updated_at = ?
+            WHERE server_id = ?
+              AND slot_name = ?
+            """,
+            (
+                next_display_name,
+                next_secret_kind,
+                next_privilege_class,
+                required_value,
+                actor_id,
+                ts,
+                server_id.strip(),
+                _normalize_slot_name(slot_name),
+            ),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        if not (rowcount and rowcount > 0):
+            return None
+        return await self.get_external_server_credential_slot(server_id=server_id, slot_name=slot_name)
+
+    async def delete_external_server_credential_slot(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+    ) -> bool:
+        cursor = await self.db_pool.execute(
+            """
+            DELETE FROM mcp_external_server_credential_slots
+            WHERE server_id = ?
+              AND slot_name = ?
+            """,
+            (server_id.strip(), _normalize_slot_name(slot_name)),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        return bool(rowcount and rowcount > 0)
+
+    async def get_external_server_default_slot(
+        self,
+        *,
+        server_id: str,
+    ) -> dict[str, Any] | None:
+        slots = await self.list_external_server_credential_slots(server_id=server_id)
+        if len(slots) != 1:
+            return None
+        slot = dict(slots[0])
+        if str(slot.get("slot_name") or "") not in {"bearer_token", "api_key"}:
+            return None
+        return slot
+
+    async def upsert_external_server_slot_secret(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        encrypted_blob: str,
+        key_hint: str | None,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        slot = await self.get_external_server_credential_slot(server_id=server_id, slot_name=slot_name)
+        if not slot:
+            raise ValueError(f"Unknown external server slot: {server_id}/{slot_name}")
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_external_server_slot_secrets (
+                slot_id, encrypted_blob, key_hint, updated_by, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(slot_id) DO UPDATE SET
+                encrypted_blob = excluded.encrypted_blob,
+                key_hint = excluded.key_hint,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(slot["id"]),
+                encrypted_blob,
+                key_hint,
+                actor_id,
+                ts,
+            ),
+        )
+        row = await self.get_external_server_slot_secret(server_id=server_id, slot_name=slot_name)
+        return row or {}
+
+    async def get_external_server_slot_secret(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+    ) -> dict[str, Any] | None:
+        row = await self.db_pool.fetchone(
+            """
+            SELECT slot.server_id,
+                   slot.slot_name,
+                   slot_sec.slot_id,
+                   slot_sec.encrypted_blob,
+                   slot_sec.key_hint,
+                   slot_sec.updated_by,
+                   slot_sec.updated_at
+            FROM mcp_external_server_credential_slots slot
+            JOIN mcp_external_server_slot_secrets slot_sec ON slot_sec.slot_id = slot.id
+            WHERE slot.server_id = ?
+              AND slot.slot_name = ?
+            """,
+            (server_id.strip(), _normalize_slot_name(slot_name)),
+        )
+        out = self._row_to_dict(row) if row else None
+        if out is None:
+            return None
+        out["slot_name"] = _normalize_slot_name(out.get("slot_name"))
+        return out
+
+    async def clear_external_server_slot_secret(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+    ) -> bool:
+        slot = await self.get_external_server_credential_slot(server_id=server_id, slot_name=slot_name)
+        if not slot:
+            return False
+        cursor = await self.db_pool.execute(
+            "DELETE FROM mcp_external_server_slot_secrets WHERE slot_id = ?",
+            (int(slot["id"]),),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        return bool(rowcount and rowcount > 0)
+
     async def upsert_credential_binding(
         self,
         *,
         binding_target_type: str,
         binding_target_id: str,
         external_server_id: str,
+        slot_name: str | None = None,
         credential_ref: str,
         binding_mode: str,
         usage_rules: dict[str, Any],
@@ -1672,6 +2036,14 @@ class McpHubRepo:
             raise ValueError("credential bindings require a managed external server")
         if server.get("superseded_by_server_id"):
             raise ValueError("credential bindings cannot target superseded external servers")
+        normalized_slot_name = _normalize_slot_name(slot_name, allow_blank=True)
+        if normalized_slot_name:
+            slot = await self.get_external_server_credential_slot(
+                server_id=external_server_id,
+                slot_name=normalized_slot_name,
+            )
+            if not slot:
+                raise ValueError(f"Unknown external server slot: {external_server_id}/{normalized_slot_name}")
 
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
@@ -1683,6 +2055,7 @@ class McpHubRepo:
                 binding_target_type,
                 binding_target_id,
                 external_server_id,
+                slot_name,
                 credential_ref,
                 binding_mode,
                 usage_rules_json,
@@ -1690,12 +2063,13 @@ class McpHubRepo:
                 updated_by,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 normalized_target_type,
                 target_id,
                 external_server_id.strip(),
+                normalized_slot_name,
                 str(credential_ref or "server").strip(),
                 normalized_binding_mode,
                 json.dumps(usage),
@@ -1711,6 +2085,7 @@ class McpHubRepo:
                    binding_target_type,
                    binding_target_id,
                    external_server_id,
+                   slot_name,
                    credential_ref,
                    binding_mode,
                    usage_rules_json,
@@ -1722,8 +2097,9 @@ class McpHubRepo:
             WHERE binding_target_type = ?
               AND binding_target_id = ?
               AND external_server_id = ?
+              AND slot_name = ?
             """,
-            (normalized_target_type, target_id, external_server_id.strip()),
+            (normalized_target_type, target_id, external_server_id.strip(), normalized_slot_name),
         )
         return self._normalize_credential_binding_row(self._row_to_dict(row) if row else None) or {}
 
@@ -1733,6 +2109,7 @@ class McpHubRepo:
         binding_target_type: str,
         binding_target_id: str,
         external_server_id: str,
+        slot_name: str | None = None,
         credential_ref: str,
         binding_mode: str,
         usage_rules: dict[str, Any],
@@ -1745,19 +2122,22 @@ class McpHubRepo:
             WHERE binding_target_type = ?
               AND binding_target_id = ?
               AND external_server_id = ?
+              AND slot_name = ?
             """,
             (
                 _normalize_credential_binding_target_type(binding_target_type),
                 str(binding_target_id or "").strip(),
                 external_server_id.strip(),
+                _normalize_slot_name(slot_name, allow_blank=True),
             ),
         )
         if existing is not None:
-            raise ValueError("credential binding already exists for target and server")
+            raise ValueError("credential binding already exists for target, server, and slot")
         return await self.upsert_credential_binding(
             binding_target_type=binding_target_type,
             binding_target_id=binding_target_id,
             external_server_id=external_server_id,
+            slot_name=slot_name,
             credential_ref=credential_ref,
             binding_mode=binding_mode,
             usage_rules=usage_rules,
@@ -1778,6 +2158,7 @@ class McpHubRepo:
                    binding_target_type,
                    binding_target_id,
                    external_server_id,
+                   slot_name,
                    credential_ref,
                    binding_mode,
                    usage_rules_json,
@@ -1788,7 +2169,7 @@ class McpHubRepo:
             FROM mcp_credential_bindings
             WHERE binding_target_type = ?
               AND binding_target_id = ?
-            ORDER BY external_server_id, id
+            ORDER BY external_server_id, slot_name, id
             """,
             (normalized_target_type, target_id),
         )
@@ -1803,6 +2184,7 @@ class McpHubRepo:
         binding_target_type: str,
         binding_target_id: str,
         external_server_id: str,
+        slot_name: str | None = None,
     ) -> bool:
         cursor = await self.db_pool.execute(
             """
@@ -1810,11 +2192,13 @@ class McpHubRepo:
             WHERE binding_target_type = ?
               AND binding_target_id = ?
               AND external_server_id = ?
+              AND slot_name = ?
             """,
             (
                 _normalize_credential_binding_target_type(binding_target_type),
                 str(binding_target_id or "").strip(),
                 external_server_id.strip(),
+                _normalize_slot_name(slot_name, allow_blank=True),
             ),
         )
         rowcount = getattr(cursor, "rowcount", 0)
