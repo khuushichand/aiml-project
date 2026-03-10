@@ -663,6 +663,7 @@ export default function ProvidersPage() {
       apiKey: '',
       clearApiKey: false,
       isSaving: false,
+      isDeleting: false,
     });
   };
 
@@ -739,7 +740,7 @@ export default function ProvidersPage() {
       message: `Remove override for ${formatProviderName(overrideDialog.provider.name)}?`,
       confirmText: 'Remove',
       variant: 'danger',
-      icon: 'trash',
+      icon: 'delete',
     });
     if (!confirmed) return;
     try {
@@ -768,7 +769,7 @@ export default function ProvidersPage() {
         provider: provider.name,
         model: overrideDefaultModel || provider.default_model || undefined,
         use_override: true,
-      });
+      }) as { model?: string | null };
       toastSuccess(
         'Connectivity check OK',
         `${formatProviderName(provider.name)} (${response?.model || 'default'})`

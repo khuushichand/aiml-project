@@ -18,11 +18,11 @@ interface PlanGuardProps {
 
 export function PlanGuard({ requiredPlan, featureName, fallback, children }: PlanGuardProps) {
   const { selectedOrg, loading: orgLoading } = useOrgContext();
+  const billingEnabled = isBillingEnabled();
   const [allowed, setAllowed] = useState<boolean | null>(null);
 
   useEffect(() => {
-    if (!isBillingEnabled()) {
-      setAllowed(true);
+    if (!billingEnabled) {
       return;
     }
     if (orgLoading || !selectedOrg) return;
@@ -40,7 +40,11 @@ export function PlanGuard({ requiredPlan, featureName, fallback, children }: Pla
         if (!cancelled) setAllowed(false);
       });
     return () => { cancelled = true; };
-  }, [selectedOrg, orgLoading, requiredPlan]);
+  }, [billingEnabled, selectedOrg, orgLoading, requiredPlan]);
+
+  if (!billingEnabled) {
+    return <>{children}</>;
+  }
 
   if (allowed === null) return null; // loading
   if (allowed) return <>{children}</>;

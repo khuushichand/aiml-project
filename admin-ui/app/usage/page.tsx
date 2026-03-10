@@ -432,8 +432,8 @@ export default function UsagePage() {
   }, [activeTab]);
 
   return (
-    <PermissionGuard requiredRole="admin" fallbackToDashboard>
-      <ResponsiveLayout title="Usage" subtitle="Router analytics status dashboard">
+    <PermissionGuard role="admin">
+      <ResponsiveLayout>
         <div className="space-y-6" data-testid="usage-router-analytics-page">
           <div className="rounded-lg border bg-card p-4">
             <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">

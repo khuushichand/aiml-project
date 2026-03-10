@@ -35,6 +35,7 @@ describe('PlanGuard', () => {
     mockUseOrgContext.mockReturnValue({ selectedOrg: null, loading: false });
     render(<PlanGuard requiredPlan="pro"><div>Protected Content</div></PlanGuard>);
     expect(screen.getByText('Protected Content')).toBeInTheDocument();
+    expect(mockGetOrgSubscription).not.toHaveBeenCalled();
   });
 
   it('renders children when org has required plan', async () => {

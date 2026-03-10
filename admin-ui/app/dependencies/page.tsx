@@ -100,8 +100,9 @@ const toProviderList = (payload: unknown): Provider[] => {
     return providers;
   }
 
-  if (asRecord(rawProviders)) {
-    Object.entries(rawProviders).forEach(([providerName, providerValue]) => {
+  const rawProvidersRecord = asRecord(rawProviders);
+  if (rawProvidersRecord) {
+    Object.entries(rawProvidersRecord).forEach(([providerName, providerValue]) => {
       const parsed = parseProvider(providerName, providerValue);
       if (parsed) providers.push(parsed);
     });

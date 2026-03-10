@@ -58,6 +58,24 @@ bun run dev
 
 Open `http://localhost:3001`.
 
+## Quality Gate
+
+Run the production gate from `admin-ui/` before cutting a release or merging risky admin changes:
+
+```bash
+bun run lint
+bun run typecheck
+bun run test
+bun run test:a11y
+bun run build
+bun run test:smoke
+```
+
+`test:smoke` starts a local Next server by default, stubs the critical `/api/auth/*` and `/api/proxy/*`
+calls in-browser, and verifies the hardened password+MFA login path plus privileged user actions.
+It does not require a live backend. To point the smoke suite at an already running server, set
+`TLDW_ADMIN_UI_AUTOSTART=false` and `TLDW_ADMIN_UI_URL=http://127.0.0.1:3001`.
+
 ## Authentication
 
 - **Single-user mode**: API key login remains supported, but the validated key is moved into an

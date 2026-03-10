@@ -70,6 +70,7 @@ vi.mock('@/lib/api-client', () => {
       getUserTeamMemberships: vi.fn(),
       getUserMfaStatus: vi.fn(),
       getUserSessions: vi.fn(),
+      revokeAllUserSessions: vi.fn(),
       getAuditLogs: vi.fn(),
       getUserEffectivePermissions: vi.fn(),
       getUserPermissionOverrides: vi.fn(),
@@ -88,6 +89,7 @@ type ApiMock = {
   getUserTeamMemberships: ReturnType<typeof vi.fn>;
   getUserMfaStatus: ReturnType<typeof vi.fn>;
   getUserSessions: ReturnType<typeof vi.fn>;
+  revokeAllUserSessions: ReturnType<typeof vi.fn>;
   getAuditLogs: ReturnType<typeof vi.fn>;
   getUserEffectivePermissions: ReturnType<typeof vi.fn>;
   getUserPermissionOverrides: ReturnType<typeof vi.fn>;
@@ -148,6 +150,7 @@ beforeEach(() => {
     method: null,
   });
   apiMock.getUserSessions.mockResolvedValue([]);
+  apiMock.revokeAllUserSessions.mockResolvedValue({});
   apiMock.getAuditLogs.mockResolvedValue({
     entries: [
       {
@@ -245,6 +248,48 @@ describe('UserDetailPage password reset', () => {
     );
     expect(screen.queryByText('Temporary password (shown once)')).not.toBeInTheDocument();
     expect(screen.queryByText('TempP@ssw0rd123')).not.toBeInTheDocument();
+  });
+
+  it('revokes all sessions after privileged confirmation', async () => {
+    const user = userEvent.setup();
+    apiMock.getUserSessions
+      .mockResolvedValueOnce([
+        {
+          id: 5001,
+          ip_address: '127.0.0.1',
+          user_agent: 'Chrome on macOS',
+          created_at: '2026-03-10T00:00:00Z',
+          last_activity: '2026-03-10T00:30:00Z',
+          expires_at: '2026-03-10T02:00:00Z',
+        },
+      ])
+      .mockResolvedValueOnce([]);
+
+    render(<UserDetailPage />);
+
+    const revokeAllButton = await screen.findByRole('button', { name: 'Revoke all' });
+    await user.click(revokeAllButton);
+
+    await waitFor(() => {
+      expect(privilegedActionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Revoke All Sessions' })
+      );
+    });
+    await waitFor(() => {
+      expect(apiMock.revokeAllUserSessions).toHaveBeenCalledWith('42', {
+        reason: 'Customer requested this change',
+        admin_password: 'AdminPass123!',
+      });
+    });
+    await waitFor(() => {
+      expect(toastSuccessMock).toHaveBeenCalledWith(
+        'Sessions revoked',
+        'All sessions have been revoked.'
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText('No active sessions found.')).toBeInTheDocument();
+    });
   });
 
   it('only exposes backend-supported platform roles in the role selector', async () => {

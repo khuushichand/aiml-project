@@ -273,11 +273,8 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
       try {
         const currentUser = await api.getCurrentUser();
         if (cancelled) return;
-        const record = currentUser && typeof currentUser === 'object'
-          ? currentUser as Record<string, unknown>
-          : {};
-        const usernameCandidate = typeof record.username === 'string' ? record.username : '';
-        const emailCandidate = typeof record.email === 'string' ? record.email : '';
+        const usernameCandidate = currentUser.username?.trim() ?? '';
+        const emailCandidate = currentUser.email?.trim() ?? '';
         const nextInitiator = usernameCandidate || emailCandidate || 'admin';
         setRotationInitiator(nextInitiator);
       } catch {
@@ -339,12 +336,13 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
     if (previousStatus === 'running' && currentStatus && currentStatus !== 'running' && rotationState) {
       const completedAt = rotationState.completed_at ?? new Date().toISOString();
       setRotationHistory((previous) => {
+        const completedStatus = rotationState.status === 'complete' ? 'complete' : 'failed';
         const nextEntry: RotationHistoryEntry = {
           rotation_id: rotationState.rotation_id,
           completed_at: completedAt,
           records_affected: rotationState.records_processed,
           initiated_by: rotationState.initiated_by,
-          status: rotationState.status,
+          status: completedStatus,
         };
         const deduped = previous.filter((entry) => entry.rotation_id !== nextEntry.rotation_id);
         return [nextEntry, ...deduped].slice(0, 10);

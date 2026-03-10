@@ -341,4 +341,48 @@ describe('UsersPage', () => {
       });
     });
   });
+
+  it('round-trips a saved view through save, apply, and delete', async () => {
+    const user = userEvent.setup();
+    render(<UsersPage />);
+
+    const searchInput = screen.getByLabelText(/search users by username, email, or role/i) as HTMLInputElement;
+
+    await screen.findByText('Bob');
+    await user.type(searchInput, 'bob');
+    await user.click(screen.getByRole('button', { name: 'Save view' }));
+    await user.type(screen.getByLabelText('View name'), 'Bob only');
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Save view' }));
+
+    await waitFor(() => {
+      expect(toastSuccessMock).toHaveBeenCalledWith('Saved view', 'Bob only has been added.');
+    });
+    expect(window.localStorage.getItem('admin_users_saved_views')).toContain('Bob only');
+
+    await user.clear(searchInput);
+    await waitFor(() => {
+      expect(searchInput.value).toBe('');
+    });
+
+    await user.selectOptions(
+      screen.getByLabelText('Saved views'),
+      await screen.findByRole('option', { name: 'Bob only' })
+    );
+
+    await waitFor(() => {
+      expect(searchInput.value).toBe('bob');
+    });
+    expect(await screen.findByText('Bob')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Delete view' }));
+
+    await waitFor(() => {
+      expect(confirmMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Delete saved view' })
+      );
+    });
+    await waitFor(() => {
+      expect(window.localStorage.getItem('admin_users_saved_views') ?? '').not.toContain('Bob only');
+    });
+  });
 });

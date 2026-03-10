@@ -281,7 +281,7 @@ export default function OrganizationDetailPage() {
       const result = await api.createOrgInvite(orgId, {
         email: inviteEmail,
         role: inviteRole,
-      });
+      }) as { invite_url?: string; link?: string };
       setInviteLink(result.invite_url || result.link || 'Invite created - check email');
       setSuccess('Invite created successfully');
       setInviteEmail('');
