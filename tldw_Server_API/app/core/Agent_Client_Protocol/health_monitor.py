@@ -6,7 +6,9 @@ health status with consecutive failure counting.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -44,65 +46,70 @@ class AgentHealthMonitor:
         self._check_interval = check_interval
         self._failure_threshold = failure_threshold
         self._statuses: dict[str, AgentHealthStatus] = {}
+        self._lock = threading.Lock()
         self._task: asyncio.Task | None = None
         self._running = False
 
     def check_all(self) -> dict[str, AgentHealthStatus]:
         """Check health of all registered agents synchronously."""
         if self._registry is None:
-            return self._statuses
+            return {}
 
         now = _utcnow_iso()
-        for entry in self._registry.entries:
-            avail = entry.check_availability()
-            status = self._statuses.get(entry.type)
-            if status is None:
-                status = AgentHealthStatus(agent_type=entry.type, health="unknown")
-                self._statuses[entry.type] = status
+        with self._lock:
+            for entry in self._registry.entries:
+                avail = entry.check_availability()
+                status = self._statuses.get(entry.type)
+                if status is None:
+                    status = AgentHealthStatus(agent_type=entry.type, health="unknown")
+                    self._statuses[entry.type] = status
 
-            status.last_check = now
-            status.details = avail
+                status.last_check = now
+                status.details = avail
 
-            is_available = avail.get("status") == "available"
-            if is_available:
-                if status.consecutive_failures > 0:
-                    logger.info(
-                        "Agent '{}' recovered after {} failures",
-                        entry.type,
-                        status.consecutive_failures,
-                    )
-                status.health = "healthy"
-                status.consecutive_failures = 0
-                status.last_healthy = now
-            else:
-                status.consecutive_failures += 1
-                if status.consecutive_failures >= self._failure_threshold:
-                    status.health = "unavailable"
+                is_available = avail.get("status") == "available"
+                if is_available:
+                    if status.consecutive_failures > 0:
+                        logger.info(
+                            "Agent '{}' recovered after {} failures",
+                            entry.type,
+                            status.consecutive_failures,
+                        )
+                    status.health = "healthy"
+                    status.consecutive_failures = 0
+                    status.last_healthy = now
                 else:
-                    status.health = "degraded"
+                    status.consecutive_failures += 1
+                    if status.consecutive_failures >= self._failure_threshold:
+                        status.health = "unavailable"
+                    else:
+                        status.health = "degraded"
 
-            # Persist to DB if available
-            if self._db is not None:
-                try:
-                    self._db.record_health_check(
-                        agent_type=entry.type,
-                        health=status.health,
-                        consecutive_failures=status.consecutive_failures,
-                        details=json.dumps(avail),
-                    )
-                except Exception as exc:
-                    logger.warning("Failed to persist health check for '{}': {}",
-                                   entry.type, exc)
+                # Persist to DB if available
+                if self._db is not None:
+                    try:
+                        self._db.record_health_check(
+                            agent_type=entry.type,
+                            health=status.health,
+                            consecutive_failures=status.consecutive_failures,
+                            details=json.dumps(avail),
+                        )
+                    except Exception as exc:
+                        logger.warning("Failed to persist health check for '{}': {}",
+                                       entry.type, exc)
 
         return self._statuses
 
     def get_status(self, agent_type: str) -> AgentHealthStatus | None:
-        """Get health status for a specific agent."""
-        return self._statuses.get(agent_type)
+        """Get health status for a specific agent (returns a copy)."""
+        with self._lock:
+            status = self._statuses.get(agent_type)
+            return copy.deepcopy(status) if status else None
 
     def get_all_statuses(self) -> list[AgentHealthStatus]:
-        """Get health statuses for all monitored agents."""
-        return list(self._statuses.values())
+        """Get health statuses for all monitored agents (returns copies)."""
+        with self._lock:
+            return [copy.deepcopy(s) for s in self._statuses.values()]
 
     async def start(self) -> None:
         """Start the background health check loop."""

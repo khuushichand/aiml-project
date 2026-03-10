@@ -170,6 +170,16 @@ class AgentRegistry:
             logger.info("Agent registry file changed, reloading")
             self.load()
 
+    @staticmethod
+    def _load_json(val: Any, default: Any) -> Any:
+        """Parse a JSON string value, returning *default* on failure or None."""
+        if isinstance(val, str):
+            try:
+                return json.loads(val)
+            except (json.JSONDecodeError, TypeError):
+                return default
+        return default if val is None else val
+
     def _load_api_entries(self) -> None:
         """Load dynamically registered agents from the DB (if available)."""
         if self._db is None:
@@ -182,22 +192,16 @@ class AgentRegistry:
                 return
             entries: list[AgentRegistryEntry] = []
             for row in rows:
-                try:
-                    args = json.loads(row.get("args", "[]")) if isinstance(row.get("args"), str) else row.get("args", [])
-                    env = json.loads(row.get("env", "{}")) if isinstance(row.get("env"), str) else row.get("env", {})
-                    install = json.loads(row.get("install_instructions", "[]")) if isinstance(row.get("install_instructions"), str) else row.get("install_instructions", [])
-                except (json.JSONDecodeError, TypeError):
-                    args, env, install = [], {}, []
                 entries.append(AgentRegistryEntry(
                     type=row["agent_type"],
                     name=row["name"],
                     description=row.get("description", ""),
                     command=row.get("command", ""),
-                    args=args,
-                    env=env,
+                    args=self._load_json(row.get("args"), []),
+                    env=self._load_json(row.get("env"), {}),
                     requires_api_key=row.get("requires_api_key"),
                     default=bool(row.get("is_default", 0)),
-                    install_instructions=install,
+                    install_instructions=self._load_json(row.get("install_instructions"), []),
                     docs_url=row.get("docs_url"),
                 ))
             self._api_entries = entries
@@ -296,6 +300,9 @@ class AgentRegistry:
         "requires_api_key", "install_instructions", "docs_url",
     })
 
+    # Defaults for fields that must never be None at runtime
+    _FIELD_DEFAULTS: dict[str, Any] = {"args": [], "env": {}, "install_instructions": []}
+
     def update_agent(self, agent_type: str, **kwargs: Any) -> AgentRegistryEntry | None:
         """Update fields on an existing dynamic agent entry."""
         with self._lock:
@@ -308,6 +315,9 @@ class AgentRegistry:
                 return None
             for key, value in kwargs.items():
                 if key in self._UPDATABLE_FIELDS:
+                    # Normalize None → safe default for collection fields
+                    if value is None and key in self._FIELD_DEFAULTS:
+                        value = self._FIELD_DEFAULTS[key]
                     setattr(existing, key, value)
             if self._db is not None:
                 self._db.save_agent_entry({

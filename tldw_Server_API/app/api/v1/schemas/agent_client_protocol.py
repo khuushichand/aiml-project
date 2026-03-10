@@ -64,6 +64,13 @@ class ACPAgentUpdateRequest(BaseModel):
 # -----------------------------------------------------------------------------
 
 
+class ACPAgentRegistrationResponse(BaseModel):
+    """Response for agent registration/update/deregistration."""
+    status: str = Field(..., description="Operation result: registered, updated, deregistered")
+    agent_type: str = Field(..., description="Agent type identifier")
+    name: str | None = Field(default=None, description="Agent name (if applicable)")
+
+
 class ACPAgentHealthEntry(BaseModel):
     """Health status for a single agent."""
     agent_type: str = Field(..., description="Agent type identifier")

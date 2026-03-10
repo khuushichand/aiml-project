@@ -384,10 +384,12 @@ class ACPSessionsDB:
             if t in ("text", "input_text", "output_text"):
                 txt = d.get("text", "")
                 return str(txt).strip() if txt else None
-            for key in ("content", "text"):
-                if key in d:
-                    return ACPSessionsDB._normalize_text_content(d[key])
-        return str(value).strip() or None
+            for key in ("content", "text", "message", "output", "detail", "value"):
+                resolved = ACPSessionsDB._normalize_text_content(d.get(key))
+                if resolved:
+                    return resolved
+            return None
+        return None
 
     # ------------------------------------------------------------------
     # Message recording
@@ -411,55 +413,62 @@ class ACPSessionsDB:
 
         now = _utcnow_iso()
 
-        # Determine current max message_index for this session
-        row = conn.execute(
-            "SELECT COALESCE(MAX(message_index), -1) FROM session_messages WHERE session_id = ?",
-            (session_id,),
-        ).fetchone()
-        next_idx: int = row[0] + 1 if row else 0
+        # Use BEGIN IMMEDIATE to serialize writers, preventing
+        # concurrent MAX(message_index) from picking duplicate indices.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Determine current max message_index for this session
+            row = conn.execute(
+                "SELECT COALESCE(MAX(message_index), -1) FROM session_messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            next_idx: int = row[0] + 1 if row else 0
 
-        inserted = 0
-        # Insert user messages from prompt
-        for msg in prompt:
-            role = msg.get("role", "user")
-            content = self._normalize_text_content(msg.get("content")) or ""
+            inserted = 0
+            # Insert user messages from prompt
+            for msg in prompt:
+                role = msg.get("role", "user")
+                content = self._normalize_text_content(msg.get("content")) or ""
+                conn.execute(
+                    "INSERT INTO session_messages (session_id, message_index, role, content, timestamp, raw_data)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (session_id, next_idx, role, content, now, json.dumps(msg)),
+                )
+                next_idx += 1
+                inserted += 1
+
+            # Insert assistant response
+            assistant_text = self._normalize_text_content(result.get("content")) or ""
             conn.execute(
                 "INSERT INTO session_messages (session_id, message_index, role, content, timestamp, raw_data)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
-                (session_id, next_idx, role, content, now, json.dumps(msg)),
+                (session_id, next_idx, "assistant", assistant_text, now, json.dumps(result)),
             )
-            next_idx += 1
             inserted += 1
 
-        # Insert assistant response
-        assistant_text = self._normalize_text_content(result.get("content")) or ""
-        conn.execute(
-            "INSERT INTO session_messages (session_id, message_index, role, content, timestamp, raw_data)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (session_id, next_idx, "assistant", assistant_text, now, json.dumps(result)),
-        )
-        inserted += 1
+            # Extract token usage
+            usage = result.get("usage") or {}
+            p_tokens = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+            c_tokens = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+            t_tokens = p_tokens + c_tokens
 
-        # Extract token usage
-        usage = result.get("usage") or {}
-        p_tokens = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-        c_tokens = usage.get("completion_tokens") or usage.get("output_tokens") or 0
-        t_tokens = p_tokens + c_tokens
-
-        # Update session counters
-        conn.execute(
-            """
-            UPDATE sessions SET
-                message_count = message_count + ?,
-                prompt_tokens = prompt_tokens + ?,
-                completion_tokens = completion_tokens + ?,
-                total_tokens = total_tokens + ?,
-                last_activity_at = ?
-            WHERE session_id = ?
-            """,
-            (inserted, p_tokens, c_tokens, t_tokens, now, session_id),
-        )
-        conn.commit()
+            # Update session counters
+            conn.execute(
+                """
+                UPDATE sessions SET
+                    message_count = message_count + ?,
+                    prompt_tokens = prompt_tokens + ?,
+                    completion_tokens = completion_tokens + ?,
+                    total_tokens = total_tokens + ?,
+                    last_activity_at = ?
+                WHERE session_id = ?
+                """,
+                (inserted, p_tokens, c_tokens, t_tokens, now, session_id),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
         return {
             "prompt_tokens": p_tokens,

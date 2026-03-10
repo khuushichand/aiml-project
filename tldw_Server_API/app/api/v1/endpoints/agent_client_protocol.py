@@ -24,6 +24,7 @@ from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentHealthEntry,
     ACPAgentHealthResponse,
     ACPAgentRegisterRequest,
+    ACPAgentRegistrationResponse,
     ACPAgentUpdateRequest,
     ACPHealthResponse,
     ACPSessionCancelRequest,
@@ -1490,13 +1491,17 @@ async def acp_list_agents(
 
 @router.post(
     "/agents/register",
+    response_model=ACPAgentRegistrationResponse,
     dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.agents.register"))],
 )
 async def acp_register_agent(
     request: ACPAgentRegisterRequest,
     user: User = Depends(get_request_user),
-) -> dict[str, Any]:
-    """Register a new agent type dynamically."""
+) -> ACPAgentRegistrationResponse:
+    """Register a new agent type dynamically (admin only)."""
+    if not getattr(user, "is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin role required for agent registration")
+
     from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
 
     registry = get_agent_registry()
@@ -1511,18 +1516,22 @@ async def acp_register_agent(
         install_instructions=request.install_instructions,
         docs_url=request.docs_url,
     )
-    return {"status": "registered", "agent": {"type": entry.type, "name": entry.name}}
+    return ACPAgentRegistrationResponse(status="registered", agent_type=entry.type, name=entry.name)
 
 
 @router.delete(
     "/agents/{agent_type}",
+    response_model=ACPAgentRegistrationResponse,
     dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.agents.manage"))],
 )
 async def acp_deregister_agent(
     agent_type: str,
     user: User = Depends(get_request_user),
-) -> dict[str, Any]:
-    """Remove a dynamically registered agent."""
+) -> ACPAgentRegistrationResponse:
+    """Remove a dynamically registered agent (admin only)."""
+    if not getattr(user, "is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin role required for agent management")
+
     from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
 
     registry = get_agent_registry()
@@ -1532,30 +1541,34 @@ async def acp_deregister_agent(
             status_code=404,
             detail=f"Agent '{agent_type}' not found or is a YAML-defined agent",
         )
-    return {"status": "deregistered", "agent_type": agent_type}
+    return ACPAgentRegistrationResponse(status="deregistered", agent_type=agent_type)
 
 
 @router.put(
     "/agents/{agent_type}",
+    response_model=ACPAgentRegistrationResponse,
     dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.agents.manage"))],
 )
 async def acp_update_agent(
     agent_type: str,
     request: ACPAgentUpdateRequest,
     user: User = Depends(get_request_user),
-) -> dict[str, Any]:
-    """Update a dynamically registered agent."""
+) -> ACPAgentRegistrationResponse:
+    """Update a dynamically registered agent (admin only)."""
+    if not getattr(user, "is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin role required for agent management")
+
     from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
 
     registry = get_agent_registry()
-    updates = request.model_dump(exclude_unset=True)
+    updates = request.model_dump(exclude_unset=True, exclude_none=True)
     entry = registry.update_agent(agent_type, **updates)
     if entry is None:
         raise HTTPException(
             status_code=404,
             detail=f"Agent '{agent_type}' not found in dynamic registry",
         )
-    return {"status": "updated", "agent": {"type": entry.type, "name": entry.name}}
+    return ACPAgentRegistrationResponse(status="updated", agent_type=entry.type, name=entry.name)
 
 
 @router.get(
@@ -1567,10 +1580,18 @@ async def acp_agents_health(
     user: User = Depends(get_request_user),
 ) -> ACPAgentHealthResponse:
     """Get health status for all monitored agents."""
+    import asyncio as _asyncio
     from tldw_Server_API.app.core.Agent_Client_Protocol.health_monitor import get_health_monitor
 
     monitor = get_health_monitor()
     statuses = monitor.get_all_statuses()
+
+    # If no cached statuses, trigger a check on-demand
+    if not statuses and monitor._registry is not None:
+        loop = _asyncio.get_running_loop()
+        await loop.run_in_executor(None, monitor.check_all)
+        statuses = monitor.get_all_statuses()
+
     return ACPAgentHealthResponse(
         agents=[
             ACPAgentHealthEntry(

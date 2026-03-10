@@ -102,34 +102,8 @@ class SessionRecord:
         return d
 
 
-def _normalize_text_content(value: Any) -> str | None:
-    if isinstance(value, str):
-        text = value.strip()
-        return text or None
-
-    if isinstance(value, list):
-        parts: list[str] = []
-        for item in value:
-            normalized = _normalize_text_content(item)
-            if normalized:
-                parts.append(normalized)
-        if parts:
-            return "\n".join(parts)
-        return None
-
-    if isinstance(value, dict):
-        content_type = str(value.get("type") or "").strip().lower()
-        if content_type in {"text", "input_text", "output_text"}:
-            direct_text = value.get("text")
-            if isinstance(direct_text, str) and direct_text.strip():
-                return direct_text.strip()
-        for key in ("content", "text", "message", "output", "detail", "value"):
-            normalized = _normalize_text_content(value.get(key))
-            if normalized:
-                return normalized
-        return None
-
-    return None
+# Re-use the canonical implementation from the DB layer
+_normalize_text_content = ACPSessionsDB._normalize_text_content
 
 
 def _normalize_prompt_messages(prompt: list[dict[str, Any]], timestamp: str) -> tuple[list[dict[str, Any]], bool]:
@@ -710,6 +684,24 @@ async def get_acp_session_store() -> ACPSessionStore:
                     )
                 except Exception as exc:
                     logger.warning("Failed to load ACP quota config, using defaults: {}", exc)
+
+                # Wire the agent registry and health monitor with DB
+                try:
+                    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import (
+                        get_agent_registry,
+                        set_registry_db,
+                    )
+                    from tldw_Server_API.app.core.Agent_Client_Protocol.health_monitor import (
+                        configure_health_monitor,
+                    )
+
+                    set_registry_db(store._db)
+                    registry = get_agent_registry()
+                    monitor = configure_health_monitor(registry=registry, db=store._db)
+                    await monitor.start()
+                except Exception as exc:
+                    logger.warning("Failed to wire agent registry/health monitor: {}", exc)
+
                 store.start_cleanup_task()
                 _store = store
     return _store
