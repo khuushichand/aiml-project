@@ -32,6 +32,7 @@ class ChatGrammarCreate(ChatGrammarBase):
 class ChatGrammarUpdate(BaseModel):
     """Request schema for updating a saved grammar."""
 
+    version: int | None = Field(None, ge=1, description="Optional optimistic-lock version")
     name: str | None = Field(None, min_length=1, max_length=200)
     description: str | None = Field(None, max_length=2000)
     grammar_text: str | None = Field(None, min_length=1, max_length=200_000)

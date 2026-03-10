@@ -234,7 +234,7 @@ from tldw_Server_API.app.core.testing import (
 )
 from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
 
-from . import chat_dictionaries, chat_documents
+from . import chat_dictionaries, chat_documents, chat_grammars
 
 _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -278,6 +278,7 @@ conversations_alias_router = APIRouter()
 
 router.include_router(chat_dictionaries.router)
 router.include_router(chat_documents.router)
+router.include_router(chat_grammars.router)
 
 # Backward-compatible endpoint re-exports for unit tests and legacy imports
 # that still reference dictionary handlers from this module.
@@ -302,6 +303,11 @@ list_dictionary_versions = chat_dictionaries.list_dictionary_versions
 get_dictionary_version = chat_dictionaries.get_dictionary_version
 revert_dictionary_version = chat_dictionaries.revert_dictionary_version
 get_dictionary_statistics = chat_dictionaries.get_dictionary_statistics
+create_chat_grammar = chat_grammars.create_chat_grammar
+list_chat_grammars = chat_grammars.list_chat_grammars
+get_chat_grammar = chat_grammars.get_chat_grammar
+update_chat_grammar = chat_grammars.update_chat_grammar
+delete_chat_grammar = chat_grammars.delete_chat_grammar
 
 def _chat_connectors_enabled() -> bool:
     """Feature flag for chat connectors v2 (email/issue/wiki exports)."""
