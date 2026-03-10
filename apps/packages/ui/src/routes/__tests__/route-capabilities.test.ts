@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  COMPANION_PATH,
   FAMILY_WIZARD_SETTINGS_PATH,
   GUARDIAN_SETTINGS_PATH,
   PERSONA_DOCK_PATH,
+  isCompanionAvailable,
   isGuardianSettingsAvailable,
   isPersonaDockAvailable,
   isRouteEnabledForCapabilities
@@ -15,6 +17,7 @@ const makeCapabilities = (
 ): ServerCapabilities =>
   ({
     hasGuardian: false,
+    hasPersonalization: false,
     hasSelfMonitoring: false,
     hasPersona: false,
     ...overrides
@@ -91,5 +94,20 @@ describe("route capability gating", () => {
     })
     expect(isPersonaDockAvailable(caps)).toBe(true)
     expect(isRouteEnabledForCapabilities(PERSONA_DOCK_PATH, caps)).toBe(true)
+  })
+
+  it("hides the companion workspace when personalization capability is missing", () => {
+    const caps = makeCapabilities({
+      hasPersonalization: false
+    })
+    expect(isRouteEnabledForCapabilities(COMPANION_PATH, caps)).toBe(false)
+  })
+
+  it("enables the companion workspace when personalization capability is present", () => {
+    const caps = makeCapabilities({
+      hasPersonalization: true
+    })
+    expect(isCompanionAvailable(caps)).toBe(true)
+    expect(isRouteEnabledForCapabilities(COMPANION_PATH, caps)).toBe(true)
   })
 })

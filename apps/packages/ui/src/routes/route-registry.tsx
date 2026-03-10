@@ -189,6 +189,7 @@ const OptionGuardianSettings = createSettingsRoute(
 )
 const OptionChatbooksPlayground = lazy(() => import("./option-chatbooks-playground"))
 const OptionWatchlists = lazy(() => import("./option-watchlists"))
+const OptionCompanion = lazy(() => import("./option-companion"))
 const OptionKanbanPlayground = lazy(() => import("./option-kanban-playground"))
 const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
@@ -599,6 +600,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "option:header.contentReview",
       icon: BookText,
       order: 2
+    }
+  },
+  {
+    kind: "options",
+    path: "/companion",
+    element: <OptionCompanion />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.companion",
+      icon: Sparkles,
+      order: 2.5,
+      beta: true
     }
   },
   {
