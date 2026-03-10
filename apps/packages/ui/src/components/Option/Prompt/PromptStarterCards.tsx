@@ -1,12 +1,16 @@
 import React from "react"
 import { Code, FileText, Search } from "lucide-react"
+import type { PromptFormat, StructuredPromptDefinition } from "@/db/dexie/types"
+import {
+  createStructuredPromptDefinition,
+  renderStructuredPromptLegacySnapshot
+} from "./structured-prompt-utils"
 
 type StarterPrompt = {
   icon: React.ReactNode
   title: string
   description: string
-  system_prompt: string
-  user_prompt: string
+  structuredPromptDefinition: StructuredPromptDefinition
   keywords: string[]
 }
 
@@ -15,28 +19,120 @@ const STARTER_PROMPTS: StarterPrompt[] = [
     icon: <Code className="size-5 text-primary" />,
     title: "Code Review Assistant",
     description: "Reviews code for bugs, style, and best practices",
-    system_prompt:
-      "You are an expert code reviewer. Analyze code for bugs, performance issues, security vulnerabilities, and adherence to best practices. Provide specific, actionable feedback with line references.",
-    user_prompt: "Review the following code:\n\n{{code}}",
+    structuredPromptDefinition: createStructuredPromptDefinition({
+      variables: [
+        {
+          name: "code",
+          label: "Code",
+          description: "The source code or diff to review.",
+          required: true,
+          input_type: "textarea"
+        }
+      ],
+      blocks: [
+        {
+          id: "role",
+          name: "Role",
+          role: "system",
+          content:
+            "You are an expert code reviewer. Deliver precise, actionable feedback."
+        },
+        {
+          id: "review-focus",
+          name: "Review Focus",
+          role: "developer",
+          content:
+            "Check for correctness, regressions, security risks, performance issues, maintainability, and missing tests. Call out the most important findings first and cite exact evidence when possible."
+        },
+        {
+          id: "task",
+          name: "Task",
+          role: "user",
+          content: "Review the following code:\n\n{{code}}",
+          is_template: true
+        }
+      ]
+    }),
     keywords: ["code", "review", "development"],
   },
   {
     icon: <FileText className="size-5 text-primary" />,
     title: "Meeting Summary",
     description: "Extracts key points and action items from meeting notes",
-    system_prompt:
-      "You are a professional meeting summarizer. Extract key decisions, action items with owners, open questions, and important discussion points. Format the output clearly with sections.",
-    user_prompt:
-      "Summarize the following meeting notes:\n\n{{meeting_notes}}",
+    structuredPromptDefinition: createStructuredPromptDefinition({
+      variables: [
+        {
+          name: "meeting_notes",
+          label: "Meeting notes",
+          description: "Raw meeting notes or transcript text.",
+          required: true,
+          input_type: "textarea"
+        }
+      ],
+      blocks: [
+        {
+          id: "role",
+          name: "Role",
+          role: "system",
+          content:
+            "You are a professional meeting summarizer who extracts decisions and next steps."
+        },
+        {
+          id: "output-format",
+          name: "Output Format",
+          role: "developer",
+          content:
+            "Return sections for key decisions, action items with owners, open questions, and notable discussion points."
+        },
+        {
+          id: "task",
+          name: "Task",
+          role: "user",
+          content: "Summarize the following meeting notes:\n\n{{meeting_notes}}",
+          is_template: true
+        }
+      ]
+    }),
     keywords: ["meeting", "summary", "notes"],
   },
   {
     icon: <Search className="size-5 text-primary" />,
     title: "Research Analyst",
     description: "Analyzes topics with structured research methodology",
-    system_prompt:
-      "You are a thorough research analyst. When given a topic, provide a balanced analysis covering key facts, different perspectives, recent developments, and areas of uncertainty. Cite reasoning clearly.",
-    user_prompt: "Research and analyze the following topic:\n\n{{topic}}",
+    structuredPromptDefinition: createStructuredPromptDefinition({
+      variables: [
+        {
+          name: "topic",
+          label: "Topic",
+          description: "The subject to research and analyze.",
+          required: true,
+          input_type: "text"
+        }
+      ],
+      blocks: [
+        {
+          id: "role",
+          name: "Role",
+          role: "system",
+          content:
+            "You are a thorough research analyst who produces balanced, evidence-aware analysis."
+        },
+        {
+          id: "analysis-frame",
+          name: "Analysis Frame",
+          role: "developer",
+          content:
+            "Cover the key facts, competing perspectives, recent developments, and the main uncertainties or gaps in the evidence."
+        },
+        {
+          id: "task",
+          name: "Task",
+          role: "user",
+          content: "Research and analyze the following topic:\n\n{{topic}}",
+          is_template: true
+        }
+      ]
+    }),
     keywords: ["research", "analysis", "study"],
   },
 ]
@@ -47,6 +143,9 @@ type Props = {
     system_prompt: string
     user_prompt: string
     keywords: string[]
+    promptFormat?: PromptFormat
+    promptSchemaVersion?: number
+    structuredPromptDefinition?: StructuredPromptDefinition
   }) => void
 }
 
@@ -67,14 +166,20 @@ export const PromptStarterCards: React.FC<Props> = ({ onUse }) => {
           </p>
           <button
             type="button"
-            onClick={() =>
+            onClick={() => {
+              const legacySnapshot = renderStructuredPromptLegacySnapshot(
+                sp.structuredPromptDefinition
+              )
               onUse({
                 name: sp.title,
-                system_prompt: sp.system_prompt,
-                user_prompt: sp.user_prompt,
+                system_prompt: legacySnapshot.systemPrompt,
+                user_prompt: legacySnapshot.userPrompt,
                 keywords: sp.keywords,
+                promptFormat: "structured",
+                promptSchemaVersion: 1,
+                structuredPromptDefinition: sp.structuredPromptDefinition
               })
-            }
+            }}
             className="rounded bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/20"
             data-testid={`starter-use-${sp.title.toLowerCase().replace(/\s+/g, "-")}`}
           >
