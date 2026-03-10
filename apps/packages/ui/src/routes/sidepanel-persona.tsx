@@ -31,6 +31,7 @@ type PendingPlan = {
   planId: string
   steps: PersonaPlanStep[]
   memory?: PersonaMemoryUsage
+  companion?: PersonaCompanionUsage
 }
 
 type PersonaLogEntry = {
@@ -52,6 +53,13 @@ type PersonaMemoryUsage = {
   enabled?: boolean
   requested_top_k?: number
   applied_count?: number
+}
+
+type PersonaCompanionUsage = {
+  enabled?: boolean
+  requested_enabled?: boolean
+  applied_card_count?: number
+  applied_activity_count?: number
 }
 
 type PersonaSessionSummary = {
@@ -167,6 +175,7 @@ const SidepanelPersona = () => {
   const [resumeSessionId, setResumeSessionId] = React.useState<string>("")
   const [memoryEnabled, setMemoryEnabled] = React.useState(true)
   const [memoryTopK, setMemoryTopK] = React.useState<number>(3)
+  const [companionContextEnabled, setCompanionContextEnabled] = React.useState(true)
   const [personaStateContextEnabled, setPersonaStateContextEnabled] =
     React.useState(true)
   const [personaStateContextProfileDefault, setPersonaStateContextProfileDefault] =
@@ -357,7 +366,16 @@ const SidepanelPersona = () => {
           payload?.memory && typeof payload.memory === "object"
             ? (payload.memory as PersonaMemoryUsage)
             : undefined
-        setPendingPlan({ planId, steps, memory: memoryPayload })
+        const companionPayload =
+          payload?.companion && typeof payload.companion === "object"
+            ? (payload.companion as PersonaCompanionUsage)
+            : undefined
+        setPendingPlan({
+          planId,
+          steps,
+          memory: memoryPayload,
+          companion: companionPayload
+        })
         appendLog("tool", `Plan proposed (${steps.length} step${steps.length === 1 ? "" : "s"})`)
         return
       }
@@ -915,6 +933,7 @@ const SidepanelPersona = () => {
           session_id: sessionId,
           text: trimmed,
           use_memory_context: memoryEnabled,
+          use_companion_context: companionContextEnabled,
           use_persona_state_context: personaStateContextEnabled,
           memory_top_k: memoryTopK
         })
@@ -927,6 +946,7 @@ const SidepanelPersona = () => {
   }, [
     appendLog,
     canSend,
+    companionContextEnabled,
     input,
     memoryEnabled,
     memoryTopK,
@@ -1106,6 +1126,13 @@ const SidepanelPersona = () => {
             {t("sidepanel:persona.stateContextToggle", "State context")}
           </Checkbox>
           <Checkbox
+            data-testid="persona-companion-context-toggle"
+            checked={companionContextEnabled}
+            onChange={(event) => setCompanionContextEnabled(event.target.checked)}
+          >
+            {t("sidepanel:persona.companionContextToggle", "Companion context")}
+          </Checkbox>
+          <Checkbox
             data-testid="persona-state-context-default-toggle"
             checked={personaStateContextProfileDefault}
             disabled={!connected || updatingPersonaStateContextDefault}
@@ -1179,6 +1206,23 @@ const SidepanelPersona = () => {
                 {typeof pendingPlan.memory.applied_count === "number" ? (
                   <Tag color="purple">
                     {`applied results: ${pendingPlan.memory.applied_count}`}
+                  </Tag>
+                ) : null}
+              </div>
+            ) : null}
+            {pendingPlan.companion ? (
+              <div className="mt-1 flex flex-wrap items-center gap-1">
+                <Tag color={pendingPlan.companion.enabled ? "green" : "default"}>
+                  {pendingPlan.companion.enabled ? "companion on" : "companion off"}
+                </Tag>
+                {typeof pendingPlan.companion.applied_card_count === "number" ? (
+                  <Tag color="cyan">
+                    {`applied cards: ${pendingPlan.companion.applied_card_count}`}
+                  </Tag>
+                ) : null}
+                {typeof pendingPlan.companion.applied_activity_count === "number" ? (
+                  <Tag color="geekblue">
+                    {`applied activity: ${pendingPlan.companion.applied_activity_count}`}
                   </Tag>
                 ) : null}
               </div>

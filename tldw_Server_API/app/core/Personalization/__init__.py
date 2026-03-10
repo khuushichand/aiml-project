@@ -10,10 +10,12 @@ from tldw_Server_API.app.core.Personalization.companion_activity import (
     record_reading_item_updated,
     record_watchlist_source_created,
 )
+from tldw_Server_API.app.core.Personalization.companion_context import load_companion_context
 from tldw_Server_API.app.core.Personalization.companion_derivations import derive_companion_knowledge_cards
 
 __all__ = [
     "record_companion_activity",
+    "load_companion_context",
     "derive_companion_knowledge_cards",
     "record_persona_session_started",
     "record_reminder_task_created",

@@ -68,6 +68,7 @@ from tldw_Server_API.app.core.Persona.memory_integration import (
     retrieve_top_memories,
 )
 from tldw_Server_API.app.core.Personalization.companion_activity import record_persona_session_started
+from tldw_Server_API.app.core.Personalization.companion_context import load_companion_context
 from tldw_Server_API.app.core.Persona.policy_evaluator import (
     default_allow_rules,
     evaluate_canonical_policy,
@@ -984,6 +985,17 @@ def _build_persona_state_hint_lines(state_hints: dict[str, str]) -> list[str]:
         label = field_name.capitalize()
         lines.append(f"- {label}: {value}")
     return lines
+
+
+def _join_applied_context_labels(labels: list[str]) -> str:
+    compact = [str(label or "").strip() for label in labels if str(label or "").strip()]
+    if not compact:
+        return ""
+    if len(compact) == 1:
+        return compact[0]
+    if len(compact) == 2:
+        return f"{compact[0]} and {compact[1]}"
+    return f"{', '.join(compact[:-1])}, and {compact[-1]}"
 
 
 def _replace_persona_state_docs(
@@ -2328,6 +2340,7 @@ async def persona_stream(
             plan_id: str,
             steps: list[dict[str, Any]],
             memory: dict[str, Any],
+            companion: dict[str, Any],
             persona_id_value: str,
         ) -> None:
             payload: dict[str, Any] = {
@@ -2336,6 +2349,7 @@ async def persona_stream(
                 "plan_id": str(plan_id or ""),
                 "steps": list(steps),
                 "memory": dict(memory or {}),
+                "companion": dict(companion or {}),
                 "persona_id": str(persona_id_value or ""),
             }
             await stream.send_json(payload)
@@ -2666,6 +2680,7 @@ async def persona_stream(
             text: str,
             memory_context: list[str] | None = None,
             persona_state_hints: dict[str, str] | None = None,
+            companion_context: dict[str, Any] | None = None,
         ) -> dict:
             steps = []
             text_clean = str(text or "").strip()
@@ -2728,20 +2743,44 @@ async def persona_stream(
                 query_text = text
                 compact_memories = [m.strip() for m in (memory_context or []) if str(m or "").strip()]
                 compact_state_lines = _build_persona_state_hint_lines(compact_state_hints)
+                companion_payload = dict(companion_context or {})
+                companion_knowledge_lines = [
+                    str(line).strip()
+                    for line in companion_payload.get("knowledge_lines", [])
+                    if str(line or "").strip()
+                ]
+                companion_activity_lines = [
+                    str(line).strip()
+                    for line in companion_payload.get("activity_lines", [])
+                    if str(line or "").strip()
+                ]
                 if compact_state_lines:
                     query_text = f"{query_text}\n\nPersistent persona state hints:\n" + "\n".join(compact_state_lines)
                 if compact_memories:
                     memory_lines = "\n".join(f"- {m}" for m in compact_memories[: _get_persona_memory_top_k()])
                     query_text = f"{query_text}\n\nPersona memory hints:\n{memory_lines}"
-                if compact_memories and compact_state_lines:
-                    why_text = (
-                        "Input appears to be a knowledge query with applied persistent persona state and "
-                        "personalization memories."
+                if companion_knowledge_lines:
+                    query_text = (
+                        f"{query_text}\n\nCompanion knowledge:\n"
+                        + "\n".join(companion_knowledge_lines)
                     )
-                elif compact_state_lines:
-                    why_text = "Input appears to be a knowledge query with applied persistent persona state."
-                elif compact_memories:
-                    why_text = "Input appears to be a knowledge query with applied personalization memories."
+                if companion_activity_lines:
+                    query_text = (
+                        f"{query_text}\n\nRecent explicit companion activity:\n"
+                        + "\n".join(companion_activity_lines)
+                    )
+                applied_context_labels: list[str] = []
+                if compact_state_lines:
+                    applied_context_labels.append("persistent persona state")
+                if compact_memories:
+                    applied_context_labels.append("personalization memories")
+                if companion_knowledge_lines or companion_activity_lines:
+                    applied_context_labels.append("companion context")
+                if applied_context_labels:
+                    why_text = (
+                        "Input appears to be a knowledge query with applied "
+                        f"{_join_applied_context_labels(applied_context_labels)}."
+                    )
                 else:
                     why_text = "Input appears to be a knowledge query."
                 steps.append(
@@ -2826,6 +2865,15 @@ async def persona_stream(
                     default=default_use_memory,
                 )
                 use_memory_context = requested_use_memory_context
+                default_use_companion_context = _coerce_bool(
+                    existing_preferences.get("use_companion_context"),
+                    default=True,
+                )
+                requested_use_companion_context = _coerce_bool(
+                    msg.get("use_companion_context"),
+                    default=default_use_companion_context,
+                )
+                use_companion_context = requested_use_companion_context
                 runtime_persona_state_context_default = _coerce_bool(
                     runtime_context.get("persona_state_context_default"),
                     default=True,
@@ -2866,6 +2914,7 @@ async def persona_stream(
                     session_policy_rules = _session_policy_rules_from_preferences(existing_preferences)
                 preferences_patch: dict[str, Any] = {
                     "use_memory_context": use_memory_context,
+                    "use_companion_context": use_companion_context,
                     "use_persona_state_context": use_persona_state_context,
                     "memory_top_k": memory_top_k,
                 }
@@ -2885,6 +2934,7 @@ async def persona_stream(
                     metadata={
                         "source": "ws",
                         "use_memory_context": use_memory_context,
+                        "use_companion_context": use_companion_context,
                         "use_persona_state_context": use_persona_state_context,
                         "memory_top_k": memory_top_k,
                         "session_policy_rule_count": len(session_policy_rules),
@@ -2908,6 +2958,14 @@ async def persona_stream(
                         session_id=session_id,
                     )
                     memory_context = [m.content for m in memories]
+                companion_context = {
+                    "knowledge_lines": [],
+                    "activity_lines": [],
+                    "card_count": 0,
+                    "activity_count": 0,
+                }
+                if use_companion_context:
+                    companion_context = load_companion_context(user_id=authenticated_user_id)
                 persona_state_hints: dict[str, str] = {}
                 if use_persona_state_context and state_context_allowed_by_mode:
                     persona_state_hints = _load_persona_state_hints_for_runtime(
@@ -2930,6 +2988,12 @@ async def persona_stream(
                     "persona_state_applied_count": len(persona_state_fields),
                     "persona_state_fields": persona_state_fields,
                 }
+                companion_usage = {
+                    "enabled": use_companion_context,
+                    "requested_enabled": requested_use_companion_context,
+                    "applied_card_count": int(companion_context.get("card_count", 0) or 0),
+                    "applied_activity_count": int(companion_context.get("activity_count", 0) or 0),
+                }
                 if use_memory_context and memory_context:
                     await _emit_notice(
                         session_id=session_id,
@@ -2950,6 +3014,26 @@ async def persona_stream(
                         level="info",
                         reason_code="MEMORY_CONTEXT_DISABLED",
                         message="Memory context disabled for this message",
+                    )
+                if use_companion_context and (
+                    companion_usage["applied_card_count"] or companion_usage["applied_activity_count"]
+                ):
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="COMPANION_CONTEXT_APPLIED",
+                        message=(
+                            "Applied companion context from "
+                            f"{companion_usage['applied_card_count']} knowledge cards and "
+                            f"{companion_usage['applied_activity_count']} recent activities"
+                        ),
+                    )
+                elif not use_companion_context:
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="COMPANION_CONTEXT_DISABLED",
+                        message="Companion context disabled for this message",
                     )
                 if persona_state_fields:
                     await _emit_notice(
@@ -2976,6 +3060,7 @@ async def persona_stream(
                     text,
                     memory_context=memory_context,
                     persona_state_hints=persona_state_hints,
+                    companion_context=companion_context,
                 )
                 plan_id = uuid.uuid4().hex
                 max_tool_steps = _get_persona_max_tool_steps()
@@ -3041,6 +3126,7 @@ async def persona_stream(
                     plan_id=plan_id,
                     steps=stored_steps,
                     memory=memory_usage,
+                    companion=companion_usage,
                     persona_id_value=runtime_persona_id,
                 )
             elif mtype == "audio_chunk":

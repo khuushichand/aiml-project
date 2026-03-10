@@ -592,14 +592,24 @@ describe("SidepanelPersona", () => {
           requested_top_k: 4,
           applied_count: 2
         },
+        companion: {
+          enabled: true,
+          requested_enabled: true,
+          applied_card_count: 1,
+          applied_activity_count: 2
+        },
         steps: [{ idx: 0, tool: "rag_search", description: "search" }]
       })
     )
     await screen.findByText("requested memory results: 4")
     await screen.findByText("applied results: 2")
+    await screen.findByText("companion on")
+    await screen.findByText("applied cards: 1")
+    await screen.findByText("applied activity: 2")
 
     fireEvent.click(screen.getByTestId("persona-memory-toggle"))
     fireEvent.click(screen.getByTestId("persona-state-context-toggle"))
+    fireEvent.click(screen.getByTestId("persona-companion-context-toggle"))
     fireEvent.change(screen.getByPlaceholderText("Ask Persona..."), {
       target: { value: "memory toggle payload" }
     })
@@ -611,6 +621,7 @@ describe("SidepanelPersona", () => {
       expect(userMessage).toBeTruthy()
       expect(userMessage?.use_memory_context).toBe(false)
       expect(userMessage?.use_persona_state_context).toBe(false)
+      expect(userMessage?.use_companion_context).toBe(false)
       expect(userMessage?.memory_top_k).toBe(3)
     })
   })
