@@ -23,6 +23,9 @@ _DEBUG_ALLOWED_ROLES = {"super_admin", "owner"}
 async def require_debug_roles(
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
 ) -> AuthPrincipal:
+    if getattr(principal, "subject", None) == "single_user":
+        return principal
+
     roles = {
         str(role).strip().lower()
         for role in (principal.roles or [])

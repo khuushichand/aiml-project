@@ -32,12 +32,17 @@ def _build_app_with_overrides(
     return app
 
 
-def _make_principal(*, is_admin: bool, roles: Optional[list[str]] = None) -> AuthPrincipal:
+def _make_principal(
+    *,
+    is_admin: bool,
+    roles: Optional[list[str]] = None,
+    subject: Optional[str] = None,
+) -> AuthPrincipal:
     return AuthPrincipal(
         kind="user",
         user_id=1,
         api_key_id=None,
-        subject=None,
+        subject=subject,
         token_type="access",
         jti=None,
         roles=roles or [],
@@ -90,6 +95,25 @@ async def test_authnz_debug_403_when_not_admin(path: str):
         resp = client.get(path)
 
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    ["/api/v1/authnz/debug/api-key-id", "/api/v1/authnz/debug/budget-summary"],
+)
+async def test_authnz_debug_200_for_single_user_admin(path: str):
+    principal = _make_principal(
+        is_admin=True,
+        roles=["admin"],
+        subject="single_user",
+    )
+    app = _build_app_with_overrides(principal=principal)
+
+    with TestClient(app) as client:
+        resp = client.get(path)
+
+    assert resp.status_code == 200
 
 
 @pytest.mark.asyncio

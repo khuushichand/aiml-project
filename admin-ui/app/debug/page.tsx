@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Bug, Key, Wallet, Search } from 'lucide-react';
 import { api } from '@/lib/api-client';
+import { isSingleUserMode } from '@/lib/auth';
 import { formatDateTime } from '@/lib/format';
 
 type ApiKeyInfo = {
@@ -33,6 +34,9 @@ type BudgetSummary = {
 };
 
 export default function DebugPage() {
+  const allowedRoles = isSingleUserMode()
+    ? ['admin', 'super_admin', 'owner']
+    : ['super_admin', 'owner'];
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [apiKeyResult, setApiKeyResult] = useState<ApiKeyInfo | null>(null);
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
@@ -98,7 +102,7 @@ export default function DebugPage() {
       : 0;
 
   return (
-    <PermissionGuard variant="route" requireAuth role={['super_admin', 'owner']}>
+    <PermissionGuard variant="route" requireAuth role={allowedRoles}>
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
           <div className="mb-8">
