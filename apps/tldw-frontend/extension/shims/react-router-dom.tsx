@@ -22,6 +22,8 @@ type NavigateOptions = {
   state?: unknown
 }
 
+type RouteParams = Record<string, string | undefined>
+
 type BlockerHookArg = boolean | ((...args: unknown[]) => boolean)
 
 type ShimBlocker = {
@@ -124,6 +126,21 @@ export const useLocation = () => {
     }),
     [pathname, router.asPath, search, hash]
   )
+}
+
+export const useParams = <TParams extends RouteParams = RouteParams>(): Readonly<TParams> => {
+  const router = useRouter()
+  return React.useMemo(() => {
+    const params: RouteParams = {}
+    for (const [key, value] of Object.entries(router.query)) {
+      if (typeof value === "string") {
+        params[key] = value
+      } else if (Array.isArray(value) && value.length > 0) {
+        params[key] = value[0]
+      }
+    }
+    return params as TParams
+  }, [router.query])
 }
 
 export const useSearchParams = (): [

@@ -59,6 +59,17 @@ export const parseCommaList = (value: string): string[] =>
 export const joinList = (values: string[] | undefined | null, separator = "\n"): string =>
   Array.isArray(values) ? values.filter(Boolean).join(separator) : ""
 
+export const toggleStringValue = (
+  values: string[],
+  value: string,
+  enabled: boolean
+): string[] => {
+  if (enabled) {
+    return values.includes(value) ? values : [...values, value]
+  }
+  return values.filter((entry) => entry !== value)
+}
+
 const SIMPLE_POLICY_KEYS = new Set(["allowed_tools", "denied_tools", "capabilities"])
 
 const unique = (values: string[]): string[] => Array.from(new Set(values.filter(Boolean)))
