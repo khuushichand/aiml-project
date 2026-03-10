@@ -19,8 +19,10 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     MCPHubDeleteResponse,
     PermissionProfileCreateRequest,
     PermissionProfileResponse,
+    PermissionProfileUpdateRequest,
     PolicyAssignmentCreateRequest,
     PolicyAssignmentResponse,
+    PolicyAssignmentUpdateRequest,
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
@@ -319,6 +321,67 @@ async def create_permission_profile(
     return _permission_profile_row_to_response(row)
 
 
+@router.get("/permission-profiles", response_model=list[PermissionProfileResponse])
+async def list_permission_profiles(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[PermissionProfileResponse]:
+    """List permission profiles visible to the current principal with scope-constrained filtering."""
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_permission_profiles(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    return [_permission_profile_row_to_response(row) for row in rows]
+
+
+@router.put("/permission-profiles/{profile_id}", response_model=PermissionProfileResponse)
+async def update_permission_profile(
+    profile_id: int,
+    payload: PermissionProfileUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> PermissionProfileResponse:
+    """Update an existing permission profile by id."""
+    _require_mutation_permission(principal)
+    update_fields = payload.model_dump(exclude_unset=True)
+    if "policy_document" in update_fields:
+        _require_grant_authority(principal, update_fields.get("policy_document") or {})
+    row = await svc.update_permission_profile(
+        profile_id,
+        actor_id=principal.user_id,
+        **update_fields,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Permission profile not found")
+    return _permission_profile_row_to_response(row)
+
+
+@router.delete("/permission-profiles/{profile_id}", response_model=MCPHubDeleteResponse)
+async def delete_permission_profile(
+    profile_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete a permission profile by id."""
+    _require_mutation_permission(principal)
+    deleted = await svc.delete_permission_profile(profile_id, actor_id=principal.user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Permission profile not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
 @router.post("/policy-assignments", response_model=PolicyAssignmentResponse, status_code=201)
 async def create_policy_assignment(
     payload: PolicyAssignmentCreateRequest,
@@ -340,6 +403,71 @@ async def create_policy_assignment(
         actor_id=principal.user_id,
     )
     return _policy_assignment_row_to_response(row)
+
+
+@router.get("/policy-assignments", response_model=list[PolicyAssignmentResponse])
+async def list_policy_assignments(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[PolicyAssignmentResponse]:
+    """List policy assignments visible to the current principal with scope-constrained filtering."""
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_policy_assignments(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+                target_type=target_type,
+                target_id=target_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    return [_policy_assignment_row_to_response(row) for row in rows]
+
+
+@router.put("/policy-assignments/{assignment_id}", response_model=PolicyAssignmentResponse)
+async def update_policy_assignment(
+    assignment_id: int,
+    payload: PolicyAssignmentUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> PolicyAssignmentResponse:
+    """Update an existing policy assignment by id."""
+    _require_mutation_permission(principal)
+    update_fields = payload.model_dump(exclude_unset=True)
+    if "inline_policy_document" in update_fields:
+        _require_grant_authority(principal, update_fields.get("inline_policy_document") or {})
+    row = await svc.update_policy_assignment(
+        assignment_id,
+        actor_id=principal.user_id,
+        **update_fields,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Policy assignment not found")
+    return _policy_assignment_row_to_response(row)
+
+
+@router.delete("/policy-assignments/{assignment_id}", response_model=MCPHubDeleteResponse)
+async def delete_policy_assignment(
+    assignment_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete a policy assignment by id."""
+    _require_mutation_permission(principal)
+    deleted = await svc.delete_policy_assignment(assignment_id, actor_id=principal.user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Policy assignment not found")
+    return MCPHubDeleteResponse(ok=True)
 
 
 @router.get("/acp-profiles", response_model=list[ACPProfileResponse])

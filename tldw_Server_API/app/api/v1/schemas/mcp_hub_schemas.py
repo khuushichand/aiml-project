@@ -52,6 +52,16 @@ class PermissionProfileCreateRequest(BaseModel):
     is_active: bool = True
 
 
+class PermissionProfileUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=512)
+    owner_scope_type: ScopeType | None = None
+    owner_scope_id: int | None = None
+    mode: ProfileMode | None = None
+    policy_document: dict[str, Any] | None = None
+    is_active: bool | None = None
+
+
 class PermissionProfileResponse(BaseModel):
     id: int
     name: str
@@ -76,6 +86,17 @@ class PolicyAssignmentCreateRequest(BaseModel):
     inline_policy_document: dict[str, Any] = Field(default_factory=dict)
     approval_policy_id: int | None = None
     is_active: bool = True
+
+
+class PolicyAssignmentUpdateRequest(BaseModel):
+    target_type: AssignmentTargetType | None = None
+    target_id: str | None = Field(default=None, max_length=200)
+    owner_scope_type: ScopeType | None = None
+    owner_scope_id: int | None = None
+    profile_id: int | None = None
+    inline_policy_document: dict[str, Any] | None = None
+    approval_policy_id: int | None = None
+    is_active: bool | None = None
 
 
 class PolicyAssignmentResponse(BaseModel):

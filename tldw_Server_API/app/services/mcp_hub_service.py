@@ -112,6 +112,55 @@ class McpHubService:
         )
         return row
 
+    async def list_permission_profiles(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self.repo.list_permission_profiles(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+
+    async def update_permission_profile(
+        self,
+        profile_id: int,
+        *,
+        actor_id: int | None = None,
+        **update_fields: Any,
+    ) -> dict[str, Any] | None:
+        row = await self.repo.update_permission_profile(
+            profile_id,
+            actor_id=actor_id,
+            **update_fields,
+        )
+        if row:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.permission_profile.update",
+                    actor_id=actor_id,
+                    resource_type="mcp_permission_profile",
+                    resource_id=str(row.get("id") or profile_id),
+                    metadata={"name": row.get("name"), "owner_scope_type": row.get("owner_scope_type")},
+                )
+            )
+        return row
+
+    async def delete_permission_profile(self, profile_id: int, *, actor_id: int | None) -> bool:
+        deleted = await self.repo.delete_permission_profile(profile_id)
+        if deleted:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.permission_profile.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_permission_profile",
+                    resource_id=str(profile_id),
+                    metadata=None,
+                )
+            )
+        return deleted
+
     async def create_policy_assignment(
         self,
         *,
@@ -146,6 +195,59 @@ class McpHubService:
             )
         )
         return row
+
+    async def list_policy_assignments(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+        target_type: str | None = None,
+        target_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self.repo.list_policy_assignments(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            target_type=target_type,
+            target_id=target_id,
+        )
+
+    async def update_policy_assignment(
+        self,
+        assignment_id: int,
+        *,
+        actor_id: int | None = None,
+        **update_fields: Any,
+    ) -> dict[str, Any] | None:
+        row = await self.repo.update_policy_assignment(
+            assignment_id,
+            actor_id=actor_id,
+            **update_fields,
+        )
+        if row:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.policy_assignment.update",
+                    actor_id=actor_id,
+                    resource_type="mcp_policy_assignment",
+                    resource_id=str(row.get("id") or assignment_id),
+                    metadata={"target_type": row.get("target_type"), "target_id": row.get("target_id")},
+                )
+            )
+        return row
+
+    async def delete_policy_assignment(self, assignment_id: int, *, actor_id: int | None) -> bool:
+        deleted = await self.repo.delete_policy_assignment(assignment_id)
+        if deleted:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.policy_assignment.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_policy_assignment",
+                    resource_id=str(assignment_id),
+                    metadata=None,
+                )
+            )
+        return deleted
 
     async def create_acp_profile(
         self,

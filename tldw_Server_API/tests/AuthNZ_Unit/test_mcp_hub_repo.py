@@ -188,3 +188,55 @@ async def test_repo_can_crud_permission_profile_and_policy_assignment(tmp_path, 
     assert deleted is True
     missing = await repo.get_policy_assignment(int(assignment["id"]))
     assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_repo_update_policy_assignment_can_clear_nullable_fields(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    profile = await repo.create_permission_profile(
+        name="Runtime Profile",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        mode="custom",
+        policy_document={"capabilities": ["filesystem.read"]},
+        actor_id=7,
+    )
+    assignment = await repo.create_policy_assignment(
+        target_type="persona",
+        target_id="researcher",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        profile_id=int(profile["id"]),
+        inline_policy_document={"approval_mode": "ask_outside_profile"},
+        approval_policy_id=9,
+        actor_id=7,
+        is_active=True,
+    )
+
+    updated = await repo.update_policy_assignment(
+        int(assignment["id"]),
+        profile_id=None,
+        approval_policy_id=None,
+        actor_id=8,
+    )
+
+    assert updated is not None
+    assert updated["profile_id"] is None
+    assert updated["approval_policy_id"] is None

@@ -12,6 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 _VALID_SCOPE_TYPES = {"global", "org", "team", "user"}
 _VALID_TARGET_TYPES = {"default", "group", "persona"}
 _VALID_PROFILE_MODES = {"preset", "custom"}
+_UNSET = object()
 
 
 def _normalize_scope_type(scope_type: str | None) -> str:
@@ -438,30 +439,34 @@ class McpHubRepo:
         self,
         profile_id: int,
         *,
-        name: str | None = None,
-        description: str | None = None,
-        owner_scope_type: str | None = None,
-        owner_scope_id: int | None = None,
-        mode: str | None = None,
-        policy_document: dict[str, Any] | None = None,
-        is_active: bool | None = None,
+        name: str | object = _UNSET,
+        description: str | None | object = _UNSET,
+        owner_scope_type: str | object = _UNSET,
+        owner_scope_id: int | None | object = _UNSET,
+        mode: str | object = _UNSET,
+        policy_document: dict[str, Any] | None | object = _UNSET,
+        is_active: bool | object = _UNSET,
         actor_id: int | None = None,
     ) -> dict[str, Any] | None:
         existing = await self.get_permission_profile(profile_id)
         if not existing:
             return None
 
-        next_name = name.strip() if name is not None else str(existing["name"])
-        next_description = description if description is not None else existing.get("description")
+        next_name = str(existing["name"]) if name is _UNSET else str(name).strip()
+        next_description = existing.get("description") if description is _UNSET else description
         next_scope = (
             _normalize_scope_type(owner_scope_type)
-            if owner_scope_type is not None
+            if owner_scope_type is not _UNSET
             else str(existing["owner_scope_type"])
         )
-        next_scope_id = owner_scope_id if owner_scope_id is not None else existing.get("owner_scope_id")
-        next_mode = _normalize_profile_mode(mode) if mode is not None else str(existing["mode"])
-        next_policy_document = policy_document if policy_document is not None else dict(existing.get("policy_document") or {})
-        next_active = _to_bool(is_active) if is_active is not None else _to_bool(existing.get("is_active"))
+        next_scope_id = existing.get("owner_scope_id") if owner_scope_id is _UNSET else owner_scope_id
+        next_mode = _normalize_profile_mode(mode) if mode is not _UNSET else str(existing["mode"])
+        next_policy_document = (
+            dict(existing.get("policy_document") or {})
+            if policy_document is _UNSET
+            else dict(policy_document or {})
+        )
+        next_active = _to_bool(existing.get("is_active")) if is_active is _UNSET else _to_bool(is_active)
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         active_value: bool | int = next_active if getattr(self.db_pool, "pool", None) is not None else int(next_active)
@@ -641,14 +646,14 @@ class McpHubRepo:
         self,
         assignment_id: int,
         *,
-        target_type: str | None = None,
-        target_id: str | None = None,
-        owner_scope_type: str | None = None,
-        owner_scope_id: int | None = None,
-        profile_id: int | None = None,
-        inline_policy_document: dict[str, Any] | None = None,
-        approval_policy_id: int | None = None,
-        is_active: bool | None = None,
+        target_type: str | object = _UNSET,
+        target_id: str | None | object = _UNSET,
+        owner_scope_type: str | object = _UNSET,
+        owner_scope_id: int | None | object = _UNSET,
+        profile_id: int | None | object = _UNSET,
+        inline_policy_document: dict[str, Any] | None | object = _UNSET,
+        approval_policy_id: int | None | object = _UNSET,
+        is_active: bool | object = _UNSET,
         actor_id: int | None = None,
     ) -> dict[str, Any] | None:
         existing = await self.get_policy_assignment(assignment_id)
@@ -657,28 +662,33 @@ class McpHubRepo:
 
         next_target_type = (
             _normalize_target_type(target_type)
-            if target_type is not None
+            if target_type is not _UNSET
             else str(existing["target_type"])
         )
-        next_target_id = str(target_id).strip() if target_id is not None else existing.get("target_id")
+        if target_id is _UNSET:
+            next_target_id = existing.get("target_id")
+        elif target_id is None:
+            next_target_id = None
+        else:
+            next_target_id = str(target_id).strip()
         next_scope = (
             _normalize_scope_type(owner_scope_type)
-            if owner_scope_type is not None
+            if owner_scope_type is not _UNSET
             else str(existing["owner_scope_type"])
         )
-        next_scope_id = owner_scope_id if owner_scope_id is not None else existing.get("owner_scope_id")
-        next_profile_id = profile_id if profile_id is not None else existing.get("profile_id")
+        next_scope_id = existing.get("owner_scope_id") if owner_scope_id is _UNSET else owner_scope_id
+        next_profile_id = existing.get("profile_id") if profile_id is _UNSET else profile_id
         next_inline_policy_document = (
-            inline_policy_document
-            if inline_policy_document is not None
-            else dict(existing.get("inline_policy_document") or {})
+            dict(existing.get("inline_policy_document") or {})
+            if inline_policy_document is _UNSET
+            else dict(inline_policy_document or {})
         )
         next_approval_policy_id = (
-            approval_policy_id
-            if approval_policy_id is not None
-            else existing.get("approval_policy_id")
+            existing.get("approval_policy_id")
+            if approval_policy_id is _UNSET
+            else approval_policy_id
         )
-        next_active = _to_bool(is_active) if is_active is not None else _to_bool(existing.get("is_active"))
+        next_active = _to_bool(existing.get("is_active")) if is_active is _UNSET else _to_bool(is_active)
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         active_value: bool | int = next_active if getattr(self.db_pool, "pool", None) is not None else int(next_active)
