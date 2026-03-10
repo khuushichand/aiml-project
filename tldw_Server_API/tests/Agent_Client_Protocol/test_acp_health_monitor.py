@@ -1,4 +1,6 @@
 """Tests for agent health monitoring."""
+import asyncio
+
 import pytest
 from unittest.mock import MagicMock
 
@@ -129,3 +131,66 @@ def test_multiple_checks_accumulate_failures(mock_registry):
     status = monitor.get_status("codex")
     assert status.consecutive_failures == 5
     assert status.health == "unavailable"
+
+
+# --- Async lifecycle tests ---
+
+
+@pytest.mark.asyncio
+async def test_start_and_stop(mock_registry):
+    """start() creates a background task, stop() cancels it."""
+    monitor = AgentHealthMonitor(
+        registry=mock_registry, check_interval=0.05,
+    )
+    await monitor.start()
+    assert monitor._running is True
+    assert monitor._task is not None
+
+    # Let one check happen
+    await asyncio.sleep(0.1)
+    assert monitor.get_status("claude_code") is not None
+
+    await monitor.stop()
+    assert monitor._running is False
+    assert monitor._task is None
+
+
+@pytest.mark.asyncio
+async def test_double_start_is_idempotent(mock_registry):
+    """Calling start() twice doesn't create duplicate tasks."""
+    monitor = AgentHealthMonitor(
+        registry=mock_registry, check_interval=0.05,
+    )
+    await monitor.start()
+    task1 = monitor._task
+    await monitor.start()  # second call
+    assert monitor._task is task1  # same task
+
+    await monitor.stop()
+
+
+@pytest.mark.asyncio
+async def test_check_loop_survives_exception():
+    """The background loop continues after check_all raises."""
+    registry = MagicMock()
+    call_count = 0
+
+    def flaky_entries():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("transient failure")
+        entry = MagicMock()
+        entry.type = "agent"
+        entry.check_availability.return_value = {"status": "available"}
+        return [entry]
+
+    type(registry).entries = property(lambda self: flaky_entries())
+
+    monitor = AgentHealthMonitor(registry=registry, check_interval=0.05)
+    await monitor.start()
+    await asyncio.sleep(0.2)
+    await monitor.stop()
+
+    # Should have recovered after the first exception
+    assert call_count >= 2

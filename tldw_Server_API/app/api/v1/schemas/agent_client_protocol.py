@@ -60,6 +60,26 @@ class ACPAgentUpdateRequest(BaseModel):
 
 
 # -----------------------------------------------------------------------------
+# Agent Health
+# -----------------------------------------------------------------------------
+
+
+class ACPAgentHealthEntry(BaseModel):
+    """Health status for a single agent."""
+    agent_type: str = Field(..., description="Agent type identifier")
+    health: str = Field(..., description="Health state: healthy, degraded, unavailable, unknown")
+    consecutive_failures: int = Field(default=0, description="Number of consecutive check failures")
+    last_check: str | None = Field(default=None, description="ISO timestamp of last health check")
+    last_healthy: str | None = Field(default=None, description="ISO timestamp of last healthy check")
+    details: dict[str, Any] = Field(default_factory=dict, description="Raw availability check details")
+
+
+class ACPAgentHealthResponse(BaseModel):
+    """Response for agent health status."""
+    agents: list[ACPAgentHealthEntry] = Field(default_factory=list)
+
+
+# -----------------------------------------------------------------------------
 # MCP Server Configuration
 # -----------------------------------------------------------------------------
 
