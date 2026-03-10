@@ -127,7 +127,7 @@ from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_selector i
 from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_telemetry import (
     compute_persona_exemplar_telemetry,
 )
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError, ChatBadRequestError
 from tldw_Server_API.app.core.Chat.chat_exceptions import (
     ChatDatabaseError,
     ChatErrorCode,
@@ -2803,6 +2803,21 @@ async def create_chat_completion(
                     loop=current_loop,
                 )
 
+            llamacpp_grammar_record: dict[str, Any] | None = None
+            if target_api_provider == "llama.cpp" and getattr(request_data, "grammar_mode", None) == "library":
+                grammar_id = str(getattr(request_data, "grammar_id", "") or "").strip()
+                if not grammar_id:
+                    raise ChatBadRequestError(
+                        provider=target_api_provider,
+                        message="grammar_id is required when grammar_mode is 'library'",
+                    )
+                llamacpp_grammar_record = chat_db.get_chat_grammar(grammar_id)
+                if not isinstance(llamacpp_grammar_record, dict):
+                    raise ChatBadRequestError(
+                        provider=target_api_provider,
+                        message="Saved grammar could not be resolved",
+                    )
+
             # --- LLM Call ---
             cleaned_args = build_call_params_from_request(
                 request_data=request_data,
@@ -2811,6 +2826,7 @@ async def create_chat_completion(
                 templated_llm_payload=templated_llm_payload,
                 final_system_message=final_system_message,
                 app_config=app_config_override,
+                grammar_record=llamacpp_grammar_record,
             )
             cleaned_args["request"] = request
             try:
@@ -2898,6 +2914,7 @@ async def create_chat_completion(
                     templated_llm_payload=templated_llm_payload,
                     final_system_message=final_system_message,
                     app_config=refreshed_resolution.app_config,
+                    grammar_record=llamacpp_grammar_record,
                 )
                 refreshed_args["request"] = request
                 refreshed_model = refreshed_args.get("model")

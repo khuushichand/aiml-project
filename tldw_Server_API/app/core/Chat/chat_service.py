@@ -18,7 +18,7 @@ import os
 import re
 import time
 import uuid as _uuid
-from collections.abc import AsyncIterator, Awaitable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -1403,6 +1403,7 @@ def build_call_params_from_request(
     templated_llm_payload: list[dict[str, Any]],
     final_system_message: str | None,
     app_config: dict[str, Any] | None = None,
+    grammar_record: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Construct the cleaned argument dictionary for chat_api_call.
 
@@ -1467,7 +1468,7 @@ def build_call_params_from_request(
     call_params["extra_body"] = resolve_llamacpp_request_extensions(
         request_fields=llamacpp_request_fields,
         provider=target_api_provider,
-        grammar_record=None,
+        grammar_record=grammar_record,
         runtime_caps=resolve_llamacpp_runtime_caps(app_config=app_config),
     )["extra_body"]
 
