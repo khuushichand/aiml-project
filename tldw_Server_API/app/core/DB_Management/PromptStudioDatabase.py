@@ -487,7 +487,7 @@ class BackendPromptStudioDatabaseBase:
         try:
             yield conn
             ctx.__exit__(None, None, None)
-        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             ctx.__exit__(exc.__class__, exc, exc.__traceback__)
             raise
 
@@ -6643,7 +6643,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         try:
             yield conn
             conn.commit()
-        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
+        except Exception:
             conn.rollback()
             raise
 
