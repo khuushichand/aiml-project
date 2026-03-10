@@ -9,7 +9,7 @@ try:
 except ImportError:  # pragma: no cover - pydantic v1 fallback
     from pydantic import root_validator as model_validator  # type: ignore
 
-RuntimeType = Literal["docker", "firecracker", "lima"]
+RuntimeType = Literal["docker", "firecracker", "lima", "vz_linux", "vz_macos", "seatbelt"]
 TrustLevelType = Literal["trusted", "standard", "untrusted"]
 
 
