@@ -11,6 +11,7 @@ type StructuredPromptBlock = {
   id: string
   name: string
   role: "system" | "developer" | "user" | "assistant"
+  kind?: string
   content: string
   enabled: boolean
   order: number
@@ -23,6 +24,15 @@ type StructuredPromptVariable = {
   input_type?: string
   label?: string
   description?: string
+  default_value?: unknown
+  options?: string[] | null
+  max_length?: number
+}
+
+type StructuredPromptAssemblyConfig = {
+  legacy_system_roles: string[]
+  legacy_user_roles: string[]
+  block_separator: string
 }
 
 type StructuredPromptEditorProps = {
@@ -37,11 +47,18 @@ const makeDefaultBlock = (): StructuredPromptBlock => ({
   id: `block-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   name: "Task",
   role: "user",
+  kind: "task",
   content: "Describe the task here.",
   enabled: true,
   order: 10,
   is_template: false
 })
+
+const DEFAULT_ASSEMBLY_CONFIG: StructuredPromptAssemblyConfig = {
+  legacy_system_roles: ["system", "developer"],
+  legacy_user_roles: ["user"],
+  block_separator: "\n\n"
+}
 
 const reindexBlocks = (blocks: StructuredPromptBlock[]): StructuredPromptBlock[] =>
   blocks.map((block, index) => ({
@@ -53,6 +70,26 @@ const normalizeDefinition = (
   value: StructuredPromptDefinition | null | undefined
 ): StructuredPromptDefinition => {
   const candidate = value && typeof value === "object" ? value : {}
+  const assemblyConfigCandidate =
+    candidate.assembly_config &&
+    typeof candidate.assembly_config === "object" &&
+    !Array.isArray(candidate.assembly_config)
+      ? (candidate.assembly_config as Record<string, unknown>)
+      : null
+  const assemblyConfig: StructuredPromptAssemblyConfig = {
+    legacy_system_roles: Array.isArray(assemblyConfigCandidate?.legacy_system_roles)
+      ? assemblyConfigCandidate.legacy_system_roles
+          .filter((role): role is string => typeof role === "string")
+      : DEFAULT_ASSEMBLY_CONFIG.legacy_system_roles,
+    legacy_user_roles: Array.isArray(assemblyConfigCandidate?.legacy_user_roles)
+      ? assemblyConfigCandidate.legacy_user_roles
+          .filter((role): role is string => typeof role === "string")
+      : DEFAULT_ASSEMBLY_CONFIG.legacy_user_roles,
+    block_separator:
+      typeof assemblyConfigCandidate?.block_separator === "string"
+        ? assemblyConfigCandidate.block_separator
+        : DEFAULT_ASSEMBLY_CONFIG.block_separator
+  }
   const blocks = Array.isArray(candidate.blocks)
     ? reindexBlocks(
         candidate.blocks.map((block: any, index: number) => ({
@@ -64,6 +101,7 @@ const normalizeDefinition = (
             block?.role === "assistant"
               ? block.role
               : "user",
+          kind: typeof block?.kind === "string" ? block.kind : undefined,
           content: typeof block?.content === "string" ? block.content : "",
           enabled: block?.enabled !== false,
           order:
@@ -85,6 +123,24 @@ const normalizeDefinition = (
         description:
           typeof variable?.description === "string"
             ? variable.description
+            : undefined,
+        default_value:
+          variable && Object.prototype.hasOwnProperty.call(variable, "default_value")
+            ? variable.default_value
+            : undefined,
+        options:
+          variable?.options === null
+            ? null
+            : Array.isArray(variable?.options)
+              ? variable.options.filter(
+                  (option: unknown): option is string => typeof option === "string"
+                )
+              : undefined,
+        max_length:
+          typeof variable?.max_length === "number" &&
+          Number.isFinite(variable.max_length) &&
+          variable.max_length >= 1
+            ? variable.max_length
             : undefined
       }))
     : []
@@ -96,6 +152,7 @@ const normalizeDefinition = (
         ? candidate.schema_version
         : 1,
     format: "structured",
+    assembly_config: assemblyConfig,
     variables,
     blocks
   }
