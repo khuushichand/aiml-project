@@ -113,7 +113,7 @@ _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # --- Database Class ---
 class PromptsDatabase:
-    _CURRENT_SCHEMA_VERSION = 4
+    _CURRENT_SCHEMA_VERSION = 5
 
     _TABLES_SQL_V1 = """
     PRAGMA foreign_keys = ON;
@@ -551,6 +551,7 @@ class PromptsDatabase:
     _SCHEMA_UPDATE_VERSION_SQL_V2 = "UPDATE schema_version SET version = 2 WHERE version = 1;"
     _SCHEMA_UPDATE_VERSION_SQL_V3 = "UPDATE schema_version SET version = 3 WHERE version = 2;"
     _SCHEMA_UPDATE_VERSION_SQL_V4 = "UPDATE schema_version SET version = 4 WHERE version = 3;"
+    _SCHEMA_UPDATE_VERSION_SQL_V5 = "UPDATE schema_version SET version = 5 WHERE version = 4;"
 
     def _apply_schema_v1(self, conn: sqlite3.Connection):
         logging.info(f"Applying initial schema (Version 1) to DB: {self.db_path_str}...")
@@ -698,6 +699,21 @@ class PromptsDatabase:
             logging.error(f"[Schema V4] Application failed: {e}", exc_info=True)
             raise DatabaseError(f"DB schema V4 setup failed: {e}") from e  # noqa: TRY003
 
+    def _apply_schema_v5(self, conn: sqlite3.Connection):
+        logging.info(f"Applying schema migration (Version 5) to DB: {self.db_path_str}...")
+        try:
+            with self.transaction():
+                conn.execute(self._SCHEMA_UPDATE_VERSION_SQL_V5)
+                cursor_check = conn.execute("SELECT version FROM schema_version LIMIT 1")
+                version_in_tx = cursor_check.fetchone()
+                if not version_in_tx or version_in_tx["version"] != 5:
+                    raise SchemaError("Schema V5 version update did not take effect within transaction.")  # noqa: TRY003
+                self._rebuild_prompts_fts(conn)
+            logging.info(f"[Schema V5] Prompt FTS index rebuilt for DB: {self.db_path_str}.")
+        except sqlite3.Error as e:
+            logging.error(f"[Schema V5] Application failed: {e}", exc_info=True)
+            raise DatabaseError(f"DB schema V5 setup failed: {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         conn = self.get_connection()
         try:
@@ -724,6 +740,10 @@ class PromptsDatabase:
                     continue
                 if current_db_version == 3:
                     self._apply_schema_v4(conn)
+                    current_db_version = self._get_db_version(conn)
+                    continue
+                if current_db_version == 4:
+                    self._apply_schema_v5(conn)
                     current_db_version = self._get_db_version(conn)
                     continue
                 raise SchemaError(  # noqa: TRY003
@@ -786,6 +806,61 @@ class PromptsDatabase:
         else:
             record["prompt_definition"] = None
         return record
+
+    @staticmethod
+    def build_structured_prompt_searchable_text(prompt_definition: Any) -> str:
+        if prompt_definition is None:
+            return ""
+
+        definition_payload = prompt_definition
+        if isinstance(prompt_definition, str):
+            with suppress(TypeError, ValueError, json.JSONDecodeError):
+                definition_payload = json.loads(prompt_definition)
+
+        if not isinstance(definition_payload, dict):
+            return ""
+
+        parts: list[str] = []
+
+        variables = definition_payload.get("variables")
+        if isinstance(variables, list):
+            for variable in variables:
+                if not isinstance(variable, dict):
+                    continue
+                for key in ("name", "label", "description"):
+                    value = variable.get(key)
+                    if isinstance(value, str) and value.strip():
+                        parts.append(value.strip())
+
+        blocks = definition_payload.get("blocks")
+        if isinstance(blocks, list):
+            for block in blocks:
+                if not isinstance(block, dict) or block.get("enabled") is False:
+                    continue
+                for key in ("name", "role", "content"):
+                    value = block.get(key)
+                    if isinstance(value, str) and value.strip():
+                        parts.append(value.strip())
+
+        normalized_parts: list[str] = []
+        seen: set[str] = set()
+        for part in parts:
+            if part in seen:
+                continue
+            normalized_parts.append(part)
+            seen.add(part)
+        return "\n".join(normalized_parts)
+
+    def _build_fts_details_text(self, details: Optional[str], prompt_definition: Any) -> str:
+        detail_parts: list[str] = []
+        if isinstance(details, str) and details.strip():
+            detail_parts.append(details.strip())
+
+        structured_text = self.build_structured_prompt_searchable_text(prompt_definition)
+        if structured_text:
+            detail_parts.append(structured_text)
+
+        return "\n\n".join(detail_parts)
 
     def _normalize_keyword(self, keyword: str) -> str:
         """Normalize keyword while preserving case for round-trip display/export.
@@ -854,15 +929,43 @@ class PromptsDatabase:
 
     # --- FTS Helper Methods ---
     def _update_fts_prompt(self, conn: sqlite3.Connection, prompt_id: int, name: str, author: Optional[str],
-                           details: Optional[str], system_prompt: Optional[str], user_prompt: Optional[str]):
+                           details: Optional[str], system_prompt: Optional[str], user_prompt: Optional[str],
+                           prompt_definition: Any = None):
         try:
+            fts_details = self._build_fts_details_text(details, prompt_definition)
             conn.execute(
                 "INSERT OR REPLACE INTO prompts_fts (rowid, name, author, details, system_prompt, user_prompt) VALUES (?, ?, ?, ?, ?, ?)",
-                (prompt_id, name, author or "", details or "", system_prompt or "", user_prompt or ""))
+                (prompt_id, name, author or "", fts_details, system_prompt or "", user_prompt or ""))
             logging.debug(f"Updated FTS for Prompt ID {prompt_id}")
         except sqlite3.Error as e:
             logging.error(f"Failed FTS update Prompt ID {prompt_id}: {e}", exc_info=True)
             raise DatabaseError(f"Failed FTS update Prompt ID {prompt_id}: {e}") from e  # noqa: TRY003
+
+    def _rebuild_prompts_fts(self, conn: sqlite3.Connection):
+        try:
+            conn.executescript(self._FTS_TABLES_SQL)
+            conn.execute("DELETE FROM prompts_fts")
+            cursor = conn.execute(
+                """
+                SELECT id, name, author, details, system_prompt, user_prompt, prompt_definition_json
+                FROM Prompts
+                WHERE deleted = 0
+                """
+            )
+            for row in cursor.fetchall():
+                self._update_fts_prompt(
+                    conn,
+                    row["id"],
+                    row["name"],
+                    row["author"],
+                    row["details"],
+                    row["system_prompt"],
+                    row["user_prompt"],
+                    row["prompt_definition_json"],
+                )
+        except sqlite3.Error as e:
+            logging.error(f"Failed to rebuild prompt FTS index: {e}", exc_info=True)
+            raise DatabaseError(f"Failed to rebuild prompt FTS index: {e}") from e  # noqa: TRY003
 
     def _delete_fts_prompt(self, conn: sqlite3.Connection, prompt_id: int):
         try:
@@ -1181,7 +1284,16 @@ class PromptsDatabase:
                         raise ConflictError(f"Failed to update prompt '{name}'.", "Prompts", prompt_id)  # noqa: TRY003, TRY301
 
                     self._log_sync_event(conn, 'Prompts', prompt_uuid, 'update', new_version, update_data)
-                    self._update_fts_prompt(conn, prompt_id, name, author, details, system_prompt, user_prompt)
+                    self._update_fts_prompt(
+                        conn,
+                        prompt_id,
+                        name,
+                        author,
+                        details,
+                        system_prompt,
+                        user_prompt,
+                        prompt_definition,
+                    )
                 else:  # New prompt
                     action_taken = "added"
                     prompt_uuid = self._generate_uuid()
@@ -1235,7 +1347,16 @@ class PromptsDatabase:
                     prompt_id = cursor.lastrowid
                     if not prompt_id: raise DatabaseError("Failed to get ID for new prompt.")  # noqa: E701, TRY003, TRY301
                     self._log_sync_event(conn, 'Prompts', prompt_uuid, 'create', new_version, insert_data)
-                    self._update_fts_prompt(conn, prompt_id, name, author, details, system_prompt, user_prompt)
+                    self._update_fts_prompt(
+                        conn,
+                        prompt_id,
+                        name,
+                        author,
+                        details,
+                        system_prompt,
+                        user_prompt,
+                        prompt_definition,
+                    )
 
                 if prompt_id:
                     # Apply provided keywords only; do not inject a default tag when none provided
@@ -1451,7 +1572,8 @@ class PromptsDatabase:
                 self._update_fts_prompt(conn, prompt_id,
                                         updated_payload['name'], updated_payload.get('author'),
                                         updated_payload.get('details'), updated_payload.get('system_prompt'),
-                                        updated_payload.get('user_prompt'))
+                                        updated_payload.get('user_prompt'),
+                                        updated_payload.get('prompt_definition'))
 
                 # Handle keywords if provided in update_data (assuming 'keywords' is a list of strings)
                 if 'keywords' in update_data and isinstance(update_data['keywords'], list):
@@ -2370,6 +2492,14 @@ class PromptsDatabase:
                         rowd = dict(row)
                         kws = self.fetch_keywords_for_prompt(rowd['id'], include_deleted=False)
                         haystack_parts = []
+                        if fields_to_scan & text_fields:
+                            haystack_parts.append(
+                                self._normalize_text_for_search(
+                                    self.build_structured_prompt_searchable_text(
+                                        rowd.get("prompt_definition_json")
+                                    )
+                                )
+                            )
                         for f in fields_to_scan:
                             if f == "keywords":
                                 haystack_parts.extend([self._normalize_text_for_search(k) for k in kws])

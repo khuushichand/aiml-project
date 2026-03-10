@@ -266,6 +266,12 @@ Suggested derived text shape:
 
 This avoids regressing search while keeping the canonical source structured.
 
+Implementation note:
+
+- regenerate the derived structured-search snapshot on prompt writes
+- merge that snapshot into the regular Prompts FTS index so enabled non-legacy blocks remain searchable without exposing `prompt_definition_json` as a user-facing query field
+- keep preview and execution parity covered by tests that compare Prompt Studio preview assembly against executor assembly with `few_shot_examples`, `modules_config`, and signatures applied
+
 ### 6.9 Local Sync and Conflict Detection
 
 The regular Prompts workspace currently syncs and detects conflicts using raw prompt text.
