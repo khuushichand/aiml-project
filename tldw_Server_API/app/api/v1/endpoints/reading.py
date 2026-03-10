@@ -77,6 +77,12 @@ from tldw_Server_API.app.core.feature_flags import (
 )
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as summarize_analyze
+from tldw_Server_API.app.core.Personalization.companion_activity import (
+    record_reading_item_archived,
+    record_reading_item_deleted,
+    record_reading_item_saved,
+    record_reading_item_updated,
+)
 from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSAuthenticationError,
@@ -506,7 +512,9 @@ async def save_reading_item(
             notes=payload.notes,
             archive_mode=payload.archive_mode,
         )
-        return _to_reading_item(result.item)
+        item = _to_reading_item(result.item)
+        record_reading_item_saved(user_id=current_user.id, item=item)
+        return item
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_save_failed: {exc}")
         raise HTTPException(status_code=400, detail="reading_save_failed") from exc
@@ -1121,7 +1129,9 @@ async def update_reading_item(
             notes=payload.notes,
             title=payload.title,
         )
-        return _to_reading_item(row)
+        item = _to_reading_item(row)
+        record_reading_item_updated(user_id=current_user.id, item=item)
+        return item
     except KeyError:
         raise HTTPException(status_code=404, detail="reading_item_not_found") from None
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
@@ -1144,8 +1154,11 @@ async def delete_reading_item(
     try:
         if hard:
             service.delete_item(item_id)
+            record_reading_item_deleted(user_id=current_user.id, item_id=item_id)
             return ReadingDeleteResponse(status="deleted", item_id=item_id, hard=True)
         row = service.update_item(item_id, status="archived")
+        item = _to_reading_item(row)
+        record_reading_item_archived(user_id=current_user.id, item=item)
         return ReadingDeleteResponse(status=row.status or "archived", item_id=item_id, hard=False)
     except KeyError:
         raise HTTPException(status_code=404, detail="reading_item_not_found") from None

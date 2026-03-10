@@ -67,6 +67,7 @@ from tldw_Server_API.app.core.Persona.memory_integration import (
     persist_tool_outcome,
     retrieve_top_memories,
 )
+from tldw_Server_API.app.core.Personalization.companion_activity import record_persona_session_started
 from tldw_Server_API.app.core.Persona.policy_evaluator import (
     default_allow_rules,
     evaluate_canonical_policy,
@@ -2011,6 +2012,7 @@ async def persona_session(
                         entity_id=str(req.resume_session_id),
                     )
 
+        created_new_session = session_row is None
         if session_row is None:
             scope_rules = db.list_persona_scope_rules(persona_id=persona_id, user_id=user_id, include_deleted=False)
             scope_snapshot, scope_audit = _build_scope_snapshot(scope_rules)
@@ -2047,7 +2049,7 @@ async def persona_session(
         allow_export, allow_delete = _get_persona_rbac_flags()
         scopes = sorted(_get_persona_session_scopes(allow_export=allow_export, allow_delete=allow_delete))
         scope_snapshot = session_row.get("scope_snapshot") or {}
-        return PersonaSessionResponse(
+        response = PersonaSessionResponse(
             session_id=session_id,
             persona=persona,
             scopes=scopes,
@@ -2055,6 +2057,15 @@ async def persona_session(
             scope_snapshot_id=_scope_snapshot_id_from_snapshot(scope_snapshot),
             scope_audit=scope_audit,
         )
+        if created_new_session:
+            record_persona_session_started(
+                user_id=_current_user.id,
+                session_id=response.session_id,
+                persona_id=response.persona.id,
+                runtime_mode=response.runtime_mode,
+                scope_snapshot_id=response.scope_snapshot_id,
+            )
+        return response
     except HTTPException:
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
