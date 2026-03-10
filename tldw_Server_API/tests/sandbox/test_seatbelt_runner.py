@@ -27,6 +27,38 @@ def test_seatbelt_preflight_allows_standard_when_explicitly_enabled(monkeypatch)
     assert "untrusted" not in result.supported_trust_levels
 
 
+def test_seatbelt_preflight_reports_missing_launcher(monkeypatch) -> None:
+    monkeypatch.setenv("TLDW_SANDBOX_SEATBELT_AVAILABLE", "1")
+    monkeypatch.setattr(seatbelt_module.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        seatbelt_module,
+        "vz_host_facts",
+        lambda: {"os": "darwin", "arch": "arm64", "apple_silicon": True},
+    )
+    monkeypatch.setattr(seatbelt_module, "_sandbox_exec_exists", lambda: False)
+
+    result = SeatbeltRunner().preflight(network_policy="deny_all")
+
+    assert result.available is False
+    assert "sandbox_exec_missing" in result.reasons
+
+
+def test_seatbelt_preflight_rejects_allowlist_even_when_launcher_exists(monkeypatch) -> None:
+    monkeypatch.setenv("TLDW_SANDBOX_SEATBELT_AVAILABLE", "1")
+    monkeypatch.setattr(seatbelt_module.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        seatbelt_module,
+        "vz_host_facts",
+        lambda: {"os": "darwin", "arch": "arm64", "apple_silicon": True},
+    )
+    monkeypatch.setattr(seatbelt_module, "_sandbox_exec_exists", lambda: True)
+
+    result = SeatbeltRunner().preflight(network_policy="allowlist")
+
+    assert result.available is False
+    assert "strict_allowlist_not_supported" in result.reasons
+
+
 def test_seatbelt_fake_run_completes(monkeypatch) -> None:
     monkeypatch.setenv("TLDW_SANDBOX_SEATBELT_FAKE_EXEC", "1")
 

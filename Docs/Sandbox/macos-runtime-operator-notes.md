@@ -65,6 +65,7 @@ Today, the image store implements template registration plus deterministic run-c
 ## Networking
 
 - `deny_all` is the intended strict baseline for the new macOS runtimes.
+- `seatbelt` only offers a best-effort deny-all claim via seatbelt policy; discovery should not be read as VM-grade or firewall-backed network isolation.
 - `strict_allowlist_not_supported` is still the expected result for:
   - `vz_linux`
   - `vz_macos`
@@ -99,6 +100,7 @@ ACP sandbox session creation now performs runtime preflight validation before ca
 
 - No real `vz_linux` or `vz_macos` guest command execution yet
 - `seatbelt` fake execution uses `TLDW_SANDBOX_SEATBELT_FAKE_EXEC=1`; real seatbelt execution is still absent
+- `seatbelt` availability depends on `sandbox-exec` existing on the host, but its summarized discovery payload still keeps `strict_deny_all_supported=false`
 - No APFS clone execution path yet
 - No allowlist networking for the new macOS runtimes
 - No warm-session VM reuse yet

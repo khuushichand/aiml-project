@@ -48,6 +48,7 @@ Current limitations:
 - Real `Virtualization.framework` execution is not implemented yet.
 - `vz_linux` and `vz_macos` require helper/template readiness plus `*_FAKE_EXEC=1`; otherwise discovery reports `real_execution_not_implemented`.
 - Strict allowlist networking is not implemented for `vz_linux`, `vz_macos`, or `seatbelt`.
+- `seatbelt` discovery may be `available=True` while `strict_deny_all_supported=False`; deny-all is a best-effort host policy claim, not a VM-grade guarantee.
 - Warm session VM reuse is not implemented yet.
 - `seatbelt` is intentionally conservative and should not be treated as equivalent to a VM boundary.
 

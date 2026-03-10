@@ -13,17 +13,25 @@ from ..runtime_capabilities import RuntimePreflightResult
 from ..streams import get_hub
 from .vz_common import vz_host_facts
 
+_SANDBOX_EXEC_PATH = "/usr/bin/sandbox-exec"
+
 
 def _truthy(value: str | None) -> bool:
     return is_truthy(value)
 
 
+def _sandbox_exec_exists() -> bool:
+    return bool(os.path.isfile(_SANDBOX_EXEC_PATH) and os.access(_SANDBOX_EXEC_PATH, os.X_OK))
+
+
 class SeatbeltRunner:
     """Host-local macOS runner for seatbelt-scoped trusted workloads.
 
-    This runner only supports discovery and a fake execution path today.
-    `untrusted` is never allowed, `standard` requires explicit opt-in, and real
-    seatbelt execution is still pending.
+    `untrusted` is never allowed, `standard` requires explicit opt-in, and
+    best-effort deny-all networking is not equivalent to a VM boundary. Real
+    seatbelt execution is still pending; the current implementation only has a
+    fake execution path, and launch readiness depends on `sandbox-exec` being
+    present on the macOS host.
     """
 
     runtime_type = RuntimeType.seatbelt
@@ -50,6 +58,8 @@ class SeatbeltRunner:
         availability_override = os.getenv("TLDW_SANDBOX_SEATBELT_AVAILABLE")
         if availability_override is not None and not _truthy(availability_override):
             reasons.append("seatbelt_unavailable")
+        if not _sandbox_exec_exists():
+            reasons.append("sandbox_exec_missing")
 
         if str(network_policy or "deny_all").strip().lower() == "allowlist":
             reasons.append("strict_allowlist_not_supported")

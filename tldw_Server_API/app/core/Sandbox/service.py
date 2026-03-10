@@ -959,7 +959,7 @@ class SandboxService:
                 "interactive_supported": False,
                 "egress_allowlist_supported": False,
                 "store_mode": store_mode,
-                "notes": "Host-local seatbelt process isolation for trusted workflows on macOS",
+                "notes": "Host-local seatbelt process isolation for trusted macOS workflows with best-effort deny-all networking; not VM-grade isolation",
                 **_preflight_fields(seatbelt_preflight),
             },
         ]
