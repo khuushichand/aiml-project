@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -9,6 +10,8 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 
 _VALID_SCOPE_TYPES = {"global", "org", "team", "user"}
+_VALID_TARGET_TYPES = {"default", "group", "persona"}
+_VALID_PROFILE_MODES = {"preset", "custom"}
 
 
 def _normalize_scope_type(scope_type: str | None) -> str:
@@ -33,6 +36,34 @@ def _to_bool(value: Any) -> bool:
     return text in {"1", "true", "t", "yes", "y"}
 
 
+def _normalize_target_type(target_type: str | None) -> str:
+    value = str(target_type or "").strip().lower()
+    if value not in _VALID_TARGET_TYPES:
+        raise ValueError(f"Invalid target_type: {target_type}")
+    return value
+
+
+def _normalize_profile_mode(mode: str | None) -> str:
+    value = str(mode or "").strip().lower()
+    if value not in _VALID_PROFILE_MODES:
+        raise ValueError(f"Invalid profile mode: {mode}")
+    return value
+
+
+def _load_json_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not raw:
+        return {}
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
 @dataclass
 class McpHubRepo:
     """Data access for MCP Hub ACP profiles and external server configuration."""
@@ -54,11 +85,19 @@ class McpHubRepo:
 
             required = {
                 "mcp_acp_profiles",
+                "mcp_approval_decisions",
+                "mcp_approval_policies",
+                "mcp_credential_bindings",
                 "mcp_external_servers",
                 "mcp_external_server_secrets",
+                "mcp_permission_profiles",
+                "mcp_policy_assignments",
+                "mcp_policy_audit_history",
+                "mcp_policy_overrides",
             }
+            placeholders = ", ".join("?" for _ in required)
             rows = await self.db_pool.fetchall(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?, ?)",
+                f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
                 tuple(required),
             )
             existing = {str(row["name"]) for row in rows}
@@ -105,6 +144,24 @@ class McpHubRepo:
         out = dict(row)
         out["enabled"] = _to_bool(out.get("enabled"))
         out["secret_configured"] = _to_bool(out.get("secret_configured"))
+        return out
+
+    @staticmethod
+    def _normalize_permission_profile_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        out = dict(row)
+        out["is_active"] = _to_bool(out.get("is_active"))
+        out["policy_document"] = _load_json_dict(out.pop("policy_document_json", None))
+        return out
+
+    @staticmethod
+    def _normalize_policy_assignment_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        out = dict(row)
+        out["is_active"] = _to_bool(out.get("is_active"))
+        out["inline_policy_document"] = _load_json_dict(out.pop("inline_policy_document_json", None))
         return out
 
     async def create_acp_profile(
@@ -270,6 +327,397 @@ class McpHubRepo:
         cursor = await self.db_pool.execute(
             "DELETE FROM mcp_acp_profiles WHERE id = ?",
             (int(profile_id),),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        return bool(rowcount and rowcount > 0)
+
+    async def create_permission_profile(
+        self,
+        *,
+        name: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        mode: str,
+        policy_document: dict[str, Any],
+        actor_id: int | None,
+        description: str | None = None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        scope_type = _normalize_scope_type(owner_scope_type)
+        profile_mode = _normalize_profile_mode(mode)
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = is_active if getattr(self.db_pool, "pool", None) is not None else int(is_active)
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_permission_profiles (
+                name, description, owner_scope_type, owner_scope_id, mode, policy_document_json, is_active,
+                created_by, updated_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name.strip(),
+                description,
+                scope_type,
+                owner_scope_id,
+                profile_mode,
+                json.dumps(policy_document or {}),
+                active_value,
+                actor_id,
+                actor_id,
+                ts,
+                ts,
+            ),
+        )
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id
+            FROM mcp_permission_profiles
+            WHERE name = ?
+              AND owner_scope_type = ?
+              AND (
+                (owner_scope_id IS NULL AND ? IS NULL)
+                OR owner_scope_id = ?
+              )
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (name.strip(), scope_type, owner_scope_id, owner_scope_id),
+        )
+        if not row:
+            return {}
+        created = await self.get_permission_profile(int(row["id"]))
+        return created or {}
+
+    async def get_permission_profile(self, profile_id: int) -> dict[str, Any] | None:
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, name, description, owner_scope_type, owner_scope_id, mode, policy_document_json, is_active,
+                   created_by, updated_by, created_at, updated_at
+            FROM mcp_permission_profiles
+            WHERE id = ?
+            """,
+            (int(profile_id),),
+        )
+        return self._normalize_permission_profile_row(self._row_to_dict(row) if row else None)
+
+    async def list_permission_profiles(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_scope_type = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not None
+            else None
+        )
+        normalized_scope_id = int(owner_scope_id) if owner_scope_id is not None else None
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, name, description, owner_scope_type, owner_scope_id, mode, policy_document_json, is_active,
+                   created_by, updated_by, created_at, updated_at
+            FROM mcp_permission_profiles
+            WHERE (? IS NULL OR owner_scope_type = ?)
+              AND (? IS NULL OR owner_scope_id = ?)
+            ORDER BY name, id
+            """,
+            (
+                normalized_scope_type,
+                normalized_scope_type,
+                normalized_scope_id,
+                normalized_scope_id,
+            ),
+        )
+        return [
+            self._normalize_permission_profile_row(self._row_to_dict(row)) or {}
+            for row in rows
+        ]
+
+    async def update_permission_profile(
+        self,
+        profile_id: int,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+        mode: str | None = None,
+        policy_document: dict[str, Any] | None = None,
+        is_active: bool | None = None,
+        actor_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_permission_profile(profile_id)
+        if not existing:
+            return None
+
+        next_name = name.strip() if name is not None else str(existing["name"])
+        next_description = description if description is not None else existing.get("description")
+        next_scope = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not None
+            else str(existing["owner_scope_type"])
+        )
+        next_scope_id = owner_scope_id if owner_scope_id is not None else existing.get("owner_scope_id")
+        next_mode = _normalize_profile_mode(mode) if mode is not None else str(existing["mode"])
+        next_policy_document = policy_document if policy_document is not None else dict(existing.get("policy_document") or {})
+        next_active = _to_bool(is_active) if is_active is not None else _to_bool(existing.get("is_active"))
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = next_active if getattr(self.db_pool, "pool", None) is not None else int(next_active)
+
+        await self.db_pool.execute(
+            """
+            UPDATE mcp_permission_profiles
+            SET name = ?,
+                description = ?,
+                owner_scope_type = ?,
+                owner_scope_id = ?,
+                mode = ?,
+                policy_document_json = ?,
+                is_active = ?,
+                updated_by = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                next_name,
+                next_description,
+                next_scope,
+                next_scope_id,
+                next_mode,
+                json.dumps(next_policy_document or {}),
+                active_value,
+                actor_id,
+                ts,
+                int(profile_id),
+            ),
+        )
+        return await self.get_permission_profile(profile_id)
+
+    async def delete_permission_profile(self, profile_id: int) -> bool:
+        cursor = await self.db_pool.execute(
+            "DELETE FROM mcp_permission_profiles WHERE id = ?",
+            (int(profile_id),),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        return bool(rowcount and rowcount > 0)
+
+    async def create_policy_assignment(
+        self,
+        *,
+        target_type: str,
+        target_id: str | None,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        profile_id: int | None,
+        inline_policy_document: dict[str, Any],
+        approval_policy_id: int | None,
+        actor_id: int | None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        normalized_target_type = _normalize_target_type(target_type)
+        normalized_target_id = str(target_id).strip() if target_id is not None else None
+        scope_type = _normalize_scope_type(owner_scope_type)
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = is_active if getattr(self.db_pool, "pool", None) is not None else int(is_active)
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_policy_assignments (
+                target_type, target_id, owner_scope_type, owner_scope_id, profile_id,
+                inline_policy_document_json, approval_policy_id, is_active,
+                created_by, updated_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_target_type,
+                normalized_target_id,
+                scope_type,
+                owner_scope_id,
+                profile_id,
+                json.dumps(inline_policy_document or {}),
+                approval_policy_id,
+                active_value,
+                actor_id,
+                actor_id,
+                ts,
+                ts,
+            ),
+        )
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id
+            FROM mcp_policy_assignments
+            WHERE target_type = ?
+              AND (
+                (target_id IS NULL AND ? IS NULL)
+                OR target_id = ?
+              )
+              AND owner_scope_type = ?
+              AND (
+                (owner_scope_id IS NULL AND ? IS NULL)
+                OR owner_scope_id = ?
+              )
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (
+                normalized_target_type,
+                normalized_target_id,
+                normalized_target_id,
+                scope_type,
+                owner_scope_id,
+                owner_scope_id,
+            ),
+        )
+        if not row:
+            return {}
+        created = await self.get_policy_assignment(int(row["id"]))
+        return created or {}
+
+    async def get_policy_assignment(self, assignment_id: int) -> dict[str, Any] | None:
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, target_type, target_id, owner_scope_type, owner_scope_id, profile_id,
+                   inline_policy_document_json, approval_policy_id, is_active,
+                   created_by, updated_by, created_at, updated_at
+            FROM mcp_policy_assignments
+            WHERE id = ?
+            """,
+            (int(assignment_id),),
+        )
+        return self._normalize_policy_assignment_row(self._row_to_dict(row) if row else None)
+
+    async def list_policy_assignments(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+        target_type: str | None = None,
+        target_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_scope_type = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not None
+            else None
+        )
+        normalized_scope_id = int(owner_scope_id) if owner_scope_id is not None else None
+        normalized_target_type = (
+            _normalize_target_type(target_type)
+            if target_type is not None
+            else None
+        )
+        normalized_target_id = str(target_id).strip() if target_id is not None else None
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, target_type, target_id, owner_scope_type, owner_scope_id, profile_id,
+                   inline_policy_document_json, approval_policy_id, is_active,
+                   created_by, updated_by, created_at, updated_at
+            FROM mcp_policy_assignments
+            WHERE (? IS NULL OR owner_scope_type = ?)
+              AND (? IS NULL OR owner_scope_id = ?)
+              AND (? IS NULL OR target_type = ?)
+              AND (? IS NULL OR target_id = ?)
+            ORDER BY target_type, target_id, id
+            """,
+            (
+                normalized_scope_type,
+                normalized_scope_type,
+                normalized_scope_id,
+                normalized_scope_id,
+                normalized_target_type,
+                normalized_target_type,
+                normalized_target_id,
+                normalized_target_id,
+            ),
+        )
+        return [
+            self._normalize_policy_assignment_row(self._row_to_dict(row)) or {}
+            for row in rows
+        ]
+
+    async def update_policy_assignment(
+        self,
+        assignment_id: int,
+        *,
+        target_type: str | None = None,
+        target_id: str | None = None,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+        profile_id: int | None = None,
+        inline_policy_document: dict[str, Any] | None = None,
+        approval_policy_id: int | None = None,
+        is_active: bool | None = None,
+        actor_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_policy_assignment(assignment_id)
+        if not existing:
+            return None
+
+        next_target_type = (
+            _normalize_target_type(target_type)
+            if target_type is not None
+            else str(existing["target_type"])
+        )
+        next_target_id = str(target_id).strip() if target_id is not None else existing.get("target_id")
+        next_scope = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not None
+            else str(existing["owner_scope_type"])
+        )
+        next_scope_id = owner_scope_id if owner_scope_id is not None else existing.get("owner_scope_id")
+        next_profile_id = profile_id if profile_id is not None else existing.get("profile_id")
+        next_inline_policy_document = (
+            inline_policy_document
+            if inline_policy_document is not None
+            else dict(existing.get("inline_policy_document") or {})
+        )
+        next_approval_policy_id = (
+            approval_policy_id
+            if approval_policy_id is not None
+            else existing.get("approval_policy_id")
+        )
+        next_active = _to_bool(is_active) if is_active is not None else _to_bool(existing.get("is_active"))
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = next_active if getattr(self.db_pool, "pool", None) is not None else int(next_active)
+
+        await self.db_pool.execute(
+            """
+            UPDATE mcp_policy_assignments
+            SET target_type = ?,
+                target_id = ?,
+                owner_scope_type = ?,
+                owner_scope_id = ?,
+                profile_id = ?,
+                inline_policy_document_json = ?,
+                approval_policy_id = ?,
+                is_active = ?,
+                updated_by = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                next_target_type,
+                next_target_id,
+                next_scope,
+                next_scope_id,
+                next_profile_id,
+                json.dumps(next_inline_policy_document or {}),
+                next_approval_policy_id,
+                active_value,
+                actor_id,
+                ts,
+                int(assignment_id),
+            ),
+        )
+        return await self.get_policy_assignment(assignment_id)
+
+    async def delete_policy_assignment(self, assignment_id: int) -> bool:
+        cursor = await self.db_pool.execute(
+            "DELETE FROM mcp_policy_assignments WHERE id = ?",
+            (int(assignment_id),),
         )
         rowcount = getattr(cursor, "rowcount", 0)
         return bool(rowcount and rowcount > 0)

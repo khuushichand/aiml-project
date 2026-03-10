@@ -1423,6 +1423,174 @@ def migration_055_create_mcp_hub_tables(conn: sqlite3.Connection) -> None:
     logger.info("Migration 055: Created MCP Hub tables")
 
 
+def migration_056_create_mcp_hub_policy_tables(conn: sqlite3.Connection) -> None:
+    """Create MCP Hub policy and approval tables (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_permission_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            mode TEXT NOT NULL DEFAULT 'custom',
+            policy_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(name, owner_scope_type, owner_scope_id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_scope "
+        "ON mcp_permission_profiles(owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_type TEXT NOT NULL,
+            target_id TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            profile_id INTEGER,
+            inline_policy_document_json TEXT NOT NULL DEFAULT '{}',
+            approval_policy_id INTEGER,
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (profile_id) REFERENCES mcp_permission_profiles(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_scope "
+        "ON mcp_policy_assignments(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_target "
+        "ON mcp_policy_assignments(target_type, target_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_overrides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            assignment_id INTEGER NOT NULL,
+            override_document_json TEXT NOT NULL DEFAULT '{}',
+            broadens_access INTEGER DEFAULT 0,
+            grant_authority_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (assignment_id) REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_overrides_assignment "
+        "ON mcp_policy_overrides(assignment_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_approval_policies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            mode TEXT NOT NULL,
+            rules_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_policies_scope "
+        "ON mcp_approval_policies(owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_approval_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            approval_policy_id INTEGER,
+            context_key TEXT NOT NULL,
+            conversation_id TEXT,
+            tool_name TEXT NOT NULL,
+            scope_key TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            expires_at TIMESTAMP,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (approval_policy_id) REFERENCES mcp_approval_policies(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_decisions_context "
+        "ON mcp_approval_decisions(context_key, conversation_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_credential_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            binding_target_type TEXT NOT NULL,
+            binding_target_id TEXT,
+            external_server_id TEXT NOT NULL,
+            credential_ref TEXT NOT NULL,
+            usage_rules_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (external_server_id) REFERENCES mcp_external_servers(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_credential_bindings_target "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_audit_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            previous_value_json TEXT NOT NULL DEFAULT '{}',
+            new_value_json TEXT NOT NULL DEFAULT '{}',
+            broadened_access INTEGER DEFAULT 0,
+            actor_id INTEGER,
+            grant_authority_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_audit_history_resource "
+        "ON mcp_policy_audit_history(resource_type, resource_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 056: Created MCP Hub policy tables")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
@@ -2855,6 +3023,11 @@ def get_authnz_migrations() -> list[Migration]:
             55,
             "Create MCP Hub tables",
             migration_055_create_mcp_hub_tables,
+        ),
+        Migration(
+            56,
+            "Create MCP Hub policy tables",
+            migration_056_create_mcp_hub_policy_tables,
         ),
     ]
 

@@ -18,14 +18,27 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
         WHERE table_schema = 'public'
           AND table_name IN (
             'mcp_acp_profiles',
+            'mcp_approval_decisions',
+            'mcp_approval_policies',
+            'mcp_credential_bindings',
             'mcp_external_servers',
-            'mcp_external_server_secrets'
+            'mcp_external_server_secrets',
+            'mcp_permission_profiles',
+            'mcp_policy_assignments',
+            'mcp_policy_audit_history',
+            'mcp_policy_overrides'
           )
         """
     )
     names = {str(row["table_name"]) for row in rows}
 
     assert "mcp_acp_profiles" in names
+    assert "mcp_approval_decisions" in names
+    assert "mcp_approval_policies" in names
+    assert "mcp_credential_bindings" in names
     assert "mcp_external_servers" in names
     assert "mcp_external_server_secrets" in names
-
+    assert "mcp_permission_profiles" in names
+    assert "mcp_policy_assignments" in names
+    assert "mcp_policy_audit_history" in names
+    assert "mcp_policy_overrides" in names
