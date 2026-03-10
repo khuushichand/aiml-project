@@ -37,6 +37,7 @@ class _FakeApprovalRepo:
         conversation_id: str | None,
         tool_name: str,
         scope_key: str,
+        decision: str | None = None,
         now: datetime | None = None,
     ) -> dict | None:
         current = now or datetime.now(timezone.utc)
@@ -51,6 +52,10 @@ class _FakeApprovalRepo:
                 continue
             if row.get("scope_key") != scope_key:
                 continue
+            if decision is not None and str(row.get("decision") or "").strip().lower() != str(decision).strip().lower():
+                continue
+            if row.get("consumed_at") is not None:
+                continue
             expires_at = row.get("expires_at")
             if expires_at is not None and expires_at <= current:
                 continue
@@ -61,6 +66,41 @@ class _FakeApprovalRepo:
         row = {"id": len(self.decisions) + 1, **kwargs}
         self.decisions.append(row)
         return row
+
+    async def consume_active_approval_decision(
+        self,
+        *,
+        approval_policy_id: int | None,
+        context_key: str,
+        conversation_id: str | None,
+        tool_name: str,
+        scope_key: str,
+        now: datetime | None = None,
+    ) -> dict | None:
+        current = now or datetime.now(timezone.utc)
+        for row in reversed(self.decisions):
+            if approval_policy_id is not None and int(row.get("approval_policy_id") or 0) != int(approval_policy_id):
+                continue
+            if row.get("context_key") != context_key:
+                continue
+            if row.get("conversation_id") != conversation_id:
+                continue
+            if row.get("tool_name") != tool_name:
+                continue
+            if row.get("scope_key") != scope_key:
+                continue
+            if str(row.get("decision") or "").strip().lower() != "approved":
+                continue
+            if not bool(row.get("consume_on_match")):
+                continue
+            if row.get("consumed_at") is not None:
+                continue
+            expires_at = row.get("expires_at")
+            if expires_at is not None and expires_at <= current:
+                continue
+            row["consumed_at"] = current
+            return dict(row)
+        return None
 
     async def expire_approval_decision(
         self,
@@ -197,7 +237,8 @@ async def test_approval_service_consumes_single_use_approval_after_first_match()
         tool_name=approval["tool_name"],
         scope_key=approval["scope_key"],
         decision="approved",
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+        expires_at=None,
+        consume_on_match=True,
         actor_id=7,
     )
 
@@ -236,6 +277,7 @@ async def test_approval_service_consumes_single_use_approval_after_first_match()
 @pytest.mark.asyncio
 async def test_approval_service_does_not_reuse_denied_decisions() -> None:
     from tldw_Server_API.app.services.mcp_hub_approval_service import McpHubApprovalService
+    from tldw_Server_API.app.services.mcp_hub_approval_service import _scope_key_for_tool_call
 
     repo = _FakeApprovalRepo()
     svc = McpHubApprovalService(repo=repo)
@@ -250,7 +292,7 @@ async def test_approval_service_does_not_reuse_denied_decisions() -> None:
         context_key="user:7|group:|persona:researcher",
         conversation_id="sess-1",
         tool_name="Bash",
-        scope_key="tool:Bash|command:a74e4c46f8e9a0f6",
+        scope_key=_scope_key_for_tool_call("Bash", {"command": "git status"}),
         decision="denied",
         expires_at=None,
         actor_id=7,
@@ -271,6 +313,61 @@ async def test_approval_service_does_not_reuse_denied_decisions() -> None:
     )
 
     assert result["status"] == "approval_required"
+
+
+@pytest.mark.asyncio
+async def test_approval_service_prefers_active_session_approval_over_newer_denial() -> None:
+    from tldw_Server_API.app.services.mcp_hub_approval_service import McpHubApprovalService
+    from tldw_Server_API.app.services.mcp_hub_approval_service import _scope_key_for_tool_call
+
+    repo = _FakeApprovalRepo()
+    svc = McpHubApprovalService(repo=repo)
+    context = SimpleNamespace(
+        user_id="7",
+        session_id="sess-1",
+        metadata={"persona_id": "researcher"},
+    )
+    scope_key = _scope_key_for_tool_call("Bash", {"command": "git status"})
+
+    await repo.create_approval_decision(
+        approval_policy_id=1,
+        context_key="user:7|group:|persona:researcher",
+        conversation_id="sess-1",
+        tool_name="Bash",
+        scope_key=scope_key,
+        decision="approved",
+        expires_at=None,
+        consume_on_match=False,
+        actor_id=7,
+    )
+    await repo.create_approval_decision(
+        approval_policy_id=1,
+        context_key="user:7|group:|persona:researcher",
+        conversation_id="sess-1",
+        tool_name="Bash",
+        scope_key=scope_key,
+        decision="denied",
+        expires_at=None,
+        consume_on_match=False,
+        actor_id=7,
+    )
+
+    result = await svc.evaluate_tool_call(
+        effective_policy={
+            "enabled": True,
+            "allowed_tools": ["notes.search"],
+            "approval_policy_id": 1,
+        },
+        tool_name="Bash",
+        tool_args={"command": "git status"},
+        context=context,
+        tool_def={"name": "Bash", "metadata": {"category": "management"}},
+        is_write=False,
+        within_effective_policy=False,
+    )
+
+    assert result["status"] == "allow"
+    assert result["reason"] == "active_approval"
 
 
 @pytest.mark.asyncio

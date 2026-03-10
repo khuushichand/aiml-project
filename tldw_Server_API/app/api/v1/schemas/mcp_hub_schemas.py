@@ -165,6 +165,7 @@ class ApprovalDecisionCreateRequest(BaseModel):
     tool_name: str = Field(..., min_length=1, max_length=255)
     scope_key: str = Field(..., min_length=1, max_length=255)
     decision: ApprovalDecision
+    consume_on_match: bool = False
     expires_at: datetime | str | None = None
 
 
@@ -176,7 +177,9 @@ class ApprovalDecisionResponse(BaseModel):
     tool_name: str
     scope_key: str
     decision: ApprovalDecision
+    consume_on_match: bool = False
     expires_at: datetime | str | None = None
+    consumed_at: datetime | str | None = None
     created_by: int | None = None
     created_at: datetime | str | None = None
 

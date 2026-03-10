@@ -225,6 +225,8 @@ class _FakePolicyService:
             "scope_key": kwargs["scope_key"],
             "decision": kwargs["decision"],
             "expires_at": kwargs.get("expires_at"),
+            "consume_on_match": bool(kwargs.get("consume_on_match")),
+            "consumed_at": kwargs.get("consumed_at"),
             "created_by": kwargs.get("actor_id"),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -407,6 +409,7 @@ def test_record_approval_decision_returns_created_payload() -> None:
                 "tool_name": "Bash",
                 "scope_key": "tool:Bash|command:abc123",
                 "decision": "approved",
+                "consume_on_match": True,
             },
         )
 
@@ -415,6 +418,7 @@ def test_record_approval_decision_returns_created_payload() -> None:
     assert payload["approval_policy_id"] == 17
     assert payload["context_key"] == "user:7|group:|persona:researcher"
     assert payload["decision"] == "approved"
+    assert payload["consume_on_match"] is True
 
 
 def test_record_approval_decision_rejects_foreign_context_key() -> None:

@@ -160,18 +160,18 @@ const _approvalRequestKey = (
     String(payload.step_idx ?? "").trim()
   ].join("|")
 
-const _approvalDecisionExpiresAt = (
+const _approvalDecisionPayload = (
   decision: "approved" | "denied",
   duration: string
-): string | null => {
-  if (decision === "denied") {
-    return new Date().toISOString()
+): { consume_on_match: boolean; expires_at: string | null } => {
+  if (decision !== "approved") {
+    return { consume_on_match: false, expires_at: null }
   }
   const normalized = String(duration || "").trim().toLowerCase()
   if (normalized === "once") {
-    return new Date(Date.now() + 60_000).toISOString()
+    return { consume_on_match: true, expires_at: null }
   }
-  return null
+  return { consume_on_match: false, expires_at: null }
 }
 
 const _readBoolPreference = (key: string, fallback: boolean): boolean => {
@@ -1141,6 +1141,7 @@ const SidepanelPersona = () => {
       approval: PersonaRuntimeApprovalRequest,
       decision: "approved" | "denied"
     ) => {
+      const approvalDecision = _approvalDecisionPayload(decision, approval.selected_duration)
       setSubmittingApprovalKey(approval.key)
       setError(null)
       try {
@@ -1155,7 +1156,8 @@ const SidepanelPersona = () => {
               tool_name: approval.tool_name,
               scope_key: approval.scope_key,
               decision,
-              expires_at: _approvalDecisionExpiresAt(decision, approval.selected_duration)
+              consume_on_match: approvalDecision.consume_on_match,
+              expires_at: approvalDecision.expires_at
             }
           }
         )

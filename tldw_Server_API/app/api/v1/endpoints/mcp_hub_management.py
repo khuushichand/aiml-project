@@ -338,7 +338,9 @@ def _approval_decision_row_to_response(row: dict[str, Any]) -> ApprovalDecisionR
         tool_name=str(row.get("tool_name") or ""),
         scope_key=str(row.get("scope_key") or ""),
         decision=str(row.get("decision") or "denied"),
+        consume_on_match=bool(row.get("consume_on_match")),
         expires_at=row.get("expires_at"),
+        consumed_at=row.get("consumed_at"),
         created_by=row.get("created_by"),
         created_at=row.get("created_at"),
     )
@@ -627,6 +629,7 @@ async def create_approval_decision(
         tool_name=payload.tool_name,
         scope_key=payload.scope_key,
         decision=payload.decision,
+        consume_on_match=payload.consume_on_match,
         expires_at=payload.expires_at,
         actor_id=actor_id,
     )

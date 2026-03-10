@@ -340,8 +340,9 @@ class McpHubService:
         tool_name: str,
         scope_key: str,
         decision: str,
-        expires_at: Any,
-        actor_id: int | None,
+        consume_on_match: bool = False,
+        expires_at: Any = None,
+        actor_id: int | None = None,
     ) -> dict[str, Any]:
         row = await self.repo.create_approval_decision(
             approval_policy_id=approval_policy_id,
@@ -350,6 +351,7 @@ class McpHubService:
             tool_name=tool_name,
             scope_key=scope_key,
             decision=decision,
+            consume_on_match=consume_on_match,
             expires_at=expires_at,
             actor_id=actor_id,
         )

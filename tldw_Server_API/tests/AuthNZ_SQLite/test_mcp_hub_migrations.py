@@ -36,3 +36,8 @@ async def test_mcp_hub_tables_exist_after_authnz_migrations_sqlite(tmp_path, mon
     assert "mcp_approval_decisions" in names
     assert "mcp_credential_bindings" in names
     assert "mcp_policy_audit_history" in names
+
+    columns = await pool.fetchall("PRAGMA table_info(mcp_approval_decisions)")
+    column_names = {str(row["name"]) for row in columns}
+    assert "consume_on_match" in column_names
+    assert "consumed_at" in column_names

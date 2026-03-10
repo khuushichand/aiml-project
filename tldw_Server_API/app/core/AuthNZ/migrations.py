@@ -1532,7 +1532,9 @@ def migration_056_create_mcp_hub_policy_tables(conn: sqlite3.Connection) -> None
             tool_name TEXT NOT NULL,
             scope_key TEXT NOT NULL,
             decision TEXT NOT NULL,
+            consume_on_match INTEGER DEFAULT 0,
             expires_at TIMESTAMP,
+            consumed_at TIMESTAMP,
             created_by INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (approval_policy_id) REFERENCES mcp_approval_policies(id) ON DELETE SET NULL
@@ -1589,6 +1591,25 @@ def migration_056_create_mcp_hub_policy_tables(conn: sqlite3.Connection) -> None
 
     conn.commit()
     logger.info("Migration 056: Created MCP Hub policy tables")
+
+
+def migration_057_add_consumable_mcp_approval_decision_columns(conn: sqlite3.Connection) -> None:
+    """Add explicit single-use approval columns to MCP Hub approval decisions."""
+
+    def add_col(name: str, decl: str) -> None:
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_approval_decisions)").fetchall()}
+        if name not in cols:
+            conn.execute(f"ALTER TABLE mcp_approval_decisions ADD COLUMN {decl}")
+
+    add_col("consume_on_match", "consume_on_match INTEGER DEFAULT 0")
+    add_col("consumed_at", "consumed_at TIMESTAMP")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_decisions_active "
+        "ON mcp_approval_decisions(context_key, conversation_id, tool_name, scope_key, decision, consumed_at)"
+    )
+
+    conn.commit()
+    logger.info("Migration 057: Added MCP approval decision consumption columns")
 
 
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
@@ -3028,6 +3049,11 @@ def get_authnz_migrations() -> list[Migration]:
             56,
             "Create MCP Hub policy tables",
             migration_056_create_mcp_hub_policy_tables,
+        ),
+        Migration(
+            57,
+            "Add consumable MCP approval decision columns",
+            migration_057_add_consumable_mcp_approval_decision_columns,
         ),
     ]
 

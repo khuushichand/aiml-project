@@ -83,8 +83,9 @@ class McpHubApprovalService:
         tool_name: str,
         scope_key: str,
         decision: str,
-        expires_at: datetime | None,
-        actor_id: int | None,
+        consume_on_match: bool = False,
+        expires_at: datetime | None = None,
+        actor_id: int | None = None,
     ) -> dict[str, Any]:
         return await self.repo.create_approval_decision(
             approval_policy_id=approval_policy_id,
@@ -93,6 +94,7 @@ class McpHubApprovalService:
             tool_name=tool_name,
             scope_key=scope_key,
             decision=decision,
+            consume_on_match=consume_on_match,
             expires_at=expires_at,
             actor_id=actor_id,
         )
@@ -140,16 +142,22 @@ class McpHubApprovalService:
             conversation_id=conversation_id,
             tool_name=tool_name,
             scope_key=scope_key,
+            decision="approved",
             now=datetime.now(timezone.utc),
         )
         if existing:
-            normalized_decision = str(existing.get("decision") or "").strip().lower()
-            if normalized_decision == "approved":
-                if existing.get("expires_at") is not None:
-                    await self.repo.expire_approval_decision(
-                        int(existing.get("id")),
-                        expires_at=datetime.now(timezone.utc),
-                    )
+            if bool(existing.get("consume_on_match")):
+                consumed = await self.repo.consume_active_approval_decision(
+                    approval_policy_id=int(approval_policy_id) if approval_policy_id is not None else None,
+                    context_key=context_key,
+                    conversation_id=conversation_id,
+                    tool_name=tool_name,
+                    scope_key=scope_key,
+                    now=datetime.now(timezone.utc),
+                )
+                if consumed:
+                    return {"status": "allow", "reason": "active_approval", "decision": consumed}
+            else:
                 return {"status": "allow", "reason": "active_approval", "decision": existing}
 
         should_require = False

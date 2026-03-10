@@ -300,9 +300,11 @@ async def test_repo_can_crud_approval_policy_and_match_active_decision(tmp_path,
         scope_key="tool:Bash|command:git-status",
         decision="approved",
         expires_at=expires_at,
+        consume_on_match=False,
         actor_id=7,
     )
     assert decision["decision"] == "approved"
+    assert decision["consume_on_match"] is False
 
     matched = await repo.find_active_approval_decision(
         approval_policy_id=int(policy["id"]),
@@ -310,6 +312,7 @@ async def test_repo_can_crud_approval_policy_and_match_active_decision(tmp_path,
         conversation_id="sess-1",
         tool_name="Bash",
         scope_key="tool:Bash|command:git-status",
+        decision="approved",
         now=datetime.now(timezone.utc),
     )
     assert matched is not None
@@ -328,9 +331,45 @@ async def test_repo_can_crud_approval_policy_and_match_active_decision(tmp_path,
         conversation_id="sess-1",
         tool_name="Bash",
         scope_key="tool:Bash|command:git-status",
+        decision="approved",
         now=datetime.now(timezone.utc),
     )
     assert after_consume is None
+
+    single_use = await repo.create_approval_decision(
+        approval_policy_id=int(policy["id"]),
+        context_key="user:7|persona:researcher",
+        conversation_id="sess-1",
+        tool_name="Bash",
+        scope_key="tool:Bash|command:git-status",
+        decision="approved",
+        expires_at=None,
+        consume_on_match=True,
+        actor_id=7,
+    )
+    assert single_use["consume_on_match"] is True
+
+    consumed = await repo.consume_active_approval_decision(
+        approval_policy_id=int(policy["id"]),
+        context_key="user:7|persona:researcher",
+        conversation_id="sess-1",
+        tool_name="Bash",
+        scope_key="tool:Bash|command:git-status",
+        now=datetime.now(timezone.utc),
+    )
+    assert consumed is not None
+    assert consumed["id"] == single_use["id"]
+    assert consumed["consumed_at"] is not None
+
+    consumed_again = await repo.consume_active_approval_decision(
+        approval_policy_id=int(policy["id"]),
+        context_key="user:7|persona:researcher",
+        conversation_id="sess-1",
+        tool_name="Bash",
+        scope_key="tool:Bash|command:git-status",
+        now=datetime.now(timezone.utc),
+    )
+    assert consumed_again is None
 
     deleted = await repo.delete_approval_policy(int(policy["id"]))
     assert deleted is True

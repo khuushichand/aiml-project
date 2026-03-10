@@ -168,6 +168,7 @@ export type McpHubApprovalDecisionCreateInput = {
   tool_name: string
   scope_key: string
   decision: McpHubApprovalDecision
+  consume_on_match?: boolean
   expires_at?: string | null
 }
 
@@ -179,7 +180,9 @@ export type McpHubApprovalDecisionResponse = {
   tool_name: string
   scope_key: string
   decision: McpHubApprovalDecision
+  consume_on_match: boolean
   expires_at?: string | null
+  consumed_at?: string | null
   created_by?: number | null
   created_at?: string | null
 }

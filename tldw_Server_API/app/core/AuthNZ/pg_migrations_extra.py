@@ -249,16 +249,25 @@ _CREATE_MCP_HUB_TABLES = [
             tool_name TEXT NOT NULL,
             scope_key TEXT NOT NULL,
             decision TEXT NOT NULL,
+            consume_on_match BOOLEAN DEFAULT FALSE,
             expires_at TIMESTAMPTZ NULL,
+            consumed_at TIMESTAMPTZ NULL,
             created_by INTEGER NULL,
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
         """,
         (),
     ),
+    ("ALTER TABLE mcp_approval_decisions ADD COLUMN IF NOT EXISTS consume_on_match BOOLEAN DEFAULT FALSE", ()),
+    ("ALTER TABLE mcp_approval_decisions ADD COLUMN IF NOT EXISTS consumed_at TIMESTAMPTZ", ()),
     (
         "CREATE INDEX IF NOT EXISTS idx_mcp_approval_decisions_context "
         "ON mcp_approval_decisions(context_key, conversation_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_decisions_active "
+        "ON mcp_approval_decisions(context_key, conversation_id, tool_name, scope_key, decision, consumed_at)",
         (),
     ),
     (

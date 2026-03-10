@@ -547,6 +547,7 @@ describe("SidepanelPersona", () => {
               approval_policy_id?: number
               tool_name?: string
               decision?: string
+              consume_on_match?: boolean
               expires_at?: string | null
             }
           }
@@ -554,17 +555,18 @@ describe("SidepanelPersona", () => {
       ).toMatchObject({
         approval_policy_id: 17,
         tool_name: "knowledge.search",
-        decision: "approved"
+        decision: "approved",
+        consume_on_match: true,
       })
       expect(
-        typeof (
+        (
           approvalCall?.[1] as {
             body?: {
               expires_at?: string | null
             }
           }
-        )?.body?.expires_at
-      ).toBe("string")
+        )?.body?.expires_at ?? null
+      ).toBeNull()
       const sentPayloads = getSentPayloads(ws)
       expect(
         sentPayloads.some(
@@ -675,13 +677,14 @@ describe("SidepanelPersona", () => {
         approvalCall?.[1] as {
           body?: {
             decision?: string
+            consume_on_match?: boolean
             expires_at?: string | null
           }
         }
       )?.body
       expect(body?.decision).toBe("denied")
-      expect(typeof body?.expires_at).toBe("string")
-      expect(Date.parse(String(body?.expires_at))).not.toBeNaN()
+      expect(body?.consume_on_match ?? false).toBe(false)
+      expect(body?.expires_at ?? null).toBeNull()
       const sentPayloads = getSentPayloads(ws)
       expect(sentPayloads.some((payload) => payload.type === "retry_tool_call")).toBe(false)
     })

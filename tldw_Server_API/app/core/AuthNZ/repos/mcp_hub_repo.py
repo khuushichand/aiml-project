@@ -192,7 +192,20 @@ class McpHubRepo:
     def _normalize_approval_decision_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
         if row is None:
             return None
-        return dict(row)
+        out = dict(row)
+        out["consume_on_match"] = _to_bool(out.get("consume_on_match"))
+        return out
+
+    @staticmethod
+    def _command_touched_rows(result: Any) -> bool:
+        if result is None:
+            return False
+        if isinstance(result, str):
+            return result.upper().startswith(("UPDATE ", "DELETE ", "INSERT "))
+        rowcount = getattr(result, "rowcount", None)
+        if isinstance(rowcount, int):
+            return rowcount > 0
+        return False
 
     async def create_acp_profile(
         self,
@@ -950,8 +963,9 @@ class McpHubRepo:
         tool_name: str,
         scope_key: str,
         decision: str,
-        expires_at: datetime | str | None,
-        actor_id: int | None,
+        consume_on_match: bool = False,
+        expires_at: datetime | str | None = None,
+        actor_id: int | None = None,
     ) -> dict[str, Any]:
         normalized_decision = str(decision or "").strip().lower()
         if normalized_decision not in {"approved", "denied"}:
@@ -959,14 +973,19 @@ class McpHubRepo:
         normalized_expires_at = expires_at
         if isinstance(expires_at, datetime) and getattr(self.db_pool, "pool", None) is None:
             normalized_expires_at = expires_at.isoformat()
+        consume_value: bool | int = (
+            bool(consume_on_match)
+            if getattr(self.db_pool, "pool", None) is not None
+            else int(bool(consume_on_match))
+        )
         now = datetime.now(timezone.utc)
         created_at = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         await self.db_pool.execute(
             """
             INSERT INTO mcp_approval_decisions (
                 approval_policy_id, context_key, conversation_id, tool_name, scope_key,
-                decision, expires_at, created_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                decision, consume_on_match, expires_at, consumed_at, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 approval_policy_id,
@@ -975,7 +994,9 @@ class McpHubRepo:
                 str(tool_name).strip(),
                 str(scope_key).strip(),
                 normalized_decision,
+                consume_value,
                 normalized_expires_at,
+                None,
                 actor_id,
                 created_at,
             ),
@@ -983,7 +1004,7 @@ class McpHubRepo:
         row = await self.db_pool.fetchone(
             """
             SELECT id, approval_policy_id, context_key, conversation_id, tool_name, scope_key,
-                   decision, expires_at, created_by, created_at
+                   decision, consume_on_match, expires_at, consumed_at, created_by, created_at
             FROM mcp_approval_decisions
             WHERE context_key = ?
               AND (
@@ -1013,12 +1034,13 @@ class McpHubRepo:
         conversation_id: str | None,
         tool_name: str,
         scope_key: str,
+        decision: str | None = None,
         now: datetime | None = None,
     ) -> dict[str, Any] | None:
         rows = await self.db_pool.fetchall(
             """
             SELECT id, approval_policy_id, context_key, conversation_id, tool_name, scope_key,
-                   decision, expires_at, created_by, created_at
+                   decision, consume_on_match, expires_at, consumed_at, created_by, created_at
             FROM mcp_approval_decisions
             WHERE (? IS NULL OR approval_policy_id = ?)
               AND context_key = ?
@@ -1029,6 +1051,7 @@ class McpHubRepo:
               )
               AND tool_name = ?
               AND scope_key = ?
+              AND (? IS NULL OR decision = ?)
             ORDER BY id DESC
             """,
             (
@@ -1039,11 +1062,15 @@ class McpHubRepo:
                 str(conversation_id).strip() if conversation_id is not None else None,
                 str(tool_name).strip(),
                 str(scope_key).strip(),
+                str(decision).strip().lower() if decision is not None else None,
+                str(decision).strip().lower() if decision is not None else None,
             ),
         )
         current = now or datetime.now(timezone.utc)
         for row in rows:
             normalized = self._normalize_approval_decision_row(self._row_to_dict(row)) or {}
+            if normalized.get("consumed_at") is not None:
+                continue
             expires_at = normalized.get("expires_at")
             if expires_at:
                 try:
@@ -1058,6 +1085,129 @@ class McpHubRepo:
                     continue
             return normalized
         return None
+
+    async def consume_active_approval_decision(
+        self,
+        *,
+        approval_policy_id: int | None,
+        context_key: str,
+        conversation_id: str | None,
+        tool_name: str,
+        scope_key: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        consume_time = now or datetime.now(timezone.utc)
+        conversation_value = str(conversation_id).strip() if conversation_id is not None else None
+        if getattr(self.db_pool, "pool", None) is not None:
+            async with self.db_pool.transaction() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT id, approval_policy_id, context_key, conversation_id, tool_name, scope_key,
+                           decision, consume_on_match, expires_at, consumed_at, created_by, created_at
+                    FROM mcp_approval_decisions
+                    WHERE ($1::INTEGER IS NULL OR approval_policy_id = $1)
+                      AND context_key = $2
+                      AND (
+                        ($3::TEXT IS NULL AND conversation_id IS NULL)
+                        OR conversation_id = $3
+                        OR conversation_id IS NULL
+                      )
+                      AND tool_name = $4
+                      AND scope_key = $5
+                      AND decision = 'approved'
+                      AND consume_on_match = TRUE
+                      AND consumed_at IS NULL
+                      AND (expires_at IS NULL OR expires_at > $6)
+                    ORDER BY id DESC
+                    LIMIT 1
+                    FOR UPDATE
+                    """,
+                    approval_policy_id,
+                    str(context_key).strip(),
+                    conversation_value,
+                    str(tool_name).strip(),
+                    str(scope_key).strip(),
+                    consume_time,
+                )
+                if not row:
+                    return None
+
+                result = await conn.execute(
+                    """
+                    UPDATE mcp_approval_decisions
+                    SET consumed_at = $1
+                    WHERE id = $2
+                      AND decision = 'approved'
+                      AND consume_on_match = TRUE
+                      AND consumed_at IS NULL
+                    """,
+                    consume_time,
+                    int(row["id"]),
+                )
+                if not self._command_touched_rows(result):
+                    return None
+
+                item = self._normalize_approval_decision_row(self._row_to_dict(row)) or {}
+                item["consumed_at"] = consume_time
+                return item
+
+        async with self.db_pool.transaction() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT id, approval_policy_id, context_key, conversation_id, tool_name, scope_key,
+                       decision, consume_on_match, expires_at, consumed_at, created_by, created_at
+                FROM mcp_approval_decisions
+                WHERE (? IS NULL OR approval_policy_id = ?)
+                  AND context_key = ?
+                  AND (
+                    (? IS NULL AND conversation_id IS NULL)
+                    OR conversation_id = ?
+                    OR conversation_id IS NULL
+                  )
+                  AND tool_name = ?
+                  AND scope_key = ?
+                  AND decision = 'approved'
+                  AND consume_on_match = 1
+                  AND consumed_at IS NULL
+                  AND (expires_at IS NULL OR datetime(expires_at) > datetime(?))
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (
+                    approval_policy_id,
+                    approval_policy_id,
+                    str(context_key).strip(),
+                    conversation_value,
+                    conversation_value,
+                    str(tool_name).strip(),
+                    str(scope_key).strip(),
+                    consume_time.isoformat(),
+                ),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+
+            update_cursor = await conn.execute(
+                """
+                UPDATE mcp_approval_decisions
+                SET consumed_at = ?
+                WHERE id = ?
+                  AND decision = 'approved'
+                  AND consume_on_match = 1
+                  AND consumed_at IS NULL
+                """,
+                (
+                    consume_time.isoformat(),
+                    int(row["id"]),
+                ),
+            )
+            if not self._command_touched_rows(update_cursor):
+                return None
+
+            item = self._normalize_approval_decision_row(self._row_to_dict(row)) or {}
+            item["consumed_at"] = consume_time.isoformat()
+            return item
 
     async def expire_approval_decision(
         self,
@@ -1082,7 +1232,7 @@ class McpHubRepo:
         row = await self.db_pool.fetchone(
             """
             SELECT id, approval_policy_id, context_key, conversation_id, tool_name, scope_key,
-                   decision, expires_at, created_by, created_at
+                   decision, consume_on_match, expires_at, consumed_at, created_by, created_at
             FROM mcp_approval_decisions
             WHERE id = ?
             """,
