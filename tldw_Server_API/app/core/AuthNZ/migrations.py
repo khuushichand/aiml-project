@@ -1482,8 +1482,9 @@ def migration_056_create_mcp_hub_policy_tables(conn: sqlite3.Connection) -> None
         """
         CREATE TABLE IF NOT EXISTS mcp_policy_overrides (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            assignment_id INTEGER NOT NULL,
+            assignment_id INTEGER NOT NULL UNIQUE,
             override_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
             broadens_access INTEGER DEFAULT 0,
             grant_authority_snapshot_json TEXT NOT NULL DEFAULT '{}',
             created_by INTEGER,
@@ -1495,7 +1496,7 @@ def migration_056_create_mcp_hub_policy_tables(conn: sqlite3.Connection) -> None
         """
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_overrides_assignment "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_policy_overrides_assignment "
         "ON mcp_policy_overrides(assignment_id)"
     )
 
@@ -1610,6 +1611,21 @@ def migration_057_add_consumable_mcp_approval_decision_columns(conn: sqlite3.Con
 
     conn.commit()
     logger.info("Migration 057: Added MCP approval decision consumption columns")
+
+
+def migration_058_harden_mcp_policy_override_schema(conn: sqlite3.Connection) -> None:
+    """Add override activity tracking and enforce a 1:1 assignment override mapping."""
+
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_policy_overrides)").fetchall()}
+    if "is_active" not in cols:
+        conn.execute("ALTER TABLE mcp_policy_overrides ADD COLUMN is_active INTEGER DEFAULT 1")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_policy_overrides_assignment "
+        "ON mcp_policy_overrides(assignment_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 058: Hardened MCP policy override schema")
 
 
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
@@ -3054,6 +3070,11 @@ def get_authnz_migrations() -> list[Migration]:
             57,
             "Add consumable MCP approval decision columns",
             migration_057_add_consumable_mcp_approval_decision_columns,
+        ),
+        Migration(
+            58,
+            "Harden MCP policy override schema",
+            migration_058_harden_mcp_policy_override_schema,
         ),
     ]
 

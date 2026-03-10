@@ -142,7 +142,7 @@ export const PolicyDocumentEditor = ({
             <Alert
               type="warning"
               showIcon
-              message="Advanced policy fields are present and will be preserved."
+              title="Advanced policy fields are present and will be preserved."
               description={[
                 advancedKeys.length > 0 ? `Advanced keys: ${advancedKeys.join(", ")}` : null,
                 selection.preservedPatterns.length > 0
@@ -249,7 +249,7 @@ export const PolicyDocumentEditor = ({
         </Space>
       ) : (
         <Space orientation="vertical" style={{ width: "100%" }}>
-          {advancedError ? <Alert type="error" showIcon message={advancedError} /> : null}
+          {advancedError ? <Alert type="error" showIcon title={advancedError} /> : null}
           <label htmlFor={`${formId}-advanced-policy`}>Policy JSON</label>
           <textarea
             id={`${formId}-advanced-policy`}

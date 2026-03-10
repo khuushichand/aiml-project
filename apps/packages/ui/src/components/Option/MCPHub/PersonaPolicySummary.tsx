@@ -65,6 +65,9 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
               <Tag key={capability}>{capability}</Tag>
             ))}
             {policy.approval_mode ? <Tag color="gold">{policy.approval_mode}</Tag> : null}
+            {policy.provenance.some((entry) => entry.source_kind === "assignment_override") ? (
+              <Tag color="cyan">Override active</Tag>
+            ) : null}
           </Space>
           <Space wrap>
             {policy.allowed_tools.map((tool) => (

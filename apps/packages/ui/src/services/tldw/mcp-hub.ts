@@ -101,6 +101,10 @@ export type McpHubPolicyAssignment = {
   inline_policy_document: McpHubPermissionPolicyDocument
   approval_policy_id?: number | null
   is_active: boolean
+  has_override?: boolean
+  override_id?: number | null
+  override_active?: boolean
+  override_updated_at?: string | null
   created_by?: number | null
   updated_by?: number | null
   created_at?: string | null
@@ -189,6 +193,22 @@ export type McpHubApprovalDecisionResponse = {
   created_at?: string | null
 }
 
+export type McpHubPolicyOverride = {
+  id: number
+  assignment_id: number
+  override_policy_document: McpHubPermissionPolicyDocument
+  is_active: boolean
+  created_by?: number | null
+  updated_by?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type McpHubPolicyOverrideUpsertInput = {
+  override_policy_document?: McpHubPermissionPolicyDocument
+  is_active?: boolean
+}
+
 export type McpHubEffectivePolicySource = {
   assignment_id: number
   target_type: McpHubAssignmentTargetType
@@ -196,6 +216,16 @@ export type McpHubEffectivePolicySource = {
   owner_scope_type: McpHubScopeType
   owner_scope_id?: number | null
   profile_id?: number | null
+}
+
+export type McpHubEffectivePolicyProvenance = {
+  field: string
+  value: unknown
+  source_kind: "profile" | "assignment_inline" | "assignment_override"
+  assignment_id: number
+  profile_id?: number | null
+  override_id?: number | null
+  effect: "merged" | "replaced"
 }
 
 export type McpHubEffectivePolicy = {
@@ -207,6 +237,7 @@ export type McpHubEffectivePolicy = {
   approval_mode?: McpHubApprovalMode | null
   policy_document: Record<string, unknown>
   sources: McpHubEffectivePolicySource[]
+  provenance: McpHubEffectivePolicyProvenance[]
 }
 
 export type McpHubToolRegistryEntry = {
@@ -487,6 +518,35 @@ export const deletePolicyAssignment = async (
 ): Promise<{ ok: boolean }> => {
   return await bgRequestClient<{ ok: boolean }>({
     path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}`,
+    method: "DELETE"
+  })
+}
+
+export const getPolicyAssignmentOverride = async (
+  assignmentId: number
+): Promise<McpHubPolicyOverride> => {
+  return await bgRequestClient<McpHubPolicyOverride>({
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/override`,
+    method: "GET"
+  })
+}
+
+export const upsertPolicyAssignmentOverride = async (
+  assignmentId: number,
+  payload: McpHubPolicyOverrideUpsertInput
+): Promise<McpHubPolicyOverride> => {
+  return await bgRequestClient<McpHubPolicyOverride>({
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/override`,
+    method: "PUT",
+    body: payload
+  })
+}
+
+export const deletePolicyAssignmentOverride = async (
+  assignmentId: number
+): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/override`,
     method: "DELETE"
   })
 }

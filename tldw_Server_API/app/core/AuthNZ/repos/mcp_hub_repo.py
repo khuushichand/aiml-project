@@ -177,6 +177,23 @@ class McpHubRepo:
         out = dict(row)
         out["is_active"] = _to_bool(out.get("is_active"))
         out["inline_policy_document"] = _load_json_dict(out.pop("inline_policy_document_json", None))
+        out["has_override"] = _to_bool(out.get("has_override"))
+        out["override_active"] = _to_bool(out.get("override_active"))
+        if out.get("override_id") is None:
+            out["override_active"] = False
+        return out
+
+    @staticmethod
+    def _normalize_policy_override_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        out = dict(row)
+        out["is_active"] = _to_bool(out.get("is_active"))
+        out["broadens_access"] = _to_bool(out.get("broadens_access"))
+        out["override_policy_document"] = _load_json_dict(out.pop("override_document_json", None))
+        out["grant_authority_snapshot"] = _load_json_dict(
+            out.pop("grant_authority_snapshot_json", None)
+        )
         return out
 
     @staticmethod
@@ -626,11 +643,16 @@ class McpHubRepo:
     async def get_policy_assignment(self, assignment_id: int) -> dict[str, Any] | None:
         row = await self.db_pool.fetchone(
             """
-            SELECT id, target_type, target_id, owner_scope_type, owner_scope_id, profile_id,
-                   inline_policy_document_json, approval_policy_id, is_active,
-                   created_by, updated_by, created_at, updated_at
-            FROM mcp_policy_assignments
-            WHERE id = ?
+            SELECT a.id, a.target_type, a.target_id, a.owner_scope_type, a.owner_scope_id, a.profile_id,
+                   a.inline_policy_document_json, a.approval_policy_id, a.is_active,
+                   a.created_by, a.updated_by, a.created_at, a.updated_at,
+                   o.id AS override_id,
+                   CASE WHEN o.id IS NULL THEN 0 ELSE 1 END AS has_override,
+                   COALESCE(o.is_active, 0) AS override_active,
+                   o.updated_at AS override_updated_at
+            FROM mcp_policy_assignments AS a
+            LEFT JOIN mcp_policy_overrides AS o ON o.assignment_id = a.id
+            WHERE a.id = ?
             """,
             (int(assignment_id),),
         )
@@ -658,15 +680,20 @@ class McpHubRepo:
         normalized_target_id = str(target_id).strip() if target_id is not None else None
         rows = await self.db_pool.fetchall(
             """
-            SELECT id, target_type, target_id, owner_scope_type, owner_scope_id, profile_id,
-                   inline_policy_document_json, approval_policy_id, is_active,
-                   created_by, updated_by, created_at, updated_at
-            FROM mcp_policy_assignments
-            WHERE (? IS NULL OR owner_scope_type = ?)
-              AND (? IS NULL OR owner_scope_id = ?)
-              AND (? IS NULL OR target_type = ?)
-              AND (? IS NULL OR target_id = ?)
-            ORDER BY target_type, target_id, id
+            SELECT a.id, a.target_type, a.target_id, a.owner_scope_type, a.owner_scope_id, a.profile_id,
+                   a.inline_policy_document_json, a.approval_policy_id, a.is_active,
+                   a.created_by, a.updated_by, a.created_at, a.updated_at,
+                   o.id AS override_id,
+                   CASE WHEN o.id IS NULL THEN 0 ELSE 1 END AS has_override,
+                   COALESCE(o.is_active, 0) AS override_active,
+                   o.updated_at AS override_updated_at
+            FROM mcp_policy_assignments AS a
+            LEFT JOIN mcp_policy_overrides AS o ON o.assignment_id = a.id
+            WHERE (? IS NULL OR a.owner_scope_type = ?)
+              AND (? IS NULL OR a.owner_scope_id = ?)
+              AND (? IS NULL OR a.target_type = ?)
+              AND (? IS NULL OR a.target_id = ?)
+            ORDER BY a.target_type, a.target_id, a.id
             """,
             (
                 normalized_scope_type,
@@ -769,6 +796,75 @@ class McpHubRepo:
     async def delete_policy_assignment(self, assignment_id: int) -> bool:
         cursor = await self.db_pool.execute(
             "DELETE FROM mcp_policy_assignments WHERE id = ?",
+            (int(assignment_id),),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        return bool(rowcount and rowcount > 0)
+
+    async def get_policy_override_by_assignment(self, assignment_id: int) -> dict[str, Any] | None:
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, assignment_id, override_document_json, is_active, broadens_access,
+                   grant_authority_snapshot_json, created_by, updated_by, created_at, updated_at
+            FROM mcp_policy_overrides
+            WHERE assignment_id = ?
+            """,
+            (int(assignment_id),),
+        )
+        return self._normalize_policy_override_row(self._row_to_dict(row) if row else None)
+
+    async def upsert_policy_override(
+        self,
+        assignment_id: int,
+        *,
+        override_policy_document: dict[str, Any],
+        broadens_access: bool,
+        grant_authority_snapshot: dict[str, Any],
+        actor_id: int | None,
+        is_active: bool = True,
+    ) -> dict[str, Any] | None:
+        assignment = await self.get_policy_assignment(int(assignment_id))
+        if assignment is None:
+            return None
+
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = is_active if getattr(self.db_pool, "pool", None) is not None else int(is_active)
+        broadens_value: bool | int = (
+            broadens_access if getattr(self.db_pool, "pool", None) is not None else int(broadens_access)
+        )
+
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_policy_overrides (
+                assignment_id, override_document_json, is_active, broadens_access,
+                grant_authority_snapshot_json, created_by, updated_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(assignment_id) DO UPDATE SET
+                override_document_json = excluded.override_document_json,
+                is_active = excluded.is_active,
+                broadens_access = excluded.broadens_access,
+                grant_authority_snapshot_json = excluded.grant_authority_snapshot_json,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(assignment_id),
+                json.dumps(override_policy_document or {}),
+                active_value,
+                broadens_value,
+                json.dumps(grant_authority_snapshot or {}),
+                actor_id,
+                actor_id,
+                ts,
+                ts,
+            ),
+        )
+        return await self.get_policy_override_by_assignment(int(assignment_id))
+
+    async def delete_policy_override_by_assignment(self, assignment_id: int) -> bool:
+        cursor = await self.db_pool.execute(
+            "DELETE FROM mcp_policy_overrides WHERE assignment_id = ?",
             (int(assignment_id),),
         )
         rowcount = getattr(cursor, "rowcount", 0)

@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 ScopeType = Literal["global", "org", "team", "user"]
 ProfileMode = Literal["preset", "custom"]
 AssignmentTargetType = Literal["default", "group", "persona"]
+PolicyProvenanceSourceKind = Literal["profile", "assignment_inline", "assignment_override"]
+PolicyProvenanceEffect = Literal["merged", "replaced"]
 ApprovalMode = Literal[
     "allow_silently",
     "ask_every_time",
@@ -120,6 +122,26 @@ class PolicyAssignmentResponse(BaseModel):
     inline_policy_document: dict[str, Any] = Field(default_factory=dict)
     approval_policy_id: int | None = None
     is_active: bool
+    has_override: bool = False
+    override_id: int | None = None
+    override_active: bool = False
+    override_updated_at: datetime | str | None = None
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
+class PolicyOverrideUpsertRequest(BaseModel):
+    override_policy_document: dict[str, Any] = Field(default_factory=dict)
+    is_active: bool = True
+
+
+class PolicyOverrideResponse(BaseModel):
+    id: int
+    assignment_id: int
+    override_policy_document: dict[str, Any] = Field(default_factory=dict)
+    is_active: bool
     created_by: int | None = None
     updated_by: int | None = None
     created_at: datetime | str | None = None
@@ -195,6 +217,16 @@ class EffectivePolicySourceResponse(BaseModel):
     profile_id: int | None = None
 
 
+class EffectivePolicyProvenanceResponse(BaseModel):
+    field: str
+    value: Any
+    source_kind: PolicyProvenanceSourceKind
+    assignment_id: int
+    profile_id: int | None = None
+    override_id: int | None = None
+    effect: PolicyProvenanceEffect
+
+
 class EffectivePolicyResponse(BaseModel):
     enabled: bool
     allowed_tools: list[str] = Field(default_factory=list)
@@ -204,6 +236,7 @@ class EffectivePolicyResponse(BaseModel):
     approval_mode: ApprovalMode | None = None
     policy_document: dict[str, Any] = Field(default_factory=dict)
     sources: list[EffectivePolicySourceResponse] = Field(default_factory=list)
+    provenance: list[EffectivePolicyProvenanceResponse] = Field(default_factory=list)
 
 
 class ToolRegistryEntryResponse(BaseModel):

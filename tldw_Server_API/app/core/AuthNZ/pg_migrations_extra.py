@@ -198,8 +198,9 @@ _CREATE_MCP_HUB_TABLES = [
         """
         CREATE TABLE IF NOT EXISTS mcp_policy_overrides (
             id SERIAL PRIMARY KEY,
-            assignment_id INTEGER NOT NULL REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE,
+            assignment_id INTEGER NOT NULL UNIQUE REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE,
             override_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active BOOLEAN DEFAULT TRUE,
             broadens_access BOOLEAN DEFAULT FALSE,
             grant_authority_snapshot_json TEXT NOT NULL DEFAULT '{}',
             created_by INTEGER NULL,
@@ -211,7 +212,12 @@ _CREATE_MCP_HUB_TABLES = [
         (),
     ),
     (
-        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_overrides_assignment "
+        "ALTER TABLE mcp_policy_overrides "
+        "ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_policy_overrides_assignment "
         "ON mcp_policy_overrides(assignment_id)",
         (),
     ),

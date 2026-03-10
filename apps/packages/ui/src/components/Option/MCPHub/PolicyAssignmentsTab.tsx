@@ -3,25 +3,35 @@ import { Alert, Button, Card, Checkbox, Empty, List, Space, Tag, Typography } fr
 
 import {
   createPolicyAssignment,
+  deletePolicyAssignmentOverride,
   deletePolicyAssignment,
   getEffectivePolicy,
+  getPolicyAssignmentOverride,
   listApprovalPolicies,
   listPermissionProfiles,
   listPolicyAssignments,
   listToolRegistry,
   listToolRegistryModules,
+  upsertPolicyAssignmentOverride,
   updatePolicyAssignment,
   type McpHubApprovalPolicy,
   type McpHubEffectivePolicy,
   type McpHubPermissionPolicyDocument,
   type McpHubPermissionProfile,
   type McpHubPolicyAssignment,
+  type McpHubPolicyOverride,
   type McpHubToolRegistryEntry,
   type McpHubToolRegistryModule
 } from "@/services/tldw/mcp-hub"
 
 import { MCP_HUB_SCOPE_OPTIONS, MCP_HUB_TARGET_OPTIONS } from "./policyHelpers"
 import { PolicyDocumentEditor } from "./PolicyDocumentEditor"
+
+const PROVENANCE_LABELS = {
+  profile: "profile",
+  assignment_inline: "assignment",
+  assignment_override: "assignment override"
+} as const
 
 export const PolicyAssignmentsTab = () => {
   const [assignments, setAssignments] = useState<McpHubPolicyAssignment[]>([])
@@ -40,6 +50,13 @@ export const PolicyAssignmentsTab = () => {
   const [approvalPolicyId, setApprovalPolicyId] = useState<string>("")
   const [policyDocument, setPolicyDocument] = useState<McpHubPermissionPolicyDocument>({})
   const [isActive, setIsActive] = useState(true)
+  const [overridePolicyDocument, setOverridePolicyDocument] = useState<McpHubPermissionPolicyDocument>(
+    {}
+  )
+  const [overrideIsActive, setOverrideIsActive] = useState(true)
+  const [overrideExists, setOverrideExists] = useState(false)
+  const [overrideLoading, setOverrideLoading] = useState(false)
+  const [overrideSaving, setOverrideSaving] = useState(false)
   const [registryEntries, setRegistryEntries] = useState<McpHubToolRegistryEntry[]>([])
   const [registryModules, setRegistryModules] = useState<McpHubToolRegistryModule[]>([])
 
@@ -119,6 +136,28 @@ export const PolicyAssignmentsTab = () => {
     setApprovalPolicyId("")
     setPolicyDocument({})
     setIsActive(true)
+    setOverridePolicyDocument({})
+    setOverrideIsActive(true)
+    setOverrideExists(false)
+    setOverrideLoading(false)
+    setOverrideSaving(false)
+  }
+
+  const loadOverride = async (assignmentId: number) => {
+    setOverrideLoading(true)
+    try {
+      const row = await getPolicyAssignmentOverride(assignmentId)
+      const overrideRow = row as McpHubPolicyOverride
+      setOverridePolicyDocument(overrideRow.override_policy_document || {})
+      setOverrideIsActive(Boolean(overrideRow.is_active))
+      setOverrideExists(true)
+    } catch {
+      setOverridePolicyDocument({})
+      setOverrideIsActive(true)
+      setOverrideExists(false)
+    } finally {
+      setOverrideLoading(false)
+    }
   }
 
   const openForEdit = (assignment: McpHubPolicyAssignment) => {
@@ -131,6 +170,12 @@ export const PolicyAssignmentsTab = () => {
     setApprovalPolicyId(assignment.approval_policy_id ? String(assignment.approval_policy_id) : "")
     setPolicyDocument(assignment.inline_policy_document || {})
     setIsActive(assignment.is_active)
+    setOverridePolicyDocument({})
+    setOverrideIsActive(assignment.has_override ? Boolean(assignment.override_active) : true)
+    setOverrideExists(Boolean(assignment.has_override))
+    if (assignment.has_override) {
+      void loadOverride(assignment.id)
+    }
   }
 
   const handleSave = async () => {
@@ -173,6 +218,41 @@ export const PolicyAssignmentsTab = () => {
       await loadAll()
     } catch {
       setErrorMessage("Failed to delete policy assignment.")
+    }
+  }
+
+  const handleSaveOverride = async () => {
+    if (!editingId) return
+    setOverrideSaving(true)
+    setErrorMessage(null)
+    try {
+      await upsertPolicyAssignmentOverride(editingId, {
+        override_policy_document: overridePolicyDocument,
+        is_active: overrideIsActive
+      })
+      setOverrideExists(true)
+      await loadAll()
+    } catch {
+      setErrorMessage("Failed to save assignment override.")
+    } finally {
+      setOverrideSaving(false)
+    }
+  }
+
+  const handleDeleteOverride = async () => {
+    if (!editingId) return
+    if (typeof window !== "undefined" && !window.confirm("Delete this assignment override?")) {
+      return
+    }
+    setErrorMessage(null)
+    try {
+      await deletePolicyAssignmentOverride(editingId)
+      setOverridePolicyDocument({})
+      setOverrideIsActive(true)
+      setOverrideExists(false)
+      await loadAll()
+    } catch {
+      setErrorMessage("Failed to delete assignment override.")
     }
   }
 
@@ -270,13 +350,72 @@ export const PolicyAssignmentsTab = () => {
               </Space>
             </Space>
 
-            <PolicyDocumentEditor
-              formId="mcp-assignment"
-              policy={policyDocument}
-              onChange={setPolicyDocument}
-              registryEntries={registryEntries}
-              registryModules={registryModules}
-            />
+            <Card size="small" title="Base Assignment Policy">
+              <PolicyDocumentEditor
+                formId="mcp-assignment"
+                policy={policyDocument}
+                onChange={setPolicyDocument}
+                registryEntries={registryEntries}
+                registryModules={registryModules}
+              />
+            </Card>
+
+            {editingId ? (
+              <Card
+                size="small"
+                title="Assignment Override"
+                extra={
+                  overrideExists ? (
+                    <Tag color={overrideIsActive ? "cyan" : "default"}>
+                      {overrideIsActive ? "override active" : "override inactive"}
+                    </Tag>
+                  ) : (
+                    <Tag>no override yet</Tag>
+                  )
+                }
+              >
+                <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                  <Typography.Text type="secondary">
+                    Use one explicit override document for this assignment when it needs to differ from
+                    the base profile plus assignment policy.
+                  </Typography.Text>
+                  {overrideLoading ? (
+                    <Typography.Text type="secondary">Loading override...</Typography.Text>
+                  ) : (
+                    <PolicyDocumentEditor
+                      formId="mcp-assignment-override"
+                      policy={overridePolicyDocument}
+                      onChange={setOverridePolicyDocument}
+                      registryEntries={registryEntries}
+                      registryModules={registryModules}
+                    />
+                  )}
+                  <Checkbox
+                    checked={overrideIsActive}
+                    onChange={(event) => setOverrideIsActive(event.target.checked)}
+                  >
+                    Override Active
+                  </Checkbox>
+                  <Space>
+                    <Button
+                      type="primary"
+                      onClick={() => void handleSaveOverride()}
+                      loading={overrideSaving}
+                      disabled={overrideLoading}
+                    >
+                      Save Override
+                    </Button>
+                    <Button
+                      danger
+                      onClick={() => void handleDeleteOverride()}
+                      disabled={!overrideExists || overrideLoading}
+                    >
+                      Delete Override
+                    </Button>
+                  </Space>
+                </Space>
+              </Card>
+            ) : null}
 
             <Checkbox checked={isActive} onChange={(event) => setIsActive(event.target.checked)}>
               Active
@@ -312,6 +451,16 @@ export const PolicyAssignmentsTab = () => {
                 <Tag color="gold">{effectivePolicy.approval_mode}</Tag>
               ) : null}
             </Space>
+            {effectivePolicy.provenance.length > 0 ? (
+              <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+                <Typography.Text strong>Why This Applies</Typography.Text>
+                {effectivePolicy.provenance.map((entry, index) => (
+                  <Typography.Text key={`${entry.assignment_id}-${entry.field}-${entry.source_kind}-${index}`}>
+                    {`${entry.field} from ${PROVENANCE_LABELS[entry.source_kind]} (${entry.effect})`}
+                  </Typography.Text>
+                ))}
+              </Space>
+            ) : null}
           </Space>
         ) : (
           <Empty description="No effective policy preview available yet" />
@@ -335,6 +484,11 @@ export const PolicyAssignmentsTab = () => {
                   <Tag color="gold">{`approval ${assignment.approval_policy_id}`}</Tag>
                 ) : null}
                 {assignment.is_active ? <Tag color="green">active</Tag> : <Tag>inactive</Tag>}
+                {assignment.has_override ? (
+                  <Tag color={assignment.override_active ? "cyan" : "default"}>
+                    {assignment.override_active ? "override active" : "override inactive"}
+                  </Tag>
+                ) : null}
                 <Button size="small" onClick={() => openForEdit(assignment)}>
                   Edit
                 </Button>
