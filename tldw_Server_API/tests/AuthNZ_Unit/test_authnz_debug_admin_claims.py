@@ -67,6 +67,21 @@ async def test_authnz_debug_401_when_principal_missing(path: str):
     "path",
     ["/api/v1/authnz/debug/api-key-id", "/api/v1/authnz/debug/budget-summary"],
 )
+async def test_authnz_debug_403_when_plain_admin(path: str):
+    principal = _make_principal(is_admin=True, roles=["admin"])
+    app = _build_app_with_overrides(principal=principal)
+
+    with TestClient(app) as client:
+        resp = client.get(path)
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    ["/api/v1/authnz/debug/api-key-id", "/api/v1/authnz/debug/budget-summary"],
+)
 async def test_authnz_debug_403_when_not_admin(path: str):
     principal = _make_principal(is_admin=False, roles=["user"])
     app = _build_app_with_overrides(principal=principal)
@@ -82,8 +97,9 @@ async def test_authnz_debug_403_when_not_admin(path: str):
     "path",
     ["/api/v1/authnz/debug/api-key-id", "/api/v1/authnz/debug/budget-summary"],
 )
-async def test_authnz_debug_200_for_admin(path: str):
-    principal = _make_principal(is_admin=True, roles=["admin"])
+@pytest.mark.parametrize("roles", [["super_admin"], ["owner"]])
+async def test_authnz_debug_200_for_super_admin_or_owner(path: str, roles: list[str]):
+    principal = _make_principal(is_admin=True, roles=roles)
     app = _build_app_with_overrides(principal=principal)
 
     with TestClient(app) as client:

@@ -317,6 +317,7 @@ export default function SecurityPage() {
     setError(null);
 
     try {
+      let nextError: string | null = null;
       const [healthResult, alertsResult] = await Promise.allSettled([
         api.getSecurityHealth(),
         api.getSecurityAlertStatus(),
@@ -336,19 +337,10 @@ export default function SecurityPage() {
           }
         })();
       } else {
-        // Set defaults if endpoint unavailable
-        const fallbackHealth = {
-          risk_score: 0,
-          recent_security_events: 0,
-          failed_logins_24h: 0,
-          suspicious_activity: 0,
-          mfa_adoption_rate: 0,
-          active_sessions: 0,
-          api_keys_active: 0,
-        };
-        setSecurityHealth(fallbackHealth);
-        setRiskBreakdown(buildRiskBreakdown(buildFallbackRiskContext(fallbackHealth)));
+        setSecurityHealth(null);
+        setRiskBreakdown(null);
         setRiskBreakdownLoading(false);
+        nextError = 'Security health data is unavailable. Risk score and summary metrics cannot be calculated.';
       }
 
       if (alertsResult.status === 'fulfilled' && isSecurityAlertStatus(alertsResult.value)) {
@@ -364,8 +356,9 @@ export default function SecurityPage() {
       }
 
       if (healthResult.status === 'rejected' && alertsResult.status === 'rejected') {
-        setError('Failed to load security data. Some endpoints may not be available.');
+        nextError = 'Failed to load security health and alert data. Some endpoints may not be available.';
       }
+      setError(nextError);
     } finally {
       setLoading(false);
     }
@@ -375,10 +368,17 @@ export default function SecurityPage() {
     loadData();
   }, [loadData]);
 
-  const riskScore = securityHealth?.risk_score ?? 0;
-  const riskScoreClamped = Math.min(Math.max(riskScore, 0), 100);
-  const riskLevel = getRiskLevelLabel(riskScore);
-  const riskColor = getRiskLevelColor(riskScore);
+  const hasSecurityHealth = securityHealth !== null;
+  const riskScore = hasSecurityHealth ? (securityHealth?.risk_score ?? 0) : null;
+  const riskScoreClamped = riskScore !== null
+    ? Math.min(Math.max(riskScore, 0), 100)
+    : null;
+  const riskLevel = riskScore !== null ? getRiskLevelLabel(riskScore) : null;
+  const riskColor = riskScore !== null ? getRiskLevelColor(riskScore) : '';
+  const failedLogins24h = securityHealth?.failed_logins_24h ?? null;
+
+  const renderSecurityMetric = (value: number | null | undefined, suffix = '') =>
+    hasSecurityHealth && value !== null && value !== undefined ? `${value}${suffix}` : '—';
 
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
@@ -410,113 +410,127 @@ export default function SecurityPage() {
           <Card className="mb-6">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                {riskScore < 40 ? (
+                {riskScore !== null && riskScore < 40 ? (
                   <ShieldCheck className="h-5 w-5 text-green-500" />
                 ) : (
                   <ShieldAlert className="h-5 w-5 text-yellow-500" />
                 )}
                 Security Risk Assessment
               </CardTitle>
-              <CardDescription>Overall security posture score</CardDescription>
+              <CardDescription>
+                {hasSecurityHealth ? 'Overall security posture score' : 'Security health endpoint unavailable'}
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center gap-8">
-                <div>
-                  <div className={`text-6xl font-bold ${riskColor}`}>
-                    {riskScoreClamped}
-                  </div>
-                  <Badge variant={riskLevel.variant} className="mt-2">
-                    {riskLevel.label}
-                  </Badge>
-                </div>
-                <div className="flex-1">
-                  <div
-                    className="h-4 bg-muted rounded-full overflow-hidden"
-                    role="progressbar"
-                    aria-valuenow={riskScoreClamped}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-label={`Security risk score: ${riskScoreClamped}`}
-                  >
-                    <div
-                      className={`h-full transition-all ${getRiskBarColor(riskScore)}`}
-                      style={{ width: `${riskScoreClamped}%` }}
-                    />
-                  </div>
-                  <p className="text-sm text-muted-foreground mt-2">
-                    {securityHealth?.last_security_scan
-                      ? `Last scan: ${formatTimestamp(securityHealth.last_security_scan)}`
-                      : 'Risk score based on recent security events and configuration'}
+              {!hasSecurityHealth ? (
+                <div className="space-y-3" data-testid="security-risk-unavailable">
+                  <Badge variant="outline">Unavailable</Badge>
+                  <p className="text-sm text-muted-foreground">Risk score unavailable.</p>
+                  <p className="text-sm text-muted-foreground">
+                    Security health data is unavailable. Risk score and summary metrics cannot be calculated.
                   </p>
-
-                  <div className="mt-4 rounded-md border p-3">
-                    <div className="mb-3 flex items-center justify-between">
-                      <h3 className="text-sm font-semibold">Risk factor breakdown</h3>
-                      <Badge variant="outline" data-testid="risk-breakdown-estimated-score">
-                        Estimated {riskBreakdown?.estimatedScore ?? 0}/100
-                      </Badge>
+                </div>
+              ) : (
+                <div className="flex items-center gap-8">
+                  <div>
+                    <div className={`text-6xl font-bold ${riskColor}`}>
+                      {riskScoreClamped}
                     </div>
-                    {riskBreakdownLoading ? (
-                      <div className="text-sm text-muted-foreground">Loading risk factor details...</div>
-                    ) : riskBreakdown ? (
-                      <>
-                        <div className="overflow-x-auto rounded-md border">
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>Factor</TableHead>
-                                <TableHead>Value</TableHead>
-                                <TableHead>Weight</TableHead>
-                                <TableHead>Contribution</TableHead>
-                                <TableHead>Severity</TableHead>
-                                <TableHead>Remediation</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {riskBreakdown.factors.map((factor) => (
-                                <TableRow key={factor.key} data-testid={`risk-factor-${factor.key}`}>
-                                  <TableCell>
-                                    <div className="font-medium">{factor.label}</div>
-                                    <div className="text-xs text-muted-foreground">{factor.description}</div>
-                                  </TableCell>
-                                  <TableCell>{factor.value}</TableCell>
-                                  <TableCell>{factor.weight}</TableCell>
-                                  <TableCell>
-                                    <div>{factor.contribution}</div>
-                                    <div className="text-xs text-muted-foreground">
-                                      min({factor.cap}, {factor.value} x {factor.weight})
-                                    </div>
-                                  </TableCell>
-                                  <TableCell>
-                                    <Badge variant={getRiskFactorSeverityVariant(factor.severity)}>
-                                      {factor.severity}
-                                    </Badge>
-                                  </TableCell>
-                                  <TableCell>
-                                    <Link href={factor.remediationHref} className="text-primary underline text-sm">
-                                      {factor.remediationLabel}
-                                    </Link>
-                                  </TableCell>
+                    {riskLevel ? (
+                      <Badge variant={riskLevel.variant} className="mt-2">
+                        {riskLevel.label}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <div className="flex-1">
+                    <div
+                      className="h-4 bg-muted rounded-full overflow-hidden"
+                      role="progressbar"
+                      aria-valuenow={riskScoreClamped ?? 0}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-label={`Security risk score: ${riskScoreClamped ?? 0}`}
+                    >
+                      <div
+                        className={`h-full transition-all ${getRiskBarColor(riskScore ?? 0)}`}
+                        style={{ width: `${riskScoreClamped ?? 0}%` }}
+                      />
+                    </div>
+                    <p className="text-sm text-muted-foreground mt-2">
+                      {securityHealth?.last_security_scan
+                        ? `Last scan: ${formatTimestamp(securityHealth.last_security_scan)}`
+                        : 'Risk score based on recent security events and configuration'}
+                    </p>
+
+                    <div className="mt-4 rounded-md border p-3">
+                      <div className="mb-3 flex items-center justify-between">
+                        <h3 className="text-sm font-semibold">Risk factor breakdown</h3>
+                        <Badge variant="outline" data-testid="risk-breakdown-estimated-score">
+                          Estimated {riskBreakdown?.estimatedScore ?? 0}/100
+                        </Badge>
+                      </div>
+                      {riskBreakdownLoading ? (
+                        <div className="text-sm text-muted-foreground">Loading risk factor details...</div>
+                      ) : riskBreakdown ? (
+                        <>
+                          <div className="overflow-x-auto rounded-md border">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Factor</TableHead>
+                                  <TableHead>Value</TableHead>
+                                  <TableHead>Weight</TableHead>
+                                  <TableHead>Contribution</TableHead>
+                                  <TableHead>Severity</TableHead>
+                                  <TableHead>Remediation</TableHead>
                                 </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
-                        <p className="mt-2 text-xs text-muted-foreground">
-                          Calculation: {riskBreakdown.factors.map((factor) => factor.contribution).join(' + ')} = {riskBreakdown.estimatedScore}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {riskBreakdown.context.estimatedFromSample
-                            ? `API key-age factor estimated from ${riskBreakdown.context.sampledUsers} sampled users out of ${riskBreakdown.context.totalUsers}.`
-                            : `API key-age factor calculated from ${riskBreakdown.context.sampledUsers} users.`}
-                        </p>
-                      </>
-                    ) : (
-                      <div className="text-sm text-muted-foreground">Risk factor data is unavailable.</div>
-                    )}
+                              </TableHeader>
+                              <TableBody>
+                                {riskBreakdown.factors.map((factor) => (
+                                  <TableRow key={factor.key} data-testid={`risk-factor-${factor.key}`}>
+                                    <TableCell>
+                                      <div className="font-medium">{factor.label}</div>
+                                      <div className="text-xs text-muted-foreground">{factor.description}</div>
+                                    </TableCell>
+                                    <TableCell>{factor.value}</TableCell>
+                                    <TableCell>{factor.weight}</TableCell>
+                                    <TableCell>
+                                      <div>{factor.contribution}</div>
+                                      <div className="text-xs text-muted-foreground">
+                                        min({factor.cap}, {factor.value} x {factor.weight})
+                                      </div>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Badge variant={getRiskFactorSeverityVariant(factor.severity)}>
+                                        {factor.severity}
+                                      </Badge>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Link href={factor.remediationHref} className="text-primary underline text-sm">
+                                        {factor.remediationLabel}
+                                      </Link>
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Calculation: {riskBreakdown.factors.map((factor) => factor.contribution).join(' + ')} = {riskBreakdown.estimatedScore}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {riskBreakdown.context.estimatedFromSample
+                              ? `API key-age factor estimated from ${riskBreakdown.context.sampledUsers} sampled users out of ${riskBreakdown.context.totalUsers}.`
+                              : `API key-age factor calculated from ${riskBreakdown.context.sampledUsers} users.`}
+                          </p>
+                        </>
+                      ) : (
+                        <div className="text-sm text-muted-foreground">Risk factor data is unavailable.</div>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </CardContent>
           </Card>
 
@@ -531,10 +545,12 @@ export default function SecurityPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold">
-                  {securityHealth?.recent_security_events ?? 0}
+                  {renderSecurityMetric(securityHealth?.recent_security_events)}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {securityHealth?.suspicious_activity ?? 0} suspicious
+                  {hasSecurityHealth
+                    ? `${securityHealth?.suspicious_activity ?? 0} suspicious`
+                    : 'Unavailable'}
                 </p>
               </CardContent>
             </Card>
@@ -548,12 +564,12 @@ export default function SecurityPage() {
               </CardHeader>
               <CardContent>
                 <div className={`text-3xl font-bold ${
-                  (securityHealth?.failed_logins_24h ?? 0) > 10 ? 'text-red-500' : ''
+                  hasSecurityHealth && (failedLogins24h ?? 0) > 10 ? 'text-red-500' : ''
                 }`}>
-                  {securityHealth?.failed_logins_24h ?? 0}
+                  {renderSecurityMetric(failedLogins24h)}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Potential brute force attempts
+                  {hasSecurityHealth ? 'Potential brute force attempts' : 'Unavailable'}
                 </p>
               </CardContent>
             </Card>
@@ -567,10 +583,10 @@ export default function SecurityPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold">
-                  {securityHealth?.mfa_adoption_rate ?? 0}%
+                  {renderSecurityMetric(securityHealth?.mfa_adoption_rate, '%')}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Users with MFA enabled
+                  {hasSecurityHealth ? 'Users with MFA enabled' : 'Unavailable'}
                 </p>
               </CardContent>
             </Card>
@@ -584,10 +600,12 @@ export default function SecurityPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold">
-                  {securityHealth?.active_sessions ?? 0}
+                  {renderSecurityMetric(securityHealth?.active_sessions)}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {securityHealth?.api_keys_active ?? 0} API keys in use
+                  {hasSecurityHealth
+                    ? `${securityHealth?.api_keys_active ?? 0} API keys in use`
+                    : 'Unavailable'}
                 </p>
               </CardContent>
             </Card>

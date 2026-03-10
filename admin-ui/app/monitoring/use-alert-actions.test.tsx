@@ -19,6 +19,7 @@ type HarnessProps = {
   setSuccess: (message: string) => void;
   onReloadRequested: () => void | Promise<void>;
   assignableUsers: AlertAssignableUser[];
+  allowLocalMutations?: boolean;
 };
 
 const baseAlerts: SystemAlert[] = [
@@ -47,6 +48,7 @@ function Harness({
   setSuccess,
   onReloadRequested,
   assignableUsers,
+  allowLocalMutations = false,
 }: HarnessProps) {
   const [alerts, setAlerts] = React.useState<SystemAlert[]>(baseAlerts);
   const [history, setAlertHistory] = React.useState<AlertHistoryEntry[]>([]);
@@ -66,6 +68,7 @@ function Harness({
     setSuccess,
     onReloadRequested,
     assignableUsers,
+    allowLocalMutations,
   });
 
   const alertA1 = alerts.find((item) => item.id === 'a1');
@@ -210,6 +213,7 @@ describe('useAlertActions', () => {
         setSuccess={setSuccess}
         onReloadRequested={onReloadRequested}
         assignableUsers={[{ id: 'u1', label: 'Alice' }]}
+        allowLocalMutations
       />
     );
 
@@ -243,6 +247,7 @@ describe('useAlertActions', () => {
         setSuccess={setSuccess}
         onReloadRequested={onReloadRequested}
         assignableUsers={[]}
+        allowLocalMutations
       />
     );
 
@@ -266,5 +271,39 @@ describe('useAlertActions', () => {
 
     expect(readHistory().length).toBe(historyLengthBeforeNoop);
     expect(setSuccess.mock.calls.length).toBe(successCallCountBeforeNoop);
+  });
+
+  it('does not apply assign, snooze, or escalate mutations when local-only actions are disabled', async () => {
+    const apiClient = buildApiClient();
+    const confirm = vi.fn().mockResolvedValue(true);
+    const setError = vi.fn();
+    const setSuccess = vi.fn();
+    const onReloadRequested = vi.fn();
+
+    render(
+      <Harness
+        apiClient={apiClient}
+        confirm={confirm}
+        setError={setError}
+        setSuccess={setSuccess}
+        onReloadRequested={onReloadRequested}
+        assignableUsers={[{ id: 'u1', label: 'Alice' }]}
+        allowLocalMutations={false}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Assign A1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze A1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Escalate A1' }));
+
+    await waitFor(() => {
+      expect(readAlerts().find((item) => item.id === 'a1')?.assigned_to).toBeUndefined();
+    });
+    expect(readAlerts().find((item) => item.id === 'a1')?.snoozed_until).toBeUndefined();
+    expect(readAlerts().find((item) => item.id === 'a1')?.severity).toBe('warning');
+    expect(readHistory()).toHaveLength(0);
+    expect(setSuccess).not.toHaveBeenCalledWith('Alert assigned');
+    expect(setSuccess).not.toHaveBeenCalledWith('Alert snoozed for 15m');
+    expect(setSuccess).not.toHaveBeenCalledWith('Alert escalated to critical');
   });
 });

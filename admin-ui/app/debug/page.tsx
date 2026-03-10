@@ -98,7 +98,7 @@ export default function DebugPage() {
       : 0;
 
   return (
-    <PermissionGuard variant="route" requireAuth role="admin">
+    <PermissionGuard variant="route" requireAuth role={['super_admin', 'owner']}>
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
           <div className="mb-8">

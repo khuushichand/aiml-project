@@ -195,6 +195,29 @@ const statusVariant = (status: ProviderHealthStatus): 'default' | 'secondary' | 
 const hasPrometheusProviderData = (metricsText: string): boolean =>
   /provider|llm/i.test(metricsText);
 
+const createDefaultProviderCheck = (): ProviderHealthCheck => ({
+  status: 'unknown',
+  testing: false,
+  lastCheckedAt: null,
+  lastSuccessAt: null,
+  responseTimeMs: null,
+  errorMessage: null,
+});
+
+const reconcileProviderChecks = (
+  previous: Record<string, ProviderHealthCheck>,
+  providerList: Provider[],
+): Record<string, ProviderHealthCheck> => {
+  const next: Record<string, ProviderHealthCheck> = {};
+  providerList.forEach((provider) => {
+    const key = provider.name.toLowerCase();
+    next[key] = previous[key]
+      ? { ...createDefaultProviderCheck(), ...previous[key] }
+      : createDefaultProviderCheck();
+  });
+  return next;
+};
+
 function AvailabilitySparkline({
   providerName,
   series,
@@ -233,6 +256,7 @@ function AvailabilitySparkline({
 
 export default function DependenciesPage() {
   const [loading, setLoading] = useState(true);
+  const [runningAllChecks, setRunningAllChecks] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -280,12 +304,9 @@ export default function DependenciesPage() {
       const next = { ...prev };
       providerKeys.forEach((key) => {
         next[key] = {
-          status: next[key]?.status ?? 'unknown',
+          ...createDefaultProviderCheck(),
+          ...next[key],
           testing: true,
-          lastCheckedAt: next[key]?.lastCheckedAt ?? null,
-          lastSuccessAt: next[key]?.lastSuccessAt ?? null,
-          responseTimeMs: next[key]?.responseTimeMs ?? null,
-          errorMessage: next[key]?.errorMessage ?? null,
         };
       });
       return next;
@@ -319,7 +340,7 @@ export default function DependenciesPage() {
     });
   }, [runProviderCheck]);
 
-  const loadData = useCallback(async () => {
+  const loadTelemetry = useCallback(async () => {
     setLoading(true);
     setErrors([]);
 
@@ -414,31 +435,36 @@ export default function DependenciesPage() {
     setProviders(parsedProviders);
     setUsageByProvider(usageMap);
     setAvailabilityByProvider(availabilityMap);
+    setProviderChecks((prev) => reconcileProviderChecks(prev, parsedProviders));
     setErrors(nextErrors);
     setLastUpdatedAt(new Date().toISOString());
-
-    await runAllProviderChecks(parsedProviders.filter((provider) => provider.enabled));
     setLoading(false);
-  }, [runAllProviderChecks]);
+  }, []);
 
   useEffect(() => {
     const timerId = window.setTimeout(() => {
-      void loadData();
+      void loadTelemetry();
     }, 0);
     return () => window.clearTimeout(timerId);
-  }, [loadData]);
+  }, [loadTelemetry]);
+
+  const handleRunAllChecks = useCallback(async () => {
+    setRunningAllChecks(true);
+    try {
+      await runAllProviderChecks(providers.filter((provider) => provider.enabled));
+    } finally {
+      setRunningAllChecks(false);
+    }
+  }, [providers, runAllProviderChecks]);
 
   const handleTestProvider = useCallback(async (provider: Provider) => {
     const providerKey = provider.name.toLowerCase();
     setProviderChecks((prev) => ({
       ...prev,
       [providerKey]: {
-        status: prev[providerKey]?.status ?? 'unknown',
+        ...createDefaultProviderCheck(),
+        ...prev[providerKey],
         testing: true,
-        lastCheckedAt: prev[providerKey]?.lastCheckedAt ?? null,
-        lastSuccessAt: prev[providerKey]?.lastSuccessAt ?? null,
-        responseTimeMs: prev[providerKey]?.responseTimeMs ?? null,
-        errorMessage: prev[providerKey]?.errorMessage ?? null,
       },
     }));
 
@@ -484,13 +510,24 @@ export default function DependenciesPage() {
             <div>
               <h1 className="text-3xl font-bold">External Dependencies</h1>
               <p className="text-muted-foreground">
-                Live availability and performance checks for configured provider dependencies.
+                Passive usage telemetry loads on refresh. Live provider checks run only when triggered.
               </p>
             </div>
-            <Button variant="outline" onClick={() => void loadData()} loading={loading} loadingText="Refreshing...">
-              <RefreshCw className="h-4 w-4" />
-              Refresh All
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" onClick={() => void loadTelemetry()} loading={loading} loadingText="Refreshing...">
+                <RefreshCw className="h-4 w-4" />
+                Refresh Data
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => void handleRunAllChecks()}
+                loading={runningAllChecks}
+                loadingText="Running checks..."
+              >
+                <Activity className="h-4 w-4" />
+                Run All Checks
+              </Button>
+            </div>
           </div>
 
           {lastUpdatedAt && (
@@ -551,12 +588,12 @@ export default function DependenciesPage() {
             <CardHeader>
               <CardTitle>Dependency Health Grid</CardTitle>
               <CardDescription>
-                Reachability checks run on page load and can be re-run per provider.
+                Usage telemetry loads passively. Trigger live reachability checks per provider or run them in batch.
               </CardDescription>
             </CardHeader>
             <CardContent>
               {loading && !hasLoadedData ? (
-                <div className="py-8 text-center text-muted-foreground">Loading dependency checks...</div>
+                <div className="py-8 text-center text-muted-foreground">Loading dependency telemetry...</div>
               ) : (
                 <Table>
                   <TableHeader>
@@ -575,14 +612,7 @@ export default function DependenciesPage() {
                     {providers.map((provider) => {
                       const key = provider.name.toLowerCase();
                       const usage = usageByProvider[key];
-                      const check = providerChecks[key] ?? {
-                        status: 'unknown',
-                        testing: false,
-                        lastCheckedAt: null,
-                        lastSuccessAt: null,
-                        responseTimeMs: null,
-                        errorMessage: null,
-                      };
+                      const check = providerChecks[key] ?? createDefaultProviderCheck();
                       const unreachable = check.status === 'unreachable';
                       const responseTimeValue = check.responseTimeMs !== null
                         ? `${check.responseTimeMs} ms`
