@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 ScopeType = Literal["global", "org", "team", "user"]
 ProfileMode = Literal["preset", "custom"]
 AssignmentTargetType = Literal["default", "group", "persona"]
+PolicyProvenanceSourceKind = Literal["profile", "assignment_inline", "assignment_override"]
+PolicyProvenanceEffect = Literal["merged", "replaced"]
 ApprovalMode = Literal[
     "allow_silently",
     "ask_every_time",
@@ -17,6 +19,8 @@ ApprovalMode = Literal[
 ]
 ApprovalDecision = Literal["approved", "denied"]
 ApprovalDuration = Literal["once", "session", "conversation"]
+ToolRiskClass = Literal["low", "medium", "high", "unclassified"]
+ToolMetadataSource = Literal["explicit", "heuristic", "fallback"]
 
 
 class ACPProfileCreateRequest(BaseModel):
@@ -118,6 +122,26 @@ class PolicyAssignmentResponse(BaseModel):
     inline_policy_document: dict[str, Any] = Field(default_factory=dict)
     approval_policy_id: int | None = None
     is_active: bool
+    has_override: bool = False
+    override_id: int | None = None
+    override_active: bool = False
+    override_updated_at: datetime | str | None = None
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
+class PolicyOverrideUpsertRequest(BaseModel):
+    override_policy_document: dict[str, Any] = Field(default_factory=dict)
+    is_active: bool = True
+
+
+class PolicyOverrideResponse(BaseModel):
+    id: int
+    assignment_id: int
+    override_policy_document: dict[str, Any] = Field(default_factory=dict)
+    is_active: bool
     created_by: int | None = None
     updated_by: int | None = None
     created_at: datetime | str | None = None
@@ -193,6 +217,16 @@ class EffectivePolicySourceResponse(BaseModel):
     profile_id: int | None = None
 
 
+class EffectivePolicyProvenanceResponse(BaseModel):
+    field: str
+    value: Any
+    source_kind: PolicyProvenanceSourceKind
+    assignment_id: int
+    profile_id: int | None = None
+    override_id: int | None = None
+    effect: PolicyProvenanceEffect
+
+
 class EffectivePolicyResponse(BaseModel):
     enabled: bool
     allowed_tools: list[str] = Field(default_factory=list)
@@ -202,6 +236,40 @@ class EffectivePolicyResponse(BaseModel):
     approval_mode: ApprovalMode | None = None
     policy_document: dict[str, Any] = Field(default_factory=dict)
     sources: list[EffectivePolicySourceResponse] = Field(default_factory=list)
+    provenance: list[EffectivePolicyProvenanceResponse] = Field(default_factory=list)
+
+
+class ToolRegistryEntryResponse(BaseModel):
+    tool_name: str
+    display_name: str
+    description: str | None = None
+    module: str
+    module_display_name: str | None = None
+    category: str
+    risk_class: ToolRiskClass
+    capabilities: list[str] = Field(default_factory=list)
+    mutates_state: bool = False
+    uses_filesystem: bool = False
+    uses_processes: bool = False
+    uses_network: bool = False
+    uses_credentials: bool = False
+    supports_arguments_preview: bool = False
+    path_boundable: bool = False
+    metadata_source: ToolMetadataSource
+    metadata_warnings: list[str] = Field(default_factory=list)
+
+
+class ToolRegistryModuleResponse(BaseModel):
+    module: str
+    display_name: str
+    tool_count: int
+    risk_summary: dict[str, int] = Field(default_factory=dict)
+    metadata_warnings: list[str] = Field(default_factory=list)
+
+
+class ToolRegistrySummaryResponse(BaseModel):
+    entries: list[ToolRegistryEntryResponse] = Field(default_factory=list)
+    modules: list[ToolRegistryModuleResponse] = Field(default_factory=list)
 
 
 class ExternalServerCreateRequest(BaseModel):

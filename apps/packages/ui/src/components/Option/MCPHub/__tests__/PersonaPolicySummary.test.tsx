@@ -23,7 +23,18 @@ describe("PersonaPolicySummary", () => {
       approval_policy_id: 17,
       approval_mode: "ask_outside_profile",
       policy_document: {},
-      sources: []
+      sources: [],
+      provenance: [
+        {
+          field: "allowed_tools",
+          value: ["Bash(git *)"],
+          source_kind: "assignment_override",
+          assignment_id: 11,
+          profile_id: 5,
+          override_id: 31,
+          effect: "merged"
+        }
+      ]
     })
   })
 
@@ -33,6 +44,7 @@ describe("PersonaPolicySummary", () => {
     expect(await screen.findByText("process.execute")).toBeTruthy()
     expect(screen.getByText("Bash(git *)")).toBeTruthy()
     expect(screen.getByText("Bash(rm *)")).toBeTruthy()
+    expect(screen.getByText("Override active")).toBeTruthy()
     expect(screen.getByRole("link", { name: /open mcp hub/i })).toBeTruthy()
   })
 })

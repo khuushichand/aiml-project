@@ -81,6 +81,9 @@ class _FakeRepo:
     async def get_permission_profile(self, profile_id: int) -> dict | None:
         return self.profiles.get(profile_id)
 
+    async def get_policy_override_by_assignment(self, assignment_id: int) -> dict | None:
+        return None
+
 
 @pytest.mark.asyncio
 async def test_policy_resolver_merges_default_group_and_persona_targets() -> None:

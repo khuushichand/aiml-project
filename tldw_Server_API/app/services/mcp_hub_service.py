@@ -123,6 +123,10 @@ class McpHubService:
             owner_scope_id=owner_scope_id,
         )
 
+    async def get_permission_profile(self, profile_id: int) -> dict[str, Any] | None:
+        """Fetch a single permission profile by id."""
+        return await self.repo.get_permission_profile(profile_id)
+
     async def update_permission_profile(
         self,
         profile_id: int,
@@ -211,6 +215,10 @@ class McpHubService:
             target_id=target_id,
         )
 
+    async def get_policy_assignment(self, assignment_id: int) -> dict[str, Any] | None:
+        """Fetch a single policy assignment by id."""
+        return await self.repo.get_policy_assignment(assignment_id)
+
     async def update_policy_assignment(
         self,
         assignment_id: int,
@@ -236,6 +244,18 @@ class McpHubService:
         return row
 
     async def delete_policy_assignment(self, assignment_id: int, *, actor_id: int | None) -> bool:
+        existing_override = await self.repo.get_policy_override_by_assignment(assignment_id)
+        if existing_override:
+            await self.repo.delete_policy_override_by_assignment(assignment_id)
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.policy_override.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_policy_override",
+                    resource_id=str(existing_override.get("id") or ""),
+                    metadata={"assignment_id": assignment_id},
+                )
+            )
         deleted = await self.repo.delete_policy_assignment(assignment_id)
         if deleted:
             await _await_if_needed(
@@ -245,6 +265,59 @@ class McpHubService:
                     resource_type="mcp_policy_assignment",
                     resource_id=str(assignment_id),
                     metadata=None,
+                )
+            )
+        return deleted
+
+    async def get_policy_override(self, assignment_id: int) -> dict[str, Any] | None:
+        """Fetch a single assignment-bound override by assignment id."""
+        return await self.repo.get_policy_override_by_assignment(assignment_id)
+
+    async def upsert_policy_override(
+        self,
+        assignment_id: int,
+        *,
+        override_policy_document: dict[str, Any],
+        is_active: bool,
+        broadens_access: bool,
+        grant_authority_snapshot: dict[str, Any],
+        actor_id: int | None,
+    ) -> dict[str, Any] | None:
+        row = await self.repo.upsert_policy_override(
+            assignment_id,
+            override_policy_document=override_policy_document,
+            is_active=is_active,
+            broadens_access=broadens_access,
+            grant_authority_snapshot=grant_authority_snapshot,
+            actor_id=actor_id,
+        )
+        if row:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.policy_override.upsert",
+                    actor_id=actor_id,
+                    resource_type="mcp_policy_override",
+                    resource_id=str(row.get("id") or ""),
+                    metadata={
+                        "assignment_id": assignment_id,
+                        "broadens_access": bool(row.get("broadens_access")),
+                        "is_active": bool(row.get("is_active")),
+                    },
+                )
+            )
+        return row
+
+    async def delete_policy_override(self, assignment_id: int, *, actor_id: int | None) -> bool:
+        existing = await self.repo.get_policy_override_by_assignment(assignment_id)
+        deleted = await self.repo.delete_policy_override_by_assignment(assignment_id)
+        if deleted:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.policy_override.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_policy_override",
+                    resource_id=str((existing or {}).get("id") or ""),
+                    metadata={"assignment_id": assignment_id},
                 )
             )
         return deleted

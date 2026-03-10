@@ -109,6 +109,30 @@ def _allowed_tool_patterns(policy_document: dict[str, Any]) -> list[str]:
     return _unique(patterns)
 
 
+def _provenance_entries(
+    *,
+    layer_document: dict[str, Any],
+    source_kind: str,
+    assignment_id: int,
+    profile_id: int | None,
+    override_id: int | None,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for field, value in layer_document.items():
+        entries.append(
+            {
+                "field": str(field),
+                "value": deepcopy(value),
+                "source_kind": source_kind,
+                "assignment_id": assignment_id,
+                "profile_id": profile_id,
+                "override_id": override_id,
+                "effect": "merged" if field in _UNION_LIST_KEYS else "replaced",
+            }
+        )
+    return entries
+
+
 class McpHubPolicyResolver:
     """Resolve effective MCP Hub policy for a runtime request context."""
 
@@ -143,32 +167,70 @@ class McpHubPolicyResolver:
         sources: list[dict[str, Any]] = []
         profile_cache: dict[int, dict[str, Any] | None] = {}
         resolved_approval_policy_id: int | None = None
+        provenance: list[dict[str, Any]] = []
 
         for assignment in assignments:
             assignment_document: dict[str, Any] = {}
             profile_id = assignment.get("profile_id")
+            profile_key: int | None = int(profile_id) if profile_id is not None else None
+            assignment_id = int(assignment.get("id"))
             if profile_id is not None:
-                profile_key = int(profile_id)
                 if profile_key not in profile_cache:
                     profile_cache[profile_key] = await self.repo.get_permission_profile(profile_key)
                 profile_row = profile_cache.get(profile_key) or {}
                 if bool(profile_row.get("is_active", True)):
+                    profile_document = _as_dict(profile_row.get("policy_document"))
                     assignment_document = _merge_policy_documents(
                         assignment_document,
-                        _as_dict(profile_row.get("policy_document")),
+                        profile_document,
+                    )
+                    provenance.extend(
+                        _provenance_entries(
+                            layer_document=profile_document,
+                            source_kind="profile",
+                            assignment_id=assignment_id,
+                            profile_id=profile_key,
+                            override_id=None,
+                        )
                     )
 
+            inline_policy_document = _as_dict(assignment.get("inline_policy_document"))
             assignment_document = _merge_policy_documents(
                 assignment_document,
-                _as_dict(assignment.get("inline_policy_document")),
+                inline_policy_document,
             )
+            provenance.extend(
+                _provenance_entries(
+                    layer_document=inline_policy_document,
+                    source_kind="assignment_inline",
+                    assignment_id=assignment_id,
+                    profile_id=profile_key,
+                    override_id=None,
+                )
+            )
+            override_row = await self.repo.get_policy_override_by_assignment(assignment_id)
+            if override_row and bool(override_row.get("is_active", True)):
+                override_document = _as_dict(override_row.get("override_policy_document"))
+                assignment_document = _merge_policy_documents(
+                    assignment_document,
+                    override_document,
+                )
+                provenance.extend(
+                    _provenance_entries(
+                        layer_document=override_document,
+                        source_kind="assignment_override",
+                        assignment_id=assignment_id,
+                        profile_id=profile_key,
+                        override_id=int(override_row.get("id")),
+                    )
+                )
             merged_policy_document = _merge_policy_documents(merged_policy_document, assignment_document)
             approval_policy_id = assignment.get("approval_policy_id")
             if approval_policy_id is not None:
                 resolved_approval_policy_id = int(approval_policy_id)
             sources.append(
                 {
-                    "assignment_id": int(assignment.get("id")),
+                    "assignment_id": assignment_id,
                     "target_type": str(assignment.get("target_type") or "default"),
                     "target_id": assignment.get("target_id"),
                     "owner_scope_type": str(assignment.get("owner_scope_type") or "global"),
@@ -186,6 +248,7 @@ class McpHubPolicyResolver:
             "approval_mode": str(merged_policy_document.get("approval_mode") or "").strip() or None,
             "policy_document": merged_policy_document,
             "sources": sources,
+            "provenance": provenance,
         }
 
     async def _load_applicable_assignments(
@@ -237,6 +300,7 @@ class McpHubPolicyResolver:
             "approval_mode": None,
             "policy_document": {},
             "sources": [],
+            "provenance": [],
         }
 
 

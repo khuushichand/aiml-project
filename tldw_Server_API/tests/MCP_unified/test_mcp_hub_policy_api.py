@@ -62,12 +62,30 @@ class _FakePolicyService:
                 "inline_policy_document": {"capabilities": ["process.execute"]},
                 "approval_policy_id": None,
                 "is_active": True,
+                "has_override": True,
+                "override_id": 31,
+                "override_active": True,
+                "override_updated_at": datetime.now(timezone.utc).isoformat(),
                 "created_by": 7,
                 "updated_by": 7,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         ]
+        self.policy_overrides = {
+            11: {
+                "id": 31,
+                "assignment_id": 11,
+                "override_policy_document": {"allowed_tools": ["remote.fetch"]},
+                "is_active": True,
+                "broadens_access": True,
+                "grant_authority_snapshot": {"permissions": ["grant.tool.invoke"]},
+                "created_by": 7,
+                "updated_by": 7,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        }
         self.approval_policies = [
             {
                 "id": 17,
@@ -87,7 +105,13 @@ class _FakePolicyService:
         self.approval_decisions = []
 
     async def list_permission_profiles(self, **_kwargs):
-        return list(self.permission_profiles)
+        return self.permission_profiles
+
+    async def get_permission_profile(self, profile_id: int):
+        for profile in self.permission_profiles:
+            if int(profile.get("id") or 0) == int(profile_id):
+                return dict(profile)
+        return None
 
     async def create_permission_profile(self, **kwargs):
         profile = {
@@ -131,6 +155,12 @@ class _FakePolicyService:
     async def list_policy_assignments(self, **_kwargs):
         return list(self.policy_assignments)
 
+    async def get_policy_assignment(self, assignment_id: int):
+        for assignment in self.policy_assignments:
+            if int(assignment.get("id") or 0) == int(assignment_id):
+                return dict(assignment)
+        return None
+
     async def create_policy_assignment(self, **kwargs):
         assignment = {
             "id": 11,
@@ -142,6 +172,10 @@ class _FakePolicyService:
             "inline_policy_document": kwargs["inline_policy_document"],
             "approval_policy_id": kwargs.get("approval_policy_id"),
             "is_active": kwargs.get("is_active", True),
+            "has_override": False,
+            "override_id": None,
+            "override_active": False,
+            "override_updated_at": None,
             "created_by": kwargs.get("actor_id"),
             "updated_by": kwargs.get("actor_id"),
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -167,11 +201,65 @@ class _FakePolicyService:
         if kwargs.get("is_active") is not None:
             assignment["is_active"] = kwargs["is_active"]
         assignment["updated_by"] = kwargs.get("actor_id")
+        override = self.policy_overrides.get(assignment_id)
+        assignment["has_override"] = override is not None
+        assignment["override_id"] = override["id"] if override else None
+        assignment["override_active"] = bool(override and override.get("is_active"))
+        assignment["override_updated_at"] = override.get("updated_at") if override else None
         self.policy_assignments = [assignment]
         return assignment
 
     async def delete_policy_assignment(self, assignment_id: int, *, actor_id: int | None):
+        self.policy_overrides.pop(assignment_id, None)
         return assignment_id == 11 and actor_id == 7
+
+    async def get_policy_override(self, assignment_id: int):
+        return dict(self.policy_overrides[assignment_id]) if assignment_id in self.policy_overrides else None
+
+    async def upsert_policy_override(self, assignment_id: int, **kwargs):
+        if assignment_id != 11:
+            return None
+        existing = self.policy_overrides.get(assignment_id)
+        override_id = existing["id"] if existing else 31
+        row = {
+            "id": override_id,
+            "assignment_id": assignment_id,
+            "override_policy_document": kwargs["override_policy_document"],
+            "is_active": kwargs.get("is_active", True),
+            "broadens_access": kwargs.get("broadens_access", False),
+            "grant_authority_snapshot": kwargs.get("grant_authority_snapshot", {}),
+            "created_by": (existing or {}).get("created_by", kwargs.get("actor_id")),
+            "updated_by": kwargs.get("actor_id"),
+            "created_at": (existing or {}).get("created_at", datetime.now(timezone.utc).isoformat()),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.policy_overrides[assignment_id] = row
+        self.policy_assignments = [
+            {
+                **assignment,
+                "has_override": int(assignment.get("id") or 0) == assignment_id,
+                "override_id": override_id if int(assignment.get("id") or 0) == assignment_id else None,
+                "override_active": bool(row.get("is_active")) if int(assignment.get("id") or 0) == assignment_id else False,
+                "override_updated_at": row["updated_at"] if int(assignment.get("id") or 0) == assignment_id else None,
+            }
+            for assignment in self.policy_assignments
+        ]
+        return dict(row)
+
+    async def delete_policy_override(self, assignment_id: int, *, actor_id: int | None):
+        deleted = assignment_id in self.policy_overrides and actor_id == 7
+        self.policy_overrides.pop(assignment_id, None)
+        self.policy_assignments = [
+            {
+                **assignment,
+                "has_override": False if int(assignment.get("id") or 0) == assignment_id else assignment.get("has_override", False),
+                "override_id": None if int(assignment.get("id") or 0) == assignment_id else assignment.get("override_id"),
+                "override_active": False if int(assignment.get("id") or 0) == assignment_id else assignment.get("override_active", False),
+                "override_updated_at": None if int(assignment.get("id") or 0) == assignment_id else assignment.get("override_updated_at"),
+            }
+            for assignment in self.policy_assignments
+        ]
+        return deleted
 
     async def list_approval_policies(self, **_kwargs):
         return list(self.approval_policies)
@@ -263,7 +351,97 @@ class _FakePolicyResolver:
                     "owner_scope_id": user_id,
                     "profile_id": 5
                 }
+            ],
+            "provenance": [
+                {
+                    "field": "allowed_tools",
+                    "value": ["Bash(git *)"],
+                    "source_kind": "assignment_inline",
+                    "assignment_id": 11,
+                    "profile_id": 5,
+                    "override_id": None,
+                    "effect": "merged"
+                },
+                {
+                    "field": "allowed_tools",
+                    "value": ["remote.fetch"],
+                    "source_kind": "assignment_override",
+                    "assignment_id": 11,
+                    "profile_id": 5,
+                    "override_id": 31,
+                    "effect": "merged"
+                }
             ]
+        }
+
+
+class _FakeToolRegistryService:
+    def __init__(self) -> None:
+        self.list_entries_calls = 0
+        self.entries = [
+            {
+                "tool_name": "notes.search",
+                "display_name": "notes.search",
+                "module": "notes",
+                "category": "search",
+                "risk_class": "low",
+                "capabilities": ["filesystem.read"],
+                "mutates_state": False,
+                "uses_filesystem": False,
+                "uses_processes": False,
+                "uses_network": False,
+                "uses_credentials": False,
+                "supports_arguments_preview": True,
+                "path_boundable": False,
+                "metadata_source": "explicit",
+                "metadata_warnings": [],
+            },
+            {
+                "tool_name": "sandbox.run",
+                "display_name": "sandbox.run",
+                "module": "sandbox",
+                "category": "execution",
+                "risk_class": "high",
+                "capabilities": ["process.execute"],
+                "mutates_state": True,
+                "uses_filesystem": True,
+                "uses_processes": True,
+                "uses_network": False,
+                "uses_credentials": False,
+                "supports_arguments_preview": True,
+                "path_boundable": False,
+                "metadata_source": "heuristic",
+                "metadata_warnings": ["Derived from tool category"],
+            },
+        ]
+
+    async def list_entries(self):
+        self.list_entries_calls += 1
+        return list(self.entries)
+
+    async def list_modules(self):
+        return (await self.get_summary())["modules"]
+
+    async def get_summary(self):
+        entries = await self.list_entries()
+        return {
+            "entries": entries,
+            "modules": [
+                {
+                    "module": "notes",
+                    "display_name": "notes",
+                    "tool_count": 1,
+                    "risk_summary": {"low": 1, "medium": 0, "high": 0, "unclassified": 0},
+                    "metadata_warnings": [],
+                },
+                {
+                    "module": "sandbox",
+                    "display_name": "sandbox",
+                    "tool_count": 1,
+                    "risk_summary": {"low": 0, "medium": 0, "high": 1, "unclassified": 0},
+                    "metadata_warnings": ["Derived metadata present"],
+                },
+            ],
         }
 
 
@@ -272,6 +450,7 @@ def _build_app(
     service: _FakePolicyService | None = None,
     resolver: _FakePolicyResolver | None = None,
     *,
+    tool_registry: _FakeToolRegistryService | None = None,
     rate_limit_calls: list[str] | None = None,
 ) -> FastAPI:
     app = FastAPI()
@@ -285,6 +464,10 @@ def _build_app(
     app.dependency_overrides[mcp_hub_management.get_mcp_hub_policy_resolver_dep] = (
         lambda: resolver or _FakePolicyResolver()
     )
+    if hasattr(mcp_hub_management, "get_mcp_hub_tool_registry_dep"):
+        app.dependency_overrides[mcp_hub_management.get_mcp_hub_tool_registry_dep] = (
+            lambda: tool_registry or _FakeToolRegistryService()
+        )
     if rate_limit_calls is not None:
         async def _fake_check_rate_limit(_request: Request) -> None:
             rate_limit_calls.append("called")
@@ -310,6 +493,31 @@ def test_create_permission_profile_requires_grant_authority_for_capabilities() -
                 "owner_scope_id": 7,
                 "mode": "custom",
                 "policy_document": {"capabilities": ["process.execute"]},
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 403
+    assert "grant.process.execute" in resp.json()["detail"]
+
+
+def test_create_permission_profile_rejects_string_capability_without_grant_authority() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/permission-profiles",
+            json={
+                "name": "Process Exec",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "mode": "custom",
+                "policy_document": {"capabilities": "process.execute"},
                 "is_active": True,
             },
         )
@@ -605,6 +813,160 @@ def test_get_effective_policy_returns_resolved_payload() -> None:
     assert payload["allowed_tools"] == ["Bash(git *)"]
     assert payload["approval_mode"] == "ask_outside_profile"
     assert payload["sources"][0]["target_id"] == "researcher"
+    assert payload["provenance"][1]["source_kind"] == "assignment_override"
+
+
+def test_list_policy_assignments_includes_override_summary_fields() -> None:
+    app = _build_app(
+        _make_principal(
+            permissions=[SYSTEM_CONFIGURE, "grant.process.execute", "grant.tool.invoke"],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/policy-assignments")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload[0]["has_override"] is True
+    assert payload[0]["override_active"] is True
+    assert payload[0]["override_id"] == 31
+
+
+def test_get_policy_assignment_override_returns_payload() -> None:
+    app = _build_app(
+        _make_principal(
+            permissions=[SYSTEM_CONFIGURE, "grant.process.execute", "grant.tool.invoke"],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/policy-assignments/11/override")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["assignment_id"] == 11
+    assert payload["override_policy_document"]["allowed_tools"] == ["remote.fetch"]
+    assert payload["is_active"] is True
+
+
+def test_put_policy_assignment_override_returns_payload() -> None:
+    app = _build_app(
+        _make_principal(
+            permissions=[SYSTEM_CONFIGURE, "grant.process.execute", "grant.tool.invoke"],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/v1/mcp/hub/policy-assignments/11/override",
+            json={
+                "override_policy_document": {"allowed_tools": ["remote.fetch"]},
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["assignment_id"] == 11
+    assert payload["override_policy_document"]["allowed_tools"] == ["remote.fetch"]
+    assert payload["is_active"] is True
+
+
+def test_put_policy_assignment_override_requires_grant_authority_for_broadened_delta() -> None:
+    app = _build_app(
+        _make_principal(
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/v1/mcp/hub/policy-assignments/11/override",
+            json={
+                "override_policy_document": {"allowed_tools": ["remote.fetch"]},
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 403
+    assert "grant.tool.invoke" in resp.json()["detail"]
+
+
+def test_delete_policy_assignment_override_returns_ok() -> None:
+    app = _build_app(
+        _make_principal(
+            permissions=[SYSTEM_CONFIGURE, "grant.process.execute", "grant.tool.invoke"],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.delete("/api/v1/mcp/hub/policy-assignments/11/override")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+
+def test_list_tool_registry_returns_normalized_entries() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[],
+        ),
+        tool_registry=_FakeToolRegistryService(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/tool-registry")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert len(payload) == 2
+    assert payload[0]["tool_name"] == "notes.search"
+    assert payload[0]["risk_class"] == "low"
+    assert payload[1]["tool_name"] == "sandbox.run"
+    assert payload[1]["metadata_warnings"] == ["Derived from tool category"]
+
+
+def test_list_tool_registry_modules_returns_grouped_summary() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[],
+        ),
+        tool_registry=_FakeToolRegistryService(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/tool-registry/modules")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert len(payload) == 2
+    assert payload[0]["module"] == "notes"
+    assert payload[0]["tool_count"] == 1
+    assert payload[1]["module"] == "sandbox"
+    assert payload[1]["risk_summary"]["high"] == 1
+
+
+def test_get_tool_registry_summary_returns_entries_and_modules_from_one_scan() -> None:
+    registry = _FakeToolRegistryService()
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[],
+        ),
+        tool_registry=registry,
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/tool-registry/summary")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert len(payload["entries"]) == 2
+    assert len(payload["modules"]) == 2
+    assert registry.list_entries_calls == 1
 
 
 def test_list_permission_profiles_returns_visible_rows() -> None:

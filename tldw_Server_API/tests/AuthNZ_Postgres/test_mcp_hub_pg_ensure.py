@@ -55,3 +55,15 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     column_names = {str(row["column_name"]) for row in column_rows}
     assert "consume_on_match" in column_names
     assert "consumed_at" in column_names
+
+    override_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_policy_overrides'
+          AND column_name IN ('is_active')
+        """
+    )
+    override_column_names = {str(row["column_name"]) for row in override_column_rows}
+    assert "is_active" in override_column_names
