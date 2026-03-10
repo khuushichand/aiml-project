@@ -24,6 +24,9 @@ class RuntimePreflightResult:
     runtime: RuntimeType
     available: bool
     reasons: list[str] = field(default_factory=list)
+    supported_trust_levels: list[str] = field(
+        default_factory=lambda: ["trusted", "standard", "untrusted"]
+    )
     host: dict[str, Any] = field(default_factory=dict)
     enforcement_ready: dict[str, bool] = field(
         default_factory=lambda: {"deny_all": False, "allowlist": False}
