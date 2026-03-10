@@ -526,9 +526,34 @@ def record_persona_session_started(
     )
 
 
+def _watchlist_source_metadata(source: Any) -> dict[str, Any]:
+    settings = _value(source, "settings")
+    if settings is None:
+        raw_settings_json = _value(source, "settings_json")
+        if isinstance(raw_settings_json, str) and raw_settings_json.strip():
+            try:
+                settings = json.loads(raw_settings_json)
+            except Exception:
+                settings = None
+    settings_keys = sorted(str(key) for key in settings.keys()) if isinstance(settings, dict) else []
+    return {
+        "name": _value(source, "name"),
+        "url": _value(source, "url"),
+        "source_type": _value(source, "source_type"),
+        "active": _value(source, "active"),
+        "status": _value(source, "status"),
+        "group_ids": list(_value(source, "group_ids") or []),
+        "settings_keys": settings_keys,
+    }
+
+
+def _watchlist_source_timestamp(source: Any) -> str | None:
+    return _value(source, "updated_at") or _value(source, "created_at")
+
+
 def record_watchlist_source_created(*, user_id: str | int | None, source: Any) -> str | None:
-    source_id = str(getattr(source, "id"))
-    source_timestamp = getattr(source, "updated_at", None) or getattr(source, "created_at", None)
+    source_id = str(_value(source, "id"))
+    source_timestamp = _watchlist_source_timestamp(source)
     return record_companion_activity(
         user_id=user_id,
         event_type="watchlist_source_created",
@@ -542,10 +567,97 @@ def record_watchlist_source_created(*, user_id: str | int | None, source: Any) -
             action="create",
             source_timestamp=source_timestamp,
         ),
+        metadata=_watchlist_source_metadata(source),
+    )
+
+
+def record_watchlist_source_updated(
+    *,
+    user_id: str | int | None,
+    source: Any,
+    patch: dict[str, Any] | None = None,
+    event_timestamp: str | None = None,
+) -> str | None:
+    source_id = str(_value(source, "id"))
+    source_timestamp = event_timestamp or _watchlist_source_timestamp(source)
+    fingerprint = _payload_fingerprint(patch)
+    changed_fields = sorted(str(key) for key in dict(patch or {}).keys())
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="watchlist_source_updated",
+        source_type="watchlist_source",
+        source_id=source_id,
+        surface="api.watchlists",
+        dedupe_key=f"watchlists.source.update:{source_id}:{source_timestamp or 'na'}:{fingerprint}",
+        tags=list(_value(source, "tags") or []),
+        provenance=_explicit_provenance(
+            route=f"/api/v1/watchlists/sources/{source_id}",
+            action="update",
+            source_timestamp=source_timestamp,
+        ),
         metadata={
-            "name": getattr(source, "name", None),
-            "url": getattr(source, "url", None),
-            "source_type": getattr(source, "source_type", None),
+            **_watchlist_source_metadata(source),
+            "changed_fields": changed_fields,
+        },
+    )
+
+
+def record_watchlist_source_deleted(
+    *,
+    user_id: str | int | None,
+    source: Any,
+    event_timestamp: str | None = None,
+    restore_window_seconds: int | None = None,
+) -> str | None:
+    source_id = str(_value(source, "id"))
+    source_timestamp = event_timestamp or _watchlist_source_timestamp(source)
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="watchlist_source_deleted",
+        source_type="watchlist_source",
+        source_id=source_id,
+        surface="api.watchlists",
+        dedupe_key=f"watchlists.source.delete:{source_id}:{source_timestamp or 'na'}",
+        tags=list(_value(source, "tags") or []),
+        provenance=_explicit_provenance(
+            route=f"/api/v1/watchlists/sources/{source_id}",
+            action="delete",
+            source_timestamp=source_timestamp,
+        ),
+        metadata={
+            **_watchlist_source_metadata(source),
+            "deleted": True,
+            "hard_delete": False,
+            "restore_window_seconds": restore_window_seconds,
+        },
+    )
+
+
+def record_watchlist_source_restored(
+    *,
+    user_id: str | int | None,
+    source: Any,
+    event_timestamp: str | None = None,
+) -> str | None:
+    source_id = str(_value(source, "id"))
+    source_timestamp = event_timestamp or _watchlist_source_timestamp(source)
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="watchlist_source_restored",
+        source_type="watchlist_source",
+        source_id=source_id,
+        surface="api.watchlists",
+        dedupe_key=f"watchlists.source.restore:{source_id}:{source_timestamp or 'na'}",
+        tags=list(_value(source, "tags") or []),
+        provenance=_explicit_provenance(
+            route=f"/api/v1/watchlists/sources/{source_id}/restore",
+            action="restore",
+            source_timestamp=source_timestamp,
+        ),
+        metadata={
+            **_watchlist_source_metadata(source),
+            "deleted": False,
+            "hard_delete": False,
         },
     )
 

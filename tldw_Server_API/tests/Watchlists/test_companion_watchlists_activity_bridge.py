@@ -74,3 +74,66 @@ def test_watchlist_source_creation_records_companion_event(watchlists_app):
     assert event["tags"] == ["security", "feeds"]
     assert event["provenance"]["route"] == "/api/v1/watchlists/sources"
     assert event["metadata"]["name"] == "Security Feed"
+
+
+def test_watchlist_source_update_delete_and_restore_record_companion_events(watchlists_app):
+    app, personalization_db = watchlists_app
+
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/api/v1/watchlists/sources",
+            json={
+                "name": "Security Feed",
+                "url": "https://example.com/security.xml",
+                "source_type": "rss",
+                "tags": ["security", "feeds"],
+            },
+        )
+        assert create_response.status_code == 200, create_response.text
+        source_id = create_response.json()["id"]
+
+        update_response = client.patch(
+            f"/api/v1/watchlists/sources/{source_id}",
+            json={
+                "active": False,
+                "tags": ["security", "analysis"],
+            },
+        )
+        assert update_response.status_code == 200, update_response.text
+        updated = update_response.json()
+
+        delete_response = client.delete(f"/api/v1/watchlists/sources/{source_id}")
+        assert delete_response.status_code == 200, delete_response.text
+        deleted = delete_response.json()
+
+        restore_response = client.post(f"/api/v1/watchlists/sources/{source_id}/restore")
+        assert restore_response.status_code == 200, restore_response.text
+        restored = restore_response.json()
+
+    events, total = personalization_db.list_companion_activity_events("906", limit=10)
+    assert total == 4
+
+    event_types = [event["event_type"] for event in events]
+    assert event_types == [
+        "watchlist_source_restored",
+        "watchlist_source_deleted",
+        "watchlist_source_updated",
+        "watchlist_source_created",
+    ]
+
+    restored_event = events[0]
+    assert restored_event["source_id"] == str(source_id)
+    assert restored_event["metadata"]["deleted"] is False
+    assert restored_event["metadata"]["name"] == restored["name"]
+    assert restored_event["provenance"]["route"] == f"/api/v1/watchlists/sources/{source_id}/restore"
+
+    deleted_event = events[1]
+    assert deleted_event["metadata"]["deleted"] is True
+    assert deleted_event["metadata"]["hard_delete"] is False
+    assert deleted_event["metadata"]["restore_window_seconds"] == deleted["restore_window_seconds"]
+
+    updated_event = events[2]
+    assert updated_event["metadata"]["name"] == updated["name"]
+    assert updated_event["metadata"]["active"] is False
+    assert updated_event["metadata"]["changed_fields"] == ["active", "tags"]
+    assert updated_event["tags"] == ["security", "analysis"]

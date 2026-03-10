@@ -63,7 +63,12 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _get_scope
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.exceptions import TemplateValidationError
-from tldw_Server_API.app.core.Personalization.companion_activity import record_watchlist_source_created
+from tldw_Server_API.app.core.Personalization.companion_activity import (
+    record_watchlist_source_created,
+    record_watchlist_source_deleted,
+    record_watchlist_source_restored,
+    record_watchlist_source_updated,
+)
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime as _is_explicit_pytest_runtime
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
@@ -470,6 +475,32 @@ def _get_group_ids(db, source_id: int) -> list[int]:
         return db.get_source_group_ids(source_id)
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
         return []
+
+
+def _source_response_from_row(db: WatchlistsDatabase, row: Any) -> Source:
+    settings = None
+    try:
+        settings = json.loads(row.settings_json) if getattr(row, "settings_json", None) else None
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        settings = None
+    return Source(
+        id=row.id,
+        name=row.name,
+        url=row.url,
+        source_type=row.source_type,  # type: ignore[assignment]
+        active=bool(row.active),
+        tags=list(getattr(row, "tags", []) or []),
+        group_ids=_get_group_ids(db, row.id),
+        settings=settings,
+        last_scraped_at=row.last_scraped_at,
+        status=row.status,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _watchlists_event_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _is_truthy_env(raw: str | None) -> bool:
@@ -1469,20 +1500,7 @@ async def create_source(
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"create_source failed: {e}")
         raise HTTPException(status_code=400, detail="source_create_failed") from e
-    source = Source(
-        id=row.id,
-        name=row.name,
-        url=row.url,
-        source_type=row.source_type,  # type: ignore[assignment]
-        active=bool(row.active),
-        tags=row.tags,
-        group_ids=_get_group_ids(db, row.id),
-        settings=(json.loads(row.settings_json) if row.settings_json else None),
-        last_scraped_at=row.last_scraped_at,
-        status=row.status,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
+    source = _source_response_from_row(db, row)
     record_watchlist_source_created(user_id=current_user.id, source=source)
     return source
 
@@ -2099,7 +2117,8 @@ async def update_source(
                 logger.debug(f"watchlists.update_source: normalized YouTube URL {orig_url_for_log} -> {target_url}")
         else:
             _validate_youtube_feed_or_raise(target_url, target_type)
-    patch = payload.model_dump(exclude_unset=True)
+    activity_patch = payload.model_dump(exclude_unset=True)
+    patch = dict(activity_patch)
     group_ids = patch.pop("group_ids", None)
     if group_ids is not None:
         group_ids = _validate_group_ids(db, group_ids)
@@ -2125,20 +2144,15 @@ async def update_source(
                 "watchlists.update_source: failed to set source groups "
                 f"(source_id={source_id}, group_ids={group_ids})"
             )
-    return Source(
-        id=row.id,
-        name=row.name,
-        url=row.url,
-        source_type=row.source_type,  # type: ignore[assignment]
-        active=bool(row.active),
-        tags=getattr(row, "tags", []),
-        group_ids=_get_group_ids(db, row.id),
-        settings=(json.loads(row.settings_json) if row.settings_json else None),
-        last_scraped_at=row.last_scraped_at,
-        status=row.status,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
+    source = _source_response_from_row(db, row)
+    if activity_patch:
+        record_watchlist_source_updated(
+            user_id=current_user.id,
+            source=source,
+            patch=activity_patch,
+            event_timestamp=_watchlists_event_timestamp(),
+        )
+    return source
 
 
 @router.delete(
@@ -2151,12 +2165,24 @@ async def delete_source(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    existing_source = None
+    try:
+        existing_source = _source_response_from_row(db, db.get_source(source_id))
+    except KeyError:
+        existing_source = None
     ok, restore_expires_at = db.delete_source_reversible(
         source_id,
         undo_window_seconds=WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS,
     )
     if not ok or not restore_expires_at:
         raise HTTPException(status_code=404, detail="source_not_found")
+    if existing_source is not None:
+        record_watchlist_source_deleted(
+            user_id=current_user.id,
+            source=existing_source,
+            event_timestamp=_watchlists_event_timestamp(),
+            restore_window_seconds=WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS,
+        )
     return SourceDeleteResponse(
         success=True,
         source_id=int(source_id),
@@ -2180,20 +2206,13 @@ async def restore_source(
         raise HTTPException(status_code=404, detail=code) from None
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc) or "source_restore_conflict") from exc
-    return Source(
-        id=row.id,
-        name=row.name,
-        url=row.url,
-        source_type=row.source_type,  # type: ignore[assignment]
-        active=bool(row.active),
-        tags=row.tags,
-        group_ids=_get_group_ids(db, row.id),
-        settings=(json.loads(row.settings_json) if row.settings_json else None),
-        last_scraped_at=row.last_scraped_at,
-        status=row.status,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
+    source = _source_response_from_row(db, row)
+    record_watchlist_source_restored(
+        user_id=current_user.id,
+        source=source,
+        event_timestamp=_watchlists_event_timestamp(),
     )
+    return source
 
 
 @router.post(

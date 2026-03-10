@@ -20,6 +20,9 @@ from tldw_Server_API.app.core.Personalization.companion_activity import (
     record_reading_item_saved,
     record_reading_item_updated,
     record_watchlist_source_created,
+    record_watchlist_source_deleted,
+    record_watchlist_source_restored,
+    record_watchlist_source_updated,
 )
 from tldw_Server_API.app.core.Personalization.companion_context import load_companion_context
 from tldw_Server_API.app.core.Personalization.companion_derivations import derive_companion_knowledge_cards
@@ -46,4 +49,7 @@ __all__ = [
     "record_reading_item_saved",
     "record_reading_item_updated",
     "record_watchlist_source_created",
+    "record_watchlist_source_deleted",
+    "record_watchlist_source_restored",
+    "record_watchlist_source_updated",
 ]

@@ -12,6 +12,9 @@ from tldw_Server_API.app.core.Personalization.companion_activity import (
     record_note_updated,
     record_reminder_task_deleted,
     record_reminder_task_updated,
+    record_watchlist_source_deleted,
+    record_watchlist_source_restored,
+    record_watchlist_source_updated,
 )
 from tldw_Server_API.app.core.config import settings
 
@@ -235,3 +238,70 @@ def test_reminder_task_update_and_delete_adapters_capture_compact_metadata(compa
     assert updated_event["metadata"]["changed_fields"] == ["enabled", "title"]
     assert updated_event["metadata"]["schedule_kind"] == "one_time"
     assert updated_event["metadata"]["link_type"] == "note"
+
+
+def test_watchlist_source_update_delete_and_restore_adapters_capture_compact_metadata(companion_db_env):
+    user_id = "81"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    db.update_profile(user_id, enabled=1)
+
+    source = {
+        "id": 202,
+        "name": "Security Feed",
+        "url": "https://example.com/security.xml",
+        "source_type": "rss",
+        "active": True,
+        "tags": ["security", "feeds"],
+        "group_ids": [7, 9],
+        "settings": {"poll_minutes": 30, "include_summary": True},
+        "status": "ok",
+        "created_at": "2026-03-10T08:00:00Z",
+        "updated_at": "2026-03-10T09:00:00Z",
+    }
+
+    updated = record_watchlist_source_updated(
+        user_id=user_id,
+        source={**source, "active": False, "tags": ["security", "analysis"]},
+        patch={"active": False, "tags": ["security", "analysis"]},
+        event_timestamp="2026-03-10T09:15:00Z",
+    )
+    deleted = record_watchlist_source_deleted(
+        user_id=user_id,
+        source={**source, "active": False, "tags": ["security", "analysis"]},
+        event_timestamp="2026-03-10T09:30:00Z",
+        restore_window_seconds=300,
+    )
+    restored = record_watchlist_source_restored(
+        user_id=user_id,
+        source={**source, "active": False, "tags": ["security", "analysis"]},
+        event_timestamp="2026-03-10T09:35:00Z",
+    )
+
+    assert updated
+    assert deleted
+    assert restored
+
+    events, total = db.list_companion_activity_events(user_id, limit=10)
+    assert total == 3
+
+    restored_event = events[0]
+    assert restored_event["event_type"] == "watchlist_source_restored"
+    assert restored_event["metadata"]["deleted"] is False
+    assert restored_event["metadata"]["hard_delete"] is False
+    assert restored_event["provenance"]["route"] == "/api/v1/watchlists/sources/202/restore"
+
+    deleted_event = events[1]
+    assert deleted_event["event_type"] == "watchlist_source_deleted"
+    assert deleted_event["source_type"] == "watchlist_source"
+    assert deleted_event["surface"] == "api.watchlists"
+    assert deleted_event["metadata"]["deleted"] is True
+    assert deleted_event["metadata"]["hard_delete"] is False
+    assert deleted_event["metadata"]["restore_window_seconds"] == 300
+    assert deleted_event["metadata"]["settings_keys"] == ["include_summary", "poll_minutes"]
+
+    updated_event = events[2]
+    assert updated_event["event_type"] == "watchlist_source_updated"
+    assert updated_event["tags"] == ["security", "analysis"]
+    assert updated_event["metadata"]["changed_fields"] == ["active", "tags"]
+    assert updated_event["metadata"]["group_ids"] == [7, 9]
+    assert updated_event["provenance"]["action"] == "update"
