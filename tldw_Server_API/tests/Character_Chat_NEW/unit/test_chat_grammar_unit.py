@@ -8,7 +8,7 @@ per-user ChaChaNotes database.
 import pytest
 
 from tldw_Server_API.app.core.Character_Chat.chat_grammar import ChatGrammarService
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import ConflictError
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
 
 
 class TestChatGrammarService:
@@ -150,3 +150,32 @@ class TestChatGrammarService:
         deleted = service.get_grammar(grammar_id, include_deleted=True, include_archived=True)
         assert deleted is not None
         assert deleted["deleted"] is True
+
+    @pytest.mark.unit
+    def test_chat_grammar_service_scopes_same_name_per_client_on_shared_db(self, tmp_path):
+        db_path = tmp_path / "shared_chacha.db"
+        db_user_a = CharactersRAGDB(db_path=str(db_path), client_id="user-a")
+        db_user_b = CharactersRAGDB(db_path=str(db_path), client_id="user-b")
+
+        try:
+            service_user_a = ChatGrammarService(db_user_a)
+            service_user_b = ChatGrammarService(db_user_b)
+
+            grammar_a = service_user_a.create_grammar(
+                name="Shared Grammar",
+                description="user a",
+                grammar_text='root ::= "a"',
+            )
+            grammar_b = service_user_b.create_grammar(
+                name="Shared Grammar",
+                description="user b",
+                grammar_text='root ::= "b"',
+            )
+
+            assert [item["id"] for item in service_user_a.list_grammars()] == [grammar_a]
+            assert [item["id"] for item in service_user_b.list_grammars()] == [grammar_b]
+            assert service_user_a.get_grammar(grammar_b, include_archived=True, include_deleted=True) is None
+            assert service_user_b.get_grammar(grammar_a, include_archived=True, include_deleted=True) is None
+        finally:
+            db_user_a.close_connection()
+            db_user_b.close_connection()

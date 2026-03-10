@@ -17,6 +17,7 @@ _LLAMA_CPP_EXTENSION_FIELDS = (
 
 
 def _coerce_bool(value: Any) -> bool:
+    """Normalize permissive truthy inputs used in llama.cpp runtime settings."""
     if isinstance(value, bool):
         return value
     if value is None:
@@ -29,10 +30,12 @@ def _coerce_bool(value: Any) -> bool:
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
+    """Return `value` as a mapping, falling back to an empty mapping."""
     return value if isinstance(value, Mapping) else {}
 
 
 def _has_llamacpp_extension_values(request_fields: Mapping[str, Any]) -> bool:
+    """Report whether a request carries any non-empty llama.cpp extension fields."""
     grammar_mode = request_fields.get("grammar_mode")
     if grammar_mode not in (None, "", "none"):
         return True
@@ -44,6 +47,12 @@ def resolve_llamacpp_runtime_caps(
     app_config: Mapping[str, Any] | None = None,
     runtime_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Resolve deployment-specific llama.cpp capability metadata.
+
+    The returned mapping captures whether strict OpenAI compatibility is active,
+    whether a per-request thinking-budget key is configured, and which raw
+    `extra_body` keys the UI should reserve for first-class llama.cpp controls.
+    """
     context = dict(runtime_context or {})
     llama_settings = _as_mapping(_as_mapping(app_config).get("llama_api"))
     local_api_settings = _as_mapping(_as_mapping(app_config).get("local_api"))
@@ -81,6 +90,7 @@ def _resolve_grammar_text(
     request_fields: Mapping[str, Any],
     grammar_record: Mapping[str, Any] | None,
 ) -> str | None:
+    """Choose the final grammar text for a llama.cpp request, if any."""
     grammar_mode = request_fields.get("grammar_mode")
     if grammar_mode == "library":
         if not isinstance(grammar_record, Mapping):
@@ -102,6 +112,12 @@ def resolve_llamacpp_request_extensions(
     grammar_record: Mapping[str, Any] | None,
     runtime_caps: Mapping[str, Any],
 ) -> dict[str, Any]:
+    """Translate app-level llama.cpp controls into provider `extra_body` fields.
+
+    This resolver applies provider guards, strict-compatibility checks, saved
+    grammar resolution, and thinking-budget mapping in one place so every chat
+    caller produces a consistent outbound llama.cpp payload.
+    """
     raw_extra_body = request_fields.get("extra_body")
     has_original_extra_body = isinstance(raw_extra_body, Mapping)
     extra_body = dict(raw_extra_body) if has_original_extra_body else {}

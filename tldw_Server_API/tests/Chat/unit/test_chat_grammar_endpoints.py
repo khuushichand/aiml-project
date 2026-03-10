@@ -29,6 +29,19 @@ def test_chat_grammar_router_exposes_expected_paths():
     assert "/grammars/{grammar_id}" in paths
 
 
+def test_chat_grammar_route_handlers_have_docstrings():
+    handlers = (
+        chat_grammar_endpoints.create_chat_grammar,
+        chat_grammar_endpoints.list_chat_grammars,
+        chat_grammar_endpoints.get_chat_grammar,
+        chat_grammar_endpoints.update_chat_grammar,
+        chat_grammar_endpoints.delete_chat_grammar,
+    )
+
+    for handler in handlers:
+        assert handler.__doc__
+
+
 @pytest.mark.asyncio
 async def test_create_and_list_chat_grammars(chacha_db: CharactersRAGDB):
     created = await chat_endpoints.create_chat_grammar(

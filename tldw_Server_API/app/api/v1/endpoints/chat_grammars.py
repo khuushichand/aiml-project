@@ -38,6 +38,7 @@ async def create_chat_grammar(
     grammar: ChatGrammarCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> ChatGrammarResponse:
+    """Create a saved llama.cpp grammar for the current user."""
     service = ChatGrammarService(db)
     try:
         grammar_id = service.create_grammar(
@@ -75,6 +76,7 @@ async def list_chat_grammars(
     offset: int = Query(0, ge=0, description="Pagination offset"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> ChatGrammarListResponse:
+    """List saved llama.cpp grammars visible to the current user."""
     try:
         service = ChatGrammarService(db)
         grammars = service.list_grammars(
@@ -105,6 +107,7 @@ async def get_chat_grammar(
     include_archived: bool = Query(False, description="Allow archived grammars to be returned"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> ChatGrammarResponse:
+    """Fetch one saved llama.cpp grammar owned by the current user."""
     try:
         service = ChatGrammarService(db)
         grammar = service.get_grammar(grammar_id, include_archived=include_archived)
@@ -131,6 +134,7 @@ async def update_chat_grammar(
     update: ChatGrammarUpdate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> ChatGrammarResponse:
+    """Update a saved llama.cpp grammar owned by the current user."""
     service = ChatGrammarService(db)
     try:
         current = service.get_grammar(grammar_id, include_archived=True)
@@ -170,6 +174,7 @@ async def delete_chat_grammar(
     hard_delete: bool = Query(False, description="Permanently delete instead of soft delete"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> Response:
+    """Delete a saved llama.cpp grammar owned by the current user."""
     service = ChatGrammarService(db)
     try:
         deleted = service.delete_grammar(grammar_id, hard_delete=hard_delete)

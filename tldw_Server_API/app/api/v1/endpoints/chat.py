@@ -2803,20 +2803,25 @@ async def create_chat_completion(
                     loop=current_loop,
                 )
 
-            llamacpp_grammar_record: dict[str, Any] | None = None
-            if target_api_provider == "llama.cpp" and getattr(request_data, "grammar_mode", None) == "library":
+            def _resolve_llamacpp_grammar_record(target_provider: str) -> dict[str, Any] | None:
+                """Resolve the saved llama.cpp grammar record for the active provider."""
+                if target_provider != "llama.cpp" or getattr(request_data, "grammar_mode", None) != "library":
+                    return None
                 grammar_id = str(getattr(request_data, "grammar_id", "") or "").strip()
                 if not grammar_id:
                     raise ChatBadRequestError(
-                        provider=target_api_provider,
+                        provider=target_provider,
                         message="grammar_id is required when grammar_mode is 'library'",
                     )
-                llamacpp_grammar_record = chat_db.get_chat_grammar(grammar_id)
-                if not isinstance(llamacpp_grammar_record, dict):
+                grammar_record = chat_db.get_chat_grammar(grammar_id)
+                if not isinstance(grammar_record, dict):
                     raise ChatBadRequestError(
-                        provider=target_api_provider,
+                        provider=target_provider,
                         message="Saved grammar could not be resolved",
                     )
+                return grammar_record
+
+            llamacpp_grammar_record = _resolve_llamacpp_grammar_record(target_api_provider)
 
             # --- LLM Call ---
             cleaned_args = build_call_params_from_request(
@@ -2907,6 +2912,7 @@ async def create_chat_completion(
                         },
                     )
 
+                refreshed_llamacpp_grammar_record = _resolve_llamacpp_grammar_record(target_provider)
                 refreshed_args = build_call_params_from_request(
                     request_data=request_data,
                     target_api_provider=target_provider,
@@ -2914,7 +2920,7 @@ async def create_chat_completion(
                     templated_llm_payload=templated_llm_payload,
                     final_system_message=final_system_message,
                     app_config=refreshed_resolution.app_config,
-                    grammar_record=llamacpp_grammar_record,
+                    grammar_record=refreshed_llamacpp_grammar_record,
                 )
                 refreshed_args["request"] = request
                 refreshed_model = refreshed_args.get("model")

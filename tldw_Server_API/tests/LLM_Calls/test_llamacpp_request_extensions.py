@@ -5,6 +5,7 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
 from tldw_Server_API.app.core.Chat.chat_service import build_call_params_from_request
 from tldw_Server_API.app.core.LLM_Calls.llamacpp_request_extensions import (
     resolve_llamacpp_request_extensions,
+    resolve_llamacpp_runtime_caps,
 )
 
 
@@ -85,3 +86,8 @@ def test_build_call_params_rejects_llamacpp_fields_for_non_llamacpp_provider() -
             final_system_message=None,
             app_config=None,
         )
+
+
+def test_llamacpp_request_extension_helpers_have_docstrings() -> None:
+    assert resolve_llamacpp_runtime_caps.__doc__
+    assert resolve_llamacpp_request_extensions.__doc__
