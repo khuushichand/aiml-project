@@ -3,7 +3,8 @@ import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import MonitoringPage, { normalizeHealthStatus } from '../page';
+import MonitoringPage from '../page';
+import { normalizeHealthStatus } from '../status-utils';
 import { api } from '@/lib/api-client';
 import { formatAxeViolations, getCriticalAndSeriousAxeViolations } from '@/test-utils/axe';
 
