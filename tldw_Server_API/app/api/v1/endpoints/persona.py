@@ -3570,15 +3570,10 @@ async def persona_stream(
                         reason_code="STEP_IDX_INVALID",
                     )
                     continue
-                step_args = msg.get("args")
-                if not isinstance(step_args, dict):
-                    step_args = {}
                 step_type = _normalize_persona_step_type(
                     str(msg.get("step_type") or "mcp_tool"),
                     tool_name=tool_name,
                 )
-                why = str(msg.get("why") or "").strip() or None
-                description = str(msg.get("description") or "").strip() or None
                 pending_retry = _consume_pending_retry_approval(
                     session_id=session_id,
                     plan_id=plan_id,
@@ -3596,6 +3591,18 @@ async def persona_stream(
                         reason_code="APPROVAL_RETRY_NOT_FOUND",
                     )
                     continue
+                plan_id = str(pending_retry.get("plan_id") or plan_id)
+                step_idx = int(pending_retry.get("step_idx") or step_idx)
+                tool_name = str(pending_retry.get("tool") or tool_name)
+                step_type = _normalize_persona_step_type(
+                    pending_retry.get("step_type"),
+                    tool_name=tool_name,
+                )
+                step_args = pending_retry.get("args")
+                if not isinstance(step_args, dict):
+                    step_args = {}
+                why = str(pending_retry.get("why") or "").strip() or None
+                description = str(pending_retry.get("description") or "").strip() or None
 
                 runtime_context = _load_persona_policy_rules_for_session(
                     persona_scope_db,

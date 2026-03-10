@@ -997,9 +997,9 @@ def test_persona_retry_tool_call_reexecutes_mcp_step(tmp_path, monkeypatch):
                         "step_idx": 0,
                         "step_type": "mcp_tool",
                         "tool": "knowledge.search",
-                        "args": {"query": "retry me"},
-                        "why": "Retry after approval",
-                        "description": "Retry knowledge search",
+                        "args": {"query": "tampered retry args"},
+                        "why": "tampered why",
+                        "description": "tampered description",
                     }
                 )
             )
@@ -1014,6 +1014,8 @@ def test_persona_retry_tool_call_reexecutes_mcp_step(tmp_path, monkeypatch):
             assert evt_result.get("output", {}).get("retry") is True
 
     assert len(fake_server.calls) == 1
+    request = fake_server.calls[0]["request"]
+    assert request.params["arguments"]["query"] == "retry me"
 
 
 def test_persona_policy_blocks_skill_without_persona_allow(tmp_path, monkeypatch):
