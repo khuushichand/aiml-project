@@ -1102,6 +1102,223 @@ def test_persona_policy_allows_mcp_tool_when_rules_intersect(tmp_path, monkeypat
     assert metadata.get("allowed_tools") == ["knowledge.search"]
 
 
+def test_persona_tool_result_surfaces_runtime_approval_payload(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    base = tmp_path / "user_db_mcp_approval"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-ws-mcp-approval-test")
+    try:
+        persona_id = db.create_persona_profile(
+            {
+                "id": "research_assistant",
+                "user_id": "1",
+                "name": "Research Assistant",
+                "mode": "session_scoped",
+                "system_prompt": "Helper",
+                "is_active": True,
+            }
+        )
+        _ = db.replace_persona_policy_rules(
+            persona_id=persona_id,
+            user_id="1",
+            rules=[{"rule_kind": "mcp_tool", "rule_name": "knowledge.search", "allowed": True}],
+        )
+        _ = db.create_persona_session(
+            {
+                "id": "sess_policy_approval_mcp",
+                "persona_id": persona_id,
+                "user_id": "1",
+                "mode": "session_scoped",
+                "reuse_allowed": False,
+                "status": "active",
+                "scope_snapshot_json": {},
+            }
+        )
+    finally:
+        db.close_connection()
+
+    manager = SessionManager()
+    manager.put_plan(
+        session_id="sess_policy_approval_mcp",
+        user_id="1",
+        persona_id="research_assistant",
+        plan_id="plan_policy_approval_mcp",
+        steps=[
+            {
+                "idx": 0,
+                "step_type": "mcp_tool",
+                "tool": "knowledge.search",
+                "args": {"query": "approval needed"},
+            }
+        ],
+    )
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            return SimpleNamespace(
+                error=SimpleNamespace(
+                    message="Runtime approval required",
+                    data={
+                        "approval": {
+                            "approval_policy_id": 17,
+                            "mode": "ask_outside_profile",
+                            "tool_name": "knowledge.search",
+                            "context_key": "user:1|group:|persona:research_assistant",
+                            "conversation_id": "sess_policy_approval_mcp",
+                            "scope_key": "tool:knowledge.search",
+                            "reason": "outside_profile",
+                            "duration_options": ["once", "session"],
+                            "arguments_summary": {"query": "approval needed"},
+                        }
+                    },
+                ),
+                result=None,
+            )
+
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: _FakeServer())
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": "sess_policy_approval_mcp",
+                        "plan_id": "plan_policy_approval_mcp",
+                        "approved_steps": [0],
+                    }
+                )
+            )
+
+            evt_result = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+            assert evt_result.get("ok") is False
+            assert evt_result.get("reason_code") == "APPROVAL_REQUIRED"
+            assert evt_result.get("tool") == "knowledge.search"
+            assert evt_result.get("approval", {}).get("mode") == "ask_outside_profile"
+            assert evt_result.get("approval", {}).get("conversation_id") == "sess_policy_approval_mcp"
+            assert evt_result.get("approval", {}).get("arguments_summary") == {
+                "query": "approval needed"
+            }
+
+
+def test_persona_retry_tool_call_reexecutes_mcp_step(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    base = tmp_path / "user_db_mcp_retry"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-ws-mcp-retry-test")
+    try:
+        persona_id = db.create_persona_profile(
+            {
+                "id": "research_assistant",
+                "user_id": "1",
+                "name": "Research Assistant",
+                "mode": "session_scoped",
+                "system_prompt": "Helper",
+                "is_active": True,
+            }
+        )
+        _ = db.replace_persona_policy_rules(
+            persona_id=persona_id,
+            user_id="1",
+            rules=[{"rule_kind": "mcp_tool", "rule_name": "knowledge.search", "allowed": True}],
+        )
+        _ = db.create_persona_session(
+            {
+                "id": "sess_policy_retry_mcp",
+                "persona_id": persona_id,
+                "user_id": "1",
+                "mode": "session_scoped",
+                "reuse_allowed": False,
+                "status": "active",
+                "scope_snapshot_json": {},
+            }
+        )
+    finally:
+        db.close_connection()
+
+    manager = SessionManager()
+    manager.create(user_id="1", persona_id="research_assistant", resume_session_id="sess_policy_retry_mcp")
+    manager.update_preferences(
+        session_id="sess_policy_retry_mcp",
+        user_id="1",
+        preferences={
+            "pending_retry_approvals": {
+                "plan_policy_retry_mcp|0|knowledge.search": {
+                    "plan_id": "plan_policy_retry_mcp",
+                    "step_idx": 0,
+                    "step_type": "mcp_tool",
+                    "tool": "knowledge.search",
+                    "args": {"query": "retry me"},
+                    "why": "Retry after approval",
+                    "description": "Retry knowledge search",
+                }
+            }
+        },
+    )
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+            self.calls = []
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            self.calls.append({"request": request, "user_id": user_id, "metadata": metadata})
+            return SimpleNamespace(error=None, result={"ok": True, "retry": True})
+
+    fake_server = _FakeServer()
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: fake_server)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "retry_tool_call",
+                        "session_id": "sess_policy_retry_mcp",
+                        "plan_id": "plan_policy_retry_mcp",
+                        "step_idx": 0,
+                        "step_type": "mcp_tool",
+                        "tool": "knowledge.search",
+                        "args": {"query": "tampered retry args"},
+                        "why": "tampered why",
+                        "description": "tampered description",
+                    }
+                )
+            )
+
+            evt_call = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            assert evt_call.get("tool") == "knowledge.search"
+            assert evt_call.get("step_idx") == 0
+            assert evt_call.get("plan_id") == "plan_policy_retry_mcp"
+
+            evt_result = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+            assert evt_result.get("ok") is True
+            assert evt_result.get("output", {}).get("retry") is True
+
+    assert len(fake_server.calls) == 1
+    request = fake_server.calls[0]["request"]
+    assert request.params["arguments"]["query"] == "retry me"
+
+
 def test_persona_policy_blocks_skill_without_persona_allow(tmp_path, monkeypatch):
     from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
