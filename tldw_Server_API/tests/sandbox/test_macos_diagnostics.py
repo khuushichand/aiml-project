@@ -3,6 +3,19 @@ from __future__ import annotations
 import tldw_Server_API.app.core.Sandbox.macos_diagnostics as diagnostics_module
 
 
+def _patch_macos_host(monkeypatch) -> None:
+    monkeypatch.setattr(
+        diagnostics_module,
+        "vz_host_facts",
+        lambda: {
+            "os": "darwin",
+            "arch": "arm64",
+            "apple_silicon": True,
+        },
+    )
+    monkeypatch.setattr(diagnostics_module.platform, "mac_ver", lambda: ("15.0", ("", "", ""), ""))
+
+
 def _sample_diagnostics_payload() -> dict:
     return {
         "host": {
@@ -43,8 +56,7 @@ def _sample_diagnostics_payload() -> dict:
 
 
 def test_collect_macos_diagnostics_reports_missing_helper_and_templates(monkeypatch) -> None:
-    monkeypatch.setattr(diagnostics_module.sys, "platform", "darwin")
-    monkeypatch.setattr(diagnostics_module.platform, "machine", lambda: "arm64")
+    _patch_macos_host(monkeypatch)
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.delenv("TLDW_SANDBOX_MACOS_HELPER_PATH", raising=False)
     monkeypatch.delenv("TLDW_SANDBOX_MACOS_HELPER_READY", raising=False)
@@ -68,8 +80,7 @@ def test_collect_macos_diagnostics_reports_missing_helper_and_templates(monkeypa
 
 
 def test_collect_macos_diagnostics_separates_policy_from_host_readiness(monkeypatch) -> None:
-    monkeypatch.setattr(diagnostics_module.sys, "platform", "darwin")
-    monkeypatch.setattr(diagnostics_module.platform, "machine", lambda: "arm64")
+    _patch_macos_host(monkeypatch)
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("TLDW_SANDBOX_SEATBELT_AVAILABLE", "1")
     monkeypatch.delenv("TLDW_SANDBOX_SEATBELT_STANDARD_ENABLED", raising=False)
@@ -81,8 +92,7 @@ def test_collect_macos_diagnostics_separates_policy_from_host_readiness(monkeypa
 
 
 def test_collect_macos_diagnostics_uses_optional_operator_metadata_env(monkeypatch) -> None:
-    monkeypatch.setattr(diagnostics_module.sys, "platform", "darwin")
-    monkeypatch.setattr(diagnostics_module.platform, "machine", lambda: "arm64")
+    _patch_macos_host(monkeypatch)
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("TLDW_SANDBOX_MACOS_HELPER_PATH", "/tmp/macos-helper")
     monkeypatch.setenv("TLDW_SANDBOX_VZ_LINUX_TEMPLATE_SOURCE", "/tmp/vz-linux.img")
@@ -94,8 +104,7 @@ def test_collect_macos_diagnostics_uses_optional_operator_metadata_env(monkeypat
 
 
 def test_collect_macos_diagnostics_treats_ready_helper_as_configured_without_path(monkeypatch) -> None:
-    monkeypatch.setattr(diagnostics_module.sys, "platform", "darwin")
-    monkeypatch.setattr(diagnostics_module.platform, "machine", lambda: "arm64")
+    _patch_macos_host(monkeypatch)
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("TLDW_SANDBOX_MACOS_HELPER_READY", "1")
     monkeypatch.delenv("TLDW_SANDBOX_MACOS_HELPER_PATH", raising=False)

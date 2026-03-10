@@ -44,7 +44,7 @@ def _build_app_with_overrides(principal: AuthPrincipal) -> FastAPI:
         )
         return principal
 
-    async def _fake_get_request_user():
+    async def _fake_get_request_user() -> SimpleNamespace:
         return SimpleNamespace(
             id=1,
             username="sandbox-admin",

@@ -1,3 +1,5 @@
+"""Shared, side-effect-free diagnostics for macOS sandbox runtimes."""
+
 from __future__ import annotations
 
 import os
@@ -51,6 +53,8 @@ def _remediation_for_reasons(reasons: list[str]) -> str | None:
 
 
 def probe_host() -> dict[str, object]:
+    """Report coarse host facts and whether the host can support VZ runtimes."""
+
     facts = vz_host_facts()
     reasons: list[str] = []
     if facts.get("os") != "darwin":
@@ -66,6 +70,8 @@ def probe_host() -> dict[str, object]:
 
 
 def probe_helper() -> dict[str, object]:
+    """Report helper readiness plus optional operator metadata such as local path facts."""
+
     raw_path = str(os.getenv("TLDW_SANDBOX_MACOS_HELPER_PATH") or "").strip()
     path = raw_path or None
     ready = _truthy(os.getenv("TLDW_SANDBOX_MACOS_HELPER_READY"))
@@ -121,6 +127,8 @@ def _template_status(
 
 
 def probe_templates() -> dict[str, dict[str, object]]:
+    """Report template readiness for the VZ runtime families."""
+
     return {
         "vz_linux": _template_status(
             source_env_key="TLDW_SANDBOX_VZ_LINUX_TEMPLATE_SOURCE",
@@ -139,6 +147,8 @@ def probe_runtime_statuses(
     *,
     runtime_preflights: dict[RuntimeType, RuntimePreflightResult],
 ) -> dict[str, dict[str, object]]:
+    """Summarize admin-facing runtime posture from shared runtime preflight results."""
+
     statuses: dict[str, dict[str, object]] = {}
     for runtime in (RuntimeType.vz_linux, RuntimeType.vz_macos, RuntimeType.seatbelt):
         preflight = runtime_preflights.get(runtime)
@@ -154,6 +164,8 @@ def probe_runtime_statuses(
 
 
 def collect_macos_diagnostics() -> dict[str, Any]:
+    """Aggregate host, helper, template, and runtime diagnostics for admin callers."""
+
     host = probe_host()
     helper = probe_helper()
     templates = probe_templates()

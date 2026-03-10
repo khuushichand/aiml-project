@@ -270,6 +270,8 @@ class SandboxAdminUsageResponse(BaseModel):
 
 
 class SandboxAdminMacOSHostDiagnostics(BaseModel):
+    """Admin-facing host facts for macOS sandbox readiness checks."""
+
     os: str
     arch: str
     apple_silicon: bool
@@ -279,6 +281,8 @@ class SandboxAdminMacOSHostDiagnostics(BaseModel):
 
 
 class SandboxAdminMacOSHelperDiagnostics(BaseModel):
+    """Admin-facing helper readiness and optional helper metadata."""
+
     configured: bool
     path: str | None = None
     exists: bool
@@ -289,6 +293,8 @@ class SandboxAdminMacOSHelperDiagnostics(BaseModel):
 
 
 class SandboxAdminMacOSTemplateDiagnostics(BaseModel):
+    """Admin-facing template readiness for a single VZ runtime family."""
+
     configured: bool
     ready: bool
     source: str | None = None
@@ -296,6 +302,8 @@ class SandboxAdminMacOSTemplateDiagnostics(BaseModel):
 
 
 class SandboxAdminMacOSRuntimeDiagnostics(BaseModel):
+    """Admin-facing runtime posture derived from shared runtime preflight checks."""
+
     available: bool
     supported_trust_levels: list[TrustLevelType] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
@@ -304,6 +312,8 @@ class SandboxAdminMacOSRuntimeDiagnostics(BaseModel):
 
 
 class SandboxAdminMacOSDiagnosticsResponse(BaseModel):
+    """Structured admin response for macOS sandbox diagnostics."""
+
     host: SandboxAdminMacOSHostDiagnostics
     helper: SandboxAdminMacOSHelperDiagnostics
     templates: dict[str, SandboxAdminMacOSTemplateDiagnostics] = Field(default_factory=dict)

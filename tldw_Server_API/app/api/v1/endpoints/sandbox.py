@@ -2227,11 +2227,11 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     summary="Admin: macOS sandbox diagnostics",
 )
 async def admin_macos_diagnostics(
-    principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
-    current_user: User = Depends(get_request_user),
+    _principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
+    _current_user: User = Depends(get_request_user),
 ) -> SandboxAdminMacOSDiagnosticsResponse:
-    del principal
-    del current_user
+    """Return detailed macOS sandbox diagnostics for admin troubleshooting."""
+
     return SandboxAdminMacOSDiagnosticsResponse.model_validate(_service.macos_diagnostics())
 
 @router.get(
