@@ -2,6 +2,8 @@ import type {
   McpHubApprovalDuration,
   McpHubApprovalMode,
   McpHubAssignmentTargetType,
+  McpHubEffectiveExternalAccessEntry,
+  McpHubExternalServer,
   McpHubPathScopeMode,
   McpHubPermissionPolicyDocument,
   McpHubProfileMode,
@@ -191,4 +193,36 @@ export const getPathScopeLabel = (value: McpHubPathScopeMode | string | null | u
     return null
   }
   return MCP_HUB_PATH_SCOPE_OPTIONS.find((option) => option.value === normalized)?.label || normalized
+}
+
+export const getManagedExternalServers = (
+  servers: McpHubExternalServer[] | undefined | null
+): McpHubExternalServer[] =>
+  (servers || []).filter(
+    (server) => server.server_source !== "legacy" && !server.superseded_by_server_id
+  )
+
+export const getExternalBlockedReasonLabel = (
+  value: McpHubEffectiveExternalAccessEntry["blocked_reason"] | string | null | undefined
+): string | null => {
+  const normalized = String(value || "").trim()
+  if (!normalized) {
+    return null
+  }
+  if (normalized === "disabled_by_assignment") {
+    return "Disabled by assignment"
+  }
+  if (normalized === "missing_secret") {
+    return "Missing secret"
+  }
+  if (normalized === "server_disabled") {
+    return "Server disabled"
+  }
+  if (normalized === "legacy_inventory_only") {
+    return "Legacy inventory only"
+  }
+  if (normalized === "external_capability_not_granted") {
+    return "External capability not granted"
+  }
+  return normalized.replaceAll("_", " ")
 }

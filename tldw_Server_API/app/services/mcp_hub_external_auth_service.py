@@ -17,14 +17,22 @@ class ManagedExternalAuthBridge:
         config = dict(server_config.get("config") or {})
         auth = dict(config.get("auth") or {})
         mode = str(auth.get("mode") or "none").strip().lower()
-        secret = str(secret_payload.get("secret") or "").strip()
+        secret = str(
+            secret_payload.get("secret")
+            or secret_payload.get("api_key")
+            or ""
+        ).strip()
 
         if mode in {"", "none"}:
             return {"headers": {}}
         if mode == "bearer_token":
+            if not secret:
+                raise ValueError("Managed bearer token auth requires a configured secret")
             return {"headers": {"Authorization": f"Bearer {secret}"}}
         if mode == "api_key_header":
             header_name = str(auth.get("api_key_header") or "X-API-KEY")
+            if not secret:
+                raise ValueError("Managed API key header auth requires a configured secret")
             return {"headers": {header_name: secret}}
 
         raise ValueError(f"Unsupported managed auth mode: {mode}")

@@ -25,6 +25,9 @@ from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     encrypt_byok_payload,
     key_hint_for_api_key,
 )
+from tldw_Server_API.app.services.mcp_hub_external_legacy_inventory import (
+    McpHubExternalLegacyInventoryService,
+)
 from tldw_Server_API.app.services.mcp_hub_external_access_resolver import (
     McpHubExternalAccessResolver,
 )
@@ -76,11 +79,68 @@ class McpHubConflictError(BadRequestError):
     """Raised when creating an MCP Hub resource would overwrite an existing one."""
 
 
+_SCOPE_RANK = {"global": 0, "org": 1, "team": 2, "user": 3}
+
+
 class McpHubService:
     """Business logic for MCP Hub profile and external server management."""
 
-    def __init__(self, repo: McpHubRepo):
+    def __init__(
+        self,
+        repo: McpHubRepo,
+        *,
+        legacy_inventory_service: McpHubExternalLegacyInventoryService | None = None,
+    ):
         self.repo = repo
+        self.legacy_inventory_service = legacy_inventory_service
+
+    async def _list_legacy_inventory(self) -> list[dict[str, Any]]:
+        if self.legacy_inventory_service is not None:
+            return await self.legacy_inventory_service.list_inventory()
+        return list(getattr(self, "_legacy_external_inventory", []) or [])
+
+    async def _get_legacy_inventory_item(self, server_id: str) -> dict[str, Any] | None:
+        if self.legacy_inventory_service is not None:
+            return await self.legacy_inventory_service.get_inventory_item(server_id)
+        inventory = await self._list_legacy_inventory()
+        target = str(server_id or "").strip()
+        return next((item for item in inventory if str(item.get("id") or "") == target), None)
+
+    async def _resolve_binding_target(
+        self,
+        *,
+        binding_target_type: str,
+        binding_target_id: int,
+    ) -> dict[str, Any]:
+        if binding_target_type == "profile":
+            row = await self.repo.get_permission_profile(int(binding_target_id))
+            if not row:
+                raise ResourceNotFoundError("mcp_permission_profile", identifier=str(binding_target_id))
+            return row
+        if binding_target_type == "assignment":
+            row = await self.repo.get_policy_assignment(int(binding_target_id))
+            if not row:
+                raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(binding_target_id))
+            return row
+        raise BadRequestError("Invalid credential binding target")
+
+    @staticmethod
+    def _validate_binding_scope(
+        *,
+        server_row: dict[str, Any],
+        target_row: dict[str, Any],
+    ) -> None:
+        server_scope_type = str(server_row.get("owner_scope_type") or "global")
+        target_scope_type = str(target_row.get("owner_scope_type") or "global")
+        server_rank = _SCOPE_RANK.get(server_scope_type, -1)
+        target_rank = _SCOPE_RANK.get(target_scope_type, -1)
+        if server_rank < 0 or target_rank < 0:
+            raise BadRequestError("Invalid MCP Hub owner scope")
+        if server_rank > target_rank:
+            raise BadRequestError("Cannot bind a narrower-scope external server to a broader target")
+        if server_rank == target_rank and server_scope_type != "global":
+            if server_row.get("owner_scope_id") != target_row.get("owner_scope_id"):
+                raise BadRequestError("Cannot bind an external server from a different owner scope")
 
     @staticmethod
     def _normalize_imported_external_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -581,6 +641,7 @@ class McpHubService:
             owner_scope_type=owner_scope_type,
             owner_scope_id=owner_scope_id,
             enabled=enabled,
+            server_source="managed",
             actor_id=actor_id,
         )
         action = (
@@ -642,6 +703,9 @@ class McpHubService:
             ),
             owner_scope_id=owner_scope_id if owner_scope_id is not None else existing.get("owner_scope_id"),
             enabled=enabled if enabled is not None else bool(existing.get("enabled")),
+            server_source=str(existing.get("server_source") or "managed"),
+            legacy_source_ref=existing.get("legacy_source_ref"),
+            superseded_by_server_id=existing.get("superseded_by_server_id"),
             actor_id=actor_id,
         )
         if not row:
@@ -671,6 +735,7 @@ class McpHubService:
             owner_scope_type=owner_scope_type,
             owner_scope_id=owner_scope_id,
         )
+        managed_ids = {str(row.get("id") or "") for row in rows}
         legacy_rows = [
             {
                 "id": str(item.get("id") or ""),
@@ -681,7 +746,7 @@ class McpHubService:
                 "transport": str(item.get("transport") or ""),
                 "config_json": json.dumps(item.get("config") or {}),
                 "config": dict(item.get("config") or {}),
-                "secret_configured": False,
+                "secret_configured": bool(),
                 "key_hint": None,
                 "server_source": "legacy",
                 "legacy_source_ref": item.get("legacy_source_ref"),
@@ -693,7 +758,8 @@ class McpHubService:
                 "created_at": None,
                 "updated_at": None,
             }
-            for item in list(getattr(self, "_legacy_external_inventory", []) or [])
+            for item in await self._list_legacy_inventory()
+            if str(item.get("id") or "") not in managed_ids
         ]
         return [*rows, *legacy_rows]
 
@@ -703,8 +769,7 @@ class McpHubService:
         server_id: str,
         actor_id: int | None,
     ) -> dict[str, Any]:
-        inventory = list(getattr(self, "_legacy_external_inventory", []) or [])
-        legacy = next((item for item in inventory if str(item.get("id") or "") == server_id), None)
+        legacy = await self._get_legacy_inventory_item(server_id)
         if legacy is None:
             raise ResourceNotFoundError("mcp_external_server_legacy", identifier=server_id)
 
@@ -719,11 +784,157 @@ class McpHubService:
             actor_id=actor_id,
             allow_existing=True,
         )
-        out = dict(row)
-        out["server_source"] = "managed"
-        out["legacy_source_ref"] = legacy.get("legacy_source_ref")
-        out["runtime_executable"] = True
-        return out
+        updated = await self.repo.update_external_server(
+            server_id,
+            name=str(row.get("name") or server_id),
+            transport=str(row.get("transport") or legacy.get("transport") or "websocket"),
+            config_json=json.dumps(dict(row.get("config") or {})),
+            owner_scope_type=str(row.get("owner_scope_type") or "global"),
+            owner_scope_id=row.get("owner_scope_id"),
+            enabled=bool(row.get("enabled")),
+            server_source="managed",
+            legacy_source_ref=legacy.get("legacy_source_ref"),
+            superseded_by_server_id=None,
+            actor_id=actor_id,
+        )
+        return updated or row
+
+    async def list_profile_credential_bindings(
+        self,
+        *,
+        profile_id: int,
+    ) -> list[dict[str, Any]]:
+        await self._resolve_binding_target(binding_target_type="profile", binding_target_id=profile_id)
+        return await self.repo.list_credential_bindings(
+            binding_target_type="profile",
+            binding_target_id=str(profile_id),
+        )
+
+    async def upsert_profile_credential_binding(
+        self,
+        *,
+        profile_id: int,
+        external_server_id: str,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        target_row = await self._resolve_binding_target(binding_target_type="profile", binding_target_id=profile_id)
+        server_row = await self.repo.get_external_server(external_server_id)
+        if not server_row:
+            raise ResourceNotFoundError("mcp_external_server", identifier=external_server_id)
+        self._validate_binding_scope(server_row=server_row, target_row=target_row)
+        row = await self.repo.upsert_credential_binding(
+            binding_target_type="profile",
+            binding_target_id=str(profile_id),
+            external_server_id=external_server_id,
+            credential_ref="server",
+            binding_mode="grant",
+            usage_rules={},
+            actor_id=actor_id,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.profile_credential_binding.upsert",
+                actor_id=actor_id,
+                resource_type="mcp_permission_profile",
+                resource_id=str(profile_id),
+                metadata={"external_server_id": external_server_id, "binding_mode": "grant"},
+            )
+        )
+        return row
+
+    async def delete_profile_credential_binding(
+        self,
+        *,
+        profile_id: int,
+        external_server_id: str,
+        actor_id: int | None,
+    ) -> bool:
+        await self._resolve_binding_target(binding_target_type="profile", binding_target_id=profile_id)
+        deleted = await self.repo.delete_credential_binding(
+            binding_target_type="profile",
+            binding_target_id=str(profile_id),
+            external_server_id=external_server_id,
+        )
+        if deleted:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.profile_credential_binding.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_permission_profile",
+                    resource_id=str(profile_id),
+                    metadata={"external_server_id": external_server_id},
+                )
+            )
+        return deleted
+
+    async def list_assignment_credential_bindings(
+        self,
+        *,
+        assignment_id: int,
+    ) -> list[dict[str, Any]]:
+        await self._resolve_binding_target(binding_target_type="assignment", binding_target_id=assignment_id)
+        return await self.repo.list_credential_bindings(
+            binding_target_type="assignment",
+            binding_target_id=str(assignment_id),
+        )
+
+    async def upsert_assignment_credential_binding(
+        self,
+        *,
+        assignment_id: int,
+        external_server_id: str,
+        binding_mode: str,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        target_row = await self._resolve_binding_target(binding_target_type="assignment", binding_target_id=assignment_id)
+        server_row = await self.repo.get_external_server(external_server_id)
+        if not server_row:
+            raise ResourceNotFoundError("mcp_external_server", identifier=external_server_id)
+        self._validate_binding_scope(server_row=server_row, target_row=target_row)
+        row = await self.repo.upsert_credential_binding(
+            binding_target_type="assignment",
+            binding_target_id=str(assignment_id),
+            external_server_id=external_server_id,
+            credential_ref="server",
+            binding_mode=binding_mode,
+            usage_rules={},
+            actor_id=actor_id,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.assignment_credential_binding.upsert",
+                actor_id=actor_id,
+                resource_type="mcp_policy_assignment",
+                resource_id=str(assignment_id),
+                metadata={"external_server_id": external_server_id, "binding_mode": binding_mode},
+            )
+        )
+        return row
+
+    async def delete_assignment_credential_binding(
+        self,
+        *,
+        assignment_id: int,
+        external_server_id: str,
+        actor_id: int | None,
+    ) -> bool:
+        await self._resolve_binding_target(binding_target_type="assignment", binding_target_id=assignment_id)
+        deleted = await self.repo.delete_credential_binding(
+            binding_target_type="assignment",
+            binding_target_id=str(assignment_id),
+            external_server_id=external_server_id,
+        )
+        if deleted:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.assignment_credential_binding.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_policy_assignment",
+                    resource_id=str(assignment_id),
+                    metadata={"external_server_id": external_server_id},
+                )
+            )
+        return deleted
 
     async def resolve_effective_external_access(
         self,
@@ -733,11 +944,19 @@ class McpHubService:
     ) -> dict[str, Any]:
         resolver = McpHubExternalAccessResolver(repo=self.repo)
         assignment = await self.repo.get_policy_assignment(int(assignment_id))
-        effective_policy = {
-            "capabilities": list(
-                ((assignment or {}).get("inline_policy_document") or {}).get("capabilities") or []
-            )
-        }
+        policy_document: dict[str, Any] = {}
+        if assignment:
+            profile_id = assignment.get("profile_id")
+            if profile_id is not None:
+                profile = await self.repo.get_permission_profile(int(profile_id))
+                if profile and bool(profile.get("is_active", True)):
+                    policy_document = dict(profile.get("policy_document") or {})
+            inline_policy = dict((assignment or {}).get("inline_policy_document") or {})
+            policy_document.update(inline_policy)
+            override_row = await self.repo.get_policy_override_by_assignment(int(assignment_id))
+            if override_row and bool(override_row.get("is_active", True)):
+                policy_document.update(dict(override_row.get("override_policy_document") or {}))
+        effective_policy = {"capabilities": list(policy_document.get("capabilities") or [])}
         summary = await resolver.resolve(
             assignment_id=int(assignment_id),
             effective_policy=effective_policy,

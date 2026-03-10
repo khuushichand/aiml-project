@@ -109,6 +109,7 @@ def _scope_fingerprint_payload(
             "path_scope_mode",
             "workspace_root",
             "scope_root",
+            "server_id",
             "reason",
         ):
             value = str(scope_payload.get(key) or "").strip()

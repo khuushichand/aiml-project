@@ -45,3 +45,21 @@ async def test_mcp_hub_tables_exist_after_authnz_migrations_sqlite(tmp_path, mon
     override_columns = await pool.fetchall("PRAGMA table_info(mcp_policy_overrides)")
     override_column_names = {str(row["name"]) for row in override_columns}
     assert "is_active" in override_column_names
+
+    external_columns = await pool.fetchall("PRAGMA table_info(mcp_external_servers)")
+    external_column_names = {str(row["name"]) for row in external_columns}
+    assert "server_source" in external_column_names
+    assert "legacy_source_ref" in external_column_names
+    assert "superseded_by_server_id" in external_column_names
+
+    binding_columns = await pool.fetchall("PRAGMA table_info(mcp_credential_bindings)")
+    binding_column_names = {str(row["name"]) for row in binding_columns}
+    assert "binding_mode" in binding_column_names
+
+    binding_indexes = await pool.fetchall("PRAGMA index_list(mcp_credential_bindings)")
+    unique_binding_indexes = {
+        str(row["name"])
+        for row in binding_indexes
+        if int(row["unique"]) == 1
+    }
+    assert "uq_mcp_credential_bindings_target_server" in unique_binding_indexes

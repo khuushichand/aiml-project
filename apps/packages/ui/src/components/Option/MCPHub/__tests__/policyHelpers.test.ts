@@ -6,6 +6,8 @@ import {
   buildSimplePolicyDocument,
   createPresetSelection,
   getDerivedCapabilities,
+  getExternalBlockedReasonLabel,
+  getManagedExternalServers,
   getPolicyAllowedToolSelection
 } from "../policyHelpers"
 
@@ -99,5 +101,36 @@ describe("policyHelpers", () => {
     expect(selection.selectedTools).toEqual(["notes.search"])
     expect(selection.preservedPatterns).toEqual(["Bash(git *)"])
     expect(capabilities).toEqual(["filesystem.read"])
+  })
+
+  it("maps external server helpers to managed-only selections and readable blocked reasons", () => {
+    const managedServers = getManagedExternalServers([
+      {
+        id: "docs-managed",
+        name: "Docs Managed",
+        enabled: true,
+        owner_scope_type: "global",
+        transport: "stdio",
+        config: {},
+        secret_configured: true,
+        server_source: "managed",
+        runtime_executable: true
+      },
+      {
+        id: "docs-legacy",
+        name: "Docs Legacy",
+        enabled: true,
+        owner_scope_type: "global",
+        transport: "stdio",
+        config: {},
+        secret_configured: false,
+        server_source: "legacy",
+        runtime_executable: false
+      }
+    ])
+
+    expect(managedServers.map((server) => server.id)).toEqual(["docs-managed"])
+    expect(getExternalBlockedReasonLabel("disabled_by_assignment")).toEqual("Disabled by assignment")
+    expect(getExternalBlockedReasonLabel("missing_secret")).toEqual("Missing secret")
   })
 })

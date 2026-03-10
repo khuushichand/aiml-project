@@ -13,7 +13,12 @@ const mocks = vi.hoisted(() => ({
   listPermissionProfiles: vi.fn(),
   listApprovalPolicies: vi.fn(),
   getEffectivePolicy: vi.fn(),
-  getToolRegistrySummary: vi.fn()
+  getToolRegistrySummary: vi.fn(),
+  listExternalServers: vi.fn(),
+  listAssignmentCredentialBindings: vi.fn(),
+  upsertAssignmentCredentialBinding: vi.fn(),
+  deleteAssignmentCredentialBinding: vi.fn(),
+  getAssignmentExternalAccess: vi.fn()
 }))
 
 vi.mock("@/services/tldw/mcp-hub", () => ({
@@ -26,7 +31,12 @@ vi.mock("@/services/tldw/mcp-hub", () => ({
   listPermissionProfiles: (...args: unknown[]) => mocks.listPermissionProfiles(...args),
   listApprovalPolicies: (...args: unknown[]) => mocks.listApprovalPolicies(...args),
   getEffectivePolicy: (...args: unknown[]) => mocks.getEffectivePolicy(...args),
-  getToolRegistrySummary: (...args: unknown[]) => mocks.getToolRegistrySummary(...args)
+  getToolRegistrySummary: (...args: unknown[]) => mocks.getToolRegistrySummary(...args),
+  listExternalServers: (...args: unknown[]) => mocks.listExternalServers(...args),
+  listAssignmentCredentialBindings: (...args: unknown[]) => mocks.listAssignmentCredentialBindings(...args),
+  upsertAssignmentCredentialBinding: (...args: unknown[]) => mocks.upsertAssignmentCredentialBinding(...args),
+  deleteAssignmentCredentialBinding: (...args: unknown[]) => mocks.deleteAssignmentCredentialBinding(...args),
+  getAssignmentExternalAccess: (...args: unknown[]) => mocks.getAssignmentExternalAccess(...args)
 }))
 
 import { PolicyAssignmentsTab } from "../PolicyAssignmentsTab"
@@ -175,6 +185,88 @@ describe("PolicyAssignmentsTab", () => {
         }
       ]
     })
+    mocks.listExternalServers.mockResolvedValue([
+      {
+        id: "docs-managed",
+        name: "Docs Managed",
+        enabled: true,
+        owner_scope_type: "global",
+        transport: "stdio",
+        config: {},
+        secret_configured: true,
+        server_source: "managed",
+        binding_count: 1,
+        runtime_executable: true
+      },
+      {
+        id: "search-api",
+        name: "Search API",
+        enabled: true,
+        owner_scope_type: "global",
+        transport: "websocket",
+        config: {},
+        secret_configured: false,
+        server_source: "managed",
+        binding_count: 0,
+        runtime_executable: true
+      },
+      {
+        id: "legacy-search",
+        name: "Legacy Search",
+        enabled: true,
+        owner_scope_type: "global",
+        transport: "websocket",
+        config: {},
+        secret_configured: false,
+        server_source: "legacy",
+        binding_count: 0,
+        runtime_executable: false
+      }
+    ])
+    mocks.listAssignmentCredentialBindings.mockResolvedValue([
+      {
+        id: 52,
+        binding_target_type: "policy_assignment",
+        binding_target_id: "11",
+        external_server_id: "docs-managed",
+        credential_ref: "server:docs-managed",
+        binding_mode: "disable",
+        usage_rules: {}
+      }
+    ])
+    mocks.upsertAssignmentCredentialBinding.mockResolvedValue({
+      id: 53,
+      binding_target_type: "policy_assignment",
+      binding_target_id: "11",
+      external_server_id: "search-api",
+      credential_ref: "server:search-api",
+      binding_mode: "grant",
+      usage_rules: {}
+    })
+    mocks.getAssignmentExternalAccess.mockResolvedValue({
+      servers: [
+        {
+          server_id: "docs-managed",
+          server_name: "Docs Managed",
+          granted_by: "profile",
+          disabled_by_assignment: true,
+          server_source: "managed",
+          secret_available: true,
+          runtime_executable: true,
+          blocked_reason: "disabled_by_assignment"
+        },
+        {
+          server_id: "search-api",
+          server_name: "Search API",
+          granted_by: "assignment",
+          disabled_by_assignment: false,
+          server_source: "managed",
+          secret_available: false,
+          runtime_executable: true,
+          blocked_reason: "missing_secret"
+        }
+      ]
+    })
   })
 
   it("loads assignments and shows the current effective preview", async () => {
@@ -218,6 +310,27 @@ describe("PolicyAssignmentsTab", () => {
         approval_mode: "ask_outside_profile"
       },
       is_active: true
+    })
+  })
+
+  it("manages assignment external service bindings and explains blocked access", async () => {
+    const user = userEvent.setup()
+    render(<PolicyAssignmentsTab />)
+
+    await screen.findByText("researcher")
+    await user.click(screen.getByRole("button", { name: "Edit" }))
+
+    expect(await screen.findByText("External Service Bindings")).toBeTruthy()
+    expect(screen.getByLabelText("Docs Managed")).toBeTruthy()
+    expect(screen.getByLabelText("Search API")).toBeTruthy()
+    expect(screen.queryByText("Legacy Search")).toBeNull()
+    expect(screen.getByText(/disabled by assignment/i)).toBeTruthy()
+    expect(screen.getByText(/missing secret/i)).toBeTruthy()
+
+    await user.selectOptions(screen.getByLabelText("Search API"), "grant")
+
+    expect(mocks.upsertAssignmentCredentialBinding).toHaveBeenCalledWith(11, "search-api", {
+      binding_mode: "grant"
     })
   })
 })

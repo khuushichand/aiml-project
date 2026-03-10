@@ -67,3 +67,41 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     )
     override_column_names = {str(row["column_name"]) for row in override_column_rows}
     assert "is_active" in override_column_names
+
+    external_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_external_servers'
+          AND column_name IN ('server_source', 'legacy_source_ref', 'superseded_by_server_id')
+        """
+    )
+    external_column_names = {str(row["column_name"]) for row in external_column_rows}
+    assert "server_source" in external_column_names
+    assert "legacy_source_ref" in external_column_names
+    assert "superseded_by_server_id" in external_column_names
+
+    binding_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_credential_bindings'
+          AND column_name IN ('binding_mode')
+        """
+    )
+    binding_column_names = {str(row["column_name"]) for row in binding_column_rows}
+    assert "binding_mode" in binding_column_names
+
+    binding_index_rows = await test_db_pool.fetch(
+        """
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND tablename = 'mcp_credential_bindings'
+          AND indexname = 'uq_mcp_credential_bindings_target_server'
+        """
+    )
+    binding_index_names = {str(row["indexname"]) for row in binding_index_rows}
+    assert "uq_mcp_credential_bindings_target_server" in binding_index_names

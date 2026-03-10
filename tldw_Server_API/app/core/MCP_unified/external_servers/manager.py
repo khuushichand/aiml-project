@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from loguru import logger
 
@@ -97,12 +98,20 @@ class ExternalServerManager:
 
     def __init__(self, config_path: Optional[str] = None) -> None:
         self.config_path = config_path
+        self._server_loader: Callable[[], Awaitable[list[ExternalMCPServerConfig]] | list[ExternalMCPServerConfig]] | None = None
         self._servers: dict[str, ExternalMCPServerConfig] = {}
         self._adapters: dict[str, ExternalMCPTransportAdapter] = {}
         self._virtual_tools: dict[str, VirtualExternalTool] = {}
         self._discovery_errors: dict[str, str] = {}
         self._telemetry: dict[str, ExternalServerTelemetry] = {}
         self._initialized = False
+
+    def with_server_loader(
+        self,
+        server_loader: Callable[[], Awaitable[list[ExternalMCPServerConfig]] | list[ExternalMCPServerConfig]],
+    ) -> "ExternalServerManager":
+        self._server_loader = server_loader
+        return self
 
     @property
     def initialized(self) -> bool:
@@ -111,8 +120,13 @@ class ExternalServerManager:
     async def initialize(self) -> None:
         """Load config, construct adapters, and attempt initial discovery."""
 
-        cfg = load_external_server_registry(self.config_path)
-        self._servers = {s.id: s for s in cfg.servers if s.enabled}
+        if self._server_loader is not None:
+            loaded = self._server_loader()
+            servers = await loaded if inspect.isawaitable(loaded) else loaded
+        else:
+            cfg = load_external_server_registry(self.config_path)
+            servers = list(cfg.servers)
+        self._servers = {s.id: s for s in servers if s.enabled}
         self._adapters = {}
         self._virtual_tools = {}
         self._discovery_errors = {}

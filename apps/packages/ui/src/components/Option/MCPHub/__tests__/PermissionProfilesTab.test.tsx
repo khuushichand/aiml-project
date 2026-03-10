@@ -6,13 +6,21 @@ import userEvent from "@testing-library/user-event"
 const mocks = vi.hoisted(() => ({
   listPermissionProfiles: vi.fn(),
   createPermissionProfile: vi.fn(),
-  getToolRegistrySummary: vi.fn()
+  getToolRegistrySummary: vi.fn(),
+  listExternalServers: vi.fn(),
+  listProfileCredentialBindings: vi.fn(),
+  upsertProfileCredentialBinding: vi.fn(),
+  deleteProfileCredentialBinding: vi.fn()
 }))
 
 vi.mock("@/services/tldw/mcp-hub", () => ({
   listPermissionProfiles: (...args: unknown[]) => mocks.listPermissionProfiles(...args),
   createPermissionProfile: (...args: unknown[]) => mocks.createPermissionProfile(...args),
-  getToolRegistrySummary: (...args: unknown[]) => mocks.getToolRegistrySummary(...args)
+  getToolRegistrySummary: (...args: unknown[]) => mocks.getToolRegistrySummary(...args),
+  listExternalServers: (...args: unknown[]) => mocks.listExternalServers(...args),
+  listProfileCredentialBindings: (...args: unknown[]) => mocks.listProfileCredentialBindings(...args),
+  upsertProfileCredentialBinding: (...args: unknown[]) => mocks.upsertProfileCredentialBinding(...args),
+  deleteProfileCredentialBinding: (...args: unknown[]) => mocks.deleteProfileCredentialBinding(...args)
 }))
 
 import { PermissionProfilesTab } from "../PermissionProfilesTab"
@@ -76,6 +84,64 @@ describe("PermissionProfilesTab", () => {
         }
       ]
     })
+    mocks.listExternalServers.mockResolvedValue([
+      {
+        id: "docs-managed",
+        name: "Docs Managed",
+        enabled: true,
+        owner_scope_type: "global",
+        transport: "stdio",
+        config: {},
+        secret_configured: true,
+        server_source: "managed",
+        binding_count: 1,
+        runtime_executable: true
+      },
+      {
+        id: "legacy-search",
+        name: "Legacy Search",
+        enabled: true,
+        owner_scope_type: "global",
+        transport: "websocket",
+        config: {},
+        secret_configured: false,
+        server_source: "legacy",
+        binding_count: 0,
+        runtime_executable: false
+      },
+      {
+        id: "search-api",
+        name: "Search API",
+        enabled: true,
+        owner_scope_type: "global",
+        transport: "websocket",
+        config: {},
+        secret_configured: false,
+        server_source: "managed",
+        binding_count: 0,
+        runtime_executable: true
+      }
+    ])
+    mocks.listProfileCredentialBindings.mockResolvedValue([
+      {
+        id: 41,
+        binding_target_type: "permission_profile",
+        binding_target_id: "5",
+        external_server_id: "docs-managed",
+        credential_ref: "server:docs-managed",
+        binding_mode: "grant",
+        usage_rules: {}
+      }
+    ])
+    mocks.upsertProfileCredentialBinding.mockResolvedValue({
+      id: 42,
+      binding_target_type: "permission_profile",
+      binding_target_id: "5",
+      external_server_id: "search-api",
+      credential_ref: "server:search-api",
+      binding_mode: "grant",
+      usage_rules: {}
+    })
   })
 
   it("renders saved permission profiles and opens the create form", async () => {
@@ -92,5 +158,22 @@ describe("PermissionProfilesTab", () => {
     await user.click(screen.getByRole("checkbox", { name: /notes\.search/i }))
     expect(screen.getByText(/local file scope/i)).toBeTruthy()
     expect(screen.getByText(/workspace root/i)).toBeTruthy()
+  })
+
+  it("manages profile external server grants and excludes legacy servers", async () => {
+    const user = userEvent.setup()
+    render(<PermissionProfilesTab />)
+
+    await screen.findByText("Process Exec")
+    await user.click(screen.getByRole("button", { name: "Edit" }))
+
+    expect(await screen.findByText("External Service Bindings")).toBeTruthy()
+    expect(screen.getByRole("checkbox", { name: /Docs Managed/ })).toBeTruthy()
+    expect(screen.getByRole("checkbox", { name: /Search API/ })).toBeTruthy()
+    expect(screen.queryByRole("checkbox", { name: /Legacy Search/ })).toBeNull()
+
+    await user.click(screen.getByRole("checkbox", { name: /Search API/ }))
+
+    expect(mocks.upsertProfileCredentialBinding).toHaveBeenCalledWith(5, "search-api")
   })
 })

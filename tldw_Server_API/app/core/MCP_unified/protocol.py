@@ -1775,6 +1775,93 @@ class MCPProtocol:
                 "scope_payload": {"path_scope_mode": path_scope_mode, "reason": "path_scope_unavailable"},
             }
 
+    async def _evaluate_external_access(
+        self,
+        *,
+        effective_policy: dict[str, Any] | None,
+        tool_name: str,
+        context: RequestContext,
+    ) -> dict[str, Any]:
+        if not str(tool_name or "").startswith("ext."):
+            return {"enabled": False, "within_scope": True, "reason": None, "scope_payload": None}
+        policy = dict(effective_policy or {})
+        if not bool(policy.get("enabled", False)):
+            return {"enabled": False, "within_scope": True, "reason": None, "scope_payload": None}
+        sources = policy.get("sources")
+        if not isinstance(sources, list):
+            return {
+                "enabled": True,
+                "within_scope": False,
+                "reason": "external_access_unavailable",
+                "scope_payload": {"server_id": tool_name.split(".", 2)[1], "reason": "external_access_unavailable"},
+            }
+        parts = str(tool_name or "").split(".", 2)
+        if len(parts) != 3 or not parts[1]:
+            return {
+                "enabled": True,
+                "within_scope": False,
+                "reason": "invalid_external_tool_name",
+                "scope_payload": {"reason": "invalid_external_tool_name"},
+            }
+        server_id = parts[1]
+        metadata = context.metadata if isinstance(getattr(context, "metadata", None), dict) else {}
+        cached = metadata.get("_mcp_effective_external_access")
+        if not isinstance(cached, dict):
+            try:
+                from tldw_Server_API.app.services.mcp_hub_external_access_resolver import (
+                    get_mcp_hub_external_access_resolver,
+                )
+
+                resolver = await get_mcp_hub_external_access_resolver()
+                cached = await resolver.resolve_for_sources(
+                    sources=[dict(item) for item in sources if isinstance(item, dict)],
+                    effective_policy=policy,
+                )
+                metadata["_mcp_effective_external_access"] = cached
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("Failed to evaluate MCP Hub external access: {}", exc)
+                return {
+                    "enabled": True,
+                    "within_scope": False,
+                    "reason": "external_access_unavailable",
+                    "scope_payload": {"server_id": server_id, "reason": "external_access_unavailable"},
+                }
+
+        rows = cached.get("servers") if isinstance(cached, dict) else None
+        server_row = next(
+            (
+                row for row in rows
+                if isinstance(row, dict) and str(row.get("server_id") or "") == server_id
+            ),
+            None,
+        ) if isinstance(rows, list) else None
+        if not isinstance(server_row, dict):
+            return {
+                "enabled": True,
+                "within_scope": False,
+                "reason": "external_server_not_bound",
+                "scope_payload": {"server_id": server_id, "reason": "external_server_not_bound"},
+            }
+        runtime_executable = bool(server_row.get("runtime_executable"))
+        reason = str(server_row.get("blocked_reason") or "").strip() or None
+        scope_payload = {
+            "server_id": server_id,
+            "reason": reason or ("external_server_allowed" if runtime_executable else "external_server_not_bound"),
+        }
+        if not runtime_executable:
+            return {
+                "enabled": True,
+                "within_scope": False,
+                "reason": reason or "external_server_not_bound",
+                "scope_payload": scope_payload,
+            }
+        return {
+            "enabled": True,
+            "within_scope": True,
+            "reason": None,
+            "scope_payload": scope_payload,
+        }
+
     async def _handle_tools_call(
         self,
         params: dict[str, Any],
@@ -1946,7 +2033,25 @@ class MCPProtocol:
             context=context,
             tool_def=tool_def if isinstance(tool_def, dict) else None,
         )
-        within_resolved_scope = bool(path_scope_result.get("within_scope", True))
+        external_access_result = await self._evaluate_external_access(
+            effective_policy=effective_policy,
+            tool_name=tool_name,
+            context=context,
+        )
+        within_resolved_scope = bool(path_scope_result.get("within_scope", True)) and bool(
+            external_access_result.get("within_scope", True)
+        )
+        approval_reason = str(path_scope_result.get("reason") or "").strip() or None
+        if approval_reason is None:
+            approval_reason = str(external_access_result.get("reason") or "").strip() or None
+        scope_payload: dict[str, Any] | None = None
+        for payload in (
+            path_scope_result.get("scope_payload"),
+            external_access_result.get("scope_payload"),
+        ):
+            if isinstance(payload, dict):
+                scope_payload = dict(scope_payload or {})
+                scope_payload.update(payload)
 
         approval_result = await self._evaluate_runtime_approval(
             effective_policy=effective_policy,
@@ -1957,10 +2062,8 @@ class MCPProtocol:
             is_write=is_write,
             within_effective_policy=within_effective_policy and within_resolved_scope,
             force_approval=bool(path_scope_result.get("force_approval", False)),
-            approval_reason=str(path_scope_result.get("reason") or "").strip() or None,
-            scope_payload=path_scope_result.get("scope_payload")
-            if isinstance(path_scope_result.get("scope_payload"), dict)
-            else None,
+            approval_reason=approval_reason,
+            scope_payload=scope_payload,
         )
         approval_status = str(approval_result.get("status") or "allow").strip().lower()
         if approval_status == "approval_required":

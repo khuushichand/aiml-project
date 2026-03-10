@@ -1381,9 +1381,13 @@ class McpHubRepo:
         owner_scope_type: str,
         owner_scope_id: int | None,
         enabled: bool,
+        server_source: str = "managed",
+        legacy_source_ref: str | None = None,
+        superseded_by_server_id: str | None = None,
         actor_id: int | None,
     ) -> dict[str, Any]:
         scope_type = _normalize_scope_type(owner_scope_type)
+        source_value = str(server_source or "managed").strip().lower() or "managed"
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         enabled_value: bool | int = enabled if getattr(self.db_pool, "pool", None) is not None else int(enabled)
@@ -1391,8 +1395,9 @@ class McpHubRepo:
             """
             INSERT INTO mcp_external_servers (
                 id, name, enabled, owner_scope_type, owner_scope_id, transport, config_json,
+                server_source, legacy_source_ref, superseded_by_server_id,
                 created_by, updated_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 enabled = excluded.enabled,
@@ -1400,6 +1405,9 @@ class McpHubRepo:
                 owner_scope_id = excluded.owner_scope_id,
                 transport = excluded.transport,
                 config_json = excluded.config_json,
+                server_source = excluded.server_source,
+                legacy_source_ref = excluded.legacy_source_ref,
+                superseded_by_server_id = excluded.superseded_by_server_id,
                 updated_by = excluded.updated_by,
                 updated_at = excluded.updated_at
             """,
@@ -1411,6 +1419,9 @@ class McpHubRepo:
                 owner_scope_id,
                 transport.strip(),
                 config_json,
+                source_value,
+                str(legacy_source_ref).strip() if legacy_source_ref is not None else None,
+                str(superseded_by_server_id).strip() if superseded_by_server_id is not None else None,
                 actor_id,
                 actor_id,
                 ts,
@@ -1430,10 +1441,26 @@ class McpHubRepo:
         owner_scope_type: str,
         owner_scope_id: int | None,
         enabled: bool,
+        server_source: str | object = _UNSET,
+        legacy_source_ref: str | None | object = _UNSET,
+        superseded_by_server_id: str | None | object = _UNSET,
         actor_id: int | None,
     ) -> dict[str, Any] | None:
         """Update an existing external server row and return the normalized record."""
         scope_type = _normalize_scope_type(owner_scope_type)
+        next_source = (
+            str(server_source or "managed").strip().lower() or "managed"
+            if server_source is not _UNSET
+            else None
+        )
+        next_legacy_source_ref = (
+            str(legacy_source_ref).strip() if legacy_source_ref is not _UNSET and legacy_source_ref is not None else None
+        )
+        next_superseded_by = (
+            str(superseded_by_server_id).strip()
+            if superseded_by_server_id is not _UNSET and superseded_by_server_id is not None
+            else None
+        )
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         enabled_value: bool | int = enabled if getattr(self.db_pool, "pool", None) is not None else int(enabled)
@@ -1446,6 +1473,9 @@ class McpHubRepo:
                 owner_scope_id = ?,
                 transport = ?,
                 config_json = ?,
+                server_source = COALESCE(?, server_source),
+                legacy_source_ref = COALESCE(?, legacy_source_ref),
+                superseded_by_server_id = COALESCE(?, superseded_by_server_id),
                 updated_by = ?,
                 updated_at = ?
             WHERE id = ?
@@ -1457,6 +1487,9 @@ class McpHubRepo:
                 owner_scope_id,
                 transport.strip(),
                 config_json,
+                next_source,
+                next_legacy_source_ref,
+                next_superseded_by,
                 actor_id,
                 ts,
                 server_id.strip(),
@@ -1476,12 +1509,20 @@ class McpHubRepo:
                    s.owner_scope_type,
                    s.owner_scope_id,
                    s.transport,
+                   s.server_source,
+                   s.legacy_source_ref,
+                   s.superseded_by_server_id,
                    s.config_json,
                    s.created_by,
                    s.updated_by,
                    s.created_at,
                    s.updated_at,
                    CASE WHEN sec.server_id IS NULL THEN 0 ELSE 1 END AS secret_configured,
+                   (
+                       SELECT COUNT(*)
+                       FROM mcp_credential_bindings b
+                       WHERE b.external_server_id = s.id
+                   ) AS binding_count,
                    sec.key_hint
             FROM mcp_external_servers s
             LEFT JOIN mcp_external_server_secrets sec ON sec.server_id = s.id
@@ -1513,12 +1554,20 @@ class McpHubRepo:
                    s.owner_scope_type,
                    s.owner_scope_id,
                    s.transport,
+                   s.server_source,
+                   s.legacy_source_ref,
+                   s.superseded_by_server_id,
                    s.config_json,
                    s.created_by,
                    s.updated_by,
                    s.created_at,
                    s.updated_at,
                    CASE WHEN sec.server_id IS NULL THEN 0 ELSE 1 END AS secret_configured,
+                   (
+                       SELECT COUNT(*)
+                       FROM mcp_credential_bindings b
+                       WHERE b.external_server_id = s.id
+                   ) AS binding_count,
                    sec.key_hint
             FROM mcp_external_servers s
             LEFT JOIN mcp_external_server_secrets sec ON sec.server_id = s.id
@@ -1597,7 +1646,7 @@ class McpHubRepo:
         rowcount = getattr(cursor, "rowcount", 0)
         return bool(rowcount and rowcount > 0)
 
-    async def create_credential_binding(
+    async def upsert_credential_binding(
         self,
         *,
         binding_target_type: str,
@@ -1616,19 +1665,6 @@ class McpHubRepo:
         if normalized_target_type == "profile" and normalized_binding_mode == "disable":
             raise ValueError("profile bindings may not use disable mode")
 
-        existing = await self.db_pool.fetchone(
-            """
-            SELECT id
-            FROM mcp_credential_bindings
-            WHERE binding_target_type = ?
-              AND binding_target_id = ?
-              AND external_server_id = ?
-            """,
-            (normalized_target_type, target_id, external_server_id.strip()),
-        )
-        if existing is not None:
-            raise ValueError("credential binding already exists for target and server")
-
         server = await self.get_external_server(external_server_id)
         if not server:
             raise ValueError(f"Unknown external server: {external_server_id}")
@@ -1640,7 +1676,6 @@ class McpHubRepo:
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         usage = dict(usage_rules or {})
-        usage["binding_mode"] = normalized_binding_mode
 
         await self.db_pool.execute(
             """
@@ -1649,18 +1684,20 @@ class McpHubRepo:
                 binding_target_id,
                 external_server_id,
                 credential_ref,
+                binding_mode,
                 usage_rules_json,
                 created_by,
                 updated_by,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 normalized_target_type,
                 target_id,
                 external_server_id.strip(),
                 str(credential_ref or "server").strip(),
+                normalized_binding_mode,
                 json.dumps(usage),
                 actor_id,
                 actor_id,
@@ -1675,6 +1712,7 @@ class McpHubRepo:
                    binding_target_id,
                    external_server_id,
                    credential_ref,
+                   binding_mode,
                    usage_rules_json,
                    created_by,
                    updated_by,
@@ -1688,6 +1726,43 @@ class McpHubRepo:
             (normalized_target_type, target_id, external_server_id.strip()),
         )
         return self._normalize_credential_binding_row(self._row_to_dict(row) if row else None) or {}
+
+    async def create_credential_binding(
+        self,
+        *,
+        binding_target_type: str,
+        binding_target_id: str,
+        external_server_id: str,
+        credential_ref: str,
+        binding_mode: str,
+        usage_rules: dict[str, Any],
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        existing = await self.db_pool.fetchone(
+            """
+            SELECT id
+            FROM mcp_credential_bindings
+            WHERE binding_target_type = ?
+              AND binding_target_id = ?
+              AND external_server_id = ?
+            """,
+            (
+                _normalize_credential_binding_target_type(binding_target_type),
+                str(binding_target_id or "").strip(),
+                external_server_id.strip(),
+            ),
+        )
+        if existing is not None:
+            raise ValueError("credential binding already exists for target and server")
+        return await self.upsert_credential_binding(
+            binding_target_type=binding_target_type,
+            binding_target_id=binding_target_id,
+            external_server_id=external_server_id,
+            credential_ref=credential_ref,
+            binding_mode=binding_mode,
+            usage_rules=usage_rules,
+            actor_id=actor_id,
+        )
 
     async def list_credential_bindings(
         self,
@@ -1704,6 +1779,7 @@ class McpHubRepo:
                    binding_target_id,
                    external_server_id,
                    credential_ref,
+                   binding_mode,
                    usage_rules_json,
                    created_by,
                    updated_by,
@@ -1720,3 +1796,26 @@ class McpHubRepo:
             self._normalize_credential_binding_row(self._row_to_dict(row)) or {}
             for row in rows
         ]
+
+    async def delete_credential_binding(
+        self,
+        *,
+        binding_target_type: str,
+        binding_target_id: str,
+        external_server_id: str,
+    ) -> bool:
+        cursor = await self.db_pool.execute(
+            """
+            DELETE FROM mcp_credential_bindings
+            WHERE binding_target_type = ?
+              AND binding_target_id = ?
+              AND external_server_id = ?
+            """,
+            (
+                _normalize_credential_binding_target_type(binding_target_type),
+                str(binding_target_id or "").strip(),
+                external_server_id.strip(),
+            ),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        return bool(rowcount and rowcount > 0)

@@ -5,15 +5,25 @@ import {
   createPermissionProfile,
   deletePermissionProfile,
   getToolRegistrySummary,
+  listExternalServers,
+  listProfileCredentialBindings,
   listPermissionProfiles,
+  deleteProfileCredentialBinding,
+  upsertProfileCredentialBinding,
   updatePermissionProfile,
+  type McpHubCredentialBinding,
+  type McpHubExternalServer,
   type McpHubPermissionPolicyDocument,
   type McpHubPermissionProfile,
   type McpHubToolRegistryEntry,
   type McpHubToolRegistryModule
 } from "@/services/tldw/mcp-hub"
 
-import { MCP_HUB_PROFILE_MODE_OPTIONS, MCP_HUB_SCOPE_OPTIONS } from "./policyHelpers"
+import {
+  getManagedExternalServers,
+  MCP_HUB_PROFILE_MODE_OPTIONS,
+  MCP_HUB_SCOPE_OPTIONS
+} from "./policyHelpers"
 import { PolicyDocumentEditor } from "./PolicyDocumentEditor"
 
 export const PermissionProfilesTab = () => {
@@ -31,6 +41,18 @@ export const PermissionProfilesTab = () => {
   const [isActive, setIsActive] = useState(true)
   const [registryEntries, setRegistryEntries] = useState<McpHubToolRegistryEntry[]>([])
   const [registryModules, setRegistryModules] = useState<McpHubToolRegistryModule[]>([])
+  const [externalServers, setExternalServers] = useState<McpHubExternalServer[]>([])
+  const [profileBindings, setProfileBindings] = useState<McpHubCredentialBinding[]>([])
+  const [bindingsLoading, setBindingsLoading] = useState(false)
+  const [bindingServerId, setBindingServerId] = useState<string | null>(null)
+  const managedExternalServers = useMemo(
+    () => getManagedExternalServers(externalServers),
+    [externalServers]
+  )
+  const grantedServerIds = useMemo(
+    () => new Set(profileBindings.map((binding) => binding.external_server_id)),
+    [profileBindings]
+  )
 
   const canSave = useMemo(() => name.trim().length > 0 && !saving, [name, saving])
 
@@ -54,21 +76,26 @@ export const PermissionProfilesTab = () => {
 
   useEffect(() => {
     let cancelled = false
-    const loadRegistry = async () => {
+    const loadRegistryAndServers = async () => {
       try {
-        const summary = await getToolRegistrySummary()
+        const [summary, serverRows] = await Promise.all([
+          getToolRegistrySummary(),
+          listExternalServers()
+        ])
         if (!cancelled) {
           setRegistryEntries(Array.isArray(summary?.entries) ? summary.entries : [])
           setRegistryModules(Array.isArray(summary?.modules) ? summary.modules : [])
+          setExternalServers(Array.isArray(serverRows) ? serverRows : [])
         }
       } catch {
         if (!cancelled) {
           setRegistryEntries([])
           setRegistryModules([])
+          setExternalServers([])
         }
       }
     }
-    void loadRegistry()
+    void loadRegistryAndServers()
     return () => {
       cancelled = true
     }
@@ -83,6 +110,22 @@ export const PermissionProfilesTab = () => {
     setMode("custom")
     setPolicyDocument({})
     setIsActive(true)
+    setProfileBindings([])
+    setBindingsLoading(false)
+    setBindingServerId(null)
+  }
+
+  const loadProfileBindings = async (profileId: number) => {
+    setBindingsLoading(true)
+    try {
+      const rows = await listProfileCredentialBindings(profileId)
+      setProfileBindings(Array.isArray(rows) ? rows : [])
+    } catch {
+      setProfileBindings([])
+      setErrorMessage("Failed to load external server bindings.")
+    } finally {
+      setBindingsLoading(false)
+    }
   }
 
   const openForEdit = (profile: McpHubPermissionProfile) => {
@@ -94,6 +137,8 @@ export const PermissionProfilesTab = () => {
     setMode(profile.mode)
     setPolicyDocument(profile.policy_document || {})
     setIsActive(profile.is_active)
+    setProfileBindings([])
+    void loadProfileBindings(profile.id)
   }
 
   const handleSave = async () => {
@@ -137,6 +182,29 @@ export const PermissionProfilesTab = () => {
       await loadProfiles()
     } catch {
       setErrorMessage("Failed to delete MCP Hub permission profile.")
+    }
+  }
+
+  const handleToggleExternalServer = async (serverId: string, checked: boolean) => {
+    if (!editingId) return
+    setBindingServerId(serverId)
+    setErrorMessage(null)
+    try {
+      if (checked) {
+        await upsertProfileCredentialBinding(editingId, serverId)
+      } else {
+        await deleteProfileCredentialBinding(editingId, serverId)
+      }
+      const [bindingRows, serverRows] = await Promise.all([
+        listProfileCredentialBindings(editingId),
+        listExternalServers()
+      ])
+      setProfileBindings(Array.isArray(bindingRows) ? bindingRows : [])
+      setExternalServers(Array.isArray(serverRows) ? serverRows : [])
+    } catch {
+      setErrorMessage("Failed to update external server binding.")
+    } finally {
+      setBindingServerId(null)
     }
   }
 
@@ -214,6 +282,47 @@ export const PermissionProfilesTab = () => {
               registryEntries={registryEntries}
               registryModules={registryModules}
             />
+
+            {editingId ? (
+              <Card size="small" title="External Service Bindings">
+                <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                  <Typography.Text type="secondary">
+                    Grant reusable access to managed external MCP servers here. Legacy inventory is
+                    visible in External Servers and cannot be selected until imported into MCP Hub.
+                  </Typography.Text>
+                  {bindingsLoading ? (
+                    <Typography.Text type="secondary">Loading external service bindings...</Typography.Text>
+                  ) : managedExternalServers.length > 0 ? (
+                    <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+                      {managedExternalServers.map((server) => (
+                        <Checkbox
+                          key={server.id}
+                          checked={grantedServerIds.has(server.id)}
+                          disabled={bindingServerId === server.id}
+                          onChange={(event) =>
+                            void handleToggleExternalServer(server.id, event.target.checked)
+                          }
+                        >
+                          <Space wrap size={4}>
+                            <span>{server.name}</span>
+                            {server.secret_configured ? (
+                              <Tag color="green">secret configured</Tag>
+                            ) : (
+                              <Tag>no secret</Tag>
+                            )}
+                            {server.binding_count ? (
+                              <Tag>{`${server.binding_count} bindings`}</Tag>
+                            ) : null}
+                          </Space>
+                        </Checkbox>
+                      ))}
+                    </Space>
+                  ) : (
+                    <Empty description="No managed external servers are available yet." />
+                  )}
+                </Space>
+              </Card>
+            ) : null}
 
             <Checkbox checked={isActive} onChange={(event) => setIsActive(event.target.checked)}>
               Active

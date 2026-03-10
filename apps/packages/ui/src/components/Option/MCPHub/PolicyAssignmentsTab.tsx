@@ -5,16 +5,24 @@ import {
   createPolicyAssignment,
   deletePolicyAssignmentOverride,
   deletePolicyAssignment,
+  deleteAssignmentCredentialBinding,
+  getAssignmentExternalAccess,
   getToolRegistrySummary,
   getEffectivePolicy,
   getPolicyAssignmentOverride,
+  listAssignmentCredentialBindings,
   listApprovalPolicies,
+  listExternalServers,
   listPermissionProfiles,
   listPolicyAssignments,
+  upsertAssignmentCredentialBinding,
   upsertPolicyAssignmentOverride,
   updatePolicyAssignment,
   type McpHubApprovalPolicy,
+  type McpHubCredentialBinding,
   type McpHubEffectivePolicy,
+  type McpHubEffectiveExternalAccess,
+  type McpHubExternalServer,
   type McpHubPermissionPolicyDocument,
   type McpHubPermissionProfile,
   type McpHubPolicyAssignment,
@@ -23,7 +31,13 @@ import {
   type McpHubToolRegistryModule
 } from "@/services/tldw/mcp-hub"
 
-import { getPathScopeLabel, MCP_HUB_SCOPE_OPTIONS, MCP_HUB_TARGET_OPTIONS } from "./policyHelpers"
+import {
+  getManagedExternalServers,
+  getPathScopeLabel,
+  MCP_HUB_SCOPE_OPTIONS,
+  MCP_HUB_TARGET_OPTIONS
+} from "./policyHelpers"
+import { ExternalAccessSummary } from "./ExternalAccessSummary"
 import { PolicyDocumentEditor } from "./PolicyDocumentEditor"
 
 const PROVENANCE_LABELS = {
@@ -58,6 +72,22 @@ export const PolicyAssignmentsTab = () => {
   const [overrideSaving, setOverrideSaving] = useState(false)
   const [registryEntries, setRegistryEntries] = useState<McpHubToolRegistryEntry[]>([])
   const [registryModules, setRegistryModules] = useState<McpHubToolRegistryModule[]>([])
+  const [externalServers, setExternalServers] = useState<McpHubExternalServer[]>([])
+  const [assignmentBindings, setAssignmentBindings] = useState<McpHubCredentialBinding[]>([])
+  const [externalAccess, setExternalAccess] = useState<McpHubEffectiveExternalAccess | null>(null)
+  const [bindingsLoading, setBindingsLoading] = useState(false)
+  const [bindingServerId, setBindingServerId] = useState<string | null>(null)
+  const managedExternalServers = useMemo(
+    () => getManagedExternalServers(externalServers),
+    [externalServers]
+  )
+  const bindingModes = useMemo(
+    () =>
+      new Map(
+        assignmentBindings.map((binding) => [binding.external_server_id, binding.binding_mode] as const)
+      ),
+    [assignmentBindings]
+  )
 
   const canSave = useMemo(
     () => !saving && (targetType === "default" || targetId.trim().length > 0),
@@ -105,21 +135,26 @@ export const PolicyAssignmentsTab = () => {
 
   useEffect(() => {
     let cancelled = false
-    const loadRegistry = async () => {
+    const loadRegistryAndServers = async () => {
       try {
-        const summary = await getToolRegistrySummary()
+        const [summary, serverRows] = await Promise.all([
+          getToolRegistrySummary(),
+          listExternalServers()
+        ])
         if (!cancelled) {
           setRegistryEntries(Array.isArray(summary?.entries) ? summary.entries : [])
           setRegistryModules(Array.isArray(summary?.modules) ? summary.modules : [])
+          setExternalServers(Array.isArray(serverRows) ? serverRows : [])
         }
       } catch {
         if (!cancelled) {
           setRegistryEntries([])
           setRegistryModules([])
+          setExternalServers([])
         }
       }
     }
-    void loadRegistry()
+    void loadRegistryAndServers()
     return () => {
       cancelled = true
     }
@@ -140,6 +175,10 @@ export const PolicyAssignmentsTab = () => {
     setOverrideExists(false)
     setOverrideLoading(false)
     setOverrideSaving(false)
+    setAssignmentBindings([])
+    setExternalAccess(null)
+    setBindingsLoading(false)
+    setBindingServerId(null)
   }
 
   const loadOverride = async (assignmentId: number) => {
@@ -159,6 +198,26 @@ export const PolicyAssignmentsTab = () => {
     }
   }
 
+  const loadAssignmentExternalState = async (assignmentId: number) => {
+    setBindingsLoading(true)
+    try {
+      const [bindingRows, summary, serverRows] = await Promise.all([
+        listAssignmentCredentialBindings(assignmentId),
+        getAssignmentExternalAccess(assignmentId),
+        listExternalServers()
+      ])
+      setAssignmentBindings(Array.isArray(bindingRows) ? bindingRows : [])
+      setExternalAccess(summary)
+      setExternalServers(Array.isArray(serverRows) ? serverRows : [])
+    } catch {
+      setAssignmentBindings([])
+      setExternalAccess(null)
+      setErrorMessage("Failed to load external service bindings.")
+    } finally {
+      setBindingsLoading(false)
+    }
+  }
+
   const openForEdit = (assignment: McpHubPolicyAssignment) => {
     setCreateOpen(true)
     setEditingId(assignment.id)
@@ -175,6 +234,7 @@ export const PolicyAssignmentsTab = () => {
     if (assignment.has_override) {
       void loadOverride(assignment.id)
     }
+    void loadAssignmentExternalState(assignment.id)
   }
 
   const handleSave = async () => {
@@ -252,6 +312,33 @@ export const PolicyAssignmentsTab = () => {
       await loadAll()
     } catch {
       setErrorMessage("Failed to delete assignment override.")
+    }
+  }
+
+  const handleAssignmentBindingModeChange = async (
+    serverId: string,
+    nextMode: "inherit" | "grant" | "disable"
+  ) => {
+    if (!editingId) return
+    const currentMode = bindingModes.get(serverId) || "inherit"
+    if (currentMode === nextMode) {
+      return
+    }
+    setBindingServerId(serverId)
+    setErrorMessage(null)
+    try {
+      if (nextMode === "inherit") {
+        if (bindingModes.has(serverId)) {
+          await deleteAssignmentCredentialBinding(editingId, serverId)
+        }
+      } else {
+        await upsertAssignmentCredentialBinding(editingId, serverId, { binding_mode: nextMode })
+      }
+      await loadAssignmentExternalState(editingId)
+    } catch {
+      setErrorMessage("Failed to update external service binding.")
+    } finally {
+      setBindingServerId(null)
     }
   }
 
@@ -358,6 +445,59 @@ export const PolicyAssignmentsTab = () => {
                 registryModules={registryModules}
               />
             </Card>
+
+            {editingId ? (
+              <Card size="small" title="External Service Bindings">
+                <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                  <Typography.Text type="secondary">
+                    Grant or disable managed external MCP servers for this assignment. Legacy inventory is
+                    visible in External Servers and cannot be selected here until imported into MCP Hub.
+                  </Typography.Text>
+                  {bindingsLoading ? (
+                    <Typography.Text type="secondary">Loading external service bindings...</Typography.Text>
+                  ) : managedExternalServers.length > 0 ? (
+                    <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+                      {managedExternalServers.map((server) => (
+                        <Space
+                          key={server.id}
+                          wrap
+                          size="small"
+                          style={{ width: "100%", justifyContent: "space-between" }}
+                        >
+                          <Space wrap size={4}>
+                            <Typography.Text strong>{server.name}</Typography.Text>
+                            {server.secret_configured ? <Tag color="green">secret configured</Tag> : <Tag>no secret</Tag>}
+                          </Space>
+                          <select
+                            aria-label={server.name}
+                            value={bindingModes.get(server.id) || "inherit"}
+                            disabled={bindingServerId === server.id}
+                            onChange={(event) =>
+                              void handleAssignmentBindingModeChange(
+                                server.id,
+                                event.target.value as "inherit" | "grant" | "disable"
+                              )
+                            }
+                          >
+                            <option value="inherit">Inherit</option>
+                            <option value="grant">Grant</option>
+                            <option value="disable">Disable</option>
+                          </select>
+                        </Space>
+                      ))}
+                    </Space>
+                  ) : (
+                    <Empty description="No managed external servers are available yet." />
+                  )}
+                  <Card size="small" title="Effective External Access">
+                    <ExternalAccessSummary
+                      summary={externalAccess}
+                      emptyText="No external server access is currently configured for this assignment."
+                    />
+                  </Card>
+                </Space>
+              </Card>
+            ) : null}
 
             {editingId ? (
               <Card

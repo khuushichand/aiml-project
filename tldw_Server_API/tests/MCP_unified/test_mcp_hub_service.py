@@ -286,3 +286,111 @@ async def test_service_resolves_effective_external_access_with_assignment_disabl
     )
 
     assert access["servers"][0]["disabled_by_assignment"] is True
+
+
+@pytest.mark.asyncio
+async def test_service_lists_legacy_inventory_from_config_and_hides_imported_duplicates(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.services.mcp_hub_external_legacy_inventory import (
+        McpHubExternalLegacyInventoryService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_service import McpHubService
+
+    db_path = tmp_path / "users.db"
+    cfg_path = tmp_path / "external_servers.yaml"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "id": "legacy-docs",
+                        "name": "Legacy Docs",
+                        "transport": "websocket",
+                        "websocket": {"url": "wss://docs.example/ws"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("BYOK_ENCRYPTION_KEY", _b64_key(b"k"))
+
+    reset_settings()
+    await reset_db_pool()
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    svc = McpHubService(
+        repo=repo,
+        legacy_inventory_service=McpHubExternalLegacyInventoryService(config_path=str(cfg_path)),
+    )
+
+    rows = await svc.list_external_servers()
+    assert rows[0]["server_source"] == "legacy"
+
+    imported = await svc.import_legacy_external_server(server_id="legacy-docs", actor_id=1)
+    rows_after_import = await svc.list_external_servers()
+
+    assert imported["legacy_source_ref"] == "yaml:legacy-docs"
+    assert len(rows_after_import) == 1
+    assert rows_after_import[0]["server_source"] == "managed"
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_cross_scope_assignment_binding(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.exceptions import BadRequestError
+    from tldw_Server_API.app.services.mcp_hub_service import McpHubService
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("BYOK_ENCRYPTION_KEY", _b64_key(b"k"))
+
+    reset_settings()
+    await reset_db_pool()
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    svc = McpHubService(repo=repo)
+
+    assignment = await repo.create_policy_assignment(
+        target_type="group",
+        target_id="ops",
+        owner_scope_type="team",
+        owner_scope_id=5,
+        profile_id=None,
+        inline_policy_document={"capabilities": ["network.external"]},
+        approval_policy_id=None,
+        actor_id=1,
+        is_active=True,
+    )
+    await repo.upsert_external_server(
+        server_id="private-docs",
+        name="Private Docs",
+        transport="websocket",
+        config_json=json.dumps({"websocket": {"url": "wss://docs.example/ws"}}),
+        owner_scope_type="user",
+        owner_scope_id=1,
+        enabled=True,
+        server_source="managed",
+        actor_id=1,
+    )
+
+    with pytest.raises(BadRequestError):
+        await svc.upsert_assignment_credential_binding(
+            assignment_id=int(assignment["id"]),
+            external_server_id="private-docs",
+            binding_mode="grant",
+            actor_id=1,
+        )

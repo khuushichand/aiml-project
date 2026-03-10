@@ -326,5 +326,39 @@ class ExternalSecretSetResponse(BaseModel):
     updated_at: datetime | str | None = None
 
 
+class CredentialBindingResponse(BaseModel):
+    id: int
+    binding_target_type: str
+    binding_target_id: str
+    external_server_id: str
+    credential_ref: str
+    binding_mode: str
+    usage_rules: dict[str, Any] = Field(default_factory=dict)
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
+class AssignmentCredentialBindingUpsertRequest(BaseModel):
+    binding_mode: str = Field(default="grant", pattern="^(grant|disable)$")
+
+
+class EffectiveExternalAccessEntryResponse(BaseModel):
+    server_id: str
+    server_name: str | None = None
+    granted_by: str | None = None
+    disabled_by_assignment: bool = False
+    server_source: str = "managed"
+    superseded_by_server_id: str | None = None
+    secret_available: bool = False
+    runtime_executable: bool = False
+    blocked_reason: str | None = None
+
+
+class EffectiveExternalAccessResponse(BaseModel):
+    servers: list[EffectiveExternalAccessEntryResponse] = Field(default_factory=list)
+
+
 class MCPHubDeleteResponse(BaseModel):
     ok: bool

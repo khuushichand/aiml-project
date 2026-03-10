@@ -16,6 +16,8 @@ export type McpHubToolRiskClass = "low" | "medium" | "high" | "unclassified"
 export type McpHubToolMetadataSource = "explicit" | "heuristic" | "fallback"
 export type McpHubPathScopeMode = "none" | "workspace_root" | "cwd_descendants"
 export type McpHubPathScopeEnforcement = "approval_required_when_unenforceable"
+export type McpHubExternalServerSource = "managed" | "legacy"
+export type McpHubCredentialBindingMode = "grant" | "disable"
 
 export type McpHubProfile = {
   id: number
@@ -288,6 +290,11 @@ export type McpHubExternalServer = {
   config: Record<string, unknown>
   secret_configured: boolean
   key_hint?: string | null
+  server_source?: McpHubExternalServerSource
+  legacy_source_ref?: string | null
+  superseded_by_server_id?: string | null
+  binding_count?: number
+  runtime_executable?: boolean
   created_by?: number | null
   updated_by?: number | null
   created_at?: string | null
@@ -318,6 +325,36 @@ export type McpHubSecretSetResponse = {
   secret_configured: boolean
   key_hint?: string | null
   updated_at?: string | null
+}
+
+export type McpHubCredentialBinding = {
+  id: number
+  binding_target_type: string
+  binding_target_id: string
+  external_server_id: string
+  credential_ref: string
+  binding_mode: McpHubCredentialBindingMode
+  usage_rules: Record<string, unknown>
+  created_by?: number | null
+  updated_by?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type McpHubEffectiveExternalAccessEntry = {
+  server_id: string
+  server_name?: string | null
+  granted_by?: string | null
+  disabled_by_assignment: boolean
+  server_source: McpHubExternalServerSource
+  superseded_by_server_id?: string | null
+  secret_available: boolean
+  runtime_executable: boolean
+  blocked_reason?: string | null
+}
+
+export type McpHubEffectiveExternalAccess = {
+  servers: McpHubEffectiveExternalAccessEntry[]
 }
 
 const withQuery = (
@@ -399,6 +436,15 @@ export const createExternalServer = async (
   })
 }
 
+export const importExternalServer = async (
+  serverId: string
+): Promise<McpHubExternalServer> => {
+  return await bgRequestClient<McpHubExternalServer>({
+    path: `/api/v1/mcp/hub/external-servers/${encodeURIComponent(serverId)}/import`,
+    method: "POST"
+  })
+}
+
 export const updateExternalServer = async (
   serverId: string,
   payload: McpHubExternalServerUpdateInput
@@ -427,6 +473,75 @@ export const setExternalServerSecret = async (
     path: `/api/v1/mcp/hub/external-servers/${encodeURIComponent(serverId)}/secret`,
     method: "POST",
     body: { secret }
+  })
+}
+
+export const listProfileCredentialBindings = async (
+  profileId: number
+): Promise<McpHubCredentialBinding[]> => {
+  return await bgRequestClient<McpHubCredentialBinding[]>({
+    path: `/api/v1/mcp/hub/permission-profiles/${profileId}/credential-bindings`,
+    method: "GET"
+  })
+}
+
+export const upsertProfileCredentialBinding = async (
+  profileId: number,
+  serverId: string
+): Promise<McpHubCredentialBinding> => {
+  return await bgRequestClient<McpHubCredentialBinding>({
+    path: `/api/v1/mcp/hub/permission-profiles/${profileId}/credential-bindings/${encodeURIComponent(serverId)}`,
+    method: "PUT"
+  })
+}
+
+export const deleteProfileCredentialBinding = async (
+  profileId: number,
+  serverId: string
+): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/permission-profiles/${profileId}/credential-bindings/${encodeURIComponent(serverId)}`,
+    method: "DELETE"
+  })
+}
+
+export const listAssignmentCredentialBindings = async (
+  assignmentId: number
+): Promise<McpHubCredentialBinding[]> => {
+  return await bgRequestClient<McpHubCredentialBinding[]>({
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/credential-bindings`,
+    method: "GET"
+  })
+}
+
+export const upsertAssignmentCredentialBinding = async (
+  assignmentId: number,
+  serverId: string,
+  payload: { binding_mode: McpHubCredentialBindingMode }
+): Promise<McpHubCredentialBinding> => {
+  return await bgRequestClient<McpHubCredentialBinding>({
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/credential-bindings/${encodeURIComponent(serverId)}`,
+    method: "PUT",
+    body: payload
+  })
+}
+
+export const deleteAssignmentCredentialBinding = async (
+  assignmentId: number,
+  serverId: string
+): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/credential-bindings/${encodeURIComponent(serverId)}`,
+    method: "DELETE"
+  })
+}
+
+export const getAssignmentExternalAccess = async (
+  assignmentId: number
+): Promise<McpHubEffectiveExternalAccess> => {
+  return await bgRequestClient<McpHubEffectiveExternalAccess>({
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/external-access`,
+    method: "GET"
   })
 }
 

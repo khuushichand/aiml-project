@@ -19,7 +19,10 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     ApprovalPolicyCreateRequest,
     ApprovalPolicyResponse,
     ApprovalPolicyUpdateRequest,
+    AssignmentCredentialBindingUpsertRequest,
+    CredentialBindingResponse,
     EffectivePolicyResponse,
+    EffectiveExternalAccessResponse,
     ExternalSecretSetRequest,
     ExternalSecretSetResponse,
     ExternalServerCreateRequest,
@@ -42,7 +45,11 @@ from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+from tldw_Server_API.app.core.config import config
 from tldw_Server_API.app.core.exceptions import BadRequestError, ResourceNotFoundError
+from tldw_Server_API.app.services.mcp_hub_external_legacy_inventory import (
+    McpHubExternalLegacyInventoryService,
+)
 from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver, get_mcp_hub_policy_resolver
 from tldw_Server_API.app.services.mcp_hub_service import McpHubConflictError, McpHubService
 from tldw_Server_API.app.services.mcp_hub_tool_registry import McpHubToolRegistryService
@@ -72,7 +79,14 @@ async def get_mcp_hub_service() -> McpHubService:
     pool = await get_db_pool()
     repo = McpHubRepo(pool)
     await repo.ensure_tables()
-    return McpHubService(repo)
+    cfg = config
+    inventory_service = McpHubExternalLegacyInventoryService(
+        config_path=str(
+            getattr(cfg, "external_servers_config_path", None)
+            or "tldw_Server_API/Config_Files/mcp_external_servers.yaml"
+        )
+    )
+    return McpHubService(repo, legacy_inventory_service=inventory_service)
 
 
 async def get_mcp_hub_policy_resolver_dep() -> McpHubPolicyResolver:
@@ -588,6 +602,24 @@ async def _get_visible_policy_assignment_or_404(
     return assignment
 
 
+async def _get_visible_permission_profile_or_404(
+    *,
+    profile_id: int,
+    principal: AuthPrincipal,
+    svc: McpHubService,
+) -> dict[str, Any]:
+    """Fetch a permission profile and ensure the principal can access its owner scope."""
+    profile = await svc.get_permission_profile(profile_id)
+    if profile is None:
+        raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
+    _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=str(profile.get("owner_scope_type") or "global"),
+        owner_scope_id=profile.get("owner_scope_id"),
+    )
+    return profile
+
+
 async def _assignment_base_policy_document(
     *,
     svc: McpHubService,
@@ -608,6 +640,22 @@ async def _assignment_base_policy_document(
         _load_json_object(assignment.get("inline_policy_document")),
     )
     return (int(profile_id) if profile_id is not None else None, base_document)
+
+
+def _binding_row_to_response(row: dict[str, Any]) -> CredentialBindingResponse:
+    return CredentialBindingResponse(
+        id=int(row.get("id")),
+        binding_target_type=str(row.get("binding_target_type") or ""),
+        binding_target_id=str(row.get("binding_target_id") or ""),
+        external_server_id=str(row.get("external_server_id") or ""),
+        credential_ref=str(row.get("credential_ref") or "server"),
+        binding_mode=str(row.get("binding_mode") or "grant"),
+        usage_rules=_load_json_object(row.get("usage_rules")),
+        created_by=row.get("created_by"),
+        updated_by=row.get("updated_by"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
 
 
 @router.get("/tool-registry", response_model=list[ToolRegistryEntryResponse])
@@ -1237,6 +1285,145 @@ async def import_external_server(
     except McpHubConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _external_row_to_response(row)
+
+
+@router.get("/permission-profiles/{profile_id}/credential-bindings", response_model=list[CredentialBindingResponse])
+async def list_profile_credential_bindings(
+    profile_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[CredentialBindingResponse]:
+    """List external server bindings attached to a permission profile."""
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    rows = await svc.list_profile_credential_bindings(profile_id=profile_id)
+    return [_binding_row_to_response(row) for row in rows]
+
+
+@router.put(
+    "/permission-profiles/{profile_id}/credential-bindings/{server_id}",
+    response_model=CredentialBindingResponse,
+)
+async def upsert_profile_credential_binding(
+    profile_id: int,
+    server_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> CredentialBindingResponse:
+    """Grant a managed external server to a permission profile."""
+    _require_mutation_permission(principal)
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    try:
+        row = await svc.upsert_profile_credential_binding(
+            profile_id=profile_id,
+            external_server_id=server_id,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _binding_row_to_response(row)
+
+
+@router.delete(
+    "/permission-profiles/{profile_id}/credential-bindings/{server_id}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_profile_credential_binding(
+    profile_id: int,
+    server_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete an external server binding from a permission profile."""
+    _require_mutation_permission(principal)
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    deleted = await svc.delete_profile_credential_binding(
+        profile_id=profile_id,
+        external_server_id=server_id,
+        actor_id=principal.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential binding not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.get("/policy-assignments/{assignment_id}/credential-bindings", response_model=list[CredentialBindingResponse])
+async def list_assignment_credential_bindings(
+    assignment_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[CredentialBindingResponse]:
+    """List external server bindings attached to a policy assignment."""
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    rows = await svc.list_assignment_credential_bindings(assignment_id=assignment_id)
+    return [_binding_row_to_response(row) for row in rows]
+
+
+@router.put(
+    "/policy-assignments/{assignment_id}/credential-bindings/{server_id}",
+    response_model=CredentialBindingResponse,
+)
+async def upsert_assignment_credential_binding(
+    assignment_id: int,
+    server_id: str,
+    payload: AssignmentCredentialBindingUpsertRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> CredentialBindingResponse:
+    """Create or update an external server binding on a policy assignment."""
+    _require_mutation_permission(principal)
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    try:
+        row = await svc.upsert_assignment_credential_binding(
+            assignment_id=assignment_id,
+            external_server_id=server_id,
+            binding_mode=payload.binding_mode,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _binding_row_to_response(row)
+
+
+@router.delete(
+    "/policy-assignments/{assignment_id}/credential-bindings/{server_id}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_assignment_credential_binding(
+    assignment_id: int,
+    server_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete an external server binding from a policy assignment."""
+    _require_mutation_permission(principal)
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    deleted = await svc.delete_assignment_credential_binding(
+        assignment_id=assignment_id,
+        external_server_id=server_id,
+        actor_id=principal.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential binding not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.get("/policy-assignments/{assignment_id}/external-access", response_model=EffectiveExternalAccessResponse)
+async def get_assignment_external_access(
+    assignment_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> EffectiveExternalAccessResponse:
+    """Preview effective external server access for a policy assignment."""
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    summary = await svc.resolve_effective_external_access(
+        assignment_id=assignment_id,
+        actor_id=principal.user_id,
+    )
+    return EffectiveExternalAccessResponse.model_validate(summary)
 
 
 @router.put("/external-servers/{server_id}", response_model=ExternalServerResponse)

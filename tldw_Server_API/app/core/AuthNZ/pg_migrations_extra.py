@@ -123,6 +123,21 @@ _CREATE_MCP_HUB_TABLES = [
         (),
     ),
     (
+        "ALTER TABLE mcp_external_servers "
+        "ADD COLUMN IF NOT EXISTS server_source TEXT NOT NULL DEFAULT 'managed'",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_external_servers "
+        "ADD COLUMN IF NOT EXISTS legacy_source_ref TEXT",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_external_servers "
+        "ADD COLUMN IF NOT EXISTS superseded_by_server_id TEXT",
+        (),
+    ),
+    (
         """
         CREATE TABLE IF NOT EXISTS mcp_external_server_secrets (
             server_id TEXT PRIMARY KEY REFERENCES mcp_external_servers(id) ON DELETE CASCADE,
@@ -284,6 +299,7 @@ _CREATE_MCP_HUB_TABLES = [
             binding_target_id TEXT NULL,
             external_server_id TEXT NOT NULL REFERENCES mcp_external_servers(id) ON DELETE CASCADE,
             credential_ref TEXT NOT NULL,
+            binding_mode TEXT NOT NULL DEFAULT 'grant',
             usage_rules_json TEXT NOT NULL DEFAULT '{}',
             created_by INTEGER NULL,
             updated_by INTEGER NULL,
@@ -296,6 +312,28 @@ _CREATE_MCP_HUB_TABLES = [
     (
         "CREATE INDEX IF NOT EXISTS idx_mcp_credential_bindings_target "
         "ON mcp_credential_bindings(binding_target_type, binding_target_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_credential_bindings "
+        "ADD COLUMN IF NOT EXISTS binding_mode TEXT NOT NULL DEFAULT 'grant'",
+        (),
+    ),
+    (
+        """
+        UPDATE mcp_credential_bindings
+        SET binding_mode = CASE
+            WHEN usage_rules_json LIKE '%"binding_mode":"disable"%'
+              OR usage_rules_json LIKE '%"binding_mode": "disable"%'
+            THEN 'disable'
+            ELSE COALESCE(NULLIF(TRIM(binding_mode), ''), 'grant')
+        END
+        """,
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_credential_bindings_target_server "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id, external_server_id)",
         (),
     ),
     (

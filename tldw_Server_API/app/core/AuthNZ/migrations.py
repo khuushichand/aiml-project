@@ -1628,6 +1628,49 @@ def migration_058_harden_mcp_policy_override_schema(conn: sqlite3.Connection) ->
     logger.info("Migration 058: Hardened MCP policy override schema")
 
 
+def migration_059_harden_mcp_external_binding_schema(conn: sqlite3.Connection) -> None:
+    """Add managed/legacy external server metadata and tighten credential bindings."""
+
+    external_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_external_servers)").fetchall()
+    }
+    if "server_source" not in external_columns:
+        conn.execute(
+            "ALTER TABLE mcp_external_servers ADD COLUMN server_source TEXT NOT NULL DEFAULT 'managed'"
+        )
+    if "legacy_source_ref" not in external_columns:
+        conn.execute("ALTER TABLE mcp_external_servers ADD COLUMN legacy_source_ref TEXT")
+    if "superseded_by_server_id" not in external_columns:
+        conn.execute("ALTER TABLE mcp_external_servers ADD COLUMN superseded_by_server_id TEXT")
+
+    binding_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_credential_bindings)").fetchall()
+    }
+    if "binding_mode" not in binding_columns:
+        conn.execute(
+            "ALTER TABLE mcp_credential_bindings ADD COLUMN binding_mode TEXT NOT NULL DEFAULT 'grant'"
+        )
+
+    conn.execute(
+        """
+        UPDATE mcp_credential_bindings
+        SET binding_mode = CASE
+            WHEN usage_rules_json LIKE '%"binding_mode":"disable"%'
+              OR usage_rules_json LIKE '%"binding_mode": "disable"%'
+            THEN 'disable'
+            ELSE COALESCE(NULLIF(TRIM(binding_mode), ''), 'grant')
+        END
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_credential_bindings_target_server "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id, external_server_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 059: Hardened MCP external binding schema")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
@@ -3075,6 +3118,11 @@ def get_authnz_migrations() -> list[Migration]:
             58,
             "Harden MCP policy override schema",
             migration_058_harden_mcp_policy_override_schema,
+        ),
+        Migration(
+            59,
+            "Harden MCP external binding schema",
+            migration_059_harden_mcp_external_binding_schema,
         ),
     ]
 

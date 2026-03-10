@@ -1,9 +1,16 @@
 import { useEffect, useState } from "react"
 import { Alert, Button, Card, Empty, Space, Tag, Typography } from "antd"
 
-import { getEffectivePolicy, type McpHubEffectivePolicy } from "@/services/tldw/mcp-hub"
+import {
+  getAssignmentExternalAccess,
+  getEffectivePolicy,
+  listPolicyAssignments,
+  type McpHubEffectiveExternalAccess,
+  type McpHubEffectivePolicy
+} from "@/services/tldw/mcp-hub"
 
 import { getPathScopeLabel } from "./policyHelpers"
+import { ExternalAccessSummary } from "./ExternalAccessSummary"
 
 type PersonaPolicySummaryProps = {
   personaId?: string | null
@@ -11,6 +18,7 @@ type PersonaPolicySummaryProps = {
 
 export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) => {
   const [policy, setPolicy] = useState<McpHubEffectivePolicy | null>(null)
+  const [externalAccess, setExternalAccess] = useState<McpHubEffectiveExternalAccess | null>(null)
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
@@ -19,18 +27,38 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
     const load = async () => {
       if (!personaId) {
         setPolicy(null)
+        setExternalAccess(null)
         return
       }
       setLoading(true)
       setErrorMessage(null)
       try {
-        const next = await getEffectivePolicy({ persona_id: personaId })
+        const [next, assignmentRows] = await Promise.all([
+          getEffectivePolicy({ persona_id: personaId }),
+          listPolicyAssignments({ target_type: "persona", target_id: personaId })
+        ])
         if (!cancelled) {
           setPolicy(next)
+          const activeAssignment = (assignmentRows || []).find((row) => row.is_active)
+          if (activeAssignment) {
+            try {
+              const summary = await getAssignmentExternalAccess(activeAssignment.id)
+              if (!cancelled) {
+                setExternalAccess(summary)
+              }
+            } catch {
+              if (!cancelled) {
+                setExternalAccess(null)
+              }
+            }
+          } else {
+            setExternalAccess(null)
+          }
         }
       } catch {
         if (!cancelled) {
           setPolicy(null)
+          setExternalAccess(null)
           setErrorMessage("Failed to load effective tool policy.")
         }
       } finally {
@@ -94,6 +122,11 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
               </Tag>
             ))}
           </Space>
+          <Typography.Text strong>External Services</Typography.Text>
+          <ExternalAccessSummary
+            summary={externalAccess}
+            emptyText="No external service access is configured for this persona."
+          />
         </Space>
       ) : (
         <Empty description="No tool policy is active for this persona yet." />
