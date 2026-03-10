@@ -35,6 +35,7 @@ import {
   AdvancedParamsTab,
   ActorTab
 } from "./tabs"
+import { LlamaCppAdvancedControls } from "./LlamaCppAdvancedControls"
 
 type Props = {
   open: boolean
@@ -728,6 +729,9 @@ export const CurrentChatModelSettings = ({
               items={tabItems}
               className="settings-tabs"
             />
+            <div className="mt-4">
+              <LlamaCppAdvancedControls selectedModel={selectedModel} />
+            </div>
             <div className="mt-4 border-t border-border pt-4">
               <SaveButton
                 className="w-full text-center inline-flex items-center justify-center"
