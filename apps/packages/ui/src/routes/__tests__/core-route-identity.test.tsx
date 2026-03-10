@@ -8,6 +8,7 @@ import OptionOnboardingTest from "../option-onboarding-test"
 const state = {
   hasCompletedFirstRun: false
 }
+const toggleDarkModeMock = vi.fn()
 
 const optionLayoutMock = vi.fn(
   ({
@@ -52,6 +53,13 @@ vi.mock("@/hooks/useComposerFocus", () => ({
   useFocusComposerOnConnect: () => undefined
 }))
 
+vi.mock("@/hooks/useDarkmode", () => ({
+  useDarkMode: () => ({
+    mode: "dark",
+    toggleDarkMode: toggleDarkModeMock
+  })
+}))
+
 vi.mock("react-router-dom", () => ({
   useNavigate: () => navigateMock
 }))
@@ -87,6 +95,7 @@ describe("core route identity guardrails", () => {
     checkOnceMock.mockReset().mockResolvedValue(undefined)
     beginOnboardingMock.mockReset().mockResolvedValue(undefined)
     markFirstRunCompleteMock.mockReset().mockResolvedValue(undefined)
+    toggleDarkModeMock.mockReset()
     state.hasCompletedFirstRun = false
   })
 
@@ -152,5 +161,16 @@ describe("core route identity guardrails", () => {
 
     // Prevent unresolved Promise leakage in this test process.
     resolveCheck?.()
+  })
+
+  it("keeps an explicit theme toggle available on the home onboarding shell", () => {
+    render(<OptionIndex />)
+
+    const toggle = screen.getByTestId("chat-header-theme-toggle")
+    expect(toggle).toBeInTheDocument()
+
+    fireEvent.click(toggle)
+
+    expect(toggleDarkModeMock).toHaveBeenCalledTimes(1)
   })
 })

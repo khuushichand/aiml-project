@@ -5,7 +5,7 @@ import { Alert, Button, Typography } from "antd"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { PageShell } from "@/components/Common/PageShell"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
-import { isTimeoutLikeError } from "@/utils/request-timeout"
+import { useTranscriptionModelsCatalog } from "@/hooks/useTranscriptionModelsCatalog"
 import { RecordingStrip } from "./RecordingStrip"
 import { InlineSettingsPanel } from "./InlineSettingsPanel"
 import type { SttLocalSettings } from "./InlineSettingsPanel"
@@ -369,12 +369,15 @@ export const SttPlaygroundPage: React.FC = () => {
           <Alert
             type="warning"
             showIcon
-            title={serverModelsError}
+            title={t("playground:stt.modelsLoadError", "Model load failed")}
+            description={serverModelsError}
             action={
               <Button
                 size="small"
-                loading={serverModelsLoading}
-                onClick={() => setModelsLoadAttempt((prev) => prev + 1)}
+                onClick={() => {
+                  retryServerModels()
+                }}
+                disabled={serverModelsLoading}
               >
                 {t("common:retry", "Retry")}
               </Button>

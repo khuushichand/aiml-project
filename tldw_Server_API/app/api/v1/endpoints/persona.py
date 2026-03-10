@@ -74,6 +74,12 @@ from tldw_Server_API.app.core.Persona.memory_integration import (
     persist_tool_outcome,
     retrieve_top_memories,
 )
+from tldw_Server_API.app.core.Persona.exemplar_runtime import (
+    append_persona_exemplar_sections,
+    build_persona_rag_why_text,
+    resolve_persona_exemplar_runtime_context,
+)
+from tldw_Server_API.app.core.Persona.exemplar_turn_classifier import classify_persona_turn
 from tldw_Server_API.app.core.Persona.exemplar_ingestion import (
     append_exemplar_review_note,
     build_transcript_exemplar_candidates,
@@ -3059,6 +3065,7 @@ async def persona_stream(
             text: str,
             memory_context: list[str] | None = None,
             persona_state_hints: dict[str, str] | None = None,
+            persona_exemplar_sections: list[tuple[str, str, int]] | None = None,
         ) -> dict:
             steps = []
             text_clean = str(text or "").strip()
@@ -3126,17 +3133,13 @@ async def persona_stream(
                 if compact_memories:
                     memory_lines = "\n".join(f"- {m}" for m in compact_memories[: _get_persona_memory_top_k()])
                     query_text = f"{query_text}\n\nPersona memory hints:\n{memory_lines}"
-                if compact_memories and compact_state_lines:
-                    why_text = (
-                        "Input appears to be a knowledge query with applied persistent persona state and "
-                        "personalization memories."
-                    )
-                elif compact_state_lines:
-                    why_text = "Input appears to be a knowledge query with applied persistent persona state."
-                elif compact_memories:
-                    why_text = "Input appears to be a knowledge query with applied personalization memories."
-                else:
-                    why_text = "Input appears to be a knowledge query."
+                query_text = append_persona_exemplar_sections(query_text, persona_exemplar_sections)
+                has_exemplar_guidance = any(str(content or "").strip() for _, content, _ in list(persona_exemplar_sections or []))
+                why_text = build_persona_rag_why_text(
+                    has_state_context=bool(compact_state_lines),
+                    has_memory_context=bool(compact_memories),
+                    has_exemplar_guidance=has_exemplar_guidance,
+                )
                 steps.append(
                     {
                         "idx": 0,
@@ -3270,6 +3273,17 @@ async def persona_stream(
                         user_id=connection_user_id,
                         preferences=preferences_patch,
                     )
+                persona_turn_classifier = classify_persona_turn(text)
+                persona_exemplar_context = await resolve_persona_exemplar_runtime_context(
+                    persona_scope_db=persona_scope_db,
+                    user_id=authenticated_user_id,
+                    persona_id=runtime_persona_id,
+                    classifier=persona_turn_classifier,
+                    current_turn_text=text,
+                    lookup_limit=50,
+                )
+                persona_exemplar_assembly = persona_exemplar_context.assembly
+                persona_exemplar_selection = persona_exemplar_context.selection_metadata
                 await _record_turn(
                     session_id=session_id,
                     role="user",
@@ -3283,6 +3297,7 @@ async def persona_stream(
                         "session_policy_rule_count": len(session_policy_rules),
                         "runtime_mode": runtime_mode,
                         "session_exists": session_exists,
+                        "persona_exemplar_selection": persona_exemplar_selection,
                     },
                     persist_as_memory=False,
                     persona_id_override=runtime_persona_id,
@@ -3369,6 +3384,7 @@ async def persona_stream(
                     text,
                     memory_context=memory_context,
                     persona_state_hints=persona_state_hints,
+                    persona_exemplar_sections=persona_exemplar_assembly.sections,
                 )
                 plan_id = uuid.uuid4().hex
                 max_tool_steps = _get_persona_max_tool_steps()
