@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
-import { Typography } from "antd"
+import { Alert, Button, Typography } from "antd"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { PageShell } from "@/components/Common/PageShell"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
-import { isTimeoutLikeError } from "@/utils/request-timeout"
+import { useTranscriptionModelsCatalog } from "@/hooks/useTranscriptionModelsCatalog"
 import { RecordingStrip } from "./RecordingStrip"
 import { InlineSettingsPanel } from "./InlineSettingsPanel"
 import type { SttLocalSettings } from "./InlineSettingsPanel"
@@ -27,10 +27,15 @@ export const SttPlaygroundPage: React.FC = () => {
 
   // ── Server models (fetched on mount) ──────────────────────────────
   const [serverModels, setServerModels] = useState<string[]>([])
+  const [serverModelsLoading, setServerModelsLoading] = useState(false)
+  const [serverModelsError, setServerModelsError] = useState<string | null>(null)
+  const [modelsLoadAttempt, setModelsLoadAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     const fetchModels = async () => {
+      setServerModelsLoading(true)
+      setServerModelsError(null)
       try {
         const res = await tldwClient.getTranscriptionModels({
           timeoutMs: 10_000
@@ -38,18 +43,28 @@ export const SttPlaygroundPage: React.FC = () => {
         const all = Array.isArray(res?.all_models)
           ? (res.all_models as string[])
           : []
-        if (!cancelled && all.length > 0) {
+        if (!cancelled) {
           const unique = Array.from(new Set(all)).sort()
           setServerModels(unique)
+          setServerModelsError(null)
         }
       } catch (e) {
         if (!cancelled) {
-          notification.error({
-            message: t("playground:stt.modelsLoadError", "Model load failed"),
-            description: isTimeoutLikeError(e)
-              ? t("playground:stt.modelsTimeout", "Model list took longer than 10 seconds. Check server health and retry.")
-              : t("playground:stt.modelsLoadErrorDesc", "Unable to load transcription models. Retry or check server settings.")
-          })
+          setServerModelsError(
+            isTimeoutLikeError(e)
+              ? t(
+                  "playground:stt.modelsTimeout",
+                  "Model list took longer than 10 seconds. Check server health and retry."
+                )
+              : t(
+                  "playground:stt.modelsLoadErrorDesc",
+                  "Unable to load transcription models. Retry or check server settings."
+                )
+          )
+        }
+      } finally {
+        if (!cancelled) {
+          setServerModelsLoading(false)
         }
       }
     }
@@ -57,8 +72,9 @@ export const SttPlaygroundPage: React.FC = () => {
     return () => {
       cancelled = true
     }
+    // Retry is explicit via modelsLoadAttempt; translation changes do not need a refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [modelsLoadAttempt])
 
   // ── Current blob from RecordingStrip ──────────────────────────────
   const [currentBlob, setCurrentBlob] = useState<Blob | null>(null)
@@ -349,6 +365,25 @@ export const SttPlaygroundPage: React.FC = () => {
       </Text>
 
       <div className="mt-4 space-y-4">
+        {serverModelsError && (
+          <Alert
+            type="warning"
+            showIcon
+            title={t("playground:stt.modelsLoadError", "Model load failed")}
+            description={serverModelsError}
+            action={
+              <Button
+                size="small"
+                onClick={() => {
+                  retryServerModels()
+                }}
+                disabled={serverModelsLoading}
+              >
+                {t("common:retry", "Retry")}
+              </Button>
+            }
+          />
+        )}
         <RecordingStrip
           onBlobReady={handleBlobReady}
           onSettingsToggle={toggleSettings}

@@ -12,7 +12,11 @@ import {
   SlidersHorizontal,
   Loader2,
   Share2,
-  Cpu
+  Cpu,
+  Plus,
+  BookOpen,
+  Users,
+  Briefcase
 } from "lucide-react"
 import { Modal, Tag, Tooltip, Input, Slider, Switch, Button, message } from "antd"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
@@ -40,6 +44,10 @@ import {
   WORKSPACE_SOURCE_DRAG_TYPE,
   parseWorkspaceSourceDragPayload
 } from "../drag-source"
+import {
+  WORKSPACE_TEMPLATE_PRESETS,
+  type WorkspaceTemplatePreset
+} from "../workspace-header.utils"
 import {
   WORKSPACE_UNDO_WINDOW_MS,
   scheduleWorkspaceUndoAction,
@@ -710,20 +718,32 @@ const RetrievalDiagnosticsPanel: React.FC<{
 /**
  * WorkspaceChatEmpty - Empty state for the workspace chat
  */
+const TEMPLATE_ICONS: Record<string, React.ElementType> = {
+  literature_review: BookOpen,
+  interview_analysis: Users,
+  product_brief: Briefcase
+}
+
 const WorkspaceChatEmpty: React.FC<{
   hasSelectedSources: boolean
   sourceCount: number
+  totalSourceCount: number
   selectedSourceTypes: WorkspaceSourceType[]
   isMobile: boolean
   layoutMode?: ChatPaneContentWidthMode
   onExamplePromptSelect?: (prompt: string) => void
+  onAddSource?: () => void
+  onCreateFromTemplate?: (template: WorkspaceTemplatePreset) => void
 }> = ({
   hasSelectedSources,
   sourceCount,
+  totalSourceCount,
   selectedSourceTypes,
   isMobile,
   layoutMode = "comfortable",
-  onExamplePromptSelect
+  onExamplePromptSelect,
+  onAddSource,
+  onCreateFromTemplate
 }) => {
   const { t } = useTranslation(["playground"])
   const sourceTypeSet = React.useMemo(
@@ -832,6 +852,47 @@ const WorkspaceChatEmpty: React.FC<{
           </button>
         ))}
       />
+
+      {totalSourceCount === 0 && (
+        <div className="mt-4 space-y-3" data-testid="workspace-chat-empty-guidance">
+          {onAddSource && (
+            <button
+              type="button"
+              data-testid="workspace-chat-add-source-button"
+              onClick={onAddSource}
+              className="mx-auto flex items-center gap-1.5 rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition hover:bg-primary/20"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {t("playground:chat.addSourceCta", "Add sources to get started")}
+            </button>
+          )}
+
+          {onCreateFromTemplate && (
+            <div className="space-y-1.5">
+              <p className="text-center text-[11px] text-text-subtle">
+                {t("playground:chat.templateHint", "Or start from a template")}
+              </p>
+              <div className={`grid gap-2 ${isMobile ? "grid-cols-1" : "grid-cols-3"}`}>
+                {WORKSPACE_TEMPLATE_PRESETS.map((template) => {
+                  const Icon = TEMPLATE_ICONS[template.id] || FileText
+                  return (
+                    <button
+                      key={template.id}
+                      type="button"
+                      data-testid={`workspace-template-card-${template.id}`}
+                      onClick={() => onCreateFromTemplate(template)}
+                      className="flex items-center gap-2 rounded-lg border border-border/70 bg-surface2/50 px-3 py-2 text-left text-xs transition hover:border-primary/40 hover:bg-primary/5"
+                    >
+                      <Icon className="h-4 w-4 shrink-0 text-primary/70" />
+                      <span className="text-text">{template.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -1087,6 +1148,10 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   )
   const chatFocusTarget = useWorkspaceStore((s) => s.chatFocusTarget)
   const clearChatFocusTarget = useWorkspaceStore((s) => s.clearChatFocusTarget)
+  const openAddSourceModal = useWorkspaceStore((s) => s.openAddSourceModal)
+  const createNewWorkspace = useWorkspaceStore((s) => s.createNewWorkspace)
+  const setCurrentNote = useWorkspaceStore((s) => s.setCurrentNote)
+  const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace)
 
   // Model settings for model badge (UX-009)
   const selectedModel = useStoreMessageOption((s) => s.selectedModel)
@@ -1205,6 +1270,22 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const selectedSources = getSelectedSources()
   const hasMessages = messages.length > 0
   const hasSelectedSources = selectedSources.length > 0
+
+  const handleCreateFromTemplate = React.useCallback(
+    (template: WorkspaceTemplatePreset) => {
+      createNewWorkspace(template.workspaceName)
+      setCurrentNote({
+        id: undefined,
+        title: template.noteTitle,
+        content: template.noteContent,
+        keywords: [...template.keywords],
+        version: undefined,
+        isDirty: true
+      })
+    },
+    [createNewWorkspace, setCurrentNote]
+  )
+
   const normalizedRagAdvancedOptions = React.useMemo(() => {
     return isRecord(ragAdvancedOptions) ? ragAdvancedOptions : {}
   }, [ragAdvancedOptions])
@@ -2538,10 +2619,13 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                 <WorkspaceChatEmpty
                   hasSelectedSources={hasSelectedSources}
                   sourceCount={selectedSources.length}
+                  totalSourceCount={sources.length}
                   selectedSourceTypes={selectedSources.map((source) => source.type)}
                   isMobile={isMobile}
                   layoutMode={contentWidthMode}
                   onExamplePromptSelect={(prompt) => setSeededPrompt(prompt)}
+                  onAddSource={openAddSourceModal}
+                  onCreateFromTemplate={handleCreateFromTemplate}
                 />
               </div>
             )}

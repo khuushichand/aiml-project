@@ -29,6 +29,7 @@ import {
 } from "antd"
 import { useWorkspaceStore } from "@/store/workspace"
 import type { WorkspaceSourceType } from "@/types/workspace"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import {
   WORKSPACE_SOURCE_DRAG_TYPE,
   serializeWorkspaceSourceDragPayload
@@ -118,7 +119,9 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     (s) => s.clearSourceFocusTarget
   )
   const openAddSourceModal = useWorkspaceStore((s) => s.openAddSourceModal)
+  const addSource = useWorkspaceStore((s) => s.addSource)
   const removeSource = useWorkspaceStore((s) => s.removeSource)
+  const removeSources = useWorkspaceStore((s) => s.removeSources)
   const restoreSource = useWorkspaceStore((s) => s.restoreSource)
   const reorderSource = useWorkspaceStore((s) => s.reorderSource)
   const sourceItemRefs = React.useRef<Record<string, HTMLDivElement | null>>({})
@@ -141,6 +144,111 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
   const [editingAnnotationId, setEditingAnnotationId] = React.useState<
     string | null
   >(null)
+  const [quickUrlValue, setQuickUrlValue] = React.useState("")
+  const [quickUrlLoading, setQuickUrlLoading] = React.useState(false)
+
+  const handleQuickUrlPaste = React.useCallback(
+    async (url: string) => {
+      const trimmed = url.trim()
+      if (!trimmed) return
+      try {
+        new URL(trimmed)
+      } catch {
+        return // Not a valid URL — ignore
+      }
+
+      setQuickUrlLoading(true)
+      try {
+        const response = await tldwClient.addMedia(trimmed)
+        const root = response as Record<string, unknown>
+        const candidates: Array<Record<string, unknown>> = []
+        if (Array.isArray(root.results)) {
+          for (const item of root.results) {
+            if (item && typeof item === "object")
+              candidates.push(item as Record<string, unknown>)
+          }
+        }
+        if (root.result && typeof root.result === "object")
+          candidates.push(root.result as Record<string, unknown>)
+        candidates.push(root)
+
+        for (const candidate of candidates) {
+          const mediaId = Number(
+            candidate.media_id ?? candidate.db_id ?? candidate.id
+          )
+          if (!Number.isFinite(mediaId) || mediaId <= 0) continue
+          const title =
+            typeof candidate.title === "string" && candidate.title.trim()
+              ? candidate.title
+              : trimmed
+          addSource({
+            mediaId,
+            title,
+            type: "website" as WorkspaceSourceType,
+            status: "processing",
+            url: trimmed
+          })
+          setQuickUrlValue("")
+          messageApi.success(
+            t("playground:sources.quickUrlAdded", "Source added from URL")
+          )
+          return
+        }
+        messageApi.error(
+          t("playground:sources.quickUrlFailed", "Could not add URL")
+        )
+      } catch {
+        messageApi.error(
+          t("playground:sources.quickUrlFailed", "Could not add URL")
+        )
+      } finally {
+        setQuickUrlLoading(false)
+      }
+    },
+    [addSource, messageApi, t]
+  )
+
+  const handleBatchRemoveSelected = React.useCallback(() => {
+    const selectedSources = sources.filter((s) =>
+      selectedSourceIds.includes(s.id)
+    )
+    const selectedIds = selectedSources.map((s) => s.id)
+    const selectedWereSelected = [...selectedSourceIds]
+
+    const undoHandle = scheduleWorkspaceUndoAction({
+      apply: () => {
+        removeSources(selectedIds)
+      },
+      undo: () => {
+        for (const source of selectedSources) {
+          restoreSource(source, { select: selectedWereSelected.includes(source.id) })
+        }
+      }
+    })
+
+    messageApi.open({
+      type: "warning",
+      duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+      content: t("playground:sources.batchRemoved", "{{count}} sources removed", {
+        count: selectedSources.length
+      }),
+      btn: (
+        <Button
+          size="small"
+          onClick={() => undoWorkspaceAction(undoHandle.id)}
+        >
+          {t("common:undo", "Undo")}
+        </Button>
+      )
+    })
+  }, [
+    sources,
+    selectedSourceIds,
+    removeSources,
+    restoreSource,
+    messageApi,
+    t
+  ])
 
   // Filter sources based on search query
   const filteredSources = React.useMemo(() => {
@@ -696,17 +804,38 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
               </p>
             )}
             {statusGuardrailsEnabled && isError && (
-              <p
-                className="mt-0.5 flex items-center gap-1 text-[11px] text-error"
-                title={source.statusMessage || undefined}
+              <Tooltip
+                title={
+                  source.statusMessage ? (
+                    <span
+                      className="cursor-text select-all"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (source.statusMessage) {
+                          navigator.clipboard.writeText(source.statusMessage).catch(() => {})
+                        }
+                      }}
+                    >
+                      {source.statusMessage}
+                      <span className="ml-1 text-[10px] opacity-70">
+                        {t("playground:sources.clickToCopy", "(click to copy)")}
+                      </span>
+                    </span>
+                  ) : undefined
+                }
+                placement="bottom"
               >
-                <AlertTriangle className="h-3 w-3" />
-                {source.statusMessage ||
-                  t(
-                    "playground:sources.statusError",
-                    "Source processing failed"
-                  )}
-              </p>
+                <p className="mt-0.5 flex items-center gap-1 text-[11px] text-error">
+                  <AlertTriangle className="h-3 w-3 shrink-0" />
+                  <span className="line-clamp-1">
+                    {source.statusMessage ||
+                      t(
+                        "playground:sources.statusError",
+                        "Source processing failed"
+                      )}
+                  </span>
+                </p>
+              </Tooltip>
             )}
           </div>
         </div>
@@ -832,7 +961,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
               <button
                 type="button"
                 onClick={onHide}
-                className="hidden rounded p-1.5 text-text-muted transition hover:bg-surface2 hover:text-text lg:block"
+                className="hidden h-9 w-9 items-center justify-center rounded text-text-muted transition hover:bg-surface2 hover:text-text lg:flex"
                 aria-label={t("playground:workspace.hideSources", "Hide sources")}
               >
                 <PanelLeftClose className="h-4 w-4" />
@@ -840,6 +969,42 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             </Tooltip>
           )}
         </div>
+      </div>
+
+      {/* Quick URL paste */}
+      <div className="border-b border-border px-4 py-1.5">
+        <Input
+          data-testid="quick-url-input"
+          placeholder={t(
+            "playground:sources.quickUrlPlaceholder",
+            "Paste a URL to add..."
+          )}
+          value={quickUrlValue}
+          onChange={(e) => {
+            setQuickUrlValue(e.target.value)
+          }}
+          onPaste={(e) => {
+            const pasted = e.clipboardData.getData("text/plain").trim()
+            try {
+              new URL(pasted)
+              e.preventDefault()
+              setQuickUrlValue(pasted)
+              handleQuickUrlPaste(pasted)
+            } catch {
+              // Not a URL — let normal paste happen
+            }
+          }}
+          onPressEnter={() => handleQuickUrlPaste(quickUrlValue)}
+          prefix={<Globe className="h-3.5 w-3.5 text-text-muted" />}
+          suffix={
+            quickUrlLoading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+            ) : null
+          }
+          size="small"
+          allowClear
+          disabled={quickUrlLoading}
+        />
       </div>
 
       {/* Search and select controls */}
@@ -901,6 +1066,27 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
               >
                 {t("playground:sources.previewSelected", "Preview selected")}
               </button>
+              <Popconfirm
+                title={t(
+                  "playground:sources.batchRemoveConfirm",
+                  "Remove {{count}} selected sources?",
+                  { count: selectedSourceIds.length }
+                )}
+                onConfirm={handleBatchRemoveSelected}
+                okText={t("common:remove", "Remove")}
+                cancelText={t("common:cancel", "Cancel")}
+                okButtonProps={{ danger: true }}
+              >
+                <button
+                  type="button"
+                  data-testid="batch-remove-sources"
+                  className="rounded border border-error/30 bg-error/10 px-2 py-0.5 text-[11px] font-medium text-error transition hover:bg-error/20"
+                >
+                  {t("playground:sources.removeCount", "Remove ({{count}})", {
+                    count: selectedSourceIds.length
+                  })}
+                </button>
+              </Popconfirm>
             </div>
           )}
         </div>

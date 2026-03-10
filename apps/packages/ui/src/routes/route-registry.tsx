@@ -34,7 +34,8 @@ import {
   SlidersHorizontal,
   FileText,
   Zap,
-  Sparkles
+  Sparkles,
+  ListTodo,
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import { createSettingsRoute } from "./settings-route"
@@ -192,10 +193,16 @@ const OptionWatchlists = lazy(() => import("./option-watchlists"))
 const OptionKanbanPlayground = lazy(() => import("./option-kanban-playground"))
 const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
+const OptionSources = lazy(() => import("./option-sources"))
+const OptionSourcesNew = lazy(() => import("./option-sources-new"))
+const OptionSourcesDetail = lazy(() => import("./option-sources-detail"))
+const OptionAdminSources = lazy(() => import("./option-admin-sources"))
 const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
 const OptionChatWorkflows = lazy(() => import("./option-chat-workflows"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
 const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
+const OptionAgents = lazy(() => import("./option-agents"))
+const OptionAgentTasks = lazy(() => import("./option-agent-tasks"))
 const OptionMcpHub = lazy(() => import("./option-mcp-hub"))
 const OptionSkills = lazy(() => import("./option-skills"))
 const OptionRepo2Txt = lazy(() => import("./option-repo2txt"))
@@ -559,6 +566,21 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
+    path: "/sources",
+    element: <OptionSources />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.sources",
+      icon: Layers,
+      order: 9.5,
+      beta: true
+    }
+  },
+  { kind: "options", path: "/sources/new", element: <OptionSourcesNew /> },
+  { kind: "options", path: "/sources/:sourceId", element: <OptionSourcesDetail /> },
+  { kind: "options", path: "/admin/sources", element: <OptionAdminSources /> },
+  {
+    kind: "options",
     path: "/media",
     element: <OptionMedia />,
     nav: {
@@ -672,6 +694,30 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       order: 12,
       beta: true
     }
+  },
+  {
+    kind: "options",
+    path: "/agents",
+    element: <OptionAgents />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.agents",
+      icon: Bot,
+      order: 12.2,
+      beta: true,
+    },
+  },
+  {
+    kind: "options",
+    path: "/agent-tasks",
+    element: <OptionAgentTasks />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.agentTasks",
+      icon: ListTodo,
+      order: 12.4,
+      beta: true,
+    },
   },
   {
     kind: "options",

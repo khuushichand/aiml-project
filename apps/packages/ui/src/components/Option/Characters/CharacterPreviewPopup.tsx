@@ -1,6 +1,6 @@
 import React from "react"
 import { Modal, Button, Tooltip, Dropdown } from "antd"
-import { MessageCircle, Pen, Copy, History, Trash2, Download, ExternalLink, Clock3, Info, MoreHorizontal } from "lucide-react"
+import { MessageCircle, Pen, Copy, History, Trash2, Download, ExternalLink, Clock3, Info, MoreHorizontal, UserCircle2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { CharacterPreview } from "./CharacterPreview"
 
@@ -27,7 +27,10 @@ interface CharacterPreviewPopupProps {
   onExport: (format?: 'json' | 'png') => void
   onDelete: () => void
   onViewConversations: () => void
+  onCreatePersonaFromCharacter: () => void
+  onOpenPersonaGarden: () => void
   onViewVersionHistory: () => void
+  creatingPersonaFromCharacter?: boolean
   attachedWorldBooks?: Array<{ id: number; name: string }>
   attachedWorldBooksLoading?: boolean
   launchedFromWorldBooks?: boolean
@@ -48,7 +51,10 @@ export function CharacterPreviewPopup({
   onExport,
   onDelete,
   onViewConversations,
+  onCreatePersonaFromCharacter,
+  onOpenPersonaGarden,
   onViewVersionHistory,
+  creatingPersonaFromCharacter = false,
   attachedWorldBooks = [],
   attachedWorldBooksLoading = false,
   launchedFromWorldBooks = false,
@@ -106,6 +112,22 @@ export function CharacterPreviewPopup({
     "settings:manageCharacters.actions.versionHistory",
     {
       defaultValue: "Version history"
+    }
+  )
+  const createPersonaLabel = t(
+    creatingPersonaFromCharacter
+      ? "settings:manageCharacters.actions.creatingPersonaFromCharacter"
+      : "settings:manageCharacters.actions.createPersonaFromCharacter",
+    {
+      defaultValue: creatingPersonaFromCharacter
+        ? "Creating Persona..."
+        : "Create Persona from Character"
+    }
+  )
+  const openPersonaGardenLabel = t(
+    "settings:manageCharacters.actions.openInPersonaGarden",
+    {
+      defaultValue: "Open in Persona Garden"
     }
   )
   const characterIdParam = encodeURIComponent(String(character.id || ""))
@@ -302,6 +324,19 @@ export function CharacterPreviewPopup({
                     icon: <History className="w-4 h-4" />,
                     label: viewConversationsLabel,
                     onClick: onViewConversations
+                  },
+                  {
+                    key: "create-persona",
+                    icon: <UserCircle2 className="w-4 h-4" />,
+                    label: createPersonaLabel,
+                    disabled: creatingPersonaFromCharacter,
+                    onClick: onCreatePersonaFromCharacter
+                  },
+                  {
+                    key: "open-persona-garden",
+                    icon: <ExternalLink className="w-4 h-4" />,
+                    label: openPersonaGardenLabel,
+                    onClick: onOpenPersonaGarden
                   },
                   {
                     key: "version-history",

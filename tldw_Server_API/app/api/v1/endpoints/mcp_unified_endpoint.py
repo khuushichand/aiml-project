@@ -49,6 +49,7 @@ from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get
 from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
 from tldw_Server_API.app.core.MCP_unified.server import _is_authnz_access_token
+from tldw_Server_API.app.core.feature_flags import is_mcp_hub_policy_enforcement_enabled
 from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 from tldw_Server_API.app.services import admin_tool_catalog_service
 
@@ -754,6 +755,7 @@ async def mcp_request(
         if auth.user.permissions:
             metadata.setdefault("permissions", auth.user.permissions)
 
+    metadata["mcp_policy_context_enabled"] = is_mcp_hub_policy_enforcement_enabled()
     if mcp_session_id:
         metadata["session_id"] = mcp_session_id
     if safe_config:
@@ -848,6 +850,7 @@ async def mcp_request_batch(
             metadata.setdefault("roles", auth.user.roles)
         if auth.user.permissions:
             metadata.setdefault("permissions", auth.user.permissions)
+    metadata["mcp_policy_context_enabled"] = is_mcp_hub_policy_enforcement_enabled()
     if mcp_session_id:
         metadata["session_id"] = mcp_session_id
     if safe_config:

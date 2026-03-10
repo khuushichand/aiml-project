@@ -6,6 +6,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.tests.Characters.test_character_functionality_db import sample_card_data
 
 
 pytestmark = pytest.mark.unit
@@ -108,6 +109,29 @@ def test_persona_profile_scope_policy_crud(persona_db: CharactersRAGDB):
 
         missing = client.get(f"/api/v1/persona/profiles/{persona_id}")
         assert missing.status_code == 404
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_create_persona_from_character_snapshots_origin_without_live_dependency(persona_db: CharactersRAGDB):
+    character_id = persona_db.add_character_card(sample_card_data(name="Source Character"))
+    assert character_id is not None
+
+    with _client_for_user(1, persona_db) as client:
+        created = client.post(
+            "/api/v1/persona/profiles",
+            json={
+                "name": "Garden Helper",
+                "character_card_id": character_id,
+                "mode": "persistent_scoped",
+            },
+        )
+        assert created.status_code == 201, created.text
+        payload = created.json()
+        assert payload["character_card_id"] == character_id
+        assert payload["origin_character_id"] == character_id
+        assert payload["origin_character_name"] == "Source Character"
+        assert payload["origin_character_snapshot_at"]
 
     fastapi_app.dependency_overrides.clear()
 

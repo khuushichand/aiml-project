@@ -174,4 +174,37 @@ describe("TldwChatService message sanitization", () => {
       { role: "user", content: "stream hello" }
     ])
   })
+
+  it("forwards first-class llama.cpp grammar and thinking fields", async () => {
+    const service = new TldwChatService()
+
+    await service.sendMessage([{ role: "user", content: "hello" }], {
+      model: "llama.cpp/local-model",
+      apiProvider: "llama.cpp",
+      systemPrompt: "Return JSON",
+      extraBody: { mirostat: 2 },
+      thinkingBudgetTokens: 64,
+      grammarMode: "inline",
+      grammarInline: 'root ::= "ok"',
+      grammarOverride: 'root ::= "override"'
+    })
+
+    const request = mocks.createChatCompletion.mock.calls.at(-1)?.[0] as {
+      api_provider?: string
+      extra_body?: Record<string, unknown>
+      thinking_budget_tokens?: number
+      grammar_mode?: string
+      grammar_inline?: string
+      grammar_override?: string
+    }
+
+    expect(request).toMatchObject({
+      api_provider: "llama.cpp",
+      extra_body: { mirostat: 2 },
+      thinking_budget_tokens: 64,
+      grammar_mode: "inline",
+      grammar_inline: 'root ::= "ok"',
+      grammar_override: 'root ::= "override"'
+    })
+  })
 })

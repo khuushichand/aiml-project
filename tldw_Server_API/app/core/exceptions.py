@@ -42,6 +42,10 @@ class ValidationError(BadRequestError):
     """Raised when validation of input parameters fails."""
 
 
+class IngestionSourceValidationError(ValidationError):
+    """Raised when an ingestion source payload fails validation."""
+
+
 class StructuredOutputParseError(ValueError):
     """Base error for structured-output parsing/normalization failures.
 

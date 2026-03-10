@@ -112,6 +112,7 @@ def _normalize_model(model: str | None) -> str:
 def _default_runtime_context() -> dict[str, Any]:
     return {
         "strict_openai_compat": _coerce_bool(os.getenv("LOCAL_LLM_STRICT_OPENAI_COMPAT", False)),
+        "thinking_budget_request_key": (os.getenv("LLAMA_CPP_THINKING_BUDGET_PARAM") or "").strip() or None,
     }
 
 

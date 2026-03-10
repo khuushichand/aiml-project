@@ -4,6 +4,7 @@ import type { ServerChatMessage } from "@/services/tldw/TldwApiClient"
 import {
   fetchAllServerChatMessages,
   mapServerChatMessagesToPlaygroundMessages,
+  resolveServerChatAssistantIdentity,
   shouldCommitServerChatLoadResult,
   shouldPreserveLocalMessagesForServerLoad,
   shouldSkipLoadedServerChatReload
@@ -188,6 +189,37 @@ describe("shouldCommitServerChatLoadResult", () => {
         activeController: new AbortController()
       })
     ).toBe(false)
+  })
+})
+
+describe("resolveServerChatAssistantIdentity", () => {
+  it("preserves persona-backed assistant identity from chat metadata", () => {
+    expect(
+      resolveServerChatAssistantIdentity({
+        assistant_kind: "persona",
+        assistant_id: "garden-helper",
+        persona_memory_mode: "read_only",
+        character_id: null
+      } as any)
+    ).toEqual({
+      assistantKind: "persona",
+      assistantId: "garden-helper",
+      characterId: null,
+      personaMemoryMode: "read_only"
+    })
+  })
+
+  it("backfills character-backed assistant identity from legacy character_id", () => {
+    expect(
+      resolveServerChatAssistantIdentity({
+        character_id: 42
+      } as any)
+    ).toEqual({
+      assistantKind: "character",
+      assistantId: "42",
+      characterId: 42,
+      personaMemoryMode: null
+    })
   })
 })
 

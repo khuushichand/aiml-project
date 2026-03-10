@@ -1,17 +1,13 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
 
 const mocks = vi.hoisted(() => ({
-  fetchMcpToolCatalogsViaDiscovery: vi.fn(),
-  fetchMcpToolCatalogs: vi.fn()
+  getToolRegistrySummary: vi.fn()
 }))
 
-vi.mock("@/services/tldw/mcp", () => ({
-  fetchMcpToolCatalogsViaDiscovery: (...args: unknown[]) =>
-    mocks.fetchMcpToolCatalogsViaDiscovery(...args),
-  fetchMcpToolCatalogs: (...args: unknown[]) => mocks.fetchMcpToolCatalogs(...args)
+vi.mock("@/services/tldw/mcp-hub", () => ({
+  getToolRegistrySummary: (...args: unknown[]) => mocks.getToolRegistrySummary(...args)
 }))
 
 import { ToolCatalogsTab } from "../ToolCatalogsTab"
@@ -19,17 +15,43 @@ import { ToolCatalogsTab } from "../ToolCatalogsTab"
 describe("ToolCatalogsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mocks.fetchMcpToolCatalogsViaDiscovery.mockImplementation(async (scope: string) => [
-      { id: 1, name: `${scope}-catalog`, description: `${scope} catalog` }
-    ])
-    mocks.fetchMcpToolCatalogs.mockResolvedValue([])
+    mocks.getToolRegistrySummary.mockResolvedValue({
+      entries: [
+        {
+          tool_name: "notes.search",
+          display_name: "notes.search",
+          module: "notes",
+          category: "search",
+          risk_class: "low",
+          capabilities: ["filesystem.read"],
+          mutates_state: false,
+          uses_filesystem: false,
+          uses_processes: false,
+          uses_network: false,
+          uses_credentials: false,
+          supports_arguments_preview: true,
+          path_boundable: false,
+          metadata_source: "explicit",
+          metadata_warnings: []
+        }
+      ],
+      modules: [
+        {
+          module: "notes",
+          display_name: "notes",
+          tool_count: 1,
+          risk_summary: { low: 1, medium: 0, high: 0, unclassified: 0 },
+          metadata_warnings: []
+        }
+      ]
+    })
   })
 
-  it("switches scope and calls proper catalog loader", async () => {
-    const user = userEvent.setup()
+  it("renders registry-backed module and tool metadata", async () => {
     render(<ToolCatalogsTab />)
 
-    await user.selectOptions(screen.getByLabelText(/scope/i), "org")
-    expect(await screen.findByText(/org catalogs/i)).toBeTruthy()
+    expect(await screen.findByText("notes")).toBeTruthy()
+    expect(screen.getByText("notes.search")).toBeTruthy()
+    expect(screen.getByText("filesystem.read")).toBeTruthy()
   })
 })

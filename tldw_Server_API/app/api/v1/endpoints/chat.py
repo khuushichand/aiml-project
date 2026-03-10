@@ -127,7 +127,7 @@ from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_selector i
 from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_telemetry import (
     compute_persona_exemplar_telemetry,
 )
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError, ChatBadRequestError
 from tldw_Server_API.app.core.Chat.chat_exceptions import (
     ChatDatabaseError,
     ChatErrorCode,
@@ -221,6 +221,13 @@ from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import (
+    assemble_persona_exemplar_prompt,
+)
+from tldw_Server_API.app.core.Persona.exemplar_turn_classifier import (
+    extract_latest_user_turn_text,
+)
+from tldw_Server_API.app.core.Persona.memory_integration import persist_persona_turn
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.testing import (
@@ -234,7 +241,7 @@ from tldw_Server_API.app.core.testing import (
 )
 from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
 
-from . import chat_dictionaries, chat_documents
+from . import chat_dictionaries, chat_documents, chat_grammars
 
 _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -278,6 +285,7 @@ conversations_alias_router = APIRouter()
 
 router.include_router(chat_dictionaries.router)
 router.include_router(chat_documents.router)
+router.include_router(chat_grammars.router)
 
 # Backward-compatible endpoint re-exports for unit tests and legacy imports
 # that still reference dictionary handlers from this module.
@@ -302,6 +310,11 @@ list_dictionary_versions = chat_dictionaries.list_dictionary_versions
 get_dictionary_version = chat_dictionaries.get_dictionary_version
 revert_dictionary_version = chat_dictionaries.revert_dictionary_version
 get_dictionary_statistics = chat_dictionaries.get_dictionary_statistics
+create_chat_grammar = chat_grammars.create_chat_grammar
+list_chat_grammars = chat_grammars.list_chat_grammars
+get_chat_grammar = chat_grammars.get_chat_grammar
+update_chat_grammar = chat_grammars.update_chat_grammar
+delete_chat_grammar = chat_grammars.delete_chat_grammar
 
 def _chat_connectors_enabled() -> bool:
     """Feature flag for chat connectors v2 (email/issue/wiki exports)."""
@@ -682,6 +695,72 @@ def _format_persona_exemplar_guidance(
     return "\n".join(lines).strip()
 
 
+def _assemble_persona_runtime_guidance(
+    *,
+    system_message: str,
+    assistant_context: dict[str, Any] | None,
+    exemplars: list[dict[str, Any]],
+    requested_scenario_tags: list[str] | None = None,
+    requested_tone: str | None = None,
+    current_turn_text: str | None = None,
+    conflicting_capability_tags: list[str] | None = None,
+) -> dict[str, Any]:
+    """Append shared persona exemplar guidance for persona-backed ordinary chat."""
+    if not isinstance(assistant_context, dict):
+        return {
+            "applied": False,
+            "system_message": system_message,
+            "sections": [],
+            "selected_exemplars": [],
+            "rejected_exemplars": [],
+        }
+
+    if assistant_context.get("assistant_kind") != "persona":
+        return {
+            "applied": False,
+            "system_message": system_message,
+            "sections": [],
+            "selected_exemplars": [],
+            "rejected_exemplars": [],
+        }
+
+    persona_id = str(assistant_context.get("assistant_id") or "").strip()
+    if not persona_id:
+        return {
+            "applied": False,
+            "system_message": system_message,
+            "sections": [],
+            "selected_exemplars": [],
+            "rejected_exemplars": [],
+        }
+
+    assembly = assemble_persona_exemplar_prompt(
+        persona_id=persona_id,
+        exemplars=exemplars,
+        requested_scenario_tags=requested_scenario_tags,
+        requested_tone=requested_tone,
+        current_turn_text=current_turn_text,
+        conflicting_capability_tags=conflicting_capability_tags,
+    )
+
+    updated_system_message = str(system_message or "")
+    for _, content, _ in assembly.sections:
+        if not str(content or "").strip():
+            continue
+        if updated_system_message.strip():
+            updated_system_message = f"{updated_system_message.rstrip()}\n\n{content}"
+        else:
+            updated_system_message = str(content).strip()
+
+    return {
+        "applied": bool(assembly.sections),
+        "system_message": updated_system_message,
+        "sections": assembly.sections,
+        "selected_exemplars": assembly.selected_exemplars,
+        "rejected_exemplars": assembly.rejected_exemplars,
+    }
+
+
 def _resolve_persona_strategy(raw_strategy: str | None) -> str:
     """Normalize persona exemplar strategy from request."""
     normalized = (raw_strategy or "default").strip().lower()
@@ -799,6 +878,58 @@ def _extract_assistant_text_from_completion_payload(payload: dict[str, Any]) -> 
     if not isinstance(message_block, dict):
         return ""
     return _extract_text_from_message_content(message_block.get("content"))
+
+
+def _persona_memory_write_enabled(assistant_context: dict[str, Any] | None) -> bool:
+    if not isinstance(assistant_context, dict):
+        return False
+    return (
+        assistant_context.get("assistant_kind") == "persona"
+        and bool(assistant_context.get("assistant_id"))
+        and assistant_context.get("persona_memory_mode") == "read_write"
+    )
+
+
+async def _persist_persona_chat_reply_if_enabled(
+    *,
+    assistant_context: dict[str, Any] | None,
+    user_id: str | None,
+    conversation_id: str | None,
+    assistant_text: str,
+) -> bool:
+    """Persist assistant reply into persona memory when conversation writeback is enabled."""
+    if not _persona_memory_write_enabled(assistant_context):
+        return False
+    if not conversation_id:
+        return False
+    content = str(assistant_text or "").strip()
+    if not content:
+        return False
+
+    persona_id = str(assistant_context.get("assistant_id") or "").strip()
+    if not persona_id:
+        return False
+
+    loop = asyncio.get_running_loop()
+    return bool(
+        await loop.run_in_executor(
+            None,
+            partial(
+                persist_persona_turn,
+                user_id=user_id,
+                session_id=conversation_id,
+                persona_id=persona_id,
+                role="assistant",
+                content=content,
+                turn_type="assistant_delta",
+                metadata={
+                    "source": "chat_completions",
+                    "conversation_id": conversation_id,
+                },
+                store_as_memory=True,
+            ),
+        )
+    )
 
 
 def _record_persona_telemetry_hooks(
@@ -2659,6 +2790,11 @@ async def create_chat_completion(
                 if isinstance(continuation_runtime.get("tldw_continuation"), dict)
                 else None
             )
+            assistant_context = (
+                continuation_runtime.get("assistant_context")
+                if isinstance(continuation_runtime.get("assistant_context"), dict)
+                else None
+            )
             assistant_parent_message_id = (
                 str(continuation_runtime.get("assistant_parent_message_id"))
                 if continuation_runtime.get("assistant_parent_message_id")
@@ -2696,7 +2832,76 @@ async def create_chat_completion(
                     "reason": "not_run",
                 }
 
-            if persona_strategy != "off" and character_db_id_for_context is not None:
+            persona_assistant_id = (
+                str(assistant_context.get("assistant_id") or "").strip()
+                if isinstance(assistant_context, dict)
+                else ""
+            )
+            is_persona_backed_chat = (
+                isinstance(assistant_context, dict)
+                and assistant_context.get("assistant_kind") == "persona"
+                and bool(persona_assistant_id)
+            )
+
+            if persona_strategy != "off" and is_persona_backed_chat:
+                persona_exemplars = await asyncio.to_thread(
+                    chat_db.list_persona_exemplars,
+                    user_id=str(user_id),
+                    persona_id=persona_assistant_id,
+                    include_disabled=False,
+                    include_deleted=False,
+                    limit=50,
+                    offset=0,
+                )
+                runtime_guidance = _assemble_persona_runtime_guidance(
+                    system_message=final_system_message,
+                    assistant_context=assistant_context,
+                    exemplars=persona_exemplars,
+                    current_turn_text=extract_latest_user_turn_text(templated_llm_payload),
+                )
+                final_system_message = runtime_guidance["system_message"]
+                persona_selected_exemplars = list(runtime_guidance["selected_exemplars"])
+
+                if persona_debug_meta is not None:
+                    persona_debug_meta["source"] = "persona_profile"
+                    persona_debug_meta["applied"] = bool(runtime_guidance["applied"])
+                    persona_debug_meta["reason"] = (
+                        "selected"
+                        if runtime_guidance["applied"]
+                        else ("no_exemplars_selected" if persona_exemplars else "no_enabled_exemplars")
+                    )
+                    persona_debug_meta["selection"] = {
+                        "selected_count": len(runtime_guidance["selected_exemplars"]),
+                        "selected_exemplar_ids": [
+                            str(item.get("id"))
+                            for item in runtime_guidance["selected_exemplars"]
+                            if item.get("id")
+                        ],
+                        "budget_tokens_used": sum(int(section[2]) for section in runtime_guidance["sections"]),
+                        "coverage": {
+                            "boundary": sum(
+                                1
+                                for item in runtime_guidance["selected_exemplars"]
+                                if str(item.get("kind") or "") == "boundary"
+                            ),
+                            "style_like": sum(
+                                1
+                                for item in runtime_guidance["selected_exemplars"]
+                                if str(item.get("kind") or "") != "boundary"
+                            ),
+                        },
+                    }
+                    persona_debug_meta["assembly_sections"] = [
+                        str(name) for name, _, _ in runtime_guidance["sections"]
+                    ]
+                    persona_debug_meta["rejected_exemplars"] = [
+                        {
+                            "id": str(item.get("id") or ""),
+                            "reason": str(item.get("reason") or ""),
+                        }
+                        for item in runtime_guidance["rejected_exemplars"]
+                    ]
+            elif persona_strategy != "off" and character_db_id_for_context is not None:
                 user_turn_text = _extract_latest_user_turn_text(getattr(request_data, "messages", []))
                 if user_turn_text:
                     budget_override = getattr(request_data, "persona_exemplar_budget_tokens", None)
@@ -2770,6 +2975,8 @@ async def create_chat_completion(
             elif persona_debug_meta is not None:
                 if persona_strategy == "off":
                     persona_debug_meta["reason"] = "disabled_by_strategy"
+                elif is_persona_backed_chat:
+                    persona_debug_meta["reason"] = "persona_context_unavailable"
                 elif character_db_id_for_context is None:
                     persona_debug_meta["reason"] = "character_context_unavailable"
 
@@ -2797,6 +3004,26 @@ async def create_chat_completion(
                     loop=current_loop,
                 )
 
+            def _resolve_llamacpp_grammar_record(target_provider: str) -> dict[str, Any] | None:
+                """Resolve the saved llama.cpp grammar record for the active provider."""
+                if target_provider != "llama.cpp" or getattr(request_data, "grammar_mode", None) != "library":
+                    return None
+                grammar_id = str(getattr(request_data, "grammar_id", "") or "").strip()
+                if not grammar_id:
+                    raise ChatBadRequestError(
+                        provider=target_provider,
+                        message="grammar_id is required when grammar_mode is 'library'",
+                    )
+                grammar_record = chat_db.get_chat_grammar(grammar_id)
+                if not isinstance(grammar_record, dict):
+                    raise ChatBadRequestError(
+                        provider=target_provider,
+                        message="Saved grammar could not be resolved",
+                    )
+                return grammar_record
+
+            llamacpp_grammar_record = _resolve_llamacpp_grammar_record(target_api_provider)
+
             # --- LLM Call ---
             cleaned_args = build_call_params_from_request(
                 request_data=request_data,
@@ -2805,6 +3032,7 @@ async def create_chat_completion(
                 templated_llm_payload=templated_llm_payload,
                 final_system_message=final_system_message,
                 app_config=app_config_override,
+                grammar_record=llamacpp_grammar_record,
             )
             cleaned_args["request"] = request
             try:
@@ -2885,6 +3113,7 @@ async def create_chat_completion(
                         },
                     )
 
+                refreshed_llamacpp_grammar_record = _resolve_llamacpp_grammar_record(target_provider)
                 refreshed_args = build_call_params_from_request(
                     request_data=request_data,
                     target_api_provider=target_provider,
@@ -2892,6 +3121,7 @@ async def create_chat_completion(
                     templated_llm_payload=templated_llm_payload,
                     final_system_message=final_system_message,
                     app_config=refreshed_resolution.app_config,
+                    grammar_record=refreshed_llamacpp_grammar_record,
                 )
                 refreshed_args["request"] = request
                 refreshed_model = refreshed_args.get("model")
@@ -3267,32 +3497,39 @@ async def create_chat_completion(
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                     return base
 
-            async def _on_stream_full_reply_for_persona_telemetry(full_reply: str) -> None:
-                if character_db_id_for_context is None:
-                    return
-                persona_telemetry = compute_persona_exemplar_telemetry(
-                    output_text=str(full_reply or ""),
-                    selected_exemplars=persona_selected_exemplars,
-                )
-                debug_id_for_logs = (
-                    str(persona_debug_meta.get("debug_id"))
-                    if isinstance(persona_debug_meta, dict) and persona_debug_meta.get("debug_id")
-                    else None
-                )
-                logger.debug(
-                    "Persona streaming telemetry debug_id={} ioo={} ior={} lcs={}",
-                    debug_id_for_logs or "n/a",
-                    persona_telemetry.get("ioo"),
-                    persona_telemetry.get("ior"),
-                    persona_telemetry.get("lcs"),
-                )
-                _record_persona_telemetry_hooks(
-                    telemetry=persona_telemetry,
-                    provider=provider,
-                    model=model,
+            async def _on_stream_full_reply_for_assistant_runtime(full_reply: str) -> None:
+                assistant_text = str(full_reply or "")
+                if character_db_id_for_context is not None:
+                    persona_telemetry = compute_persona_exemplar_telemetry(
+                        output_text=assistant_text,
+                        selected_exemplars=persona_selected_exemplars,
+                    )
+                    debug_id_for_logs = (
+                        str(persona_debug_meta.get("debug_id"))
+                        if isinstance(persona_debug_meta, dict) and persona_debug_meta.get("debug_id")
+                        else None
+                    )
+                    logger.debug(
+                        "Persona streaming telemetry debug_id={} ioo={} ior={} lcs={}",
+                        debug_id_for_logs or "n/a",
+                        persona_telemetry.get("ioo"),
+                        persona_telemetry.get("ior"),
+                        persona_telemetry.get("lcs"),
+                    )
+                    _record_persona_telemetry_hooks(
+                        telemetry=persona_telemetry,
+                        provider=provider,
+                        model=model,
+                        user_id=user_id,
+                        character_id=character_db_id_for_context,
+                        debug_id=debug_id_for_logs,
+                    )
+
+                await _persist_persona_chat_reply_if_enabled(
+                    assistant_context=assistant_context,
                     user_id=user_id,
-                    character_id=character_db_id_for_context,
-                    debug_id=debug_id_for_logs,
+                    conversation_id=final_conversation_id,
+                    assistant_text=assistant_text,
                 )
 
             if request_data.stream:
@@ -3323,7 +3560,7 @@ async def create_chat_completion(
                     structured_request_context=structured_request_context,
                     moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
-                    on_stream_full_reply=_on_stream_full_reply_for_persona_telemetry,
+                    on_stream_full_reply=_on_stream_full_reply_for_assistant_runtime,
                     rg_commit_cb=(
                         (lambda total: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": int(total)}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
                         if _rg_handle_id else None
@@ -3425,6 +3662,15 @@ async def create_chat_completion(
                         meta_payload = {}
                         encoded_payload["meta"] = meta_payload
                     meta_payload["persona"] = persona_debug_meta
+
+                if isinstance(encoded_payload, dict):
+                    assistant_reply_text = _extract_assistant_text_from_completion_payload(encoded_payload)
+                    await _persist_persona_chat_reply_if_enabled(
+                        assistant_context=assistant_context,
+                        user_id=user_id,
+                        conversation_id=final_conversation_id,
+                        assistant_text=assistant_reply_text,
+                    )
                 # Track response size and return
                 if isinstance(encoded_payload, dict):
                     response_size = len(json.dumps(encoded_payload))
@@ -3839,6 +4085,20 @@ def _calculate_recency(dt_value: datetime | None, half_life_days: float) -> floa
     now = datetime.now(timezone.utc)
     age_days = max(0.0, (now - dt_value).total_seconds() / 86400.0)
     return math.exp(-age_days / half_life_days)
+
+
+def _conversation_assistant_identity_fields(conversation: dict[str, Any]) -> dict[str, Any]:
+    character_id = conversation.get("character_id")
+    assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
+    assistant_id = conversation.get("assistant_id")
+    if assistant_id is None and character_id is not None:
+        assistant_id = str(character_id)
+    return {
+        "character_id": character_id,
+        "assistant_kind": assistant_kind,
+        "assistant_id": assistant_id,
+        "persona_memory_mode": conversation.get("persona_memory_mode"),
+    }
 
 
 def _verify_conversation_ownership(
@@ -4323,12 +4583,13 @@ async def list_chat_conversations(
             keyword_rows = keyword_map.get(conv_id, [])
             keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
             message_count = message_counts.get(conv_id, 0)
+            assistant_fields = _conversation_assistant_identity_fields(row)
 
             bm25_norm = row.get("_bm25_norm") if order_by in {"bm25", "hybrid"} else None
             items.append(
                 ConversationListItem(
                     id=conv_id,
-                    character_id=row.get("character_id"),
+                    **assistant_fields,
                     title=row.get("title"),
                     state=row.get("state") or "in-progress",
                     topic_label=row.get("topic_label"),
@@ -4450,7 +4711,7 @@ async def update_chat_conversation(
 
         return ConversationListItem(
             id=updated.get("id") or conversation_id,
-            character_id=updated.get("character_id"),
+            **_conversation_assistant_identity_fields(updated),
             title=updated.get("title"),
             state=updated.get("state") or "in-progress",
             topic_label=updated.get("topic_label"),
@@ -4643,6 +4904,7 @@ async def get_conversation_tree(
 
         metadata = ConversationMetadata(
             id=conversation.get("id") or conversation_id,
+            **_conversation_assistant_identity_fields(conversation),
             title=conversation.get("title"),
             state=conversation.get("state") or "in-progress",
             topic_label=conversation.get("topic_label"),

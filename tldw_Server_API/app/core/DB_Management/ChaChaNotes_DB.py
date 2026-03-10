@@ -99,6 +99,7 @@ _ORDER_BY_EXPR_RE = re.compile(
     re.IGNORECASE,
 )
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_CHAT_GRAMMAR_VALIDATION_STATUSES = frozenset({"unchecked", "valid", "invalid"})
 
 # --- Custom Exceptions ---
 class CharactersRAGDBError(Exception):
@@ -434,7 +435,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 30  # Schema v30 adds quizzes.source_bundle_json for mixed-source metadata
+    _CURRENT_SCHEMA_VERSION = 33  # Schema v33 adds persona exemplar persistence
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -449,6 +450,21 @@ class CharactersRAGDB:
     )
     _ALLOWED_PERSONA_POLICY_RULE_KINDS: tuple[str, ...] = ("mcp_tool", "skill")
     _ALLOWED_PERSONA_SESSION_STATUSES: tuple[str, ...] = ("active", "paused", "closed", "archived")
+    _ALLOWED_CONVERSATION_ASSISTANT_KINDS: tuple[str, ...] = ("character", "persona")
+    _ALLOWED_PERSONA_MEMORY_MODES: tuple[str, ...] = ("read_only", "read_write")
+    _ALLOWED_PERSONA_EXEMPLAR_KINDS: tuple[str, ...] = (
+        "style",
+        "catchphrase",
+        "boundary",
+        "scenario_demo",
+        "tool_behavior",
+    )
+    _ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES: tuple[str, ...] = (
+        "manual",
+        "transcript_import",
+        "character_seed",
+        "generated_candidate",
+    )
 
     _FTS_CONFIG: list[tuple[str, str, list[str]]] = [
         (
@@ -2905,6 +2921,102 @@ UPDATE db_schema_version
    AND version < 30;
 """
 
+    _MIGRATION_SQL_V30_TO_V31 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 31 - Persona origin snapshots (2026-03-07)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE persona_profiles
+  ADD COLUMN IF NOT EXISTS origin_character_id INTEGER;
+
+ALTER TABLE persona_profiles
+  ADD COLUMN IF NOT EXISTS origin_character_name TEXT;
+
+ALTER TABLE persona_profiles
+  ADD COLUMN IF NOT EXISTS origin_character_snapshot_at TEXT;
+
+UPDATE db_schema_version
+   SET version = 31
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 31;
+"""
+
+    _MIGRATION_SQL_V31_TO_V32 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 32 - Conversation assistant identity (2026-03-08)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS assistant_kind TEXT CHECK (assistant_kind IN ('character', 'persona'));
+
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS assistant_id TEXT;
+
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS persona_memory_mode TEXT CHECK (persona_memory_mode IN ('read_only', 'read_write'));
+
+UPDATE conversations
+   SET assistant_kind = 'character'
+ WHERE character_id IS NOT NULL
+   AND COALESCE(TRIM(assistant_kind), '') = '';
+
+UPDATE conversations
+   SET assistant_id = CAST(character_id AS TEXT)
+ WHERE character_id IS NOT NULL
+   AND COALESCE(TRIM(assistant_id), '') = '';
+
+UPDATE db_schema_version
+   SET version = 32
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 32;
+"""
+
+    _MIGRATION_SQL_V32_TO_V33 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 33 - Persona exemplars (2026-03-08)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS persona_exemplars(
+  id TEXT PRIMARY KEY,
+  persona_id TEXT NOT NULL REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL
+    CHECK(kind IN ('style','catchphrase','boundary','scenario_demo','tool_behavior')),
+  content TEXT NOT NULL,
+  tone TEXT,
+  scenario_tags_json TEXT NOT NULL DEFAULT '[]',
+  capability_tags_json TEXT NOT NULL DEFAULT '[]',
+  priority INTEGER NOT NULL DEFAULT 0,
+  enabled BOOLEAN NOT NULL DEFAULT 1,
+  source_type TEXT NOT NULL DEFAULT 'manual'
+    CHECK(source_type IN ('manual','transcript_import','character_seed','generated_candidate')),
+  source_ref TEXT,
+  notes TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_persona_exemplars_persona
+  ON persona_exemplars(persona_id, deleted, enabled);
+CREATE INDEX IF NOT EXISTS idx_persona_exemplars_user
+  ON persona_exemplars(user_id, deleted, enabled);
+CREATE INDEX IF NOT EXISTS idx_persona_exemplars_kind
+  ON persona_exemplars(kind, deleted);
+CREATE INDEX IF NOT EXISTS idx_persona_exemplars_enabled
+  ON persona_exemplars(enabled, deleted);
+
+UPDATE db_schema_version
+   SET version = 33
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 33;
+"""
+
+    _MIGRATION_SQL_V32_TO_V33_POSTGRES = _MIGRATION_SQL_V32_TO_V33.replace(
+        "PRAGMA foreign_keys = ON;\n\n",
+        "",
+    )
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4408,6 +4520,114 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V29->V30: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V30 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v30_to_v31(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V30 to V31 (persona origin snapshots)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V30 to V31 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
+            if "origin_character_id" not in existing_cols:
+                conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_id INTEGER")
+            if "origin_character_name" not in existing_cols:
+                conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_name TEXT")
+            if "origin_character_snapshot_at" not in existing_cols:
+                conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_snapshot_at TEXT")
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 31
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 31;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 31:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V30->V31 failed version check. Expected 31, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V31 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V30->V31 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V30->V31 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V30->V31: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V31 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v31_to_v32(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V31 to V32 (conversation assistant identity)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V31 to V32 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()}
+            if "assistant_kind" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN assistant_kind TEXT CHECK(assistant_kind IN ('character','persona'))"
+                )
+            if "assistant_id" not in existing_cols:
+                conn.execute("ALTER TABLE conversations ADD COLUMN assistant_id TEXT")
+            if "persona_memory_mode" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN persona_memory_mode TEXT CHECK(persona_memory_mode IN ('read_only','read_write'))"
+                )
+            conn.execute(
+                """
+                UPDATE conversations
+                   SET assistant_kind = 'character'
+                 WHERE character_id IS NOT NULL
+                   AND COALESCE(TRIM(assistant_kind), '') = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE conversations
+                   SET assistant_id = CAST(character_id AS TEXT)
+                 WHERE character_id IS NOT NULL
+                   AND COALESCE(TRIM(assistant_id), '') = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 32
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 32;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 32:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V31->V32 failed version check. Expected 32, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V32 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V31->V32 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V31->V32 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V31->V32: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V32 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v32_to_v33(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V32 to V33 (persona exemplar persistence)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V32 to V33 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V32_TO_V33)
+            final_version = self._get_db_version(conn)
+            if final_version != 33:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V32->V33 failed version check. Expected 33, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V33 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V32->V33 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V32->V33 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V32->V33: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V33 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4635,6 +4855,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 30 and current_db_version == 29:
                         self._migrate_from_v29_to_v30(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 31 and current_db_version == 30:
+                        self._migrate_from_v30_to_v31(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 32 and current_db_version == 31:
+                        self._migrate_from_v31_to_v32(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 33 and current_db_version == 32:
+                        self._migrate_from_v32_to_v33(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -4938,6 +5167,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v28_to_v29(conn)
                             elif fallback_version == 29:
                                 self._migrate_from_v29_to_v30(conn)
+                            elif fallback_version == 30:
+                                self._migrate_from_v30_to_v31(conn)
+                            elif fallback_version == 31:
+                                self._migrate_from_v31_to_v32(conn)
+                            elif fallback_version == 32:
+                                self._migrate_from_v32_to_v33(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5003,6 +5238,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 30 and current_db_version == 29:
                     self._migrate_from_v29_to_v30(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 31 and current_db_version == 30:
+                    self._migrate_from_v30_to_v31(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 32 and current_db_version == 31:
+                    self._migrate_from_v31_to_v32(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 33 and current_db_version == 32:
+                    self._migrate_from_v32_to_v33(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -5282,6 +5526,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 30:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V29_TO_V30, conn, expected_version=30)
                 current_version = 30
+            if current_version < 31:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V30_TO_V31, conn, expected_version=31)
+                current_version = 31
+            if current_version < 32:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V31_TO_V32, conn, expected_version=32)
+                current_version = 32
+            if current_version < 33:
+                self._apply_postgres_migration_script(
+                    self._MIGRATION_SQL_V32_TO_V33_POSTGRES,
+                    conn,
+                    expected_version=33,
+                )
+                current_version = 33
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -6227,6 +6484,591 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     # ----------------------
+    # Chat grammar library
+    # ----------------------
+    def ensure_chat_grammars_table(self) -> None:
+        """Ensure the chat_grammars table exists for the active backend."""
+        self._ensure_chat_grammars_table()
+
+    def _ensure_chat_grammars_table(self) -> None:
+        """Create the user-scoped grammar-library table and indexes when missing."""
+        if self.backend_type == BackendType.SQLITE:
+            self.execute_query(
+                """
+                CREATE TABLE IF NOT EXISTS chat_grammars (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    grammar_text TEXT NOT NULL,
+                    validation_status TEXT NOT NULL DEFAULT 'unchecked',
+                    validation_error TEXT,
+                    last_validated_at DATETIME,
+                    is_archived BOOLEAN NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted BOOLEAN NOT NULL DEFAULT 0,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(user_id, name)
+                )
+                """,
+                script=False,
+                commit=True,
+            )
+            self._migrate_sqlite_chat_grammars_table()
+            self._ensure_chat_grammars_indexes()
+            return
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_grammars (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    grammar_text TEXT NOT NULL,
+                    validation_status TEXT NOT NULL DEFAULT 'unchecked',
+                    validation_error TEXT,
+                    last_validated_at TIMESTAMP,
+                    is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    CONSTRAINT uq_chat_grammars_user_name UNIQUE (user_id, name)
+                )
+                """
+            )
+            self._migrate_postgres_chat_grammars_table()
+            self._ensure_chat_grammars_indexes()
+            return
+
+        raise NotImplementedError(
+            f"chat_grammars table creation not supported for backend {self.backend_type.value}"
+        )
+
+    def _chat_grammar_owner_id(self) -> str:
+        """Return the effective owner identifier for grammar-library rows."""
+        owner_id = str(self.client_id or "").strip()
+        return owner_id or "unknown"
+
+    def _chat_grammar_column_names(self, conn: Any | None = None) -> set[str]:
+        """Return the current chat_grammars column names for the active backend."""
+        return {
+            str(column.get("name"))
+            for column in self.backend.get_table_info("chat_grammars", connection=conn)
+            if column.get("name")
+        }
+
+    def _ensure_chat_grammars_indexes(self) -> None:
+        """Create the owner-scoped lookup indexes used by grammar-library CRUD."""
+        index_statements = (
+            "CREATE INDEX IF NOT EXISTS idx_chat_grammars_user_name ON chat_grammars(user_id, name)",
+            "CREATE INDEX IF NOT EXISTS idx_chat_grammars_user_archived_deleted "
+            "ON chat_grammars(user_id, is_archived, deleted)",
+        )
+        for statement in index_statements:
+            if self.backend_type == BackendType.POSTGRESQL:
+                self.backend.execute(statement)
+            else:
+                self.execute_query(statement, script=False, commit=True)
+
+    def _migrate_sqlite_chat_grammars_table(self) -> None:
+        """Rebuild legacy SQLite chat_grammars tables so rows are owner-scoped."""
+        with self.transaction() as conn:
+            existing_cols = self._chat_grammar_column_names(conn)
+            if "user_id" in existing_cols:
+                return
+
+            owner_id = self._chat_grammar_owner_id()
+            conn.execute("ALTER TABLE chat_grammars RENAME TO chat_grammars_legacy")
+            conn.execute(
+                """
+                CREATE TABLE chat_grammars (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    grammar_text TEXT NOT NULL,
+                    validation_status TEXT NOT NULL DEFAULT 'unchecked',
+                    validation_error TEXT,
+                    last_validated_at DATETIME,
+                    is_archived BOOLEAN NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted BOOLEAN NOT NULL DEFAULT 0,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(user_id, name)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO chat_grammars (
+                    id,
+                    user_id,
+                    name,
+                    description,
+                    grammar_text,
+                    validation_status,
+                    validation_error,
+                    last_validated_at,
+                    is_archived,
+                    created_at,
+                    updated_at,
+                    deleted,
+                    version
+                )
+                SELECT
+                    id,
+                    ?,
+                    name,
+                    description,
+                    grammar_text,
+                    validation_status,
+                    validation_error,
+                    last_validated_at,
+                    is_archived,
+                    created_at,
+                    updated_at,
+                    deleted,
+                    version
+                FROM chat_grammars_legacy
+                """,
+                (owner_id,),
+            )
+            conn.execute("DROP TABLE chat_grammars_legacy")
+
+    def _migrate_postgres_chat_grammars_table(self) -> None:
+        """Backfill owner scoping for legacy PostgreSQL chat_grammars tables."""
+        owner_id = self._chat_grammar_owner_id()
+        existing_cols = self._chat_grammar_column_names()
+        if "user_id" not in existing_cols:
+            self.backend.execute("ALTER TABLE chat_grammars ADD COLUMN IF NOT EXISTS user_id TEXT")
+        self.backend.execute(
+            "UPDATE chat_grammars SET user_id = %s WHERE user_id IS NULL OR BTRIM(user_id) = ''",
+            (owner_id,),
+        )
+        self.backend.execute("ALTER TABLE chat_grammars ALTER COLUMN user_id SET NOT NULL")
+        self.backend.execute("ALTER TABLE chat_grammars DROP CONSTRAINT IF EXISTS chat_grammars_name_key")
+        self.backend.execute("ALTER TABLE chat_grammars DROP CONSTRAINT IF EXISTS uq_chat_grammars_user_name")
+        self.backend.execute(
+            "ALTER TABLE chat_grammars ADD CONSTRAINT uq_chat_grammars_user_name UNIQUE (user_id, name)"
+        )
+
+    def _coerce_chat_grammar_datetime(self, value: Any) -> datetime | None:
+        """Best-effort conversion of stored chat-grammar timestamps."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        return None
+
+    def _chat_grammar_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a chat_grammars row into a normalized dict."""
+        if not row:
+            return None
+        item = dict(row)
+        item.pop("user_id", None)
+        item["validation_status"] = str(item.get("validation_status") or "unchecked").strip().lower()
+        item["is_archived"] = bool(item.get("is_archived", False))
+        item["deleted"] = bool(item.get("deleted", False))
+        item["version"] = int(item.get("version") or 1)
+        item["created_at"] = self._coerce_chat_grammar_datetime(item.get("created_at"))
+        item["updated_at"] = self._coerce_chat_grammar_datetime(item.get("updated_at"))
+        item["last_validated_at"] = self._coerce_chat_grammar_datetime(item.get("last_validated_at"))
+        return item
+
+    def list_chat_grammars(
+        self,
+        *,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List saved grammars for the current user."""
+        self._ensure_chat_grammars_table()
+        clauses: list[str] = ["user_id = ?"]
+        params: list[Any] = [self._chat_grammar_owner_id()]
+        if not include_deleted:
+            clauses.append("deleted = ?")
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        if not include_archived:
+            clauses.append("is_archived = ?")
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = (
+            "SELECT * FROM chat_grammars "  # nosec B608
+            f"{where_sql} "
+            "ORDER BY name ASC LIMIT ? OFFSET ?"
+        )
+        params.extend([limit, offset])
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            return [self._chat_grammar_row_to_dict(row) for row in cursor.fetchall() if row]
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error listing chat grammars: {exc}")
+            raise
+
+    def count_chat_grammars(
+        self,
+        *,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> int:
+        """Return the number of saved grammars for the current user."""
+        self._ensure_chat_grammars_table()
+        clauses: list[str] = ["user_id = ?"]
+        params: list[Any] = [self._chat_grammar_owner_id()]
+        if not include_deleted:
+            clauses.append("deleted = ?")
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        if not include_archived:
+            clauses.append("is_archived = ?")
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = f"SELECT COUNT(*) AS cnt FROM chat_grammars {where_sql}"  # nosec B608
+        try:
+            cursor = self.execute_query(query, tuple(params) if params else None)
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error counting chat grammars: {exc}")
+            raise
+
+    def get_chat_grammar(
+        self,
+        grammar_id: str,
+        *,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a saved grammar by identifier."""
+        self._ensure_chat_grammars_table()
+        grammar_id = str(grammar_id or "").strip()
+        if not grammar_id:
+            raise InputError("grammar_id is required.")  # noqa: TRY003
+        query = "SELECT * FROM chat_grammars WHERE id = ? AND user_id = ?"
+        params: list[Any] = [grammar_id, self._chat_grammar_owner_id()]
+        if not include_deleted:
+            query += " AND deleted = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        if not include_archived:
+            query += " AND is_archived = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            row = cursor.fetchone()
+            return self._chat_grammar_row_to_dict(row)
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error fetching chat grammar '{grammar_id}': {exc}")
+            raise
+
+    def insert_chat_grammar(self, grammar_data: dict[str, Any]) -> str:
+        """Insert a new saved grammar and return its identifier."""
+        self._ensure_chat_grammars_table()
+        name = str(grammar_data.get("name") or "").strip()
+        if not name:
+            raise InputError("Grammar name is required.")  # noqa: TRY003
+        grammar_text = str(grammar_data.get("grammar_text") or "")
+        if not grammar_text.strip():
+            raise InputError("grammar_text is required.")  # noqa: TRY003
+
+        validation_status = str(grammar_data.get("validation_status") or "unchecked").strip().lower()
+        if validation_status not in _CHAT_GRAMMAR_VALIDATION_STATUSES:
+            raise InputError("validation_status must be one of unchecked, valid, invalid.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        grammar_id = str(grammar_data.get("id") or f"grammar_{self._generate_uuid().replace('-', '')}")
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        owner_id = self._chat_grammar_owner_id()
+
+        query = (
+            "INSERT INTO chat_grammars ("
+            "id, user_id, name, description, grammar_text, validation_status, validation_error, "
+            "last_validated_at, is_archived, created_at, updated_at, deleted, version"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            grammar_id,
+            owner_id,
+            name,
+            grammar_data.get("description"),
+            grammar_text,
+            validation_status,
+            grammar_data.get("validation_error"),
+            grammar_data.get("last_validated_at"),
+            bool_cast(bool(grammar_data.get("is_archived", False))),
+            grammar_data.get("created_at") or now,
+            grammar_data.get("updated_at") or now,
+            bool_cast(bool(grammar_data.get("deleted", False))),
+            int(grammar_data.get("version", 1)),
+        )
+        try:
+            with self.transaction() as conn:
+                prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+                conn.execute(prepared_query, prepared_params)
+                return grammar_id  # noqa: TRY300
+        except sqlite3.IntegrityError as exc:
+            lowered = str(exc).lower()
+            if "unique constraint failed: chat_grammars.user_id, chat_grammars.name" in lowered or (
+                "unique constraint failed: chat_grammars.name" in lowered
+            ):
+                raise ConflictError(  # noqa: TRY003
+                    f"Grammar '{name}' already exists.",
+                    entity="chat_grammars",
+                    entity_id=name,
+                ) from exc
+            if "unique constraint failed: chat_grammars.id" in str(exc).lower():
+                raise ConflictError(  # noqa: TRY003
+                    "Grammar ID already exists.",
+                    entity="chat_grammars",
+                    entity_id=grammar_id,
+                ) from exc
+            raise CharactersRAGDBError(f"Database integrity error adding grammar '{name}': {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(  # noqa: TRY003
+                    f"Grammar '{name}' already exists.",
+                    entity="chat_grammars",
+                    entity_id=name,
+                ) from exc
+            raise CharactersRAGDBError(f"Database integrity error adding grammar '{name}': {exc}") from exc  # noqa: TRY003
+
+    def update_chat_grammar(
+        self,
+        grammar_id: str,
+        update_data: dict[str, Any],
+        *,
+        expected_version: int,
+    ) -> bool:
+        """Update a saved grammar using optimistic locking."""
+        if not update_data:
+            raise InputError(f"No data provided for grammar update '{grammar_id}'.")  # noqa: TRY003
+
+        self._ensure_chat_grammars_table()
+        now = self._get_current_utc_timestamp_iso()
+        allowed_fields = {
+            "name",
+            "description",
+            "grammar_text",
+            "validation_status",
+            "validation_error",
+            "last_validated_at",
+            "is_archived",
+        }
+
+        set_parts: list[str] = []
+        params: list[Any] = []
+        grammar_text_updated = False
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            if key == "name":
+                normalized = str(value or "").strip()
+                if not normalized:
+                    raise InputError("Grammar name cannot be empty.")  # noqa: TRY003
+                params.append(normalized)
+                set_parts.append("name = ?")
+            elif key == "grammar_text":
+                normalized_text = str(value or "")
+                if not normalized_text.strip():
+                    raise InputError("grammar_text cannot be empty.")  # noqa: TRY003
+                params.append(normalized_text)
+                set_parts.append("grammar_text = ?")
+                grammar_text_updated = True
+            elif key == "validation_status":
+                normalized_status = str(value or "").strip().lower()
+                if normalized_status not in _CHAT_GRAMMAR_VALIDATION_STATUSES:
+                    raise InputError("validation_status must be one of unchecked, valid, invalid.")  # noqa: TRY003
+                params.append(normalized_status)
+                set_parts.append("validation_status = ?")
+            elif key == "is_archived":
+                params.append(bool(value) if self.backend_type == BackendType.POSTGRESQL else int(bool(value)))
+                set_parts.append("is_archived = ?")
+            else:
+                params.append(value)
+                set_parts.append(f"{key} = ?")
+
+        if not set_parts:
+            raise InputError(f"No supported data provided for grammar update '{grammar_id}'.")  # noqa: TRY003
+
+        if grammar_text_updated and "validation_status" not in update_data:
+            params.append("unchecked")
+            set_parts.append("validation_status = ?")
+        if grammar_text_updated and "validation_error" not in update_data:
+            params.append(None)
+            set_parts.append("validation_error = ?")
+        if grammar_text_updated and "last_validated_at" not in update_data:
+            params.append(None)
+            set_parts.append("last_validated_at = ?")
+
+        owner_id = self._chat_grammar_owner_id()
+        next_version = expected_version + 1
+        set_parts.extend(["updated_at = ?", "version = ?"])
+        params.extend([now, next_version, grammar_id, owner_id, expected_version])
+        query = (
+            f"UPDATE chat_grammars SET {', '.join(set_parts)} "  # nosec B608
+            "WHERE id = ? AND user_id = ? AND version = ? AND deleted = 0"
+        )
+
+        try:
+            with self.transaction() as conn:
+                lookup_query, lookup_params = self._prepare_backend_statement(
+                    "SELECT version FROM chat_grammars WHERE id = ? AND user_id = ? AND deleted = 0",
+                    (grammar_id, owner_id),
+                )
+                current_row = conn.execute(lookup_query, lookup_params).fetchone()
+                current_db_version = int(current_row["version"]) if current_row else None
+                if current_db_version != expected_version:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Version mismatch. Expected {expected_version}, found {current_db_version}. Please refresh and try again.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+
+                prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+                cursor = conn.execute(prepared_query, prepared_params)
+                if cursor.rowcount == 0:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Grammar '{grammar_id}' update affected 0 rows.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+                return True
+        except sqlite3.IntegrityError as exc:
+            if "unique constraint failed: chat_grammars.name" in str(exc).lower():
+                raise ConflictError(  # noqa: TRY003
+                    f"Grammar '{update_data.get('name')}' already exists.",
+                    entity="chat_grammars",
+                    entity_id=update_data.get("name"),
+                ) from exc
+            raise CharactersRAGDBError(f"Database error updating grammar '{grammar_id}': {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(  # noqa: TRY003
+                    f"Grammar '{update_data.get('name')}' already exists.",
+                    entity="chat_grammars",
+                    entity_id=update_data.get("name"),
+                ) from exc
+            raise CharactersRAGDBError(f"Database error updating grammar '{grammar_id}': {exc}") from exc  # noqa: TRY003
+
+    def archive_chat_grammar(self, grammar_id: str, *, expected_version: int) -> bool:
+        """Archive a saved grammar using optimistic locking."""
+        self._ensure_chat_grammars_table()
+        now = self._get_current_utc_timestamp_iso()
+        next_version = expected_version + 1
+        query = (
+            "UPDATE chat_grammars SET is_archived = ?, updated_at = ?, version = ? "
+            "WHERE id = ? AND user_id = ? AND version = ? AND deleted = 0"
+        )
+        owner_id = self._chat_grammar_owner_id()
+        params = (
+            True if self.backend_type == BackendType.POSTGRESQL else 1,
+            now,
+            next_version,
+            grammar_id,
+            owner_id,
+            expected_version,
+        )
+
+        try:
+            with self.transaction() as conn:
+                lookup_query, lookup_params = self._prepare_backend_statement(
+                    "SELECT version FROM chat_grammars WHERE id = ? AND user_id = ? AND deleted = 0",
+                    (grammar_id, owner_id),
+                )
+                current_row = conn.execute(lookup_query, lookup_params).fetchone()
+                current_db_version = int(current_row["version"]) if current_row else None
+                if current_db_version != expected_version:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Version mismatch. Expected {expected_version}, found {current_db_version}. Please refresh and try again.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+
+                prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+                cursor = conn.execute(prepared_query, prepared_params)
+                if cursor.rowcount == 0:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Grammar '{grammar_id}' archive affected 0 rows.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+                return True
+        except ConflictError:
+            raise
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error archiving grammar '{grammar_id}': {exc}")
+            raise
+
+    def delete_chat_grammar(
+        self,
+        grammar_id: str,
+        *,
+        expected_version: int,
+        hard_delete: bool = False,
+    ) -> bool:
+        """Delete a saved grammar using optimistic locking."""
+        self._ensure_chat_grammars_table()
+        now = self._get_current_utc_timestamp_iso()
+        owner_id = self._chat_grammar_owner_id()
+
+        try:
+            with self.transaction() as conn:
+                lookup_query, lookup_params = self._prepare_backend_statement(
+                    "SELECT version FROM chat_grammars WHERE id = ? AND user_id = ?",
+                    (grammar_id, owner_id),
+                )
+                current_row = conn.execute(lookup_query, lookup_params).fetchone()
+                current_db_version = int(current_row["version"]) if current_row else None
+                if current_db_version != expected_version:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Version mismatch. Expected {expected_version}, found {current_db_version}. Please refresh and try again.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+
+                if hard_delete:
+                    prepared_query, prepared_params = self._prepare_backend_statement(
+                        "DELETE FROM chat_grammars WHERE id = ? AND user_id = ? AND version = ?",
+                        (grammar_id, owner_id, expected_version),
+                    )
+                else:
+                    prepared_query, prepared_params = self._prepare_backend_statement(
+                        "UPDATE chat_grammars SET deleted = ?, updated_at = ?, version = ? "
+                        "WHERE id = ? AND user_id = ? AND version = ? AND deleted = 0",
+                        (
+                            True if self.backend_type == BackendType.POSTGRESQL else 1,
+                            now,
+                            expected_version + 1,
+                            grammar_id,
+                            owner_id,
+                            expected_version,
+                        ),
+                    )
+                cursor = conn.execute(prepared_query, prepared_params)
+                if cursor.rowcount == 0:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Grammar '{grammar_id}' delete affected 0 rows.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+                return True
+        except ConflictError:
+            raise
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error deleting grammar '{grammar_id}': {exc}")
+            raise
+
+    # ----------------------
     # Persona persistence
     # ----------------------
     @staticmethod
@@ -6395,6 +7237,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 item["salience"] = 0.0
         return item
 
+    def _persona_exemplar_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a persona exemplar DB row to an API-safe dict."""
+        if not row:
+            return None
+        item = self._deserialize_row_fields(row, self._PERSONA_EXEMPLAR_JSON_FIELDS)
+        if not item:
+            return None
+        item["enabled"] = self._as_bool(item.get("enabled", True))
+        item["deleted"] = self._as_bool(item.get("deleted"))
+        try:
+            item["priority"] = int(item.get("priority", 0) or 0)
+        except (TypeError, ValueError):
+            item["priority"] = 0
+        item["scenario_tags"] = self._normalize_persona_exemplar_tags(
+            item.pop("scenario_tags_json", []),
+            "scenario_tags",
+        )
+        item["capability_tags"] = self._normalize_persona_exemplar_tags(
+            item.pop("capability_tags_json", []),
+            "capability_tags",
+        )
+        return item
+
     def _require_active_persona_profile_owner(self, conn: Any, *, persona_id: str, user_id: str) -> dict[str, Any]:
         """Require an active persona profile owned by `user_id` using DB `conn`.
 
@@ -6418,6 +7283,295 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 entity_id=persona_id,
             )
         return item
+
+    def _normalize_persona_exemplar_tone(self, value: Any) -> str | None:
+        tone = self._normalize_nullable_text(value)
+        if tone is None:
+            return None
+        normalized = tone.strip().lower()
+        return normalized or None
+
+    def create_persona_exemplar(self, exemplar_data: dict[str, Any]) -> str:
+        """Create a persona-owned exemplar and return its ID."""
+        persona_id = str(exemplar_data.get("persona_id") or "").strip()
+        user_id = str(exemplar_data.get("user_id") or "").strip()
+        if not persona_id:
+            raise InputError("persona_id is required for persona exemplar creation.")  # noqa: TRY003
+        if not user_id:
+            raise InputError("user_id is required for persona exemplar creation.")  # noqa: TRY003
+
+        kind = self._normalize_exemplar_enum(
+            exemplar_data.get("kind"),
+            allowed=self._ALLOWED_PERSONA_EXEMPLAR_KINDS,
+            field_name="kind",
+            default="style",
+        )
+        content = self._normalize_nullable_text(exemplar_data.get("content"))
+        if not content:
+            raise InputError("content is required for persona exemplar creation.")  # noqa: TRY003
+
+        tone = self._normalize_persona_exemplar_tone(exemplar_data.get("tone"))
+        scenario_tags = self._normalize_persona_exemplar_tags(
+            exemplar_data.get("scenario_tags"),
+            "scenario_tags",
+        )
+        capability_tags = self._normalize_persona_exemplar_tags(
+            exemplar_data.get("capability_tags"),
+            "capability_tags",
+        )
+        try:
+            priority = int(exemplar_data.get("priority", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise InputError("priority must be an integer.") from exc  # noqa: TRY003
+        enabled = self._as_bool(exemplar_data.get("enabled", True))
+        source_type = self._normalize_exemplar_enum(
+            exemplar_data.get("source_type"),
+            allowed=self._ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES,
+            field_name="source_type",
+            default="manual",
+        )
+        source_ref = self._normalize_nullable_text(exemplar_data.get("source_ref"))
+        notes = self._normalize_nullable_text(exemplar_data.get("notes"))
+        exemplar_id = str(exemplar_data.get("id") or self._generate_uuid()).strip()
+        now = self._get_current_utc_timestamp_iso()
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        deleted = self._normalize_deleted_input(exemplar_data.get("deleted", False))
+        version = self._parse_version_input(exemplar_data.get("version", 1))
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "INSERT INTO persona_exemplars("
+                "id, persona_id, user_id, kind, content, tone, scenario_tags_json, capability_tags_json, "
+                "priority, enabled, source_type, source_ref, notes, created_at, last_modified, deleted, version"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            params = (
+                exemplar_id,
+                persona_id,
+                user_id,
+                kind,
+                content,
+                tone,
+                self._ensure_json_string(scenario_tags) or "[]",
+                self._ensure_json_string(capability_tags) or "[]",
+                priority,
+                bool_cast(enabled),
+                source_type,
+                source_ref,
+                notes,
+                exemplar_data.get("created_at") or now,
+                exemplar_data.get("last_modified") or now,
+                bool_cast(deleted),
+                version,
+            )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            conn.execute(prepared_query, prepared_params or ())
+        return exemplar_id
+
+    def get_persona_exemplar(
+        self,
+        *,
+        exemplar_id: str,
+        persona_id: str,
+        user_id: str,
+        include_disabled: bool = False,
+        include_deleted: bool = False,
+        include_deleted_personas: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a persona exemplar owned by a user."""
+        clauses = [
+            "pe.id = ?",
+            "pe.persona_id = ?",
+            "pe.user_id = ?",
+            "pp.id = pe.persona_id",
+            "pp.user_id = pe.user_id",
+        ]
+        params: list[Any] = [exemplar_id, persona_id, user_id]
+        if not include_disabled:
+            clauses.append("pe.enabled = 1")
+        if not include_deleted:
+            clauses.append("pe.deleted = 0")
+        if not include_deleted_personas:
+            clauses.append("pp.deleted = 0")
+        query = (
+            "SELECT pe.* "
+            "FROM persona_exemplars pe "
+            "JOIN persona_profiles pp ON pp.id = pe.persona_id AND pp.user_id = pe.user_id "
+            "WHERE " + " AND ".join(clauses) + " LIMIT 1"
+        )
+        cursor = self.execute_query(query, tuple(params))
+        return self._persona_exemplar_row_to_dict(cursor.fetchone())
+
+    def list_persona_exemplars(
+        self,
+        *,
+        user_id: str,
+        persona_id: str | None = None,
+        include_disabled: bool = False,
+        include_deleted: bool = False,
+        include_deleted_personas: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List persona exemplars for a user, optionally filtered to a persona."""
+        clauses = [
+            "pe.user_id = ?",
+            "pp.id = pe.persona_id",
+            "pp.user_id = pe.user_id",
+        ]
+        params: list[Any] = [user_id]
+        if persona_id is not None:
+            clauses.append("pe.persona_id = ?")
+            params.append(persona_id)
+        if not include_disabled:
+            clauses.append("pe.enabled = 1")
+        if not include_deleted:
+            clauses.append("pe.deleted = 0")
+        if not include_deleted_personas:
+            clauses.append("pp.deleted = 0")
+        query = (
+            "SELECT pe.* "
+            "FROM persona_exemplars pe "
+            "JOIN persona_profiles pp ON pp.id = pe.persona_id AND pp.user_id = pe.user_id "
+            "WHERE " + " AND ".join(clauses) + " "
+            "ORDER BY pe.priority DESC, pe.last_modified DESC, pe.id ASC LIMIT ? OFFSET ?"
+        )
+        params.extend([max(1, int(limit)), max(0, int(offset))])
+        cursor = self.execute_query(query, tuple(params))
+        return [self._persona_exemplar_row_to_dict(row) for row in cursor.fetchall() if row]
+
+    def update_persona_exemplar(
+        self,
+        *,
+        exemplar_id: str,
+        persona_id: str,
+        user_id: str,
+        update_data: dict[str, Any],
+    ) -> bool:
+        """Update mutable persona exemplar fields."""
+        if not update_data:
+            raise InputError("No exemplar fields provided for update.")  # noqa: TRY003
+
+        allowed_fields = {
+            "kind",
+            "content",
+            "tone",
+            "scenario_tags",
+            "capability_tags",
+            "priority",
+            "enabled",
+            "source_type",
+            "source_ref",
+            "notes",
+            "deleted",
+        }
+        set_parts: list[str] = []
+        params: list[Any] = []
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            if key == "kind":
+                params.append(
+                    self._normalize_exemplar_enum(
+                        value,
+                        allowed=self._ALLOWED_PERSONA_EXEMPLAR_KINDS,
+                        field_name="kind",
+                        default="style",
+                    )
+                )
+                set_parts.append("kind = ?")
+            elif key == "content":
+                content = self._normalize_nullable_text(value)
+                if not content:
+                    raise InputError("content cannot be empty.")  # noqa: TRY003
+                params.append(content)
+                set_parts.append("content = ?")
+            elif key == "tone":
+                params.append(self._normalize_persona_exemplar_tone(value))
+                set_parts.append("tone = ?")
+            elif key == "scenario_tags":
+                params.append(self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "scenario_tags")) or "[]")
+                set_parts.append("scenario_tags_json = ?")
+            elif key == "capability_tags":
+                params.append(self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "capability_tags")) or "[]")
+                set_parts.append("capability_tags_json = ?")
+            elif key == "priority":
+                try:
+                    params.append(int(value))
+                except (TypeError, ValueError) as exc:
+                    raise InputError("priority must be an integer.") from exc  # noqa: TRY003
+                set_parts.append("priority = ?")
+            elif key == "enabled":
+                params.append(bool_cast(self._as_bool(value)))
+                set_parts.append("enabled = ?")
+            elif key == "source_type":
+                params.append(
+                    self._normalize_exemplar_enum(
+                        value,
+                        allowed=self._ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES,
+                        field_name="source_type",
+                        default="manual",
+                    )
+                )
+                set_parts.append("source_type = ?")
+            elif key == "deleted":
+                params.append(bool_cast(self._normalize_deleted_input(value)))
+                set_parts.append("deleted = ?")
+            else:
+                params.append(self._normalize_nullable_text(value))
+                set_parts.append(f"{key} = ?")
+
+        if not set_parts:
+            raise InputError("No valid exemplar fields provided for update.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.append("last_modified = ?")
+        params.append(now)
+        set_parts.append("version = version + 1")
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "UPDATE persona_exemplars "
+                f"SET {', '.join(set_parts)} "
+                "WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0"
+            )
+            params.extend([exemplar_id, persona_id, user_id])
+            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            return cursor.rowcount > 0
+
+    def soft_delete_persona_exemplar(
+        self,
+        *,
+        exemplar_id: str,
+        persona_id: str,
+        user_id: str,
+    ) -> bool:
+        """Soft-delete a persona exemplar owned by a user."""
+        now = self._get_current_utc_timestamp_iso()
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "UPDATE persona_exemplars "
+                "SET deleted = ?, enabled = ?, last_modified = ?, version = version + 1 "
+                "WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0"
+            )
+            params = (
+                bool_cast(True),
+                bool_cast(False),
+                now,
+                exemplar_id,
+                persona_id,
+                user_id,
+            )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            return cursor.rowcount > 0
 
     def create_persona_profile(self, profile_data: dict[str, Any]) -> str:
         """Create a persona profile and return its UUID."""
@@ -6444,6 +7598,30 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             except (TypeError, ValueError) as exc:
                 raise InputError("character_card_id must be an integer when provided.") from exc  # noqa: TRY003
 
+        origin_character_id = profile_data.get("origin_character_id")
+        origin_character_name = profile_data.get("origin_character_name")
+        origin_character_snapshot_at = profile_data.get("origin_character_snapshot_at")
+        if character_card_id is not None:
+            source_character = self.get_character_card_by_id(character_card_id)
+            if source_character is None:
+                raise InputError(  # noqa: TRY003
+                    f"character_card_id '{character_card_id}' must reference an existing active character."
+                )
+            origin_character_id = source_character.get("id") or character_card_id
+            source_character_name = str(source_character.get("name") or "").strip()
+            origin_character_name = source_character_name or None
+            origin_character_snapshot_at = origin_character_snapshot_at or now
+
+        if origin_character_id is not None:
+            try:
+                origin_character_id = int(origin_character_id)
+            except (TypeError, ValueError) as exc:
+                raise InputError("origin_character_id must be an integer when provided.") from exc  # noqa: TRY003
+        if origin_character_name is not None:
+            origin_character_name = str(origin_character_name).strip() or None
+        if origin_character_snapshot_at is not None:
+            origin_character_snapshot_at = str(origin_character_snapshot_at)
+
         deleted_value = self._normalize_deleted_input(profile_data.get("deleted", False))
         version = self._parse_version_input(profile_data.get("version", 1))
 
@@ -6458,15 +7636,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         query = (
             "INSERT INTO persona_profiles("
-            "id, user_id, name, character_card_id, mode, system_prompt, "
+            "id, user_id, name, character_card_id, origin_character_id, origin_character_name, "
+            "origin_character_snapshot_at, mode, system_prompt, "
             "is_active, use_persona_state_context_default, created_at, last_modified, deleted, version"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         params = (
             persona_id,
             user_id,
             name,
             character_card_id,
+            origin_character_id,
+            origin_character_name,
+            origin_character_snapshot_at,
             mode,
             system_prompt,
             is_active_db,
@@ -8179,6 +9361,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     _CHARACTER_CARD_JSON_FIELDS = ['alternate_greetings', 'tags', 'extensions']
     _CHARACTER_FOLDER_TAG_PREFIX = "__tldw_folder_id:"
     _CHARACTER_EXEMPLAR_JSON_FIELDS = ['rhetorical', 'safety_allowed', 'safety_blocked']
+    _PERSONA_EXEMPLAR_JSON_FIELDS = ['scenario_tags_json', 'capability_tags_json']
     _ALLOWED_EXEMPLAR_SOURCE_TYPES = ('audio_transcript', 'video_transcript', 'article', 'other')
     _ALLOWED_EXEMPLAR_NOVELTY_HINTS = ('post_cutoff', 'unknown', 'pre_cutoff')
     _ALLOWED_EXEMPLAR_EMOTIONS = ('angry', 'neutral', 'happy', 'other')
@@ -9507,6 +10690,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 normalized.append(text)
         return normalized
 
+    def _normalize_persona_exemplar_tags(self, value: Any, field_name: str) -> list[str]:
+        """Normalize free-form persona exemplar tags to lowercase unique strings."""
+        raw_values = self._normalize_exemplar_string_list(value, field_name)
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in raw_values:
+            text = str(item).strip().lower()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            normalized.append(text)
+        return normalized
+
     def _normalize_character_exemplar_row(self, row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
         """Deserialize exemplar JSON fields and normalize bool-like values."""
         if not row:
@@ -10009,13 +11205,74 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return stripped if stripped else None
         return str(value)
 
+    def _normalize_conversation_assistant_identity(
+        self,
+        *,
+        character_id: Any,
+        assistant_kind: Any,
+        assistant_id: Any,
+        persona_memory_mode: Any,
+    ) -> tuple[str, str, int | None, str | None]:
+        """Normalize and validate the persisted assistant identity for a conversation."""
+        normalized_kind = self._normalize_nullable_text(assistant_kind)
+        normalized_assistant_id = self._normalize_nullable_text(assistant_id)
+        normalized_memory_mode = self._normalize_nullable_text(persona_memory_mode)
+
+        if normalized_kind is None:
+            normalized_kind = "character" if character_id is not None else None
+        if normalized_kind is None:
+            raise InputError(
+                "Conversation requires either 'character_id' or assistant identity fields."
+            )  # noqa: TRY003
+
+        normalized_kind = normalized_kind.strip().lower()
+        if normalized_kind not in self._ALLOWED_CONVERSATION_ASSISTANT_KINDS:
+            raise InputError(
+                f"Invalid assistant_kind '{normalized_kind}'. Allowed: {', '.join(self._ALLOWED_CONVERSATION_ASSISTANT_KINDS)}"
+            )  # noqa: TRY003
+
+        if normalized_kind == "character":
+            normalized_character_id: int | None
+            if character_id is None:
+                if normalized_assistant_id is None:
+                    raise InputError(
+                        "Character conversations require 'character_id' or a numeric 'assistant_id'."
+                    )  # noqa: TRY003
+                try:
+                    normalized_character_id = int(normalized_assistant_id)
+                except (TypeError, ValueError) as exc:  # pragma: no cover - defensive branch
+                    raise InputError(
+                        f"Character assistant_id must be numeric. Got: {normalized_assistant_id}"
+                    ) from exc  # noqa: TRY003
+            else:
+                try:
+                    normalized_character_id = int(character_id)
+                except (TypeError, ValueError) as exc:
+                    raise InputError(f"character_id must be numeric. Got: {character_id}") from exc  # noqa: TRY003
+
+            if normalized_memory_mode is not None:
+                raise InputError("persona_memory_mode is only valid for persona-backed conversations.")  # noqa: TRY003
+            return "character", str(normalized_character_id), normalized_character_id, None
+
+        if normalized_assistant_id is None:
+            raise InputError("Persona conversations require a non-empty 'assistant_id'.")  # noqa: TRY003
+
+        if normalized_memory_mode is not None:
+            normalized_memory_mode = normalized_memory_mode.strip().lower()
+            if normalized_memory_mode not in self._ALLOWED_PERSONA_MEMORY_MODES:
+                raise InputError(
+                    f"Invalid persona_memory_mode '{normalized_memory_mode}'. Allowed: {', '.join(self._ALLOWED_PERSONA_MEMORY_MODES)}"
+                )  # noqa: TRY003
+
+        return "persona", normalized_assistant_id, None, normalized_memory_mode
+
     def add_conversation(self, conv_data: dict[str, Any]) -> str | None:
         """
         Adds a new conversation to the database.
 
         `id` (UUID string) can be provided; if not, it's auto-generated.
         `root_id` (UUID string) should be provided; if not, `id` is used as `root_id`.
-        `character_id` is required in `conv_data`.
+        Either `character_id` or a normalized assistant identity is required in `conv_data`.
         `client_id` defaults to the DB instance's `client_id` if not provided in `conv_data`.
         `version` defaults to 1. `created_at` and `last_modified` are set to current UTC time.
 
@@ -10024,7 +11281,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         Args:
             conv_data: A dictionary containing conversation data.
-                       Required: 'character_id'.
+                       Required: 'character_id' or ('assistant_kind' + 'assistant_id').
                        Recommended: 'id' (if providing own UUID), 'root_id'.
                        Optional: 'forked_from_message_id', 'parent_conversation_id',
                                  'title', 'rating' (1-5), 'client_id'.
@@ -10033,16 +11290,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             The string UUID of the newly created conversation.
 
         Raises:
-            InputError: If required fields like 'character_id' are missing, or if
-                        'client_id' is missing and not set on the DB instance.
+            InputError: If the assistant identity is invalid, or if 'client_id' is
+                        missing and not set on the DB instance.
             ConflictError: If a conversation with the provided 'id' already exists.
             CharactersRAGDBError: For other database-related errors.
         """
         conv_id = conv_data.get('id') or self._generate_uuid()
         root_id = conv_data.get('root_id') or conv_id  # If root_id not given, this is a new root.
-
-        if 'character_id' not in conv_data:
-            raise InputError("Required field 'character_id' is missing for conversation.")  # noqa: TRY003
 
         client_id = conv_data.get('client_id') or self.client_id
         if not client_id:
@@ -10053,25 +11307,32 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cluster_id = self._normalize_nullable_text(conv_data.get('cluster_id'))
         source = self._normalize_nullable_text(conv_data.get('source'))
         external_ref = self._normalize_nullable_text(conv_data.get('external_ref'))
+        assistant_kind, assistant_id, character_id, persona_memory_mode = self._normalize_conversation_assistant_identity(
+            character_id=conv_data.get('character_id'),
+            assistant_kind=conv_data.get('assistant_kind'),
+            assistant_id=conv_data.get('assistant_id'),
+            persona_memory_mode=conv_data.get('persona_memory_mode'),
+        )
 
         now = self._get_current_utc_timestamp_iso()
         query = """
                 INSERT INTO conversations (id, root_id, forked_from_message_id, parent_conversation_id, \
-                                           character_id, title, state, topic_label, cluster_id, source, external_ref, rating, \
+                                           character_id, assistant_kind, assistant_id, persona_memory_mode, \
+                                           title, state, topic_label, cluster_id, source, external_ref, rating, \
                                            created_at, last_modified, client_id, version, deleted) \
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                 """ # created_at added
         if self.backend_type == BackendType.POSTGRESQL:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
-                conv_data.get('parent_conversation_id'), conv_data['character_id'],
+                conv_data.get('parent_conversation_id'), character_id, assistant_kind, assistant_id, persona_memory_mode,
                 conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
                 now, now, client_id, 1, False
             )
         else:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
-                conv_data.get('parent_conversation_id'), conv_data['character_id'],
+                conv_data.get('parent_conversation_id'), character_id, assistant_kind, assistant_id, persona_memory_mode,
                 conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
                 now, now, client_id, 1, 0
             )
@@ -10543,7 +11804,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         Updatable fields from `update_data`: 'title', 'rating', 'state', 'topic_label',
         'topic_label_source', 'topic_last_tagged_at', 'topic_last_tagged_message_id',
-        'cluster_id', 'source', 'external_ref'. Other fields are ignored.
+        'cluster_id', 'source', 'external_ref', 'assistant_kind', 'assistant_id',
+        'character_id', 'persona_memory_mode'. Other fields are ignored.
         If `update_data` is empty or contains no updatable fields, metadata (version,
         last_modified, client_id) is still updated if the version check passes.
 
@@ -10607,7 +11869,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 # Fetch current state, including rowid (though not used for manual FTS, it's good practice to fetch if available)
                 # and current title for potential non-FTS related "title_changed" logic.
-                cursor_check = conn.execute("SELECT rowid, title, version, deleted FROM conversations WHERE id = ?",
+                cursor_check = conn.execute(
+                    """
+                    SELECT rowid, title, version, deleted, character_id, assistant_kind, assistant_id, persona_memory_mode
+                    FROM conversations
+                    WHERE id = ?
+                    """,
                                             (conversation_id,))
                 current_state = cursor_check.fetchone()
 
@@ -10620,6 +11887,30 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 current_db_version = current_state['version']
                 current_title = current_state['title']  # For logging or other conditional logic if title changed
+                assistant_update_requested = any(
+                    field in update_data
+                    for field in ('assistant_kind', 'assistant_id', 'character_id', 'persona_memory_mode')
+                )
+                normalized_assistant_kind = current_state['assistant_kind']
+                normalized_assistant_id = current_state['assistant_id']
+                normalized_character_id = current_state['character_id']
+                normalized_persona_memory_mode = current_state['persona_memory_mode']
+
+                if assistant_update_requested:
+                    (
+                        normalized_assistant_kind,
+                        normalized_assistant_id,
+                        normalized_character_id,
+                        normalized_persona_memory_mode,
+                    ) = self._normalize_conversation_assistant_identity(
+                        character_id=update_data.get('character_id', current_state['character_id']),
+                        assistant_kind=update_data.get('assistant_kind', current_state['assistant_kind']),
+                        assistant_id=update_data.get('assistant_id', current_state['assistant_id']),
+                        persona_memory_mode=update_data.get(
+                            'persona_memory_mode',
+                            current_state['persona_memory_mode'],
+                        ),
+                    )
 
                 logger.debug(
                     f"Conversation current DB version: {current_db_version}, Expected by client: {expected_version}, Current title: {current_title}")
@@ -10679,6 +11970,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if 'external_ref' in update_data:
                     fields_to_update_sql.append("external_ref = ?")
                     params_for_set_clause.append(self._normalize_nullable_text(update_data.get('external_ref')))
+
+                if assistant_update_requested:
+                    fields_to_update_sql.append("character_id = ?")
+                    params_for_set_clause.append(normalized_character_id)
+                    fields_to_update_sql.append("assistant_kind = ?")
+                    params_for_set_clause.append(normalized_assistant_kind)
+                    fields_to_update_sql.append("assistant_id = ?")
+                    params_for_set_clause.append(normalized_assistant_id)
+                    fields_to_update_sql.append("persona_memory_mode = ?")
+                    params_for_set_clause.append(normalized_persona_memory_mode)
 
                 next_version_val = expected_version + 1  # Version always increments on successful update
 

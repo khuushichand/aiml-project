@@ -1032,6 +1032,7 @@ else:
         logger.warning(f"Items endpoints unavailable; skipping import: {_items_err}")
         _HAS_ITEMS = False
     # Notes / Prompts / Translation
+    from tldw_Server_API.app.api.v1.endpoints.ingestion_sources import router as ingestion_sources_router
     from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
     from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
     from tldw_Server_API.app.api.v1.endpoints.translate import router as translate_router
@@ -3071,6 +3072,27 @@ async def lifespan(app: FastAPI):
                 logger.info("Kanban activity cleanup scheduler started")
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Kanban activity cleanup scheduler: {e}")
+
+    # Start ingestion source archive cleanup scheduler (retention cleanup)
+    try:
+        _enable_ingestion_sources_cleanup = _shared_is_truthy(
+            _env_os.getenv("INGESTION_SOURCES_CLEANUP_ENABLED", "false")
+        )
+        if not _enable_ingestion_sources_cleanup:
+            logger.info(
+                "Ingestion source archive cleanup scheduler disabled "
+                "(INGESTION_SOURCES_CLEANUP_ENABLED != true)"
+            )
+        else:
+            from tldw_Server_API.app.services.ingestion_sources_cleanup_service import (
+                start_ingestion_sources_cleanup_scheduler,
+            )
+
+            _ingestion_sources_cleanup_task = await start_ingestion_sources_cleanup_scheduler()
+            if _ingestion_sources_cleanup_task:
+                logger.info("Ingestion source archive cleanup scheduler started")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start ingestion source archive cleanup scheduler: {e}")
 
     # Start Kanban soft-delete purge scheduler
     try:
@@ -5772,6 +5794,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"])
     except _IMPORT_EXCEPTIONS as _acp_min_err:
         logger.debug(f"Skipping ACP router in minimal test app: {_acp_min_err}")
+    # Agent Orchestration endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import router as orch_router
+
+        app.include_router(orch_router, prefix=f"{API_V1_PREFIX}", tags=["agent-orchestration"])
+    except _IMPORT_EXCEPTIONS as _orch_min_err:
+        logger.debug(f"Skipping orchestration router in minimal test app: {_orch_min_err}")
     # Include admin router in minimal mode if available (ensure not gated by MCP import)
     try:
         if "admin_router" not in locals():
@@ -6111,6 +6140,13 @@ else:
         )
     except _IMPORT_EXCEPTIONS as _conn_e:
         logger.warning(f"Connectors endpoints unavailable; skipping import: {_conn_e}")
+    _include_if_enabled(
+        "ingestion-sources",
+        ingestion_sources_router,
+        prefix=f"{API_V1_PREFIX}",
+        tags=["ingestion-sources"],
+        default_stable=False,
+    )
     if "claims_router" in locals():
         _include_if_enabled("claims", claims_router, prefix=f"{API_V1_PREFIX}")
     if "media_embeddings_router" in locals():

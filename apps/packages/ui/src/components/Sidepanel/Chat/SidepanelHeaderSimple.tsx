@@ -231,12 +231,12 @@ export const SidepanelHeaderSimple = ({
           </button>
         </Tooltip>
         {capabilities?.hasPersona ? (
-          <Tooltip title={t("sidepanel:persona.openPersona", "Open Persona")}>
+          <Tooltip title={t("sidepanel:persona.openPersona", "Open Persona Garden")}>
             <Link
               to="/persona"
-              aria-label={t("sidepanel:persona.openPersona", "Open Persona") as string}
+              aria-label={t("sidepanel:persona.openPersona", "Open Persona Garden") as string}
               className="rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text"
-              title={t("sidepanel:persona.openPersona", "Open Persona")}
+              title={t("sidepanel:persona.openPersona", "Open Persona Garden")}
               data-testid="chat-open-persona"
             >
               <Bot className="size-4" aria-hidden="true" />
