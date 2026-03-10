@@ -27,6 +27,9 @@ from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
 )
 from tldw_Server_API.app.core.Prompt_Management.structured_prompts import (
     PromptDefinition,
+    assemble_prompt_definition,
+    convert_legacy_prompt_to_definition,
+    extract_legacy_prompt_variables,
     render_legacy_snapshot,
     validate_prompt_definition,
 )
@@ -99,6 +102,35 @@ def _render_definition_legacy_fields(definition: PromptDefinition) -> tuple[str,
     ]
     legacy = render_legacy_snapshot(messages, definition)
     return legacy.system_prompt, legacy.user_prompt
+
+
+def _coerce_preview_definition(
+    prompt_format: str,
+    prompt_schema_version: int | None,
+    prompt_definition_payload: dict[str, Any] | None,
+    *,
+    system_prompt: str | None,
+    user_prompt: str | None,
+) -> tuple[PromptDefinition, str, int | None]:
+    if prompt_format == "structured":
+        if prompt_schema_version is None:
+            raise InputError("Structured prompts require prompt_schema_version.")
+        if not isinstance(prompt_definition_payload, dict):
+            raise InputError("Structured prompts require prompt_definition.")
+        try:
+            definition = PromptDefinition.model_validate(prompt_definition_payload)
+        except ValidationError as exc:
+            raise InputError(f"Invalid prompt_definition: {exc}") from exc
+        issues = validate_prompt_definition(definition)
+        if issues:
+            raise InputError(issues[0].message)
+        return definition, "structured", int(prompt_schema_version)
+
+    definition = convert_legacy_prompt_to_definition(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+    return definition, "legacy", None
 
 
 def _prepare_prompt_storage_payload(
@@ -787,6 +819,69 @@ async def render_template_api(
             detail=f"Missing template variable: {missing_key}"
         ) from e
     return schemas.TemplateRenderResponse(rendered=rendered)
+
+
+@router.post(
+    "/preview",
+    response_model=schemas.StructuredPromptPreviewResponse,
+    summary="Preview assembled prompt messages",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def preview_prompt_api(
+    payload: schemas.StructuredPromptPreviewRequest = Body(...),
+):
+    try:
+        definition, prompt_format, prompt_schema_version = _coerce_preview_definition(
+            payload.prompt_format,
+            payload.prompt_schema_version,
+            payload.prompt_definition,
+            system_prompt=payload.system_prompt,
+            user_prompt=payload.user_prompt,
+        )
+        assembly = assemble_prompt_definition(definition, payload.variables)
+    except InputError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid prompt_definition: {e}",
+        ) from e
+
+    return schemas.StructuredPromptPreviewResponse(
+        prompt_format=prompt_format,
+        prompt_schema_version=prompt_schema_version,
+        assembled_messages=assembly.messages,
+        legacy_system_prompt=assembly.legacy.system_prompt,
+        legacy_user_prompt=assembly.legacy.user_prompt,
+    )
+
+
+@router.post(
+    "/convert",
+    response_model=schemas.StructuredPromptConvertResponse,
+    summary="Convert a legacy prompt to a structured definition",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def convert_prompt_api(
+    payload: schemas.StructuredPromptConvertRequest = Body(...),
+):
+    definition = convert_legacy_prompt_to_definition(
+        system_prompt=payload.system_prompt,
+        user_prompt=payload.user_prompt,
+    )
+    legacy_system_prompt, legacy_user_prompt = _render_definition_legacy_fields(definition)
+    return schemas.StructuredPromptConvertResponse(
+        prompt_definition=definition.model_dump(),
+        extracted_variables=extract_legacy_prompt_variables(
+            payload.system_prompt,
+            payload.user_prompt,
+        ),
+        legacy_system_prompt=legacy_system_prompt,
+        legacy_user_prompt=legacy_user_prompt,
+    )
 
 
 # === Bulk Operations Endpoints ===

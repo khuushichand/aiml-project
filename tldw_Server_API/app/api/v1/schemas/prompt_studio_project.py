@@ -184,6 +184,46 @@ class PromptCompareResponse(BaseModel):
     differences: dict[str, Any]
     metrics_comparison: Optional[dict[str, Any]] = None
 
+
+class StructuredPromptPreviewRequest(BaseModel):
+    """Request to preview assembled prompt messages."""
+    project_id: int
+    signature_id: Optional[int] = None
+    prompt_format: Literal["legacy", "structured"] = "legacy"
+    system_prompt: Optional[str] = Field(None, max_length=50000)
+    user_prompt: Optional[str] = Field(None, max_length=50000)
+    prompt_schema_version: Optional[int] = Field(None, ge=1)
+    prompt_definition: Optional[dict[str, Any]] = None
+    few_shot_examples: Optional[list[FewShotExample]] = None
+    modules_config: Optional[list[PromptModule]] = None
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
+class StructuredPromptPreviewResponse(BaseModel):
+    """Preview response with assembled messages and legacy compatibility text."""
+    prompt_format: Literal["legacy", "structured"]
+    prompt_schema_version: Optional[int] = None
+    assembled_messages: list[dict[str, str]] = Field(default_factory=list)
+    legacy_system_prompt: str = ""
+    legacy_user_prompt: str = ""
+
+
+class StructuredPromptConvertRequest(BaseModel):
+    """Convert raw prompt fields into a structured prompt definition."""
+    project_id: int
+    system_prompt: Optional[str] = Field(None, max_length=50000)
+    user_prompt: Optional[str] = Field(None, max_length=50000)
+
+
+class StructuredPromptConvertResponse(BaseModel):
+    """Structured prompt conversion result."""
+    prompt_format: Literal["structured"] = "structured"
+    prompt_schema_version: int = 1
+    prompt_definition: dict[str, Any]
+    extracted_variables: list[str] = Field(default_factory=list)
+    legacy_system_prompt: str = ""
+    legacy_user_prompt: str = ""
+
 ########################################################################################################################
 # Generation Requests
 

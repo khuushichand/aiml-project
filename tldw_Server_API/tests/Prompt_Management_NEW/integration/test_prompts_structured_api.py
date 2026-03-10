@@ -120,3 +120,46 @@ def test_update_structured_prompt_preserves_format_when_prompt_format_is_omitted
     updated_body = update_response.json()
     assert updated_body["prompt_format"] == "structured"
     assert updated_body["prompt_definition"]["blocks"][1]["content"] == "Evaluate {{topic}} carefully."
+
+
+def test_preview_prompt_returns_assembled_messages_and_legacy_snapshot(test_client, auth_headers):
+    response = test_client.post(
+        "/api/v1/prompts/preview",
+        json={
+            "prompt_format": "structured",
+            "prompt_schema_version": 1,
+            "prompt_definition": _make_prompt_definition_payload(),
+            "variables": {"topic": "SQLite FTS"},
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["assembled_messages"] == [
+        {"role": "system", "content": "You are precise."},
+        {"role": "user", "content": "Summarize SQLite FTS"},
+    ]
+    assert body["legacy_system_prompt"] == "You are precise."
+    assert body["legacy_user_prompt"] == "Summarize SQLite FTS"
+
+
+def test_convert_prompt_returns_structured_definition_with_normalized_variables(test_client, auth_headers):
+    response = test_client.post(
+        "/api/v1/prompts/convert",
+        json={
+            "system_prompt": "Be precise about {topic}.",
+            "user_prompt": "Summarize $topic against <baseline> in {{style}}.",
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["prompt_format"] == "structured"
+    assert body["prompt_schema_version"] == 1
+    assert body["extracted_variables"] == ["topic", "baseline", "style"]
+    assert body["prompt_definition"]["blocks"][0]["content"] == "Be precise about {{topic}}."
+    assert body["prompt_definition"]["blocks"][1]["content"] == (
+        "Summarize {{topic}} against {{baseline}} in {{style}}."
+    )

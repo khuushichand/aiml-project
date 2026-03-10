@@ -20,6 +20,46 @@ from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_st
 ########################################################################################################################
 # Test Client Setup
 
+
+def _make_structured_prompt_definition_payload() -> dict:
+    return {
+        "schema_version": 1,
+        "format": "structured",
+        "variables": [
+            {
+                "name": "input",
+                "label": "Input",
+                "required": True,
+                "input_type": "textarea",
+            }
+        ],
+        "blocks": [
+            {
+                "id": "identity",
+                "name": "Identity",
+                "role": "system",
+                "content": "You are a careful evaluator.",
+                "enabled": True,
+                "order": 10,
+                "is_template": False,
+            },
+            {
+                "id": "task",
+                "name": "Task",
+                "role": "user",
+                "content": "Evaluate {{input}}",
+                "enabled": True,
+                "order": 20,
+                "is_template": True,
+            },
+        ],
+        "assembly_config": {
+            "legacy_system_roles": ["system", "developer"],
+            "legacy_user_roles": ["user"],
+            "block_separator": "\n\n",
+        },
+    }
+
 @pytest.fixture
 def client(mock_user, test_db):
     """Create a test client for the FastAPI app with mocked authentication."""
@@ -295,6 +335,80 @@ class TestPromptEndpoints:
                 data = response.json()
                 assert "output" in data
                 assert data["tokens_used"] == 100
+
+    def test_preview_prompt_renders_structured_messages(self, client, test_db, project_id, auth_headers):
+
+        """Test previewing a structured prompt with modules/examples/signature output."""
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        signature = test_db.create_signature(
+            project_id=project_id,
+            name="Preview Signature",
+            input_schema=[{"name": "input", "type": "string"}],
+            output_schema=[{"name": "answer", "type": "string"}],
+        )
+
+        response = client.post(
+            "/api/v1/prompt-studio/prompts/preview",
+            json={
+                "project_id": project_id,
+                "signature_id": signature["id"],
+                "prompt_format": "structured",
+                "prompt_schema_version": 1,
+                "prompt_definition": _make_structured_prompt_definition_payload(),
+                "few_shot_examples": [
+                    {
+                        "inputs": {"input": "Indexes"},
+                        "outputs": {"answer": "Use the covering index."},
+                    }
+                ],
+                "modules_config": [
+                    {"type": "style_rules", "enabled": True, "config": {"tone": "concise"}}
+                ],
+                "variables": {"input": "SQLite FTS"},
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert [message["role"] for message in data["assembled_messages"]] == [
+            "system",
+            "developer",
+            "user",
+            "assistant",
+            "user",
+        ]
+        assert data["assembled_messages"][1]["content"] == "Module style_rules: tone=concise"
+        assert data["assembled_messages"][4]["content"].startswith("Evaluate SQLite FTS")
+        assert "Please format your response as JSON" in data["assembled_messages"][4]["content"]
+
+    def test_convert_prompt_returns_structured_definition(self, client, project_id, auth_headers):
+
+        """Test converting a legacy prompt payload into a structured definition."""
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        response = client.post(
+            "/api/v1/prompt-studio/prompts/convert",
+            json={
+                "project_id": project_id,
+                "system_prompt": "Be precise about {input}.",
+                "user_prompt": "Evaluate $input against <baseline>.",
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["prompt_format"] == "structured"
+        assert data["prompt_schema_version"] == 1
+        assert data["extracted_variables"] == ["input", "baseline"]
+        assert data["prompt_definition"]["blocks"][0]["content"] == "Be precise about {{input}}."
+        assert data["prompt_definition"]["blocks"][1]["content"] == (
+            "Evaluate {{input}} against {{baseline}}."
+        )
 
 ########################################################################################################################
 # Test Case Endpoints Tests

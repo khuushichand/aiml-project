@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 from loguru import logger
+from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
     PromptStudioDatabase,
@@ -37,12 +38,24 @@ from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import ListResponse, StandardResponse
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_project import (
     PromptCreate,
+    StructuredPromptConvertRequest,
+    StructuredPromptConvertResponse,
+    StructuredPromptPreviewRequest,
+    StructuredPromptPreviewResponse,
     PromptResponse,
     PromptUpdate,
     PromptVersion,
 )
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_schemas import ExecutePromptSimpleRequest
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import ConflictError, DatabaseError, InputError
+from tldw_Server_API.app.core.Prompt_Management.structured_prompts import (
+    PromptDefinition,
+    assemble_prompt_definition,
+    convert_legacy_prompt_to_definition,
+    extract_legacy_prompt_variables,
+    render_legacy_snapshot,
+    validate_prompt_definition,
+)
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 ########################################################################################################################
@@ -61,6 +74,42 @@ router = APIRouter(
 
 ########################################################################################################################
 # Prompt CRUD Endpoints
+
+
+def _render_definition_legacy_fields(definition: PromptDefinition) -> tuple[str, str]:
+    messages = [
+        {"role": block.role, "content": block.content}
+        for block in sorted(definition.blocks, key=lambda item: item.order)
+        if block.enabled
+    ]
+    legacy = render_legacy_snapshot(messages, definition)
+    return legacy.system_prompt, legacy.user_prompt
+
+
+def _coerce_preview_definition(
+    *,
+    prompt_format: str,
+    prompt_schema_version: int | None,
+    prompt_definition_payload: dict[str, Any] | None,
+    system_prompt: str | None,
+    user_prompt: str | None,
+) -> tuple[PromptDefinition, str, int | None]:
+    if prompt_format == "structured":
+        if prompt_schema_version is None:
+            raise InputError("Structured prompts require prompt_schema_version.")
+        if not isinstance(prompt_definition_payload, dict):
+            raise InputError("Structured prompts require prompt_definition.")
+        definition = PromptDefinition.model_validate(prompt_definition_payload)
+        issues = validate_prompt_definition(definition)
+        if issues:
+            raise InputError(issues[0].message)
+        return definition, "structured", int(prompt_schema_version)
+
+    definition = convert_legacy_prompt_to_definition(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+    return definition, "legacy", None
 
 # Compatibility: simple POST on base path returns prompt object directly
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -366,6 +415,92 @@ async def execute_prompt_simple(
         "tokens_used": result.get("tokens_used", 0),
         "execution_time": result.get("execution_time_ms", 0) / 1000.0
     }
+
+
+@router.post("/preview", response_model=StandardResponse)
+async def preview_prompt(
+    payload: StructuredPromptPreviewRequest,
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: dict = Depends(get_prompt_studio_user),
+) -> StandardResponse:
+    from tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_executor import PromptExecutor
+
+    try:
+        await require_project_access(payload.project_id, user_context=user_context, db=db)
+        definition, prompt_format, prompt_schema_version = _coerce_preview_definition(
+            prompt_format=payload.prompt_format,
+            prompt_schema_version=payload.prompt_schema_version,
+            prompt_definition_payload=payload.prompt_definition,
+            system_prompt=payload.system_prompt,
+            user_prompt=payload.user_prompt,
+        )
+
+        extras = {
+            "few_shot_examples": [model_dump_compat(example) for example in (payload.few_shot_examples or [])],
+            "modules_config": [model_dump_compat(module) for module in (payload.modules_config or [])],
+        }
+        assembly = assemble_prompt_definition(definition, payload.variables, extras=extras)
+        messages = assembly.messages
+
+        if payload.signature_id is not None:
+            signature = db.get_signature(payload.signature_id)
+            if not signature:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Signature {payload.signature_id} not found",
+                )
+            if int(signature.get("project_id") or -1) != int(payload.project_id):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Signature does not belong to the requested project",
+                )
+            messages = PromptExecutor(db)._apply_signature_to_messages(messages, signature)
+
+        legacy = render_legacy_snapshot(messages, definition)
+        preview_data = StructuredPromptPreviewResponse(
+            prompt_format=prompt_format,
+            prompt_schema_version=prompt_schema_version,
+            assembled_messages=messages,
+            legacy_system_prompt=legacy.system_prompt,
+            legacy_user_prompt=legacy.user_prompt,
+        )
+        return StandardResponse(success=True, data=preview_data)
+    except HTTPException:
+        raise
+    except InputError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=getattr(e, "safe_message", str(e)),
+        ) from e
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid prompt_definition: {e}",
+        ) from e
+
+
+@router.post("/convert", response_model=StandardResponse)
+async def convert_prompt(
+    payload: StructuredPromptConvertRequest,
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: dict = Depends(get_prompt_studio_user),
+) -> StandardResponse:
+    await require_project_access(payload.project_id, user_context=user_context, db=db)
+    definition = convert_legacy_prompt_to_definition(
+        system_prompt=payload.system_prompt,
+        user_prompt=payload.user_prompt,
+    )
+    legacy_system_prompt, legacy_user_prompt = _render_definition_legacy_fields(definition)
+    response = StructuredPromptConvertResponse(
+        prompt_definition=definition.model_dump(),
+        extracted_variables=extract_legacy_prompt_variables(
+            payload.system_prompt,
+            payload.user_prompt,
+        ),
+        legacy_system_prompt=legacy_system_prompt,
+        legacy_user_prompt=legacy_user_prompt,
+    )
+    return StandardResponse(success=True, data=response)
 
 @router.get("/get/{prompt_id}", response_model=StandardResponse, openapi_extra={
     "responses": {"200": {"description": "Prompt", "content": {"application/json": {"examples": {"get": {"summary": "Prompt details", "value": {"success": True, "data": {"id": 12, "name": "Summarizer", "version_number": 2}}}}}}}}
