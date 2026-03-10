@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import contextlib
 import os
 import sys
 from datetime import datetime
+
+from loguru import logger
 
 from tldw_Server_API.app.core.testing import is_truthy
 
@@ -12,21 +13,19 @@ from ..runtime_capabilities import RuntimePreflightResult
 from ..streams import get_hub
 from .vz_common import vz_host_facts
 
-_SEATBELT_NONCRITICAL_EXCEPTIONS = (
-    AttributeError,
-    OSError,
-    PermissionError,
-    RuntimeError,
-    TypeError,
-    ValueError,
-)
-
 
 def _truthy(value: str | None) -> bool:
     return is_truthy(value)
 
 
 class SeatbeltRunner:
+    """Host-local macOS runner for seatbelt-scoped trusted workloads.
+
+    This runner only supports discovery and a fake execution path today.
+    `untrusted` is never allowed, `standard` requires explicit opt-in, and real
+    seatbelt execution is still pending.
+    """
+
     runtime_type = RuntimeType.seatbelt
 
     def _version(self) -> str | None:
@@ -67,9 +66,20 @@ class SeatbeltRunner:
 
     def _run_fake(self, run_id: str) -> RunStatus:
         now = datetime.utcnow()
-        with contextlib.suppress(_SEATBELT_NONCRITICAL_EXCEPTIONS):
-            get_hub().publish_event(run_id, "start", {"ts": now.isoformat(), "runtime": self.runtime_type.value})
-            get_hub().publish_event(run_id, "end", {"exit_code": 0})
+        hub = get_hub()
+        for event, payload in (
+            ("start", {"ts": now.isoformat(), "runtime": self.runtime_type.value}),
+            ("end", {"exit_code": 0}),
+        ):
+            try:
+                hub.publish_event(run_id, event, payload)
+            except (AttributeError, OSError, PermissionError, RuntimeError, TypeError, ValueError) as exc:
+                logger.warning(
+                    "seatbelt fake execution failed to publish {} event for run {}: {}",
+                    event,
+                    run_id,
+                    exc,
+                )
         return RunStatus(
             id="",
             phase=RunPhase.completed,

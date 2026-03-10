@@ -8,6 +8,10 @@ from tldw_Server_API.app.core.testing import is_truthy
 from .models import HelperVMReply
 
 
+class MacOSVirtualizationHelperUnavailable(RuntimeError):
+    """Raised when the native macOS virtualization helper cannot service a request."""
+
+
 class MacOSVirtualizationHelperClient:
     """Client stub for the future native macOS virtualization helper."""
 
@@ -20,4 +24,4 @@ class MacOSVirtualizationHelperClient:
                 state="created",
                 details={"runtime": runtime or None, "transport": "fake"},
             )
-        raise RuntimeError("macos_virtualization_helper_unavailable")
+        raise MacOSVirtualizationHelperUnavailable("macos_virtualization_helper_unavailable")

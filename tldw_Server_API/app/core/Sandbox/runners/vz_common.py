@@ -45,6 +45,9 @@ class VZBaseRunner:
     template_ready_env_key: str
     template_missing_reason: str
 
+    def _execution_ready(self) -> bool:
+        return _truthy(os.getenv(self.fake_exec_env_key))
+
     def _helper_ready(self) -> bool:
         return _truthy(os.getenv("TLDW_SANDBOX_MACOS_HELPER_READY"))
 
@@ -72,6 +75,8 @@ class VZBaseRunner:
             reasons.append("macos_helper_missing")
         if not self._template_ready():
             reasons.append(self.template_missing_reason)
+        if not self._execution_ready():
+            reasons.append("real_execution_not_implemented")
 
         if str(network_policy or "deny_all").strip().lower() == "allowlist":
             reasons.append("strict_allowlist_not_supported")

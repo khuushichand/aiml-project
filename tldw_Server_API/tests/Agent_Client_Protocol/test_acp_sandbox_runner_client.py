@@ -13,6 +13,9 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.sandbox_runner_client import
     _is_self_referential_agent_command,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
+from tldw_Server_API.app.core.Sandbox.models import RuntimeType
+from tldw_Server_API.app.core.Sandbox.runtime_capabilities import RuntimePreflightResult
+from tldw_Server_API.app.core.Sandbox.runners.lima_runner import LimaRunner
 
 
 @pytest.mark.unit
@@ -176,6 +179,36 @@ async def test_create_session_rejects_seatbelt_without_standard_opt_in(monkeypat
 
     with pytest.raises(ACPResponseError, match="seatbelt_standard_disabled"):
         await manager.create_session(cwd="/workspace", user_id=7)
+
+
+@pytest.mark.unit
+def test_validate_runtime_requirements_uses_single_lima_preflight(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            runtime="lima",
+            network_policy="deny_all",
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    calls = {"count": 0}
+
+    def _fake_preflight(self, network_policy: str | None = None):
+        del self, network_policy
+        calls["count"] += 1
+        return RuntimePreflightResult(
+            runtime=RuntimeType.lima,
+            available=True,
+            reasons=[],
+            host={"os": "darwin"},
+            enforcement_ready={"deny_all": True, "allowlist": True},
+        )
+
+    monkeypatch.setattr(LimaRunner, "preflight", _fake_preflight)
+
+    manager._validate_runtime_requirements(RuntimeType.lima)
+
+    assert calls["count"] == 1
 
 
 @pytest.mark.unit

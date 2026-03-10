@@ -627,6 +627,50 @@ class SandboxService:
         with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
             get_hub().publish_event(status.id, "end", {"exit_code": None, "reason": reason})
 
+    def _execute_single_runtime_scaffold(
+        self,
+        *,
+        status: RunStatus,
+        spec: RunSpec,
+        workspace_path: str | None,
+        start_run_fn,
+        policy_failed_reason: str,
+        failed_reason: str,
+        policy_exceptions: tuple[type[BaseException], ...],
+    ) -> RunStatus:
+        try:
+            admitted = self._admit_run_starting(status.id)
+            if admitted is None:
+                existing = self._orch.get_run(status.id)
+                return existing or status
+            if admitted.phase != RunPhase.starting:
+                return admitted
+            self._apply_admitted_status(status, admitted)
+            try:
+                real = self._run_with_claim_lease(
+                    status.id,
+                    lambda: start_run_fn(status.id, spec, workspace_path),
+                )
+            except policy_exceptions:
+                status.phase = RunPhase.failed
+                status.message = policy_failed_reason
+                status.finished_at = datetime.utcnow()
+                self._orch.update_run(status.id, status)
+                return status
+            real.id = status.id
+            status.phase = real.phase
+            status.exit_code = real.exit_code
+            status.started_at = real.started_at
+            status.finished_at = real.finished_at
+            status.message = real.message
+            status.image_digest = real.image_digest
+            status.runtime_version = real.runtime_version
+            self._orch.update_run(status.id, status)
+            return status
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            self._mark_run_failed(status, reason=failed_reason)
+            return status
+
     def feature_discovery(self) -> list[dict]:
         images = [
             "python:3.11-slim",
@@ -1430,101 +1474,38 @@ class SandboxService:
                 except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                     pass
         elif execute_enabled and spec.runtime == RuntimeType.vz_linux:
-            try:
-                ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
-                admitted = self._admit_run_starting(status.id)
-                if admitted is None:
-                    existing = self._orch.get_run(status.id)
-                    return existing or status
-                if admitted.phase != RunPhase.starting:
-                    return admitted
-                self._apply_admitted_status(status, admitted)
-                try:
-                    real = self._run_with_claim_lease(
-                        status.id,
-                        lambda: self._start_vz_linux_run_with_execution_preflight(status.id, spec, ws),
-                    )
-                except SandboxPolicy.RuntimeUnavailable:
-                    status.phase = RunPhase.failed
-                    status.message = "vz_linux_policy_failed"
-                    status.finished_at = datetime.utcnow()
-                    self._orch.update_run(status.id, status)
-                    return status
-                real.id = status.id
-                status.phase = real.phase
-                status.exit_code = real.exit_code
-                status.started_at = real.started_at
-                status.finished_at = real.finished_at
-                status.message = real.message
-                status.image_digest = real.image_digest
-                status.runtime_version = real.runtime_version
-                self._orch.update_run(status.id, status)
-            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                self._mark_run_failed(status, reason="vz_linux_failed")
+            ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+            return self._execute_single_runtime_scaffold(
+                status=status,
+                spec=spec,
+                workspace_path=ws,
+                start_run_fn=self._start_vz_linux_run_with_execution_preflight,
+                policy_failed_reason="vz_linux_policy_failed",
+                failed_reason="vz_linux_failed",
+                policy_exceptions=(SandboxPolicy.RuntimeUnavailable,),
+            )
         elif execute_enabled and spec.runtime == RuntimeType.vz_macos:
-            try:
-                ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
-                admitted = self._admit_run_starting(status.id)
-                if admitted is None:
-                    existing = self._orch.get_run(status.id)
-                    return existing or status
-                if admitted.phase != RunPhase.starting:
-                    return admitted
-                self._apply_admitted_status(status, admitted)
-                try:
-                    real = self._run_with_claim_lease(
-                        status.id,
-                        lambda: self._start_vz_macos_run_with_execution_preflight(status.id, spec, ws),
-                    )
-                except SandboxPolicy.RuntimeUnavailable:
-                    status.phase = RunPhase.failed
-                    status.message = "vz_macos_policy_failed"
-                    status.finished_at = datetime.utcnow()
-                    self._orch.update_run(status.id, status)
-                    return status
-                real.id = status.id
-                status.phase = real.phase
-                status.exit_code = real.exit_code
-                status.started_at = real.started_at
-                status.finished_at = real.finished_at
-                status.message = real.message
-                status.image_digest = real.image_digest
-                status.runtime_version = real.runtime_version
-                self._orch.update_run(status.id, status)
-            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                self._mark_run_failed(status, reason="vz_macos_failed")
+            ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+            return self._execute_single_runtime_scaffold(
+                status=status,
+                spec=spec,
+                workspace_path=ws,
+                start_run_fn=self._start_vz_macos_run_with_execution_preflight,
+                policy_failed_reason="vz_macos_policy_failed",
+                failed_reason="vz_macos_failed",
+                policy_exceptions=(SandboxPolicy.RuntimeUnavailable,),
+            )
         elif execute_enabled and spec.runtime == RuntimeType.seatbelt:
-            try:
-                ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
-                admitted = self._admit_run_starting(status.id)
-                if admitted is None:
-                    existing = self._orch.get_run(status.id)
-                    return existing or status
-                if admitted.phase != RunPhase.starting:
-                    return admitted
-                self._apply_admitted_status(status, admitted)
-                try:
-                    real = self._run_with_claim_lease(
-                        status.id,
-                        lambda: self._start_seatbelt_run_with_execution_preflight(status.id, spec, ws),
-                    )
-                except (SandboxPolicy.RuntimeUnavailable, SandboxPolicy.PolicyUnsupported):
-                    status.phase = RunPhase.failed
-                    status.message = "seatbelt_policy_failed"
-                    status.finished_at = datetime.utcnow()
-                    self._orch.update_run(status.id, status)
-                    return status
-                real.id = status.id
-                status.phase = real.phase
-                status.exit_code = real.exit_code
-                status.started_at = real.started_at
-                status.finished_at = real.finished_at
-                status.message = real.message
-                status.image_digest = real.image_digest
-                status.runtime_version = real.runtime_version
-                self._orch.update_run(status.id, status)
-            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                self._mark_run_failed(status, reason="seatbelt_failed")
+            ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+            return self._execute_single_runtime_scaffold(
+                status=status,
+                spec=spec,
+                workspace_path=ws,
+                start_run_fn=self._start_seatbelt_run_with_execution_preflight,
+                policy_failed_reason="seatbelt_policy_failed",
+                failed_reason="seatbelt_failed",
+                policy_exceptions=(SandboxPolicy.RuntimeUnavailable, SandboxPolicy.PolicyUnsupported),
+            )
         else:
             # Stub artifacts even without execution
             artifacts: dict[str, bytes] = {}

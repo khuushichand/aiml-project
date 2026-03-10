@@ -46,7 +46,7 @@ Trust-level rules:
 Current limitations:
 
 - Real `Virtualization.framework` execution is not implemented yet.
-- `vz_linux` and `vz_macos` require helper and template readiness env wiring to pass preflight.
+- `vz_linux` and `vz_macos` require helper/template readiness plus `*_FAKE_EXEC=1`; otherwise discovery reports `real_execution_not_implemented`.
 - Strict allowlist networking is not implemented for `vz_linux`, `vz_macos`, or `seatbelt`.
 - Warm session VM reuse is not implemented yet.
 - `seatbelt` is intentionally conservative and should not be treated as equivalent to a VM boundary.
@@ -70,8 +70,11 @@ Selected configuration knobs:
 - macOS scaffolding:
   - `TLDW_SANDBOX_MACOS_HELPER_READY`
   - `TLDW_SANDBOX_VZ_LINUX_AVAILABLE`
+  - `TLDW_SANDBOX_VZ_LINUX_FAKE_EXEC`
   - `TLDW_SANDBOX_VZ_LINUX_TEMPLATE_READY`
   - `TLDW_SANDBOX_VZ_MACOS_AVAILABLE`
+  - `TLDW_SANDBOX_VZ_MACOS_FAKE_EXEC`
   - `TLDW_SANDBOX_VZ_MACOS_TEMPLATE_READY`
   - `TLDW_SANDBOX_SEATBELT_AVAILABLE`
+  - `TLDW_SANDBOX_SEATBELT_FAKE_EXEC`
   - `TLDW_SANDBOX_SEATBELT_STANDARD_ENABLED`

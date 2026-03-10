@@ -35,9 +35,14 @@ Required env flags today:
 
 - `TLDW_SANDBOX_MACOS_HELPER_READY=1`
 - `TLDW_SANDBOX_VZ_LINUX_AVAILABLE=1`
+- `TLDW_SANDBOX_VZ_LINUX_FAKE_EXEC=1`
 - `TLDW_SANDBOX_VZ_LINUX_TEMPLATE_READY=1`
 - `TLDW_SANDBOX_VZ_MACOS_AVAILABLE=1`
+- `TLDW_SANDBOX_VZ_MACOS_FAKE_EXEC=1`
 - `TLDW_SANDBOX_VZ_MACOS_TEMPLATE_READY=1`
+
+Without the fake execution flag, the VZ runtimes stay unavailable and expose
+`real_execution_not_implemented` in preflight/discovery.
 
 The helper contract lives under `tldw_Server_API/app/core/Sandbox/macos_virtualization/`.
 
@@ -81,7 +86,7 @@ ACP sandbox session creation now performs runtime preflight validation before ca
 ## Current Limits
 
 - No real `vz_linux` or `vz_macos` guest command execution yet
-- No real seatbelt profile generation or hardened-runtime helper process
+- `seatbelt` fake execution uses `TLDW_SANDBOX_SEATBELT_FAKE_EXEC=1`; real seatbelt execution is still absent
 - No APFS clone execution path yet
 - No allowlist networking for the new macOS runtimes
 - No warm-session VM reuse yet

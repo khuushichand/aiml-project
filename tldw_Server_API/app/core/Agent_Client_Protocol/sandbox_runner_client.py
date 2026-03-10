@@ -30,7 +30,7 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.stream_client import ACPStre
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.Sandbox.models import RunSpec, RuntimeType, SessionSpec, TrustLevel
 from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy
-from tldw_Server_API.app.core.Sandbox.runtime_capabilities import collect_runtime_preflights
+from tldw_Server_API.app.core.Sandbox.runtime_capabilities import RuntimePreflightResult, collect_runtime_preflights
 from tldw_Server_API.app.core.Sandbox.runners.lima_runner import LimaRunner
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
 from tldw_Server_API.app.core.testing import is_truthy
@@ -370,7 +370,11 @@ class ACPSandboxRunnerManager:
         for sess in sessions:
             await self.close_session(sess.session_id)
 
-    def _validate_lima_strict_runtime_requirements(self) -> None:
+    def _validate_lima_strict_runtime_requirements(
+        self,
+        *,
+        preflight: RuntimePreflightResult | None = None,
+    ) -> None:
         runtime = str(self.config.runtime or "").strip().lower()
         if runtime != RuntimeType.lima.value:
             return
@@ -379,7 +383,7 @@ class ACPSandboxRunnerManager:
             raise ACPResponseError(
                 "ACP lima strict policy requires network_policy to be deny_all or allowlist"
             )
-        preflight = LimaRunner().preflight(network_policy=network_policy)
+        preflight = preflight or LimaRunner().preflight(network_policy=network_policy)
         if preflight.available:
             return
         reasons = list(preflight.reasons or [])
@@ -395,9 +399,11 @@ class ACPSandboxRunnerManager:
             raise ACPResponseError(f"Unsupported ACP sandbox runtime: {runtime_raw or 'unknown'}") from exc
 
     def _validate_runtime_requirements(self, runtime: RuntimeType) -> None:
-        self._validate_lima_strict_runtime_requirements()
         network_policy = str(self.config.network_policy or "deny_all").strip().lower() or "deny_all"
-        preflight = collect_runtime_preflights(network_policy=network_policy).get(runtime)
+        runtime_preflights = collect_runtime_preflights(network_policy=network_policy)
+        preflight = runtime_preflights.get(runtime)
+        if runtime == RuntimeType.lima:
+            self._validate_lima_strict_runtime_requirements(preflight=preflight)
         if preflight is None:
             return
         if not preflight.available:
