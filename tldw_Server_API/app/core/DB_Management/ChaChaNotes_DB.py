@@ -434,7 +434,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 30  # Schema v30 adds quizzes.source_bundle_json for mixed-source metadata
+    _CURRENT_SCHEMA_VERSION = 31  # Schema v31 persists persona session activity surfaces for restart-safe provenance
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -2907,6 +2907,19 @@ UPDATE db_schema_version
    AND version < 30;
 """
 
+    _MIGRATION_SQL_V30_TO_V31 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 31 - Persona session activity surfaces (2026-03-10)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE persona_sessions
+  ADD COLUMN IF NOT EXISTS activity_surface TEXT NOT NULL DEFAULT 'api.persona';
+
+UPDATE db_schema_version
+   SET version = 31
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 31;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4410,6 +4423,38 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V29->V30: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V30 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v30_to_v31(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V30 to V31 (persona session activity surfaces)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V30 to V31 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_sessions')").fetchall()}
+            if "activity_surface" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE persona_sessions ADD COLUMN activity_surface TEXT NOT NULL DEFAULT 'api.persona'"
+                )
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 31
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 31;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 31:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V30->V31 failed version check. Expected 31, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V31 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V30->V31 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V30->V31 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V30->V31: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V31 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4638,6 +4683,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 30 and current_db_version == 29:
                         self._migrate_from_v29_to_v30(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 31 and current_db_version == 30:
+                        self._migrate_from_v30_to_v31(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -4941,6 +4989,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v28_to_v29(conn)
                             elif fallback_version == 29:
                                 self._migrate_from_v29_to_v30(conn)
+                            elif fallback_version == 30:
+                                self._migrate_from_v30_to_v31(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5006,6 +5056,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 30 and current_db_version == 29:
                     self._migrate_from_v29_to_v30(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 31 and current_db_version == 30:
+                    self._migrate_from_v30_to_v31(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -5332,6 +5385,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 30:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V29_TO_V30, conn, expected_version=30)
                 current_version = 30
+            if current_version < 31:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V30_TO_V31, conn, expected_version=31)
+                current_version = 31
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -6415,6 +6471,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         item = dict(row)
         item["reuse_allowed"] = self._as_bool(item.get("reuse_allowed"))
         item["deleted"] = self._as_bool(item.get("deleted"))
+        item["activity_surface"] = self._normalize_persona_session_activity_surface(item.get("activity_surface"))
         raw_snapshot = item.get("scope_snapshot_json")
         if isinstance(raw_snapshot, str):
             try:
@@ -6426,6 +6483,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         else:
             item["scope_snapshot"] = {}
         return item
+
+    @staticmethod
+    def _normalize_persona_session_activity_surface(value: Any) -> str:
+        from tldw_Server_API.app.core.Personalization.companion_activity import (
+            normalize_persona_activity_surface,
+        )
+
+        return normalize_persona_activity_surface(value)
 
     def _persona_memory_row_to_dict(self, row: Any) -> dict[str, Any] | None:
         """Convert a persona memory DB `row: Any` to an API-safe dict.
@@ -6899,6 +6964,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         now = self._get_current_utc_timestamp_iso()
         bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        activity_surface = self._normalize_persona_session_activity_surface(session_data.get("activity_surface"))
 
         with self.transaction() as conn:
             persona_row = self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
@@ -6913,8 +6979,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             query = (
                 "INSERT INTO persona_sessions("
                 "id, persona_id, user_id, conversation_id, mode, reuse_allowed, status, "
-                "scope_snapshot_json, created_at, last_modified, deleted, version"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "scope_snapshot_json, activity_surface, created_at, last_modified, deleted, version"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             )
             params = (
                 session_id,
@@ -6925,6 +6991,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 bool_cast(reuse_allowed),
                 status,
                 scope_snapshot_json,
+                activity_surface,
                 session_data.get("created_at") or now,
                 session_data.get("last_modified") or now,
                 bool_cast(deleted_value),
@@ -6992,7 +7059,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Update persona session fields for an owned session."""
         if not update_data:
             raise InputError("No session fields provided for update.")  # noqa: TRY003
-        allowed_fields = {"conversation_id", "mode", "reuse_allowed", "status", "scope_snapshot_json", "deleted"}
+        allowed_fields = {
+            "conversation_id",
+            "mode",
+            "reuse_allowed",
+            "status",
+            "scope_snapshot_json",
+            "activity_surface",
+            "deleted",
+        }
         bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
         set_parts: list[str] = []
         params: list[Any] = []
@@ -7015,6 +7090,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 else:
                     params.append(self._ensure_json_string(value) or "{}")
                 set_parts.append("scope_snapshot_json = ?")
+            elif key == "activity_surface":
+                params.append(self._normalize_persona_session_activity_surface(value))
+                set_parts.append("activity_surface = ?")
             else:
                 params.append(value)
                 set_parts.append("conversation_id = ?")

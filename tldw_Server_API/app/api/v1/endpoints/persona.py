@@ -384,6 +384,7 @@ def _load_persona_policy_rules_for_session(
         "scope_snapshot_id": None,
         "policy_rules": normalize_policy_rules(_DEFAULT_PERSONA_POLICY_RULES),
         "persona_state_context_default": True,
+        "activity_surface": normalize_persona_activity_surface(None),
         "session_exists": False,
     }
     sid = str(session_id or "").strip()
@@ -413,6 +414,7 @@ def _load_persona_policy_rules_for_session(
             "scope_snapshot_id": scope_snapshot_id,
             "policy_rules": normalize_policy_rules(policy_rules),
             "persona_state_context_default": persona_state_context_default,
+            "activity_surface": normalize_persona_activity_surface(session_row.get("activity_surface")),
             "session_exists": True,
         }
     except (OSError, RuntimeError, ValueError, CharactersRAGDBError) as exc:
@@ -422,6 +424,32 @@ def _load_persona_policy_rules_for_session(
             exc,
         )
         return dict(default_payload)
+
+
+def _get_session_preferences_with_activity_surface(
+    *,
+    session_manager: Any,
+    session_id: str,
+    user_id: str,
+    persisted_activity_surface: Any = None,
+) -> tuple[dict[str, Any], str]:
+    preferences = session_manager.get_preferences(
+        session_id=session_id,
+        user_id=user_id,
+    )
+    if "companion_activity_surface" in preferences:
+        return preferences, normalize_persona_activity_surface(preferences.get("companion_activity_surface"))
+
+    activity_surface = normalize_persona_activity_surface(persisted_activity_surface)
+    updated_preferences = dict(preferences)
+    updated_preferences["companion_activity_surface"] = activity_surface
+    with contextlib.suppress(Exception):
+        updated_preferences = session_manager.update_preferences(
+            session_id=session_id,
+            user_id=user_id,
+            preferences={"companion_activity_surface": activity_surface},
+        )
+    return dict(updated_preferences), activity_surface
 
 
 def _skill_policy_rules_for_step(
@@ -2040,6 +2068,7 @@ async def persona_session(
                 "conversation_id": req.project_id,
                 "mode": str(profile.get("mode") or "session_scoped"),
                 "scope_snapshot_json": scope_snapshot,
+                "activity_surface": requested_activity_surface,
             }
             if req.resume_session_id:
                 create_data["id"] = str(req.resume_session_id)
@@ -2049,6 +2078,21 @@ async def persona_session(
                 raise HTTPException(status_code=500, detail="Failed to load created persona session")
         else:
             scope_audit = _scope_audit_from_snapshot(session_row.get("scope_snapshot") or {})
+            if req.surface is not None:
+                current_surface = normalize_persona_activity_surface(session_row.get("activity_surface"))
+                if current_surface != requested_activity_surface:
+                    _ = db.update_persona_session(
+                        session_id=str(session_row.get("id") or req.resume_session_id or ""),
+                        user_id=user_id,
+                        update_data={"activity_surface": requested_activity_surface},
+                    )
+                    refreshed_row = db.get_persona_session(
+                        str(session_row.get("id") or req.resume_session_id or ""),
+                        user_id=user_id,
+                        include_deleted=False,
+                    )
+                    if refreshed_row is not None:
+                        session_row = refreshed_row
 
         session_id = str(session_row.get("id") or req.resume_session_id or "").strip()
         if not session_id:
@@ -2069,11 +2113,11 @@ async def persona_session(
                 )
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
-        activity_surface = normalize_persona_activity_surface(
-            session_manager.get_preferences(
-                session_id=session_id,
-                user_id=user_id,
-            ).get("companion_activity_surface")
+        _session_preferences, activity_surface = _get_session_preferences_with_activity_surface(
+            session_manager=session_manager,
+            session_id=session_id,
+            user_id=user_id,
+            persisted_activity_surface=session_row.get("activity_surface"),
         )
 
         allow_export, allow_delete = _get_persona_rbac_flags()
@@ -2870,12 +2914,11 @@ async def persona_stream(
                     persona_id=runtime_persona_id,
                     resume_session_id=session_id,
                 )
-                existing_preferences = session_manager.get_preferences(
+                existing_preferences, activity_surface = _get_session_preferences_with_activity_surface(
+                    session_manager=session_manager,
                     session_id=session_id,
                     user_id=connection_user_id,
-                )
-                activity_surface = normalize_persona_activity_surface(
-                    existing_preferences.get("companion_activity_surface")
+                    persisted_activity_surface=runtime_context.get("activity_surface"),
                 )
                 configured_top_k = _get_persona_memory_top_k()
                 default_use_memory = _coerce_bool(
@@ -3387,12 +3430,11 @@ async def persona_stream(
                 )
                 runtime_scope_snapshot_id = str(runtime_context.get("scope_snapshot_id") or "").strip() or None
                 persona_policy_rules = normalize_policy_rules(runtime_context.get("policy_rules"))
-                current_preferences = session_manager.get_preferences(
+                current_preferences, activity_surface = _get_session_preferences_with_activity_surface(
+                    session_manager=session_manager,
                     session_id=session_id,
                     user_id=connection_user_id,
-                )
-                activity_surface = normalize_persona_activity_surface(
-                    current_preferences.get("companion_activity_surface")
+                    persisted_activity_surface=runtime_context.get("activity_surface"),
                 )
                 if "session_policy_rules" in msg:
                     session_policy_rules = normalize_policy_rules(msg.get("session_policy_rules"))

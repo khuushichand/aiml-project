@@ -100,3 +100,20 @@ def test_postgres_statement_conversion_includes_moodboard_tables_migration(
     assert "idx_moodboard_notes_board" in full
     assert "idx_moodboard_notes_note" in full
     assert re.search(r"SET\s+version\s*=\s*29", full, flags=re.IGNORECASE)
+
+
+def test_postgres_statement_conversion_includes_persona_session_surface_migration(
+    char_rag_db: CharactersRAGDB,
+) -> None:
+    """Verify v31 conversion output includes persona session activity surface persistence."""
+
+    sql = char_rag_db._MIGRATION_SQL_V30_TO_V31
+    assert isinstance(sql, str) and "persona_sessions" in sql
+
+    stmts = char_rag_db._convert_sqlite_schema_to_postgres_statements(sql)
+    assert isinstance(stmts, list) and len(stmts) > 0
+
+    full = "\n".join(stmts)
+    assert "ALTER TABLE persona_sessions" in full
+    assert "activity_surface TEXT NOT NULL DEFAULT 'api.persona'" in full
+    assert re.search(r"SET\s+version\s*=\s*31", full, flags=re.IGNORECASE)

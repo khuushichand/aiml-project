@@ -47,7 +47,10 @@ def persona_client_with_companion_opt_in(monkeypatch, tmp_path):
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.setenv("TEST_MODE", "1")
 
-    persona_db = CharactersRAGDB(str(tmp_path / "persona_sessions.db"), client_id="companion-persona-tests")
+    persona_db = CharactersRAGDB(
+        str(DatabasePaths.get_chacha_db_path(user_id)),
+        client_id="companion-persona-tests",
+    )
     personalization_db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
     personalization_db.update_profile(str(user_id), enabled=1)
     session_manager = SessionManager()
@@ -261,6 +264,114 @@ def test_companion_session_surface_propagates_to_persona_stream_activity(
 
     started_event = next(event for event in events if event["event_type"] == "persona_session_started")
     assert started_event["surface"] == "companion.conversation"
+
+    tool_event = next(event for event in events if event["event_type"] == "persona_tool_executed")
+    assert tool_event["surface"] == "companion.conversation"
+    assert tool_event["source_id"] == f"{session_id}:{plan['plan_id']}:{tool_result['step_idx']}"
+
+    summary_event = next(
+        event for event in events if event["event_type"] == "persona_session_summarized"
+    )
+    assert summary_event["surface"] == "companion.conversation"
+    assert summary_event["metadata"]["summary_preview"] == assistant_delta["text_delta"]
+
+
+def test_persona_session_resume_persists_companion_surface_override(
+    persona_client_with_companion_opt_in,
+):
+    client, _personalization_db = persona_client_with_companion_opt_in
+
+    created = client.post("/api/v1/persona/session", json={"persona_id": "research_assistant"})
+    assert created.status_code == 200, created.text
+    session_id = created.json()["session_id"]
+
+    resumed = client.post(
+        "/api/v1/persona/session",
+        json={
+            "persona_id": "research_assistant",
+            "resume_session_id": session_id,
+            "surface": "companion.conversation",
+        },
+    )
+    assert resumed.status_code == 200, resumed.text
+
+    persona_db = fastapi_app.dependency_overrides[get_chacha_db_for_user]()
+    session_row = persona_db.get_persona_session(session_id, user_id="1", include_deleted=False)
+    assert session_row is not None
+    assert session_row["activity_surface"] == "companion.conversation"
+
+
+def test_companion_session_surface_survives_restart_when_persona_stream_resumes(
+    monkeypatch,
+    persona_client_with_companion_opt_in,
+):
+    client, personalization_db = persona_client_with_companion_opt_in
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            return SimpleNamespace(
+                error=None,
+                result={
+                    "ok": True,
+                    "saved": True,
+                    "url": "https://example.com/restart-proof",
+                },
+            )
+
+    async def _fake_resolve(*args, **kwargs):
+        return "1", True, True
+
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: _FakeServer())
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+
+    created = client.post(
+        "/api/v1/persona/session",
+        json={
+            "persona_id": "research_assistant",
+            "surface": "companion.conversation",
+        },
+    )
+    assert created.status_code == 200, created.text
+    session_id = created.json()["session_id"]
+
+    restarted_session_manager = SessionManager()
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: restarted_session_manager)
+
+    with client.websocket_connect("/api/v1/persona/stream") as ws:
+        _ = json.loads(ws.receive_text())
+        ws.send_text(
+            json.dumps(
+                {
+                    "type": "user_message",
+                    "session_id": session_id,
+                    "text": "https://example.com/restart-proof",
+                }
+            )
+        )
+        plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+        approved_steps = [int(step["idx"]) for step in plan.get("steps", [])]
+        ws.send_text(
+            json.dumps(
+                {
+                    "type": "confirm_plan",
+                    "session_id": session_id,
+                    "plan_id": plan["plan_id"],
+                    "approved_steps": approved_steps,
+                }
+            )
+        )
+        _ = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+        tool_result = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+        assistant_delta = _recv_until(ws, lambda d: d.get("event") == "assistant_delta")
+
+    events, total = personalization_db.list_companion_activity_events("1", limit=10)
+    assert total == 3
 
     tool_event = next(event for event in events if event["event_type"] == "persona_tool_executed")
     assert tool_event["surface"] == "companion.conversation"

@@ -70,6 +70,8 @@ def test_migration_v25_to_latest_creates_persona_tables(db_path: Path):
     memory_columns = {row["name"] for row in conn.execute("PRAGMA table_info('persona_memory_entries')").fetchall()}
     assert "scope_snapshot_id" in memory_columns
     assert "session_id" in memory_columns
+    session_columns = {row["name"] for row in conn.execute("PRAGMA table_info('persona_sessions')").fetchall()}
+    assert "activity_surface" in session_columns
     memory_indexes = {row["name"] for row in conn.execute("PRAGMA index_list('persona_memory_entries')").fetchall()}
     assert "idx_persona_memory_scope" in memory_indexes
     assert "idx_persona_memory_session" in memory_indexes
@@ -160,17 +162,19 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
     assert session["persona_id"] == persona_id
     assert session["reuse_allowed"] is True
     assert session["scope_snapshot"]["conversations"] == ["conv-a"]
+    assert session["activity_surface"] == "api.persona"
     session_version = int(session["version"])
 
     assert db_instance.update_persona_session(
         session_id=session_id,
         user_id="user-1",
-        update_data={"status": "paused"},
+        update_data={"status": "paused", "activity_surface": "companion.conversation"},
         expected_version=session_version,
     )
     paused_session = db_instance.get_persona_session(session_id, user_id="user-1")
     assert paused_session is not None
     assert paused_session["status"] == "paused"
+    assert paused_session["activity_surface"] == "companion.conversation"
 
     memory_id = db_instance.add_persona_memory_entry(
         {
