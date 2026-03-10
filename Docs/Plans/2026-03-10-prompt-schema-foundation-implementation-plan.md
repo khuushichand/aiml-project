@@ -10,6 +10,8 @@
 
 **Implementation scope note:** v1 supports ordered blocks plus variables only. Do not introduce conditionals, loops, Jinja execution, or a general prompt DSL while executing this plan.
 
+**Migration discipline note:** Do not edit historical Prompt Studio migrations once this work starts. Add new additive migrations for schema changes and let fresh databases reach the new shape by applying the full ordered migration chain.
+
 ---
 
 ### Task 1: Create the Shared Structured Prompt Domain Models and Validator
@@ -125,6 +127,30 @@ def test_assembler_returns_canonical_messages_and_legacy_snapshot():
     assert result.legacy.user_prompt == "Summarize SQLite FTS"
 ```
 
+```python
+def test_assembler_inserts_few_shot_examples_and_modules_at_fixed_points():
+    definition = make_definition(...)
+
+    result = assemble_prompt_definition(
+        definition,
+        {"topic": "SQLite FTS"},
+        extras={
+            "few_shot_examples": [
+                {
+                    "inputs": {"topic": "Indexes"},
+                    "outputs": {"answer": "Use the covering index."},
+                }
+            ],
+            "modules_config": [
+                {"type": "style_rules", "enabled": True, "config": {"tone": "concise"}}
+            ],
+        },
+    )
+
+    assert any(message["role"] == "assistant" for message in result.messages)
+    assert "concise" in result.legacy.system_prompt
+```
+
 **Step 2: Run test to verify it fails**
 
 Run:
@@ -158,7 +184,7 @@ source .venv/bin/activate
 python -m pytest tldw_Server_API/tests/Prompt_Management/test_structured_prompt_assembler.py -v
 ```
 
-Expected: PASS, including missing-variable and compatibility-rendering tests.
+Expected: PASS, including missing-variable, compatibility-rendering, and extras insertion tests.
 
 **Step 5: Commit**
 
@@ -250,7 +276,6 @@ git commit -m "feat: add structured prompt support to prompts api"
 ### Task 4: Extend Prompt Studio Versioned Prompts for Structured Definitions
 
 **Files:**
-- Modify: `tldw_Server_API/app/core/DB_Management/migrations/001_prompt_studio_schema.sql`
 - Create: `tldw_Server_API/app/core/DB_Management/migrations/005_prompt_studio_structured_prompts.sql`
 - Modify: `tldw_Server_API/app/core/DB_Management/PromptStudioDatabase.py`
 - Modify: `tldw_Server_API/app/api/v1/schemas/prompt_studio_project.py`
@@ -310,6 +335,8 @@ Add migration-backed support in Prompt Studio for:
 - storing the full structured definition snapshot per version
 - returning derived compatibility fields in responses
 
+Use the new `005_prompt_studio_structured_prompts.sql` migration for additive schema changes. Do not back-edit `001_prompt_studio_schema.sql`, because fresh databases should converge by applying the ordered migration chain rather than by maintaining two incompatible sources of schema truth.
+
 Do not break legacy Prompt Studio prompts or current history/revert behavior.
 
 **Step 4: Run test to verify it passes**
@@ -326,8 +353,7 @@ Expected: PASS for create, update, history, revert, and list coverage.
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/core/DB_Management/migrations/001_prompt_studio_schema.sql \
-        tldw_Server_API/app/core/DB_Management/migrations/005_prompt_studio_structured_prompts.sql \
+git add tldw_Server_API/app/core/DB_Management/migrations/005_prompt_studio_structured_prompts.sql \
         tldw_Server_API/app/core/DB_Management/PromptStudioDatabase.py \
         tldw_Server_API/app/api/v1/schemas/prompt_studio_project.py \
         tldw_Server_API/app/api/v1/endpoints/prompt_studio/prompt_studio_prompts.py \
@@ -364,6 +390,29 @@ def test_preview_endpoint_matches_assembled_messages(client, auth_headers):
     assert body["legacy"]["user_prompt"] == "Summarize Prompt engineering"
 ```
 
+```python
+def test_preview_endpoint_reflects_few_shot_examples_and_modules(client, auth_headers):
+    response = client.post(
+        "/api/v1/prompts/preview",
+        json={
+            "prompt_definition": make_prompt_definition_payload(),
+            "variables": {"topic": "Prompt engineering"},
+            "few_shot_examples": [
+                {"inputs": {"topic": "Caching"}, "outputs": {"answer": "Use prompt caching."}}
+            ],
+            "modules_config": [
+                {"type": "style_rules", "enabled": True, "config": {"tone": "concise"}}
+            ],
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "concise" in body["legacy"]["system_prompt"]
+    assert any(message["role"] == "assistant" for message in body["messages"])
+```
+
 **Step 2: Run test to verify it fails**
 
 Run:
@@ -391,6 +440,8 @@ async def convert_prompt_to_structured(...):
 ```
 
 Add preview and conversion endpoints for both APIs. Preview must always call the shared assembler. Conversion must wrap legacy `system_prompt` and `user_prompt` into default blocks and infer variables from existing placeholders where possible.
+
+Preview endpoints must also accept and render existing Prompt Studio `few_shot_examples` and `modules_config` payloads through the same assembler extras path used by runtime execution.
 
 **Step 4: Run test to verify it passes**
 
@@ -453,14 +504,20 @@ Expected: FAIL because `PromptExecutor` still performs direct string substitutio
 
 ```python
 if prompt.get("prompt_format") == "structured":
-    assembled = assemble_prompt_definition(...)
+    assembled = assemble_prompt_definition(
+        ...,
+        extras={
+            "few_shot_examples": prompt.get("few_shot_examples"),
+            "modules_config": prompt.get("modules_config"),
+        },
+    )
     messages = assembled.messages
     legacy = assembled.legacy
 else:
     ...
 ```
 
-Use canonical assembled messages for execution metadata and provider calls. Keep compatibility rendering only as an adapter for providers that still rely on `system_message + user prompt`.
+Use canonical assembled messages for execution metadata and provider calls. Pass existing `few_shot_examples` and `modules_config` through assembler extras so preview and execution stay aligned for Prompt Studio prompts that already depend on those fields. Keep compatibility rendering only as an adapter for providers that still rely on `system_message + user prompt`.
 
 **Step 4: Run test to verify it passes**
 
@@ -707,6 +764,7 @@ git commit -m "feat: add structured prompt conversion to prompts workspace"
 - Modify: `Docs/Published/API-related/Prompt_Studio_API.md`
 - Modify: `Docs/Plans/2026-03-10-prompt-schema-foundation-design.md`
 - Create: `tldw_Server_API/tests/Prompt_Management_NEW/integration/test_structured_prompt_search.py`
+- Create: `tldw_Server_API/tests/prompt_studio/test_structured_prompt_preview_parity.py`
 
 **Step 1: Write the failing test**
 
@@ -740,6 +798,14 @@ def build_structured_prompt_searchable_text(definition: dict[str, Any]) -> str:
 
 Update search/index refresh logic to derive searchable text from enabled blocks and persisted compatibility fields. Then run Bandit on touched backend paths before closing the work.
 
+Final verification must include:
+
+- regular Prompts structured API coverage
+- Prompt Studio structured versioning and execution coverage
+- Prompt Studio preview/execution parity for few-shot examples and modules
+- Dexie sync tests for structured prompts
+- UI editor coverage for Prompt Studio and the regular Prompts workspace
+
 **Step 4: Run verification to verify it passes**
 
 Run:
@@ -747,14 +813,23 @@ Run:
 ```bash
 source .venv/bin/activate
 python -m pytest tldw_Server_API/tests/Prompt_Management_NEW/integration/test_structured_prompt_search.py -v
+python -m pytest tldw_Server_API/tests/Prompt_Management_NEW/integration/test_prompts_structured_api.py -v
 python -m pytest tldw_Server_API/tests/Prompt_Management/test_structured_prompt_validator.py -v
 python -m pytest tldw_Server_API/tests/Prompt_Management/test_structured_prompt_assembler.py -v
+python -m pytest tldw_Server_API/tests/prompt_studio/test_structured_prompt_versions.py -v
+python -m pytest tldw_Server_API/tests/prompt_studio/test_structured_prompt_execution.py -v
+python -m pytest tldw_Server_API/tests/prompt_studio/test_prompt_preview_api.py -v
+python -m pytest tldw_Server_API/tests/prompt_studio/test_structured_prompt_preview_parity.py -v
 python -m bandit -r tldw_Server_API/app/core/Prompt_Management/structured_prompts tldw_Server_API/app/api/v1/endpoints/prompts.py tldw_Server_API/app/core/Prompt_Management/prompt_studio/prompt_executor.py -f json -o /tmp/bandit_prompt_schema_foundation.json
+bunx vitest run apps/packages/ui/src/services/__tests__/prompt-sync.structured-prompts.test.ts
+bunx vitest run apps/packages/ui/src/components/Option/Prompt/__tests__/StructuredPromptEditor.test.tsx
+bunx vitest run apps/packages/ui/src/components/Option/Prompt/__tests__/PromptDrawer.structured-prompts.test.tsx
 ```
 
 Expected:
 
 - pytest PASS on the structured prompt suites
+- vitest PASS on the structured prompt UI and sync suites
 - Bandit completes without new high-signal findings in touched code
 
 **Step 5: Commit**
@@ -764,6 +839,7 @@ git add tldw_Server_API/app/core/DB_Management/Prompts_DB.py \
         tldw_Server_API/app/core/DB_Management/PromptStudioDatabase.py \
         Docs/Published/API-related/Prompt_Studio_API.md \
         Docs/Plans/2026-03-10-prompt-schema-foundation-design.md \
-        tldw_Server_API/tests/Prompt_Management_NEW/integration/test_structured_prompt_search.py
+        tldw_Server_API/tests/Prompt_Management_NEW/integration/test_structured_prompt_search.py \
+        tldw_Server_API/tests/prompt_studio/test_structured_prompt_preview_parity.py
 git commit -m "feat: finalize structured prompt search and verification"
 ```
