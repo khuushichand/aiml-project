@@ -460,6 +460,7 @@ def _build_tool_result(
     error: str | None = None,
     reason_code: str | None = None,
     policy: dict[str, Any] | None = None,
+    approval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "ok": bool(ok),
@@ -473,6 +474,8 @@ def _build_tool_result(
         payload["reason_code"] = str(reason_code)
     if isinstance(policy, dict):
         payload["policy"] = dict(policy)
+    if isinstance(approval, dict):
+        payload["approval"] = dict(approval)
     return payload
 
 
@@ -2450,6 +2453,73 @@ async def persona_stream(
                     scope_snapshot_id=effective_scope_snapshot_id,
                 )
 
+        def _pending_retry_key(*, plan_id: str, step_idx: int, tool_name: str) -> str:
+            return f"{str(plan_id or '').strip()}|{int(step_idx)}|{str(tool_name or '').strip()}"
+
+        def _load_pending_retry_approvals(session_id: str) -> dict[str, dict[str, Any]]:
+            preferences = session_manager.get_preferences(
+                session_id=session_id,
+                user_id=connection_user_id,
+            )
+            raw = preferences.get("pending_retry_approvals")
+            if not isinstance(raw, dict):
+                return {}
+            out: dict[str, dict[str, Any]] = {}
+            for key, value in raw.items():
+                if not isinstance(key, str) or not isinstance(value, dict):
+                    continue
+                out[key] = dict(value)
+            return out
+
+        def _store_pending_retry_approval(
+            *,
+            session_id: str,
+            plan_id: str,
+            step_idx: int,
+            step_type: str,
+            tool_name: str,
+            args: dict[str, Any],
+            why: str | None,
+            description: str | None,
+        ) -> None:
+            retries = _load_pending_retry_approvals(session_id)
+            key = _pending_retry_key(plan_id=plan_id, step_idx=step_idx, tool_name=tool_name)
+            retries[key] = {
+                "plan_id": str(plan_id or ""),
+                "step_idx": int(step_idx),
+                "step_type": _bounded_label(
+                    step_type,
+                    allowed=_PERSONA_WS_ALLOWED_STEP_TYPES,
+                    fallback="mcp_tool",
+                ),
+                "tool": str(tool_name or ""),
+                "args": dict(args or {}),
+                "why": str(why or ""),
+                "description": str(description or ""),
+            }
+            session_manager.update_preferences(
+                session_id=session_id,
+                user_id=connection_user_id,
+                preferences={"pending_retry_approvals": retries},
+            )
+
+        def _consume_pending_retry_approval(
+            *,
+            session_id: str,
+            plan_id: str,
+            step_idx: int,
+            tool_name: str,
+        ) -> dict[str, Any] | None:
+            retries = _load_pending_retry_approvals(session_id)
+            key = _pending_retry_key(plan_id=plan_id, step_idx=step_idx, tool_name=tool_name)
+            entry = retries.pop(key, None)
+            session_manager.update_preferences(
+                session_id=session_id,
+                user_id=connection_user_id,
+                preferences={"pending_retry_approvals": retries},
+            )
+            return dict(entry) if isinstance(entry, dict) else None
+
         async def _call_mcp_tool(
             name: str,
             arguments: dict,
@@ -2542,6 +2612,12 @@ async def persona_stream(
                 )
             resp = await server.handle_http_request(req, user_id=authenticated_user_id, metadata=audit_metadata)
             if resp.error:
+                error_data = getattr(resp.error, "data", None)
+                approval_payload = (
+                    dict(error_data.get("approval") or {})
+                    if isinstance(error_data, dict) and isinstance(error_data.get("approval"), dict)
+                    else None
+                )
                 _increment_persona_metric(
                     "persona_ws_tool_calls_total",
                     {"kind": "mcp", "status": "error"},
@@ -2550,8 +2626,9 @@ async def persona_stream(
                     ok=False,
                     output=None,
                     error=resp.error.message,
-                    reason_code="TOOL_EXECUTION_ERROR",
+                    reason_code="APPROVAL_REQUIRED" if approval_payload else "TOOL_EXECUTION_ERROR",
                     policy=policy,
+                    approval=approval_payload,
                 )
             _increment_persona_metric(
                 "persona_ws_tool_calls_total",
@@ -3418,6 +3495,17 @@ async def persona_stream(
                             if isinstance(step_policy.get("effective_allowed_tools"), list)
                             else None,
                         )
+                    if isinstance(result.get("approval"), dict):
+                        _store_pending_retry_approval(
+                            session_id=session_id,
+                            plan_id=plan_id,
+                            step_idx=step.idx,
+                            step_type=step_type,
+                            tool_name=step.tool,
+                            args=step.args or {},
+                            why=step.why,
+                            description=step.description,
+                        )
                     await _emit_tool_result(
                         session_id=session_id,
                         plan_id=plan_id,
@@ -3457,6 +3545,219 @@ async def persona_stream(
                         message="No approved steps matched plan",
                         reason_code="APPROVED_STEPS_NO_MATCH",
                     )
+            elif mtype == "retry_tool_call":
+                if not await _is_stream_auth_valid():
+                    await _close_for_auth_revocation()
+                    break
+                session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
+                plan_id = _normalize_ws_identifier(msg.get("plan_id"), fallback="")
+                tool_name = str(msg.get("tool") or "").strip()
+                if not tool_name:
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="error",
+                        message="tool is required",
+                        reason_code="TOOL_REQUIRED",
+                    )
+                    continue
+                try:
+                    step_idx = int(msg.get("step_idx"))
+                except (TypeError, ValueError):
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="error",
+                        message="step_idx must be an integer",
+                        reason_code="STEP_IDX_INVALID",
+                    )
+                    continue
+                step_args = msg.get("args")
+                if not isinstance(step_args, dict):
+                    step_args = {}
+                step_type = _normalize_persona_step_type(
+                    str(msg.get("step_type") or "mcp_tool"),
+                    tool_name=tool_name,
+                )
+                why = str(msg.get("why") or "").strip() or None
+                description = str(msg.get("description") or "").strip() or None
+                pending_retry = _consume_pending_retry_approval(
+                    session_id=session_id,
+                    plan_id=plan_id,
+                    step_idx=step_idx,
+                    tool_name=tool_name,
+                )
+                if pending_retry is None:
+                    await _emit_notice(
+                        session_id=session_id,
+                        step_idx=step_idx,
+                        tool=tool_name,
+                        step_type=step_type,
+                        level="warning",
+                        message="No pending approval retry found for this tool step",
+                        reason_code="APPROVAL_RETRY_NOT_FOUND",
+                    )
+                    continue
+
+                runtime_context = _load_persona_policy_rules_for_session(
+                    persona_scope_db,
+                    session_id=session_id,
+                    user_id=authenticated_user_id,
+                )
+                runtime_persona_id = str(runtime_context.get("persona_id") or _DEFAULT_PERSONA_ID).strip() or _DEFAULT_PERSONA_ID
+                runtime_mode = _bounded_label(
+                    runtime_context.get("runtime_mode"),
+                    allowed=_PERSONA_RUNTIME_MODES,
+                    fallback="session_scoped",
+                )
+                runtime_scope_snapshot_id = str(runtime_context.get("scope_snapshot_id") or "").strip() or None
+                persona_policy_rules = normalize_policy_rules(runtime_context.get("policy_rules"))
+                current_preferences = session_manager.get_preferences(
+                    session_id=session_id,
+                    user_id=connection_user_id,
+                )
+                session_policy_rules = _session_policy_rules_from_preferences(current_preferences)
+                step_policy = _evaluate_step_policy(
+                    step_type=step_type,
+                    tool_name=tool_name,
+                    args=step_args,
+                    persona_policy_rules=persona_policy_rules,
+                    session_policy_rules=session_policy_rules,
+                    session_scopes=session_scopes,
+                    allow_export=allow_export,
+                    allow_delete=allow_delete,
+                )
+                if not bool(step_policy.get("allow", False)):
+                    deny_reason = str(step_policy.get("reason") or f"Tool '{tool_name}' not permitted by policy")
+                    reason_code = str(step_policy.get("reason_code") or "POLICY_DENIED")
+                    _increment_persona_metric(
+                        "persona_ws_policy_denials_total",
+                        {
+                            "step_type": _bounded_label(step_type, allowed=_PERSONA_WS_ALLOWED_STEP_TYPES, fallback="mcp_tool"),
+                            "reason": _metric_reason_bucket(reason_code),
+                        },
+                    )
+                    await _emit_notice(
+                        session_id=session_id,
+                        step_idx=step_idx,
+                        tool=tool_name,
+                        step_type=step_type,
+                        level="warning",
+                        reason_code=reason_code,
+                        message=deny_reason,
+                    )
+                    result = _build_tool_result(
+                        ok=False,
+                        output=None,
+                        error=deny_reason,
+                        reason_code=reason_code,
+                        policy=step_policy,
+                    )
+                    await _emit_tool_result(
+                        session_id=session_id,
+                        plan_id=plan_id,
+                        step_idx=step_idx,
+                        step_type=step_type,
+                        tool=tool_name,
+                        result=result,
+                    )
+                    await _record_turn(
+                        session_id=session_id,
+                        role="tool",
+                        content=_summarize_tool_result_for_retention(result),
+                        turn_type="tool_result",
+                        metadata={"tool": tool_name, "step_idx": step_idx, "step_type": step_type},
+                        persist_as_memory=False,
+                        persist_personalization=False,
+                        persona_id_override=runtime_persona_id,
+                        runtime_mode_override=runtime_mode,
+                        scope_snapshot_id_override=runtime_scope_snapshot_id,
+                    )
+                    _ = await asyncio.to_thread(
+                        persist_tool_outcome,
+                        user_id=authenticated_user_id,
+                        session_id=session_id,
+                        persona_id=runtime_persona_id,
+                        tool_name=tool_name,
+                        step_idx=step_idx,
+                        outcome=result,
+                        store_as_memory=False,
+                        runtime_mode=runtime_mode,
+                        scope_snapshot_id=runtime_scope_snapshot_id,
+                    )
+                    continue
+
+                await _emit_tool_call(
+                    session_id=session_id,
+                    plan_id=plan_id,
+                    step_idx=step_idx,
+                    step_type=step_type,
+                    tool=tool_name,
+                    args=step_args,
+                    why=why,
+                    policy=step_policy,
+                )
+                if step_type == "skill":
+                    result = await _call_skill(
+                        tool_name,
+                        str(step_args.get("args") or ""),
+                        policy=step_policy,
+                    )
+                else:
+                    result = await _call_mcp_tool(
+                        tool_name,
+                        step_args,
+                        session_id=session_id,
+                        plan_id=plan_id,
+                        step_idx=step_idx,
+                        policy=step_policy,
+                        why=why,
+                        description=description,
+                        allowed_tools=step_policy.get("effective_allowed_tools")
+                        if isinstance(step_policy.get("effective_allowed_tools"), list)
+                        else None,
+                    )
+                if isinstance(result.get("approval"), dict):
+                    _store_pending_retry_approval(
+                        session_id=session_id,
+                        plan_id=plan_id,
+                        step_idx=step_idx,
+                        step_type=step_type,
+                        tool_name=tool_name,
+                        args=step_args,
+                        why=why,
+                        description=description,
+                    )
+                await _emit_tool_result(
+                    session_id=session_id,
+                    plan_id=plan_id,
+                    step_idx=step_idx,
+                    step_type=step_type,
+                    tool=tool_name,
+                    result=result,
+                )
+                await _record_turn(
+                    session_id=session_id,
+                    role="tool",
+                    content=_summarize_tool_result_for_retention(result),
+                    turn_type="tool_result",
+                    metadata={"tool": tool_name, "step_idx": step_idx, "step_type": step_type},
+                    persist_as_memory=False,
+                    persist_personalization=False,
+                    persona_id_override=runtime_persona_id,
+                    runtime_mode_override=runtime_mode,
+                    scope_snapshot_id_override=runtime_scope_snapshot_id,
+                )
+                _ = await asyncio.to_thread(
+                    persist_tool_outcome,
+                    user_id=authenticated_user_id,
+                    session_id=session_id,
+                    persona_id=runtime_persona_id,
+                    tool_name=tool_name,
+                    step_idx=step_idx,
+                    outcome=result,
+                    store_as_memory=False,
+                    runtime_mode=runtime_mode,
+                    scope_snapshot_id=runtime_scope_snapshot_id,
+                )
             elif mtype == "cancel":
                 session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
                 reason = str(msg.get("reason") or "user_cancelled")

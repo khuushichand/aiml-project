@@ -55,6 +55,40 @@ type PersonaMemoryUsage = {
   applied_count?: number
 }
 
+type PersonaRuntimeApprovalPayload = {
+  approval_policy_id?: number | null
+  mode?: string | null
+  tool_name?: string | null
+  context_key?: string | null
+  conversation_id?: string | null
+  scope_key?: string | null
+  reason?: string | null
+  duration_options?: string[]
+  arguments_summary?: Record<string, unknown>
+}
+
+type PersonaRuntimeApprovalRequest = {
+  key: string
+  approval_policy_id?: number | null
+  mode?: string | null
+  tool_name: string
+  context_key: string
+  conversation_id?: string | null
+  scope_key: string
+  reason?: string | null
+  duration_options: string[]
+  arguments_summary: Record<string, unknown>
+  selected_duration: string
+  session_id?: string | null
+  plan_id?: string | null
+  step_idx?: number
+  step_type?: string | null
+  tool?: string | null
+  args?: Record<string, unknown>
+  why?: string | null
+  description?: string | null
+}
+
 type PersonaSessionSummary = {
   session_id: string
   persona_id?: string
@@ -113,6 +147,26 @@ const _historyEntrySortEpoch = (entry: PersonaStateHistoryEntry): number => {
 const PERSONA_STATE_EDITOR_EXPANDED_PREF_KEY =
   "sidepanel:persona:state-editor-expanded"
 const PERSONA_STATE_HISTORY_ORDER_PREF_KEY = "sidepanel:persona:state-history-order"
+
+const _approvalRequestKey = (
+  approval: PersonaRuntimeApprovalPayload,
+  payload: Record<string, unknown>
+): string =>
+  [
+    String(approval.conversation_id || payload.session_id || "").trim(),
+    String(approval.scope_key || "").trim(),
+    String(approval.tool_name || payload.tool || "").trim(),
+    String(payload.plan_id || "").trim(),
+    String(payload.step_idx ?? "").trim()
+  ].join("|")
+
+const _approvalDurationExpiry = (duration: string): string | null => {
+  const normalized = String(duration || "").trim().toLowerCase()
+  if (normalized === "once") {
+    return new Date(Date.now() + 60_000).toISOString()
+  }
+  return null
+}
 
 const _readBoolPreference = (key: string, fallback: boolean): boolean => {
   if (typeof window === "undefined") return fallback
@@ -205,9 +259,15 @@ const SidepanelPersona = () => {
   const [input, setInput] = React.useState("")
   const [logs, setLogs] = React.useState<PersonaLogEntry[]>([])
   const [pendingPlan, setPendingPlan] = React.useState<PendingPlan | null>(null)
+  const [pendingApprovals, setPendingApprovals] = React.useState<
+    PersonaRuntimeApprovalRequest[]
+  >([])
   const [approvedStepMap, setApprovedStepMap] = React.useState<
     Record<number, boolean>
   >({})
+  const [submittingApprovalKey, setSubmittingApprovalKey] = React.useState<string | null>(
+    null
+  )
   const [activeSessionPersonaId, setActiveSessionPersonaId] = React.useState<string | null>(
     null
   )
@@ -318,6 +378,7 @@ const SidepanelPersona = () => {
     setActiveSessionPersonaId(null)
     setPersonaStateHistory([])
     setPersonaStateHistoryLoaded(false)
+    setPendingApprovals([])
     return true
   }, [confirmDiscardUnsavedStateDrafts])
 
@@ -382,6 +443,64 @@ const SidepanelPersona = () => {
       }
 
       if (eventType === "tool_result") {
+        const approvalPayload =
+          payload?.approval && typeof payload.approval === "object"
+            ? (payload.approval as PersonaRuntimeApprovalPayload)
+            : null
+        if (approvalPayload) {
+          const durationOptions = Array.isArray(approvalPayload.duration_options)
+            ? approvalPayload.duration_options
+                .map((entry) => String(entry || "").trim())
+                .filter(Boolean)
+            : []
+          const request: PersonaRuntimeApprovalRequest = {
+            key: _approvalRequestKey(
+              approvalPayload,
+              payload as Record<string, unknown>
+            ),
+            approval_policy_id:
+              typeof approvalPayload.approval_policy_id === "number"
+                ? approvalPayload.approval_policy_id
+                : null,
+            mode: approvalPayload.mode ? String(approvalPayload.mode) : null,
+            tool_name: String(
+              approvalPayload.tool_name || payload?.tool || "tool"
+            ),
+            context_key: String(approvalPayload.context_key || ""),
+            conversation_id: approvalPayload.conversation_id
+              ? String(approvalPayload.conversation_id)
+              : null,
+            scope_key: String(approvalPayload.scope_key || ""),
+            reason: approvalPayload.reason ? String(approvalPayload.reason) : null,
+            duration_options: durationOptions.length ? durationOptions : ["once"],
+            selected_duration: durationOptions[0] || "once",
+            arguments_summary:
+              approvalPayload.arguments_summary &&
+              typeof approvalPayload.arguments_summary === "object"
+                ? (approvalPayload.arguments_summary as Record<string, unknown>)
+                : {},
+            session_id: payload?.session_id ? String(payload.session_id) : sessionId,
+            plan_id: payload?.plan_id ? String(payload.plan_id) : null,
+            step_idx:
+              typeof payload?.step_idx === "number"
+                ? payload.step_idx
+                : Number.parseInt(String(payload?.step_idx ?? ""), 10),
+            step_type: payload?.step_type ? String(payload.step_type) : "mcp_tool",
+            tool: payload?.tool ? String(payload.tool) : null,
+            args:
+              payload?.args && typeof payload.args === "object"
+                ? (payload.args as Record<string, unknown>)
+                : {},
+            why: payload?.why ? String(payload.why) : null,
+            description: payload?.description ? String(payload.description) : null
+          }
+          setPendingApprovals((prev) => {
+            const next = prev.filter((entry) => entry.key !== request.key)
+            return [...next, request]
+          })
+          appendLog("notice", `Runtime approval required for ${request.tool_name}`)
+          return
+        }
         const output = payload?.output ?? payload?.result
         const message =
           output == null
@@ -402,7 +521,7 @@ const SidepanelPersona = () => {
         appendLog("notice", "Received persona TTS audio chunk")
       }
     },
-    [appendLog]
+    [appendLog, sessionId]
   )
 
   const applyPersonaStatePayload = React.useCallback((payload: PersonaStateDocsResponse) => {
@@ -1001,6 +1120,83 @@ const SidepanelPersona = () => {
     }
   }, [appendLog, connected, sessionId])
 
+  const updateApprovalDuration = React.useCallback((approvalKey: string, duration: string) => {
+    setPendingApprovals((prev) =>
+      prev.map((approval) =>
+        approval.key === approvalKey
+          ? { ...approval, selected_duration: String(duration || "once") }
+          : approval
+      )
+    )
+  }, [])
+
+  const submitApprovalDecision = React.useCallback(
+    async (
+      approval: PersonaRuntimeApprovalRequest,
+      decision: "approved" | "denied"
+    ) => {
+      setSubmittingApprovalKey(approval.key)
+      setError(null)
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          "/api/v1/mcp/hub/approval-decisions" as any,
+          {
+            method: "POST",
+            body: {
+              approval_policy_id: approval.approval_policy_id,
+              context_key: approval.context_key,
+              conversation_id: approval.conversation_id,
+              tool_name: approval.tool_name,
+              scope_key: approval.scope_key,
+              decision,
+              expires_at:
+                decision === "approved"
+                  ? _approvalDurationExpiry(approval.selected_duration)
+                  : null
+            }
+          }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to submit approval decision")
+        }
+        await response.json()
+        setPendingApprovals((prev) => prev.filter((entry) => entry.key !== approval.key))
+        appendLog(
+          "notice",
+          decision === "approved"
+            ? `Approved ${approval.tool_name} and retrying`
+            : `Denied ${approval.tool_name}`
+        )
+        if (
+          decision === "approved" &&
+          connected &&
+          wsRef.current &&
+          approval.step_type &&
+          approval.tool
+        ) {
+          wsRef.current.send(
+            JSON.stringify({
+              type: "retry_tool_call",
+              session_id: approval.session_id || sessionId,
+              plan_id: approval.plan_id,
+              step_idx: approval.step_idx,
+              step_type: approval.step_type,
+              tool: approval.tool,
+              args: approval.args || {},
+              why: approval.why,
+              description: approval.description
+            })
+          )
+        }
+      } catch (err: any) {
+        setError(String(err?.message || "Failed to submit approval decision"))
+      } finally {
+        setSubmittingApprovalKey(null)
+      }
+    },
+    [appendLog, connected, sessionId]
+  )
+
   const personaUnsupported = !capsLoading && capabilities && !capabilities.hasPersona
 
   if (!isOnline) {
@@ -1161,6 +1357,78 @@ const SidepanelPersona = () => {
         ) : null}
 
         <PersonaPolicySummary personaId={selectedPersonaId || null} />
+
+        {pendingApprovals.length ? (
+          <div className="rounded-lg border border-warning/40 bg-warning/5 p-3">
+            <Typography.Text strong>
+              {t("sidepanel:persona.runtimeApproval", "Runtime approval required")}
+            </Typography.Text>
+            <div className="mt-2 space-y-3">
+              {pendingApprovals.map((approval) => {
+                const isSubmitting = submittingApprovalKey === approval.key
+                return (
+                  <div
+                    key={approval.key}
+                    className="rounded-md border border-warning/30 bg-surface p-3"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Tag color="gold">{approval.tool_name}</Tag>
+                      {approval.mode ? <Tag color="blue">{approval.mode}</Tag> : null}
+                      {approval.reason ? <Tag color="red">{approval.reason}</Tag> : null}
+                    </div>
+                    {Object.keys(approval.arguments_summary).length ? (
+                      <pre className="mt-2 overflow-auto rounded bg-bg p-2 text-[11px] text-text">
+                        {JSON.stringify(approval.arguments_summary, null, 2)}
+                      </pre>
+                    ) : null}
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-text-muted">
+                      <label htmlFor={`persona-approval-duration-${approval.key}`}>
+                        {t("sidepanel:persona.approvalDuration", "Approval duration")}
+                      </label>
+                      <select
+                        id={`persona-approval-duration-${approval.key}`}
+                        className="rounded border border-border bg-bg px-2 py-1 text-xs text-text"
+                        value={approval.selected_duration}
+                        disabled={isSubmitting}
+                        onChange={(event) =>
+                          updateApprovalDuration(approval.key, event.target.value)
+                        }
+                      >
+                        {approval.duration_options.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        size="small"
+                        type="primary"
+                        loading={isSubmitting}
+                        onClick={() => {
+                          void submitApprovalDecision(approval, "approved")
+                        }}
+                      >
+                        {t("sidepanel:persona.approveAndRetry", "Approve and retry")}
+                      </Button>
+                      <Button
+                        size="small"
+                        danger
+                        disabled={isSubmitting}
+                        onClick={() => {
+                          void submitApprovalDecision(approval, "denied")
+                        }}
+                      >
+                        {t("sidepanel:persona.denyApproval", "Deny")}
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ) : null}
 
         {pendingPlan ? (
           <div className="rounded-lg border border-border bg-surface p-3">

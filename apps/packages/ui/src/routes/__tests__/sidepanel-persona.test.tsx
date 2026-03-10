@@ -445,6 +445,129 @@ describe("SidepanelPersona", () => {
     await screen.findByText("Result step 3: legacy-only")
   })
 
+  it("renders runtime approval requests and retries the tool after approval", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval" })
+        })
+      }
+      if (path.includes("/mcp/hub/approval-decisions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 101,
+            approval_policy_id: init?.body?.approval_policy_id ?? 17,
+            context_key: init?.body?.context_key,
+            conversation_id: init?.body?.conversation_id,
+            tool_name: init?.body?.tool_name,
+            scope_key: init?.body?.scope_key,
+            decision: init?.body?.decision,
+            expires_at: init?.body?.expires_at ?? null
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        session_id: "sess-approval",
+        plan_id: "plan-approval",
+        step_idx: 0,
+        step_type: "mcp_tool",
+        tool: "knowledge.search",
+        args: { query: "approval needed" },
+        why: "Need to search notes",
+        ok: false,
+        error: "Runtime approval required",
+        reason_code: "APPROVAL_REQUIRED",
+        approval: {
+          approval_policy_id: 17,
+          mode: "ask_outside_profile",
+          tool_name: "knowledge.search",
+          context_key: "user:1|group:|persona:research_assistant",
+          conversation_id: "sess-approval",
+          scope_key: "tool:knowledge.search",
+          reason: "outside_profile",
+          duration_options: ["once", "session"],
+          arguments_summary: { query: "approval needed" }
+        }
+      })
+    )
+
+    await screen.findByText("Runtime approval required")
+    await screen.findByText("knowledge.search")
+    await screen.findByText("outside_profile")
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve and retry" }))
+
+    await waitFor(() => {
+      const approvalCall = mocks.fetchWithAuth.mock.calls.find(([path]) =>
+        String(path).includes("/mcp/hub/approval-decisions")
+      )
+      expect(approvalCall).toBeTruthy()
+      expect(
+        (
+          approvalCall?.[1] as {
+            body?: {
+              approval_policy_id?: number
+              tool_name?: string
+              decision?: string
+            }
+          }
+        )?.body
+      ).toMatchObject({
+        approval_policy_id: 17,
+        tool_name: "knowledge.search",
+        decision: "approved"
+      })
+      const sentPayloads = getSentPayloads(ws)
+      expect(
+        sentPayloads.some(
+          (payload) =>
+            payload.type === "retry_tool_call" &&
+            payload.plan_id === "plan-approval" &&
+            payload.step_idx === 0 &&
+            payload.tool === "knowledge.search"
+        )
+      ).toBe(true)
+    })
+  })
+
   it("renders policy metadata and keeps blocked steps out of approvals", async () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",
