@@ -691,7 +691,13 @@ def _watchlist_source_timestamp(source: Any) -> str | None:
     return _value(source, "updated_at") or _value(source, "created_at")
 
 
-def record_watchlist_source_created(*, user_id: str | int | None, source: Any) -> str | None:
+def record_watchlist_source_created(
+    *,
+    user_id: str | int | None,
+    source: Any,
+    route: str = "/api/v1/watchlists/sources",
+    surface: str = "api.watchlists",
+) -> str | None:
     source_id = str(_value(source, "id"))
     source_timestamp = _watchlist_source_timestamp(source)
     return record_companion_activity(
@@ -699,11 +705,11 @@ def record_watchlist_source_created(*, user_id: str | int | None, source: Any) -
         event_type="watchlist_source_created",
         source_type="watchlist_source",
         source_id=source_id,
-        surface="api.watchlists",
+        surface=surface,
         dedupe_key=f"watchlists.source.create:{source_id}",
         tags=list(getattr(source, "tags", None) or []),
         provenance=_explicit_provenance(
-            route="/api/v1/watchlists/sources",
+            route=route,
             action="create",
             source_timestamp=source_timestamp,
         ),
@@ -717,6 +723,8 @@ def record_watchlist_source_updated(
     source: Any,
     patch: dict[str, Any] | None = None,
     event_timestamp: str | None = None,
+    route: str | None = None,
+    surface: str = "api.watchlists",
 ) -> str | None:
     source_id = str(_value(source, "id"))
     source_timestamp = event_timestamp or _watchlist_source_timestamp(source)
@@ -727,11 +735,11 @@ def record_watchlist_source_updated(
         event_type="watchlist_source_updated",
         source_type="watchlist_source",
         source_id=source_id,
-        surface="api.watchlists",
+        surface=surface,
         dedupe_key=f"watchlists.source.update:{source_id}:{source_timestamp or 'na'}:{fingerprint}",
         tags=list(_value(source, "tags") or []),
         provenance=_explicit_provenance(
-            route=f"/api/v1/watchlists/sources/{source_id}",
+            route=route or f"/api/v1/watchlists/sources/{source_id}",
             action="update",
             source_timestamp=source_timestamp,
         ),
@@ -748,6 +756,9 @@ def record_watchlist_source_deleted(
     source: Any,
     event_timestamp: str | None = None,
     restore_window_seconds: int | None = None,
+    route: str | None = None,
+    surface: str = "api.watchlists",
+    hard_delete: bool = False,
 ) -> str | None:
     source_id = str(_value(source, "id"))
     source_timestamp = event_timestamp or _watchlist_source_timestamp(source)
@@ -756,18 +767,18 @@ def record_watchlist_source_deleted(
         event_type="watchlist_source_deleted",
         source_type="watchlist_source",
         source_id=source_id,
-        surface="api.watchlists",
+        surface=surface,
         dedupe_key=f"watchlists.source.delete:{source_id}:{source_timestamp or 'na'}",
         tags=list(_value(source, "tags") or []),
         provenance=_explicit_provenance(
-            route=f"/api/v1/watchlists/sources/{source_id}",
+            route=route or f"/api/v1/watchlists/sources/{source_id}",
             action="delete",
             source_timestamp=source_timestamp,
         ),
         metadata={
             **_watchlist_source_metadata(source),
             "deleted": True,
-            "hard_delete": False,
+            "hard_delete": hard_delete,
             "restore_window_seconds": restore_window_seconds,
         },
     )

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import contextlib
 import json
+import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -17,8 +19,14 @@ from tldw_Server_API.app.api.v1.schemas.collections_feeds_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
+from tldw_Server_API.app.core.Personalization import (
+    record_watchlist_source_created,
+    record_watchlist_source_deleted,
+    record_watchlist_source_updated,
+)
 
 FEED_ORIGIN = "feed"
+_COLLECTIONS_COMPANION_SURFACE = "api.collections"
 _FEED_JOB_KEYS = ("collections_feed_job_id", "collections_job_id")
 _DEFAULT_HOURLY_CRON = "0 * * * *"
 _DEFAULT_DAILY_CRON = "0 0 * * *"
@@ -36,6 +44,7 @@ _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS = (
     OSError,
     PermissionError,
     RuntimeError,
+    sqlite3.Error,
     TimeoutError,
     TypeError,
     UnicodeDecodeError,
@@ -346,6 +355,10 @@ def _sync_job_schedule(db: WatchlistsDatabase, job_row, *, current_user: User) -
         return None
 
 
+def _collections_feed_event_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 @router.post("", response_model=CollectionsFeed, summary="Create a Collections feed subscription")
 async def create_feed_subscription(
     payload: CollectionsFeedCreateRequest = Body(...),
@@ -416,6 +429,14 @@ async def create_feed_subscription(
     _register_schedule(db, job, current_user=current_user)
     job = db.get_job(int(job.id))
 
+    response = _to_feed_response(source, job_row=job, settings=settings)
+    record_watchlist_source_created(
+        user_id=current_user.id,
+        source=response,
+        route="/api/v1/collections/feeds",
+        surface=_COLLECTIONS_COMPANION_SURFACE,
+    )
+
     if payload.active:
         async def _run_first_job(user_id: int, job_id: int) -> None:
             try:
@@ -431,7 +452,7 @@ async def create_feed_subscription(
 
         background_tasks.add_task(_run_first_job, int(current_user.id), int(job.id))
 
-    return _to_feed_response(source, job_row=job, settings=settings)
+    return response
 
 
 @router.get("", response_model=CollectionsFeedsListResponse, summary="List Collections feed subscriptions")
@@ -504,6 +525,7 @@ async def update_feed_subscription(
     if payload.settings is not None and isinstance(payload.settings, dict):
         settings = _merge_settings(settings, payload.settings)
     settings["collections_origin"] = FEED_ORIGIN
+    activity_patch = payload.model_dump(exclude_unset=True)
     patch: dict[str, Any] = {"settings_json": json.dumps(settings)}
     if payload.name is not None:
         name = payload.name.strip()
@@ -559,7 +581,17 @@ async def update_feed_subscription(
         except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"collections_feeds_update_job_failed: {exc}")
 
-    return _to_feed_response(source, job_row=job, settings=settings)
+    response = _to_feed_response(source, job_row=job, settings=settings)
+    if activity_patch:
+        record_watchlist_source_updated(
+            user_id=current_user.id,
+            source=response,
+            patch=activity_patch,
+            event_timestamp=_collections_feed_event_timestamp(),
+            route=f"/api/v1/collections/feeds/{feed_id}",
+            surface=_COLLECTIONS_COMPANION_SURFACE,
+        )
+    return response
 
 
 @router.delete("/{feed_id}", summary="Delete a Collections feed subscription")
@@ -586,7 +618,17 @@ async def delete_feed_subscription(
             pass
         with contextlib.suppress(_COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS):
             db.delete_job(job_id)
+    source_response = _to_feed_response(source, settings=settings)
+    event_timestamp = _collections_feed_event_timestamp()
     deleted = db.delete_source(feed_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="feed_not_found")
+    record_watchlist_source_deleted(
+        user_id=current_user.id,
+        source=source_response,
+        event_timestamp=event_timestamp,
+        route=f"/api/v1/collections/feeds/{feed_id}",
+        surface=_COLLECTIONS_COMPANION_SURFACE,
+        hard_delete=True,
+    )
     return {"success": True}
