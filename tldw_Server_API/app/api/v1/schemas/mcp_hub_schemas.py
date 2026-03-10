@@ -181,6 +181,26 @@ class ApprovalDecisionResponse(BaseModel):
     created_at: datetime | str | None = None
 
 
+class EffectivePolicySourceResponse(BaseModel):
+    assignment_id: int
+    target_type: AssignmentTargetType
+    target_id: str | None = None
+    owner_scope_type: ScopeType
+    owner_scope_id: int | None = None
+    profile_id: int | None = None
+
+
+class EffectivePolicyResponse(BaseModel):
+    enabled: bool
+    allowed_tools: list[str] = Field(default_factory=list)
+    denied_tools: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
+    approval_policy_id: int | None = None
+    approval_mode: ApprovalMode | None = None
+    policy_document: dict[str, Any] = Field(default_factory=dict)
+    sources: list[EffectivePolicySourceResponse] = Field(default_factory=list)
+
+
 class ExternalServerCreateRequest(BaseModel):
     server_id: str = Field(..., min_length=1, max_length=128)
     name: str = Field(..., min_length=1, max_length=200)

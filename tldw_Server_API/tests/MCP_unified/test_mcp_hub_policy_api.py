@@ -232,7 +232,38 @@ class _FakePolicyService:
         return decision
 
 
-def _build_app(principal: AuthPrincipal, service: _FakePolicyService | None = None) -> FastAPI:
+class _FakePolicyResolver:
+    async def resolve_for_context(self, *, user_id, metadata):
+        return {
+            "enabled": True,
+            "allowed_tools": ["Bash(git *)"],
+            "denied_tools": ["Bash(rm *)"],
+            "capabilities": ["process.execute"],
+            "approval_policy_id": 17,
+            "approval_mode": "ask_outside_profile",
+            "policy_document": {
+                "allowed_tools": ["Bash(git *)"],
+                "denied_tools": ["Bash(rm *)"],
+                "capabilities": ["process.execute"]
+            },
+            "sources": [
+                {
+                    "assignment_id": 11,
+                    "target_type": "persona",
+                    "target_id": metadata.get("persona_id"),
+                    "owner_scope_type": "user",
+                    "owner_scope_id": user_id,
+                    "profile_id": 5
+                }
+            ]
+        }
+
+
+def _build_app(
+    principal: AuthPrincipal,
+    service: _FakePolicyService | None = None,
+    resolver: _FakePolicyResolver | None = None
+) -> FastAPI:
     app = FastAPI()
     app.include_router(mcp_hub_management.router, prefix="/api/v1")
 
@@ -241,6 +272,9 @@ def _build_app(principal: AuthPrincipal, service: _FakePolicyService | None = No
 
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
     app.dependency_overrides[mcp_hub_management.get_mcp_hub_service] = lambda: service or _FakePolicyService()
+    app.dependency_overrides[mcp_hub_management.get_mcp_hub_policy_resolver_dep] = (
+        lambda: resolver or _FakePolicyResolver()
+    )
     return app
 
 
@@ -405,6 +439,25 @@ def test_record_approval_decision_rejects_foreign_context_key() -> None:
         )
 
     assert resp.status_code == 403
+
+
+def test_get_effective_policy_returns_resolved_payload() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/effective-policy?persona_id=researcher&group_id=team-red")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["enabled"] is True
+    assert payload["allowed_tools"] == ["Bash(git *)"]
+    assert payload["approval_mode"] == "ask_outside_profile"
+    assert payload["sources"][0]["target_id"] == "researcher"
 
 
 def test_list_permission_profiles_returns_visible_rows() -> None:

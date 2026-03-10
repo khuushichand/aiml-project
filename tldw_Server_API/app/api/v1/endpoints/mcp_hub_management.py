@@ -17,6 +17,7 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     ApprovalPolicyCreateRequest,
     ApprovalPolicyResponse,
     ApprovalPolicyUpdateRequest,
+    EffectivePolicyResponse,
     ExternalSecretSetRequest,
     ExternalSecretSetResponse,
     ExternalServerCreateRequest,
@@ -35,6 +36,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
 from tldw_Server_API.app.core.exceptions import BadRequestError, ResourceNotFoundError
+from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver, get_mcp_hub_policy_resolver
 from tldw_Server_API.app.services.mcp_hub_service import McpHubConflictError, McpHubService
 
 router = APIRouter(prefix="/mcp/hub", tags=["mcp-hub"])
@@ -59,6 +61,11 @@ async def get_mcp_hub_service() -> McpHubService:
     repo = McpHubRepo(pool)
     await repo.ensure_tables()
     return McpHubService(repo)
+
+
+async def get_mcp_hub_policy_resolver_dep() -> McpHubPolicyResolver:
+    """Resolve MCP Hub policy resolver for effective policy previews."""
+    return await get_mcp_hub_policy_resolver()
 
 
 def _load_json_object(raw: Any) -> dict[str, Any]:
@@ -624,6 +631,35 @@ async def create_approval_decision(
         actor_id=actor_id,
     )
     return _approval_decision_row_to_response(row)
+
+
+@router.get("/effective-policy", response_model=EffectivePolicyResponse)
+async def get_effective_policy(
+    persona_id: str | None = None,
+    group_id: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    resolver: McpHubPolicyResolver = Depends(get_mcp_hub_policy_resolver_dep),
+) -> EffectivePolicyResponse:
+    """Resolve the effective MCP Hub policy for the authenticated user and optional target context."""
+    if principal.user_id is None:
+        raise HTTPException(status_code=403, detail="Authenticated user required")
+
+    metadata: dict[str, Any] = {"mcp_policy_context_enabled": True}
+    if persona_id:
+        metadata["persona_id"] = persona_id
+    if group_id:
+        metadata["group_id"] = group_id
+    if org_id is not None:
+        metadata["org_id"] = org_id
+    if team_id is not None:
+        metadata["team_id"] = team_id
+
+    return await resolver.resolve_for_context(
+        user_id=principal.user_id,
+        metadata=metadata,
+    )
 
 
 @router.get("/acp-profiles", response_model=list[ACPProfileResponse])

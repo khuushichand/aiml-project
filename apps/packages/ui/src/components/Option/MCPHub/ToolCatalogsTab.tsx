@@ -54,7 +54,7 @@ export const ToolCatalogsTab = () => {
   }, [scope])
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
       <Typography.Text type="secondary">
         Tool catalogs control which MCP tools are exposed by scope.
       </Typography.Text>
@@ -81,7 +81,7 @@ export const ToolCatalogsTab = () => {
           locale={{ emptyText: <Empty description="No catalogs available" /> }}
           renderItem={(catalog) => (
             <List.Item>
-              <Space direction="vertical" size={2}>
+              <Space orientation="vertical" size={2}>
                 <Typography.Text strong>{catalog.name}</Typography.Text>
                 <Typography.Text type="secondary">
                   {catalog.description || "No description"}

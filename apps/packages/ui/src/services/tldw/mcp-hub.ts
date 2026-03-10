@@ -2,6 +2,15 @@ import { bgRequestClient } from "@/services/background-proxy"
 import type { ClientPathOrUrlWithQuery } from "@/services/tldw/openapi-guard"
 
 export type McpHubScopeType = "global" | "org" | "team" | "user"
+export type McpHubProfileMode = "preset" | "custom"
+export type McpHubAssignmentTargetType = "default" | "group" | "persona"
+export type McpHubApprovalMode =
+  | "allow_silently"
+  | "ask_every_time"
+  | "ask_outside_profile"
+  | "ask_on_sensitive_actions"
+  | "temporary_elevation_allowed"
+export type McpHubApprovalDecision = "approved" | "denied"
 
 export type McpHubProfile = {
   id: number
@@ -33,6 +42,166 @@ export type McpHubProfileUpdateInput = {
   owner_scope_id?: number | null
   profile?: Record<string, unknown>
   is_active?: boolean
+}
+
+export type McpHubPermissionPolicyDocument = {
+  capabilities?: string[]
+  allowed_tools?: string[]
+  denied_tools?: string[]
+  tool_names?: string[]
+  tool_patterns?: string[]
+  approval_mode?: McpHubApprovalMode | null
+}
+
+export type McpHubPermissionProfile = {
+  id: number
+  name: string
+  description?: string | null
+  owner_scope_type: McpHubScopeType
+  owner_scope_id?: number | null
+  mode: McpHubProfileMode
+  policy_document: McpHubPermissionPolicyDocument
+  is_active: boolean
+  created_by?: number | null
+  updated_by?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type McpHubPermissionProfileCreateInput = {
+  name: string
+  description?: string | null
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  mode?: McpHubProfileMode
+  policy_document?: McpHubPermissionPolicyDocument
+  is_active?: boolean
+}
+
+export type McpHubPermissionProfileUpdateInput = {
+  name?: string
+  description?: string | null
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  mode?: McpHubProfileMode
+  policy_document?: McpHubPermissionPolicyDocument
+  is_active?: boolean
+}
+
+export type McpHubPolicyAssignment = {
+  id: number
+  target_type: McpHubAssignmentTargetType
+  target_id?: string | null
+  owner_scope_type: McpHubScopeType
+  owner_scope_id?: number | null
+  profile_id?: number | null
+  inline_policy_document: McpHubPermissionPolicyDocument
+  approval_policy_id?: number | null
+  is_active: boolean
+  created_by?: number | null
+  updated_by?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type McpHubPolicyAssignmentCreateInput = {
+  target_type: McpHubAssignmentTargetType
+  target_id?: string | null
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  profile_id?: number | null
+  inline_policy_document?: McpHubPermissionPolicyDocument
+  approval_policy_id?: number | null
+  is_active?: boolean
+}
+
+export type McpHubPolicyAssignmentUpdateInput = {
+  target_type?: McpHubAssignmentTargetType
+  target_id?: string | null
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  profile_id?: number | null
+  inline_policy_document?: McpHubPermissionPolicyDocument
+  approval_policy_id?: number | null
+  is_active?: boolean
+}
+
+export type McpHubApprovalPolicy = {
+  id: number
+  name: string
+  description?: string | null
+  owner_scope_type: McpHubScopeType
+  owner_scope_id?: number | null
+  mode: McpHubApprovalMode
+  rules: Record<string, unknown>
+  is_active: boolean
+  created_by?: number | null
+  updated_by?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type McpHubApprovalPolicyCreateInput = {
+  name: string
+  description?: string | null
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  mode: McpHubApprovalMode
+  rules?: Record<string, unknown>
+  is_active?: boolean
+}
+
+export type McpHubApprovalPolicyUpdateInput = {
+  name?: string
+  description?: string | null
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  mode?: McpHubApprovalMode
+  rules?: Record<string, unknown>
+  is_active?: boolean
+}
+
+export type McpHubApprovalDecisionCreateInput = {
+  approval_policy_id?: number | null
+  context_key: string
+  conversation_id?: string | null
+  tool_name: string
+  scope_key: string
+  decision: McpHubApprovalDecision
+  expires_at?: string | null
+}
+
+export type McpHubApprovalDecisionResponse = {
+  id: number
+  approval_policy_id?: number | null
+  context_key: string
+  conversation_id?: string | null
+  tool_name: string
+  scope_key: string
+  decision: McpHubApprovalDecision
+  expires_at?: string | null
+  created_by?: number | null
+  created_at?: string | null
+}
+
+export type McpHubEffectivePolicySource = {
+  assignment_id: number
+  target_type: McpHubAssignmentTargetType
+  target_id?: string | null
+  owner_scope_type: McpHubScopeType
+  owner_scope_id?: number | null
+  profile_id?: number | null
+}
+
+export type McpHubEffectivePolicy = {
+  enabled: boolean
+  allowed_tools: string[]
+  denied_tools: string[]
+  capabilities: string[]
+  approval_policy_id?: number | null
+  approval_mode?: McpHubApprovalMode | null
+  policy_document: Record<string, unknown>
+  sources: McpHubEffectivePolicySource[]
 }
 
 export type McpHubExternalServer = {
@@ -184,5 +353,163 @@ export const setExternalServerSecret = async (
     path: `/api/v1/mcp/hub/external-servers/${encodeURIComponent(serverId)}/secret`,
     method: "POST",
     body: { secret }
+  })
+}
+
+export const listPermissionProfiles = async (params: {
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+} = {}): Promise<McpHubPermissionProfile[]> => {
+  return await bgRequestClient<McpHubPermissionProfile[]>({
+    path: withQuery("/api/v1/mcp/hub/permission-profiles", {
+      owner_scope_type: params.owner_scope_type,
+      owner_scope_id: params.owner_scope_id
+    }),
+    method: "GET"
+  })
+}
+
+export const createPermissionProfile = async (
+  payload: McpHubPermissionProfileCreateInput
+): Promise<McpHubPermissionProfile> => {
+  return await bgRequestClient<McpHubPermissionProfile>({
+    path: "/api/v1/mcp/hub/permission-profiles",
+    method: "POST",
+    body: payload
+  })
+}
+
+export const updatePermissionProfile = async (
+  profileId: number,
+  payload: McpHubPermissionProfileUpdateInput
+): Promise<McpHubPermissionProfile> => {
+  return await bgRequestClient<McpHubPermissionProfile>({
+    path: `/api/v1/mcp/hub/permission-profiles/${profileId}`,
+    method: "PUT",
+    body: payload
+  })
+}
+
+export const deletePermissionProfile = async (profileId: number): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/permission-profiles/${profileId}`,
+    method: "DELETE"
+  })
+}
+
+export const listPolicyAssignments = async (params: {
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  target_type?: McpHubAssignmentTargetType
+  target_id?: string | null
+} = {}): Promise<McpHubPolicyAssignment[]> => {
+  return await bgRequestClient<McpHubPolicyAssignment[]>({
+    path: withQuery("/api/v1/mcp/hub/policy-assignments", {
+      owner_scope_type: params.owner_scope_type,
+      owner_scope_id: params.owner_scope_id,
+      target_type: params.target_type,
+      target_id: params.target_id
+    }),
+    method: "GET"
+  })
+}
+
+export const createPolicyAssignment = async (
+  payload: McpHubPolicyAssignmentCreateInput
+): Promise<McpHubPolicyAssignment> => {
+  return await bgRequestClient<McpHubPolicyAssignment>({
+    path: "/api/v1/mcp/hub/policy-assignments",
+    method: "POST",
+    body: payload
+  })
+}
+
+export const updatePolicyAssignment = async (
+  assignmentId: number,
+  payload: McpHubPolicyAssignmentUpdateInput
+): Promise<McpHubPolicyAssignment> => {
+  return await bgRequestClient<McpHubPolicyAssignment>({
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}`,
+    method: "PUT",
+    body: payload
+  })
+}
+
+export const deletePolicyAssignment = async (
+  assignmentId: number
+): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}`,
+    method: "DELETE"
+  })
+}
+
+export const listApprovalPolicies = async (params: {
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+} = {}): Promise<McpHubApprovalPolicy[]> => {
+  return await bgRequestClient<McpHubApprovalPolicy[]>({
+    path: withQuery("/api/v1/mcp/hub/approval-policies", {
+      owner_scope_type: params.owner_scope_type,
+      owner_scope_id: params.owner_scope_id
+    }),
+    method: "GET"
+  })
+}
+
+export const createApprovalPolicy = async (
+  payload: McpHubApprovalPolicyCreateInput
+): Promise<McpHubApprovalPolicy> => {
+  return await bgRequestClient<McpHubApprovalPolicy>({
+    path: "/api/v1/mcp/hub/approval-policies",
+    method: "POST",
+    body: payload
+  })
+}
+
+export const updateApprovalPolicy = async (
+  approvalPolicyId: number,
+  payload: McpHubApprovalPolicyUpdateInput
+): Promise<McpHubApprovalPolicy> => {
+  return await bgRequestClient<McpHubApprovalPolicy>({
+    path: `/api/v1/mcp/hub/approval-policies/${approvalPolicyId}`,
+    method: "PUT",
+    body: payload
+  })
+}
+
+export const deleteApprovalPolicy = async (
+  approvalPolicyId: number
+): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/approval-policies/${approvalPolicyId}`,
+    method: "DELETE"
+  })
+}
+
+export const createApprovalDecision = async (
+  payload: McpHubApprovalDecisionCreateInput
+): Promise<McpHubApprovalDecisionResponse> => {
+  return await bgRequestClient<McpHubApprovalDecisionResponse>({
+    path: "/api/v1/mcp/hub/approval-decisions",
+    method: "POST",
+    body: payload
+  })
+}
+
+export const getEffectivePolicy = async (params: {
+  persona_id?: string | null
+  group_id?: string | null
+  org_id?: number | null
+  team_id?: number | null
+} = {}): Promise<McpHubEffectivePolicy> => {
+  return await bgRequestClient<McpHubEffectivePolicy>({
+    path: withQuery("/api/v1/mcp/hub/effective-policy", {
+      persona_id: params.persona_id,
+      group_id: params.group_id,
+      org_id: params.org_id,
+      team_id: params.team_id
+    }),
+    method: "GET"
   })
 }

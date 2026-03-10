@@ -78,6 +78,12 @@ vi.mock("@/components/Common/FeatureEmptyState", () => ({
   )
 }))
 
+vi.mock("@/components/Option/MCPHub", () => ({
+  PersonaPolicySummary: ({ personaId }: { personaId?: string | null }) => (
+    <div data-testid="persona-policy-summary">{personaId || "none"}</div>
+  )
+}))
+
 vi.mock("~/components/Sidepanel/Chat/SidepanelHeaderSimple", () => ({
   SidepanelHeaderSimple: ({ activeTitle }: { activeTitle?: string }) => (
     <div data-testid="sidepanel-header">{activeTitle || "header"}</div>

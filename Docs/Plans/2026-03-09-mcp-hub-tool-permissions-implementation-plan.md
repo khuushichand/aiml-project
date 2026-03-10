@@ -25,5 +25,5 @@
 ## Stage 5: UI Integration
 **Goal**: Rebuild MCP Hub into the primary tool-governance editor and expose effective summaries in persona surfaces.
 **Success Criteria**: MCP Hub supports profile editing, assignments, approvals, and credentials; persona UI shows linked policy summaries without owning tool policy.
-**Tests**: Frontend component and route tests for profile editing, assignment previews, approval settings, and persona summary rendering.
-**Status**: Not Started
+**Tests**: `bunx vitest run src/components/Option/MCPHub/__tests__/AcpProfilesTab.test.tsx src/components/Option/MCPHub/__tests__/ExternalServersTab.test.tsx src/components/Option/MCPHub/__tests__/PermissionProfilesTab.test.tsx src/components/Option/MCPHub/__tests__/PolicyAssignmentsTab.test.tsx src/components/Option/MCPHub/__tests__/ApprovalPoliciesTab.test.tsx src/components/Option/MCPHub/__tests__/PersonaPolicySummary.test.tsx src/routes/__tests__/mcp-hub-route.test.tsx src/routes/__tests__/sidepanel-persona.test.tsx`
+**Status**: Complete

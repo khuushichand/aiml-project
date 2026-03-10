@@ -5,6 +5,7 @@ import { useBlocker, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
+import { PersonaPolicySummary } from "@/components/Option/MCPHub"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
@@ -1158,6 +1159,8 @@ const SidepanelPersona = () => {
             {error}
           </div>
         ) : null}
+
+        <PersonaPolicySummary personaId={selectedPersonaId || null} />
 
         {pendingPlan ? (
           <div className="rounded-lg border border-border bg-surface p-3">
