@@ -91,6 +91,12 @@ def _render_definition_legacy_fields(definition: PromptDefinition) -> tuple[str,
     return legacy.system_prompt, legacy.user_prompt
 
 
+def _coerce_security_config(security_config: SecurityConfig | Any) -> SecurityConfig:
+    if isinstance(security_config, SecurityConfig):
+        return security_config
+    return get_security_config()
+
+
 def _coerce_structured_definition(
     *,
     prompt_schema_version: int | None,
@@ -120,16 +126,18 @@ def _validate_prompt_lengths(
     user_prompt: str | None,
     security_config: SecurityConfig,
 ) -> None:
-    if system_prompt and len(system_prompt) > security_config.max_prompt_length:
+    config = _coerce_security_config(security_config)
+
+    if system_prompt and len(system_prompt) > config.max_prompt_length:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"System prompt exceeds maximum length of {security_config.max_prompt_length}"
+            detail=f"System prompt exceeds maximum length of {config.max_prompt_length}"
         )
 
-    if user_prompt and len(user_prompt) > security_config.max_prompt_length:
+    if user_prompt and len(user_prompt) > config.max_prompt_length:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"User prompt exceeds maximum length of {security_config.max_prompt_length}"
+            detail=f"User prompt exceeds maximum length of {config.max_prompt_length}"
         )
 
 
@@ -138,16 +146,18 @@ def _validate_message_lengths(
     messages: list[dict[str, str]],
     security_config: SecurityConfig,
 ) -> None:
+    config = _coerce_security_config(security_config)
+
     for message in messages:
         content = message.get("content") or ""
-        if len(content) <= security_config.max_prompt_length:
+        if len(content) <= config.max_prompt_length:
             continue
         role = str(message.get("role") or "prompt")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"{role.title()} prompt exceeds maximum length of "
-                f"{security_config.max_prompt_length}"
+                f"{config.max_prompt_length}"
             ),
         )
 
@@ -162,24 +172,57 @@ def _validation_variables(definition: PromptDefinition) -> dict[str, Any]:
     return variables
 
 
+def _get_signature_for_project(
+    *,
+    db: PromptStudioDatabase,
+    project_id: int,
+    signature_id: int | None,
+) -> dict[str, Any] | None:
+    if signature_id is None:
+        return None
+
+    signature = db.get_signature(signature_id)
+    if not signature:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Signature {signature_id} not found",
+        )
+
+    if int(signature.get("project_id") or -1) != int(project_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Signature does not belong to the requested project",
+        )
+
+    return signature
+
+
 def _validate_prompt_content(
     *,
     definition: PromptDefinition,
     extras: dict[str, Any],
     security_config: SecurityConfig,
+    signature: dict[str, Any] | None = None,
 ) -> None:
+    from tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_executor import PromptExecutor
+
     assembly = assemble_prompt_definition(
         definition,
         _validation_variables(definition),
         extras=extras,
     )
+    messages = assembly.messages
+    legacy = assembly.legacy
+    if signature is not None:
+        messages = PromptExecutor._apply_signature_to_messages(messages, signature)
+        legacy = render_legacy_snapshot(messages, definition)
     _validate_prompt_lengths(
-        system_prompt=assembly.legacy.system_prompt,
-        user_prompt=assembly.legacy.user_prompt,
+        system_prompt=legacy.system_prompt,
+        user_prompt=legacy.user_prompt,
         security_config=security_config,
     )
     _validate_message_lengths(
-        messages=assembly.messages,
+        messages=messages,
         security_config=security_config,
     )
 
@@ -308,6 +351,11 @@ async def create_prompt(
 
         # Ensure write access to the project
         await require_project_write_access(prompt_data.project_id, user_context=user_context, db=db)
+        signature = _get_signature_for_project(
+            db=db,
+            project_id=prompt_data.project_id,
+            signature_id=prompt_data.signature_id,
+        )
 
         few_shot_payload = None
         if prompt_data.few_shot_examples:
@@ -334,6 +382,7 @@ async def create_prompt(
             definition=definition,
             extras=extras,
             security_config=security_config,
+            signature=signature,
         )
 
         # Idempotency: if provided, return existing prompt for this key
@@ -556,18 +605,12 @@ async def preview_prompt(
         assembly = assemble_prompt_definition(definition, payload.variables, extras=extras)
         messages = assembly.messages
 
-        if payload.signature_id is not None:
-            signature = db.get_signature(payload.signature_id)
-            if not signature:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Signature {payload.signature_id} not found",
-                )
-            if int(signature.get("project_id") or -1) != int(payload.project_id):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Signature does not belong to the requested project",
-                )
+        signature = _get_signature_for_project(
+            db=db,
+            project_id=payload.project_id,
+            signature_id=payload.signature_id,
+        )
+        if signature is not None:
             messages = PromptExecutor(db)._apply_signature_to_messages(messages, signature)
 
         legacy = render_legacy_snapshot(messages, definition)
@@ -755,6 +798,11 @@ async def update_prompt(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to this prompt"
             )
+        signature = _get_signature_for_project(
+            db=db,
+            project_id=int(current_prompt["project_id"]),
+            signature_id=current_prompt.get("signature_id"),
+        )
 
         normalized_prompt_fields = _prepare_prompt_record_fields(
             prompt_format=updates.prompt_format,
@@ -796,6 +844,7 @@ async def update_prompt(
             definition=definition,
             extras=extras,
             security_config=security_config,
+            signature=signature,
         )
 
         new_prompt = db.create_prompt_version(

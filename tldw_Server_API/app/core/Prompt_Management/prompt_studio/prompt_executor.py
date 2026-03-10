@@ -571,8 +571,8 @@ class PromptExecutor:
 
         return prepared_inputs
 
+    @staticmethod
     def _apply_signature_to_messages(
-        self,
         messages: list[dict[str, Any]],
         signature: Optional[dict[str, Any]],
     ) -> list[dict[str, str]]:
@@ -593,7 +593,7 @@ class PromptExecutor:
         if target_index is not None:
             target_content = rendered_messages[target_index]["content"]
 
-        updated_content = self._apply_signature_to_text(target_content, signature)
+        updated_content = PromptExecutor._apply_signature_to_text(target_content, signature)
         if target_index is None:
             rendered_messages.append({"role": "user", "content": updated_content})
         else:
@@ -601,19 +601,21 @@ class PromptExecutor:
 
         return rendered_messages
 
-    def _apply_signature_to_text(self, text: str, signature: dict[str, Any]) -> str:
+    @staticmethod
+    def _apply_signature_to_text(text: str, signature: dict[str, Any]) -> str:
         updated_text = text
         sig_instruction = signature.get("instruction", "")
         if sig_instruction:
             updated_text = f"{sig_instruction}\n\n{updated_text}" if updated_text else sig_instruction
 
-        output_instruction = self._render_output_schema_instruction(signature.get("output_schema"))
+        output_instruction = PromptExecutor._render_output_schema_instruction(signature.get("output_schema"))
         if output_instruction:
             updated_text = f"{updated_text}\n\n{output_instruction}" if updated_text else output_instruction
 
         return updated_text
 
-    def _render_output_schema_instruction(self, output_schema: Any) -> str:
+    @staticmethod
+    def _render_output_schema_instruction(output_schema: Any) -> str:
         if not output_schema:
             return ""
 

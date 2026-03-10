@@ -246,6 +246,7 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
 
     previewMutation.mutate({
       project_id: projectId,
+      signature_id: existingPrompt?.signature_id ?? null,
       prompt_format: promptFormat,
       system_prompt:
         promptFormat === "legacy" ? values.system_prompt?.trim() || null : null,

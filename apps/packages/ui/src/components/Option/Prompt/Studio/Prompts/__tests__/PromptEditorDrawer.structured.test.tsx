@@ -49,6 +49,7 @@ vi.mock("@/services/prompt-studio", () => ({
 const makeStructuredPrompt = () => ({
   id: 71,
   project_id: 9,
+  signature_id: 17,
   name: "Structured summarizer",
   system_prompt: "You are precise.",
   user_prompt: "Summarize {{topic}}",
@@ -196,6 +197,7 @@ describe("PromptEditorDrawer structured prompt mode", () => {
       expect(mocks.previewPromptDefinition).toHaveBeenCalledWith(
         expect.objectContaining({
           project_id: 9,
+          signature_id: 17,
           prompt_format: "structured",
           prompt_schema_version: 1,
           prompt_definition: expect.objectContaining({
