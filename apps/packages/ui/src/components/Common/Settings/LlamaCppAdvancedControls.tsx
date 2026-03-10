@@ -27,10 +27,28 @@ type LlamaCppControlsMetadata = {
   reserved_extra_body_keys?: string[]
 }
 
+type LlamaGrammarMode = "none" | "library" | "inline"
+type LlamaControlField =
+  | "llamaThinkingBudgetTokens"
+  | "llamaGrammarMode"
+  | "llamaGrammarId"
+  | "llamaGrammarInline"
+  | "llamaGrammarOverride"
+
 type Props = {
   selectedModel?: string | null
   resolvedProvider?: string | null
   className?: string
+  thinkingBudget?: number
+  grammarMode?: LlamaGrammarMode
+  grammarId?: string
+  grammarInline?: string
+  grammarOverride?: string
+  extraBody?: string
+  onChange?: (
+    key: LlamaControlField,
+    value: number | string | undefined
+  ) => void
 }
 
 const normalizeResolvedProvider = (value: string | null | undefined) => {
@@ -74,24 +92,55 @@ const extractLlamaCppControls = (payload: any): LlamaCppControlsMetadata | null 
 export function LlamaCppAdvancedControls({
   selectedModel,
   resolvedProvider,
-  className
+  className,
+  thinkingBudget,
+  grammarMode,
+  grammarId,
+  grammarInline,
+  grammarOverride,
+  extraBody,
+  onChange
 }: Props) {
   const { t } = useTranslation(["common", "sidepanel"])
   const apiProviderOverride = useStoreChatModelSettings((state) => state.apiProvider)
   const updateSetting = useStoreChatModelSettings((state) => state.updateSetting)
-  const thinkingBudget = useStoreChatModelSettings(
+  const storeThinkingBudget = useStoreChatModelSettings(
     (state) => state.llamaThinkingBudgetTokens
   )
-  const grammarMode = useStoreChatModelSettings((state) => state.llamaGrammarMode)
-  const grammarId = useStoreChatModelSettings((state) => state.llamaGrammarId)
-  const grammarInline = useStoreChatModelSettings((state) => state.llamaGrammarInline)
-  const grammarOverride = useStoreChatModelSettings(
+  const storeGrammarMode = useStoreChatModelSettings((state) => state.llamaGrammarMode)
+  const storeGrammarId = useStoreChatModelSettings((state) => state.llamaGrammarId)
+  const storeGrammarInline = useStoreChatModelSettings((state) => state.llamaGrammarInline)
+  const storeGrammarOverride = useStoreChatModelSettings(
     (state) => state.llamaGrammarOverride
   )
-  const extraBody = useStoreChatModelSettings((state) => state.extraBody)
+  const storeExtraBody = useStoreChatModelSettings((state) => state.extraBody)
   const [libraryOpen, setLibraryOpen] = React.useState(false)
   const [derivedProvider, setDerivedProvider] = React.useState<string | null>(
     normalizeResolvedProvider(resolvedProvider)
+  )
+  const useControlledValues = typeof onChange === "function"
+  const currentThinkingBudget = useControlledValues
+    ? thinkingBudget
+    : storeThinkingBudget
+  const currentGrammarMode = useControlledValues ? grammarMode : storeGrammarMode
+  const currentGrammarId = useControlledValues ? grammarId : storeGrammarId
+  const currentGrammarInline = useControlledValues
+    ? grammarInline
+    : storeGrammarInline
+  const currentGrammarOverride = useControlledValues
+    ? grammarOverride
+    : storeGrammarOverride
+  const currentExtraBody = useControlledValues ? extraBody : storeExtraBody
+
+  const updateLlamaField = React.useCallback(
+    (key: LlamaControlField, value: number | string | undefined) => {
+      if (onChange) {
+        onChange(key, value)
+        return
+      }
+      updateSetting(key, value as never)
+    },
+    [onChange, updateSetting]
   )
 
   React.useEffect(() => {
@@ -136,12 +185,12 @@ export function LlamaCppAdvancedControls({
   const conflictingExtraBodyKeys = React.useMemo(() => {
     const reservedKeys = controls?.reserved_extra_body_keys ?? []
     if (!reservedKeys.length) return []
-    const parsedExtraBody = parseJsonRecord(extraBody)
+    const parsedExtraBody = parseJsonRecord(currentExtraBody)
     if (!parsedExtraBody) return []
     return reservedKeys.filter((key) =>
       Object.prototype.hasOwnProperty.call(parsedExtraBody, key)
     )
-  }, [controls?.reserved_extra_body_keys, extraBody])
+  }, [controls?.reserved_extra_body_keys, currentExtraBody])
   const grammarOptions =
     grammarsQuery.data?.items?.map((item: LlamaGrammarRecord) => ({
       label: item.name,
@@ -199,9 +248,9 @@ export function LlamaCppAdvancedControls({
           <InputNumber
             min={0}
             disabled={!thinkingSupported}
-            value={thinkingBudget}
+            value={currentThinkingBudget}
             onChange={(value) =>
-              updateSetting(
+              updateLlamaField(
                 "llamaThinkingBudgetTokens",
                 typeof value === "number" ? value : undefined
               )
@@ -224,19 +273,22 @@ export function LlamaCppAdvancedControls({
             {t("sidepanel:llamaControls.grammarSource", "Grammar source")}
           </label>
           <Select
-            value={grammarMode || "none"}
-            onChange={(value: "none" | "library" | "inline") => {
-              updateSetting("llamaGrammarMode", value === "none" ? undefined : value)
+            value={currentGrammarMode || "none"}
+            onChange={(value: LlamaGrammarMode) => {
+              updateLlamaField(
+                "llamaGrammarMode",
+                value === "none" ? undefined : value
+              )
               if (value === "none") {
-                updateSetting("llamaGrammarId", undefined)
-                updateSetting("llamaGrammarInline", undefined)
-                updateSetting("llamaGrammarOverride", undefined)
+                updateLlamaField("llamaGrammarId", undefined)
+                updateLlamaField("llamaGrammarInline", undefined)
+                updateLlamaField("llamaGrammarOverride", undefined)
               }
               if (value === "inline") {
-                updateSetting("llamaGrammarId", undefined)
+                updateLlamaField("llamaGrammarId", undefined)
               }
               if (value === "library") {
-                updateSetting("llamaGrammarInline", undefined)
+                updateLlamaField("llamaGrammarInline", undefined)
               }
             }}
             options={[
@@ -247,12 +299,12 @@ export function LlamaCppAdvancedControls({
           />
         </div>
 
-        {grammarMode === "library" ? (
+        {currentGrammarMode === "library" ? (
           <div className="space-y-2">
             <Select
-              value={grammarId}
+              value={currentGrammarId}
               options={grammarOptions}
-              onChange={(value) => updateSetting("llamaGrammarId", value)}
+              onChange={(value) => updateLlamaField("llamaGrammarId", value)}
               placeholder={t(
                 "sidepanel:llamaControls.selectSavedGrammar",
                 "Select a saved grammar"
@@ -261,9 +313,9 @@ export function LlamaCppAdvancedControls({
               allowClear
             />
             <TextArea
-              value={grammarOverride || ""}
+              value={currentGrammarOverride || ""}
               onChange={(event) =>
-                updateSetting(
+                updateLlamaField(
                   "llamaGrammarOverride",
                   event.target.value || undefined
                 )
@@ -278,11 +330,11 @@ export function LlamaCppAdvancedControls({
           </div>
         ) : null}
 
-        {grammarMode === "inline" ? (
+        {currentGrammarMode === "inline" ? (
           <TextArea
-            value={grammarInline || ""}
+            value={currentGrammarInline || ""}
             onChange={(event) =>
-              updateSetting(
+              updateLlamaField(
                 "llamaGrammarInline",
                 event.target.value || undefined
               )
@@ -297,10 +349,10 @@ export function LlamaCppAdvancedControls({
       <LlamaGrammarLibraryModal
         open={libraryOpen}
         onClose={() => setLibraryOpen(false)}
-        selectedGrammarId={grammarId}
+        selectedGrammarId={currentGrammarId}
         onSelectGrammar={(grammar) => {
-          updateSetting("llamaGrammarMode", "library")
-          updateSetting("llamaGrammarId", grammar.id)
+          updateLlamaField("llamaGrammarMode", "library")
+          updateLlamaField("llamaGrammarId", grammar.id)
           setLibraryOpen(false)
         }}
       />
