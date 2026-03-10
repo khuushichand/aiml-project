@@ -153,3 +153,136 @@ async def test_create_external_server_raises_conflict_without_allow_existing(tmp
             enabled=True,
             actor_id=1,
         )
+
+
+@pytest.mark.asyncio
+async def test_service_can_import_legacy_external_server(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.services.mcp_hub_service import McpHubService
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("BYOK_ENCRYPTION_KEY", _b64_key(b"k"))
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    svc = McpHubService(repo=repo)
+    monkeypatch.setattr(
+        svc,
+        "_legacy_external_inventory",
+        [
+            {
+                "id": "legacy-docs",
+                "name": "Legacy Docs",
+                "enabled": True,
+                "transport": "websocket",
+                "config": {
+                    "websocket": {"url": "wss://docs.example/ws"},
+                    "auth": {"mode": "bearer_env", "token_env": "DOCS_TOKEN"},
+                },
+                "legacy_source_ref": "yaml:legacy-docs",
+            }
+        ],
+        raising=False,
+    )
+
+    imported = await svc.import_legacy_external_server(
+        server_id="legacy-docs",
+        actor_id=1,
+    )
+
+    assert imported["id"] == "legacy-docs"
+    assert imported["server_source"] == "managed"
+
+
+@pytest.mark.asyncio
+async def test_service_resolves_effective_external_access_with_assignment_disable(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.services.mcp_hub_service import McpHubService
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("BYOK_ENCRYPTION_KEY", _b64_key(b"k"))
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    svc = McpHubService(repo=repo)
+
+    profile = await repo.create_permission_profile(
+        name="External Docs",
+        owner_scope_type="user",
+        owner_scope_id=1,
+        mode="custom",
+        policy_document={"capabilities": ["network.external"]},
+        actor_id=1,
+    )
+    assignment = await repo.create_policy_assignment(
+        target_type="persona",
+        target_id="researcher",
+        owner_scope_type="user",
+        owner_scope_id=1,
+        profile_id=int(profile["id"]),
+        inline_policy_document={"capabilities": ["network.external"]},
+        approval_policy_id=None,
+        actor_id=1,
+        is_active=True,
+    )
+    await repo.upsert_external_server(
+        server_id="docs",
+        name="Docs",
+        transport="websocket",
+        config_json=json.dumps({"websocket": {"url": "wss://docs.example/ws"}}),
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        actor_id=1,
+    )
+    await repo.upsert_external_secret(
+        server_id="docs",
+        encrypted_blob='{"ciphertext":"abc"}',
+        key_hint="cdef",
+        actor_id=1,
+    )
+    await repo.create_credential_binding(
+        binding_target_type="profile",
+        binding_target_id=str(profile["id"]),
+        external_server_id="docs",
+        credential_ref="server",
+        binding_mode="grant",
+        usage_rules={},
+        actor_id=1,
+    )
+    await repo.create_credential_binding(
+        binding_target_type="assignment",
+        binding_target_id=str(assignment["id"]),
+        external_server_id="docs",
+        credential_ref="server",
+        binding_mode="disable",
+        usage_rules={},
+        actor_id=1,
+    )
+
+    access = await svc.resolve_effective_external_access(
+        assignment_id=int(assignment["id"]),
+        actor_id=1,
+    )
+
+    assert access["servers"][0]["disabled_by_assignment"] is True

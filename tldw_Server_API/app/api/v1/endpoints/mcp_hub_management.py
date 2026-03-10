@@ -388,9 +388,18 @@ def _external_row_to_response(row: dict[str, Any]) -> ExternalServerResponse:
         owner_scope_type=str(row.get("owner_scope_type") or "global"),
         owner_scope_id=row.get("owner_scope_id"),
         transport=str(row.get("transport") or ""),
-        config=_load_json_object(row.get("config_json")),
+        config=_load_json_object(row.get("config_json") if row.get("config_json") is not None else row.get("config")),
         secret_configured=bool(row.get("secret_configured")),
         key_hint=row.get("key_hint"),
+        server_source=str(row.get("server_source") or "managed"),
+        legacy_source_ref=row.get("legacy_source_ref"),
+        superseded_by_server_id=row.get("superseded_by_server_id"),
+        binding_count=int(row.get("binding_count") or 0),
+        runtime_executable=bool(
+            row.get("runtime_executable")
+            if row.get("runtime_executable") is not None
+            else True
+        ),
         created_by=row.get("created_by"),
         updated_by=row.get("updated_by"),
         created_at=row.get("created_at"),
@@ -1205,6 +1214,26 @@ async def create_external_server(
             actor_id=principal.user_id,
             allow_existing=False,
         )
+    except McpHubConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _external_row_to_response(row)
+
+
+@router.post("/external-servers/{server_id}/import", response_model=ExternalServerResponse, status_code=201)
+async def import_external_server(
+    server_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ExternalServerResponse:
+    """Import a legacy external server definition into MCP Hub managed storage."""
+    _require_mutation_permission(principal)
+    try:
+        row = await svc.import_legacy_external_server(
+            server_id=server_id,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except McpHubConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _external_row_to_response(row)

@@ -397,3 +397,100 @@ async def test_repo_can_crud_approval_policy_and_match_active_decision(tmp_path,
 
     deleted = await repo.delete_approval_policy(int(policy["id"]))
     assert deleted is True
+
+
+@pytest.mark.asyncio
+async def test_repo_credential_binding_is_unique_per_target_and_server(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    await repo.upsert_external_server(
+        server_id="docs",
+        name="Docs",
+        transport="websocket",
+        config_json='{"url":"wss://docs.example/ws"}',
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        actor_id=1,
+    )
+
+    first = await repo.create_credential_binding(
+        binding_target_type="profile",
+        binding_target_id="11",
+        external_server_id="docs",
+        credential_ref="server",
+        binding_mode="grant",
+        usage_rules={},
+        actor_id=1,
+    )
+    assert first["binding_mode"] == "grant"
+
+    with pytest.raises(Exception):
+        await repo.create_credential_binding(
+            binding_target_type="profile",
+            binding_target_id="11",
+            external_server_id="docs",
+            credential_ref="server",
+            binding_mode="grant",
+            usage_rules={},
+            actor_id=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_repo_rejects_disable_binding_for_profile_target(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    await repo.upsert_external_server(
+        server_id="docs",
+        name="Docs",
+        transport="websocket",
+        config_json='{"url":"wss://docs.example/ws"}',
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        actor_id=1,
+    )
+
+    with pytest.raises(ValueError):
+        await repo.create_credential_binding(
+            binding_target_type="profile",
+            binding_target_id="11",
+            external_server_id="docs",
+            credential_ref="server",
+            binding_mode="disable",
+            usage_rules={},
+            actor_id=1,
+        )

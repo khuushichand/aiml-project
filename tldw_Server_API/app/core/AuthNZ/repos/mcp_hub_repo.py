@@ -19,6 +19,8 @@ _VALID_APPROVAL_MODES = {
     "ask_on_sensitive_actions",
     "temporary_elevation_allowed",
 }
+_VALID_CREDENTIAL_BINDING_TARGET_TYPES = {"profile", "assignment"}
+_VALID_CREDENTIAL_BINDING_MODES = {"grant", "disable"}
 _UNSET = object()
 
 
@@ -62,6 +64,20 @@ def _normalize_approval_mode(mode: str | None) -> str:
     value = str(mode or "").strip().lower()
     if value not in _VALID_APPROVAL_MODES:
         raise ValueError(f"Invalid approval mode: {mode}")
+    return value
+
+
+def _normalize_credential_binding_target_type(target_type: str | None) -> str:
+    value = str(target_type or "").strip().lower()
+    if value not in _VALID_CREDENTIAL_BINDING_TARGET_TYPES:
+        raise ValueError(f"Invalid credential binding target type: {target_type}")
+    return value
+
+
+def _normalize_credential_binding_mode(mode: str | None) -> str:
+    value = str(mode or "").strip().lower()
+    if value not in _VALID_CREDENTIAL_BINDING_MODES:
+        raise ValueError(f"Invalid credential binding mode: {mode}")
     return value
 
 
@@ -159,6 +175,16 @@ class McpHubRepo:
         out = dict(row)
         out["enabled"] = _to_bool(out.get("enabled"))
         out["secret_configured"] = _to_bool(out.get("secret_configured"))
+        out["server_source"] = str(out.get("server_source") or "managed")
+        out["legacy_source_ref"] = out.get("legacy_source_ref")
+        out["superseded_by_server_id"] = out.get("superseded_by_server_id")
+        out["binding_count"] = int(out.get("binding_count") or 0)
+        out["runtime_executable"] = bool(
+            out.get("runtime_executable")
+            if out.get("runtime_executable") is not None
+            else (out["server_source"] == "managed" and out["enabled"])
+        )
+        out["config"] = _load_json_dict(out.get("config_json"))
         return out
 
     @staticmethod
@@ -211,6 +237,18 @@ class McpHubRepo:
             return None
         out = dict(row)
         out["consume_on_match"] = _to_bool(out.get("consume_on_match"))
+        return out
+
+    @staticmethod
+    def _normalize_credential_binding_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        out = dict(row)
+        usage_rules = _load_json_dict(out.pop("usage_rules_json", None))
+        out["usage_rules"] = usage_rules
+        out["binding_mode"] = str(
+            out.get("binding_mode") or usage_rules.get("binding_mode") or "grant"
+        )
         return out
 
     @staticmethod
@@ -1558,3 +1596,127 @@ class McpHubRepo:
         )
         rowcount = getattr(cursor, "rowcount", 0)
         return bool(rowcount and rowcount > 0)
+
+    async def create_credential_binding(
+        self,
+        *,
+        binding_target_type: str,
+        binding_target_id: str,
+        external_server_id: str,
+        credential_ref: str,
+        binding_mode: str,
+        usage_rules: dict[str, Any],
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        normalized_target_type = _normalize_credential_binding_target_type(binding_target_type)
+        normalized_binding_mode = _normalize_credential_binding_mode(binding_mode)
+        target_id = str(binding_target_id or "").strip()
+        if not target_id:
+            raise ValueError("binding_target_id is required")
+        if normalized_target_type == "profile" and normalized_binding_mode == "disable":
+            raise ValueError("profile bindings may not use disable mode")
+
+        existing = await self.db_pool.fetchone(
+            """
+            SELECT id
+            FROM mcp_credential_bindings
+            WHERE binding_target_type = ?
+              AND binding_target_id = ?
+              AND external_server_id = ?
+            """,
+            (normalized_target_type, target_id, external_server_id.strip()),
+        )
+        if existing is not None:
+            raise ValueError("credential binding already exists for target and server")
+
+        server = await self.get_external_server(external_server_id)
+        if not server:
+            raise ValueError(f"Unknown external server: {external_server_id}")
+        if str(server.get("server_source") or "managed") != "managed":
+            raise ValueError("credential bindings require a managed external server")
+        if server.get("superseded_by_server_id"):
+            raise ValueError("credential bindings cannot target superseded external servers")
+
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        usage = dict(usage_rules or {})
+        usage["binding_mode"] = normalized_binding_mode
+
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_credential_bindings (
+                binding_target_type,
+                binding_target_id,
+                external_server_id,
+                credential_ref,
+                usage_rules_json,
+                created_by,
+                updated_by,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_target_type,
+                target_id,
+                external_server_id.strip(),
+                str(credential_ref or "server").strip(),
+                json.dumps(usage),
+                actor_id,
+                actor_id,
+                ts,
+                ts,
+            ),
+        )
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id,
+                   binding_target_type,
+                   binding_target_id,
+                   external_server_id,
+                   credential_ref,
+                   usage_rules_json,
+                   created_by,
+                   updated_by,
+                   created_at,
+                   updated_at
+            FROM mcp_credential_bindings
+            WHERE binding_target_type = ?
+              AND binding_target_id = ?
+              AND external_server_id = ?
+            """,
+            (normalized_target_type, target_id, external_server_id.strip()),
+        )
+        return self._normalize_credential_binding_row(self._row_to_dict(row) if row else None) or {}
+
+    async def list_credential_bindings(
+        self,
+        *,
+        binding_target_type: str,
+        binding_target_id: str,
+    ) -> list[dict[str, Any]]:
+        normalized_target_type = _normalize_credential_binding_target_type(binding_target_type)
+        target_id = str(binding_target_id or "").strip()
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id,
+                   binding_target_type,
+                   binding_target_id,
+                   external_server_id,
+                   credential_ref,
+                   usage_rules_json,
+                   created_by,
+                   updated_by,
+                   created_at,
+                   updated_at
+            FROM mcp_credential_bindings
+            WHERE binding_target_type = ?
+              AND binding_target_id = ?
+            ORDER BY external_server_id, id
+            """,
+            (normalized_target_type, target_id),
+        )
+        return [
+            self._normalize_credential_binding_row(self._row_to_dict(row)) or {}
+            for row in rows
+        ]

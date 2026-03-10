@@ -25,6 +25,9 @@ from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     encrypt_byok_payload,
     key_hint_for_api_key,
 )
+from tldw_Server_API.app.services.mcp_hub_external_access_resolver import (
+    McpHubExternalAccessResolver,
+)
 
 
 async def _await_if_needed(value: Any) -> Any:
@@ -78,6 +81,22 @@ class McpHubService:
 
     def __init__(self, repo: McpHubRepo):
         self.repo = repo
+
+    @staticmethod
+    def _normalize_imported_external_config(config: dict[str, Any]) -> dict[str, Any]:
+        out = dict(config or {})
+        auth = dict(out.get("auth") or {})
+        mode = str(auth.get("mode") or "").strip().lower()
+        if mode == "bearer_env":
+            auth = {"mode": "bearer_token"}
+        elif mode == "api_key_env":
+            auth = {
+                "mode": "api_key_header",
+                "api_key_header": str(auth.get("api_key_header") or "X-API-KEY"),
+            }
+        if auth:
+            out["auth"] = auth
+        return out
 
     async def create_permission_profile(
         self,
@@ -648,10 +667,91 @@ class McpHubService:
         owner_scope_type: str | None = None,
         owner_scope_id: int | None = None,
     ) -> list[dict[str, Any]]:
-        return await self.repo.list_external_servers(
+        rows = await self.repo.list_external_servers(
             owner_scope_type=owner_scope_type,
             owner_scope_id=owner_scope_id,
         )
+        legacy_rows = [
+            {
+                "id": str(item.get("id") or ""),
+                "name": str(item.get("name") or ""),
+                "enabled": bool(item.get("enabled", True)),
+                "owner_scope_type": str(item.get("owner_scope_type") or owner_scope_type or "global"),
+                "owner_scope_id": item.get("owner_scope_id", owner_scope_id),
+                "transport": str(item.get("transport") or ""),
+                "config_json": json.dumps(item.get("config") or {}),
+                "config": dict(item.get("config") or {}),
+                "secret_configured": False,
+                "key_hint": None,
+                "server_source": "legacy",
+                "legacy_source_ref": item.get("legacy_source_ref"),
+                "superseded_by_server_id": item.get("superseded_by_server_id"),
+                "binding_count": 0,
+                "runtime_executable": False,
+                "created_by": None,
+                "updated_by": None,
+                "created_at": None,
+                "updated_at": None,
+            }
+            for item in list(getattr(self, "_legacy_external_inventory", []) or [])
+        ]
+        return [*rows, *legacy_rows]
+
+    async def import_legacy_external_server(
+        self,
+        *,
+        server_id: str,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        inventory = list(getattr(self, "_legacy_external_inventory", []) or [])
+        legacy = next((item for item in inventory if str(item.get("id") or "") == server_id), None)
+        if legacy is None:
+            raise ResourceNotFoundError("mcp_external_server_legacy", identifier=server_id)
+
+        row = await self.create_external_server(
+            server_id=server_id,
+            name=str(legacy.get("name") or server_id),
+            transport=str(legacy.get("transport") or "websocket"),
+            config=self._normalize_imported_external_config(dict(legacy.get("config") or {})),
+            owner_scope_type=str(legacy.get("owner_scope_type") or "global"),
+            owner_scope_id=legacy.get("owner_scope_id"),
+            enabled=bool(legacy.get("enabled", True)),
+            actor_id=actor_id,
+            allow_existing=True,
+        )
+        out = dict(row)
+        out["server_source"] = "managed"
+        out["legacy_source_ref"] = legacy.get("legacy_source_ref")
+        out["runtime_executable"] = True
+        return out
+
+    async def resolve_effective_external_access(
+        self,
+        *,
+        assignment_id: int,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        resolver = McpHubExternalAccessResolver(repo=self.repo)
+        assignment = await self.repo.get_policy_assignment(int(assignment_id))
+        effective_policy = {
+            "capabilities": list(
+                ((assignment or {}).get("inline_policy_document") or {}).get("capabilities") or []
+            )
+        }
+        summary = await resolver.resolve(
+            assignment_id=int(assignment_id),
+            effective_policy=effective_policy,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.external_access.resolve",
+                actor_id=actor_id,
+                resource_type="mcp_policy_assignment",
+                resource_id=str(assignment_id),
+                metadata={"server_count": len(summary.get("servers") or [])},
+            )
+        )
+        return summary
 
     async def delete_external_server(self, server_id: str, *, actor_id: int | None) -> bool:
         deleted = await self.repo.delete_external_server(server_id)

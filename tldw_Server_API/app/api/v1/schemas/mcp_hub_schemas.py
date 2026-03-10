@@ -304,6 +304,11 @@ class ExternalServerResponse(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     secret_configured: bool
     key_hint: str | None = None
+    server_source: str = "managed"
+    legacy_source_ref: str | None = None
+    superseded_by_server_id: str | None = None
+    binding_count: int = 0
+    runtime_executable: bool = True
     created_by: int | None = None
     updated_by: int | None = None
     created_at: datetime | str | None = None

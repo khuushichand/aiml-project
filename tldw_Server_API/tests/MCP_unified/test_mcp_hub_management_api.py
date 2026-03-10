@@ -38,6 +38,54 @@ class _FakeService:
     async def list_acp_profiles(self, **_kwargs: Any) -> list[dict[str, Any]]:
         return []
 
+    async def list_external_servers(self, **_kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "docs",
+                "name": "Docs",
+                "enabled": True,
+                "owner_scope_type": "global",
+                "owner_scope_id": None,
+                "transport": "websocket",
+                "config": {"url": "wss://docs.example/ws"},
+                "secret_configured": True,
+                "key_hint": "cdef",
+                "server_source": "managed",
+                "legacy_source_ref": None,
+                "superseded_by_server_id": None,
+                "binding_count": 2,
+                "runtime_executable": True,
+                "created_by": 1,
+                "updated_by": 1,
+                "created_at": None,
+                "updated_at": None,
+            }
+        ]
+
+    async def import_legacy_external_server(self, *, server_id: str, actor_id: int | None):
+        assert actor_id == 1
+        assert server_id == "legacy-docs"
+        return {
+            "id": server_id,
+            "name": "Legacy Docs",
+            "enabled": True,
+            "owner_scope_type": "global",
+            "owner_scope_id": None,
+            "transport": "websocket",
+            "config": {"url": "wss://docs.example/ws"},
+            "secret_configured": False,
+            "key_hint": None,
+            "server_source": "managed",
+            "legacy_source_ref": "yaml:legacy-docs",
+            "superseded_by_server_id": None,
+            "binding_count": 0,
+            "runtime_executable": True,
+            "created_by": actor_id,
+            "updated_by": actor_id,
+            "created_at": None,
+            "updated_at": None,
+        }
+
     async def set_external_server_secret(self, *, server_id: str, secret_value: str, actor_id: int | None):
         assert actor_id == 1
         assert server_id == "docs"
@@ -135,3 +183,35 @@ async def test_set_external_secret_bad_request_maps_to_400() -> None:
             json={"secret": "abc123secret"},
         )
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_list_external_servers_includes_source_state_fields() -> None:
+    app = _build_app(
+        principal=_make_principal(roles=["admin"], permissions=[]),
+        fail_with_401=False,
+    )
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/external-servers")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload[0]["server_source"] == "managed"
+    assert payload[0]["binding_count"] == 2
+    assert payload[0]["runtime_executable"] is True
+
+
+@pytest.mark.asyncio
+async def test_import_legacy_external_server_endpoint_returns_managed_row() -> None:
+    app = _build_app(
+        principal=_make_principal(roles=["admin"], permissions=[]),
+        fail_with_401=False,
+    )
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/mcp/hub/external-servers/legacy-docs/import")
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    assert payload["id"] == "legacy-docs"
+    assert payload["server_source"] == "managed"
+    assert payload["legacy_source_ref"] == "yaml:legacy-docs"
