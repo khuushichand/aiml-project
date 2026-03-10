@@ -910,6 +910,13 @@ export const MediaReviewReadingPane: React.FC<MediaReviewReadingPaneProps> = ({ 
                 </div>
               )}
             </div>
+          ) : showPreviewMode && previewedDetail ? (
+            <div
+              ref={viewerParentRef}
+              className="relative flex-1 min-h-0 overflow-auto"
+            >
+              {renderCard(previewedDetail, 0)}
+            </div>
           ) : (
             <>
               <div
