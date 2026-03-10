@@ -377,6 +377,22 @@ vi.mock("antd", async (importOriginal) => {
   }
 })
 
+vi.mock("@/components/Common/Markdown", () => ({
+  Markdown: ({ message }: { message: string }) => <div data-testid="mock-markdown">{message}</div>
+}))
+
+vi.mock("@/components/Media/diff-worker-client", () => ({
+  computeDiffSync: () => [],
+  shouldUseWorkerDiff: () => false,
+  shouldRequireSampling: () => false,
+  sampleTextForDiff: (t: string) => t,
+  computeDiffWithWorker: async () => [],
+  createDiffWorker: () => null,
+  DIFF_SYNC_LINE_THRESHOLD: 4000,
+  DIFF_HARD_CHAR_THRESHOLD: 300_000,
+  DIFF_SAMPLED_CHAR_BUDGET: 120_000
+}))
+
 describe("MediaReviewPage stage3 search/filter/sort", () => {
   beforeEach(() => {
     mocks.bgRequest.mockReset()
@@ -499,7 +515,7 @@ describe("MediaReviewPage stage3 search/filter/sort", () => {
       target: { value: "alpha" }
     })
     fireEvent.click(screen.getByRole("checkbox", { name: /search full content/i }))
-    fireEvent.click(screen.getByRole("button", { name: /search/i }))
+    fireEvent.click(screen.getAllByRole("button", { name: /search/i })[0])
 
     expect(screen.getByText(/scans current page results/i)).toBeInTheDocument()
     await waitFor(() => {
@@ -509,7 +525,7 @@ describe("MediaReviewPage stage3 search/filter/sort", () => {
     })
   })
 
-  it("shows removable collapsed filter chips and removes chip actions", async () => {
+  it("shows removable filter chips and removes chip actions", async () => {
     render(<MediaReviewPage />)
 
     await waitFor(() => {
@@ -522,10 +538,8 @@ describe("MediaReviewPage stage3 search/filter/sort", () => {
     fireEvent.change(screen.getByLabelText(/start date/i), {
       target: { value: "2026-01-01" }
     })
-    fireEvent.click(
-      screen.getByRole("button", { name: /filters/i, expanded: true })
-    )
 
+    // In three-panel layout, filter chips are always visible in the left panel
     const sortChipRemove = await screen.findByRole("button", {
       name: /remove filter sort:/i
     })

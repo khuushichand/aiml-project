@@ -250,6 +250,7 @@ const renderStudioPane = () => {
 describe("StudioPane Stage 1 generation lifecycle control", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.removeItem("tldw:workspace-playground:recent-output-types:v1")
 
     workspaceStoreState.selectedSourceIds = ["source-1"]
     workspaceStoreState.getSelectedMediaIds = () => [101]

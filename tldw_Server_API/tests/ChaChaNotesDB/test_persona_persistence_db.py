@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.tests.Characters.test_character_functionality_db import sample_card_data
 
 
 pytestmark = pytest.mark.unit
@@ -67,6 +68,9 @@ def test_migration_v25_to_latest_creates_persona_tables(db_path: Path):
     assert "idx_persona_profiles_user_active" in profile_indexes
     profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
     assert "use_persona_state_context_default" in profile_columns
+    assert "origin_character_id" in profile_columns
+    assert "origin_character_name" in profile_columns
+    assert "origin_character_snapshot_at" in profile_columns
     memory_columns = {row["name"] for row in conn.execute("PRAGMA table_info('persona_memory_entries')").fetchall()}
     assert "scope_snapshot_id" in memory_columns
     assert "session_id" in memory_columns
@@ -78,13 +82,16 @@ def test_migration_v25_to_latest_creates_persona_tables(db_path: Path):
 
 
 def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB):
+    character_id = db_instance.add_character_card(sample_card_data(name="Research Persona Source"))
+    assert character_id is not None
+
     persona_id = db_instance.create_persona_profile(
         {
             "user_id": "user-1",
             "name": "Research Persona",
             "mode": "session_scoped",
             "system_prompt": "You are a focused assistant.",
-            "character_card_id": 1,
+            "character_card_id": character_id,
             "is_active": True,
         }
     )
@@ -94,8 +101,12 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
     assert profile is not None
     assert profile["name"] == "Research Persona"
     assert profile["mode"] == "session_scoped"
+    assert profile["character_card_id"] == character_id
     assert profile["is_active"] is True
     assert profile["use_persona_state_context_default"] is True
+    assert profile["origin_character_id"] == character_id
+    assert profile["origin_character_name"] == "Research Persona Source"
+    assert profile["origin_character_snapshot_at"]
     expected_version = int(profile["version"])
 
     assert db_instance.update_persona_profile(
@@ -229,6 +240,17 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
         include_archived=False,
     )
     assert visible_memories == []
+
+    source_character = db_instance.get_character_card_by_id(character_id)
+    assert source_character is not None
+    assert db_instance.soft_delete_character_card(character_id, expected_version=int(source_character["version"])) is True
+    assert db_instance.get_character_card_by_id(character_id) is None
+
+    profile_after_source_delete = db_instance.get_persona_profile(persona_id, user_id="user-1")
+    assert profile_after_source_delete is not None
+    assert profile_after_source_delete["origin_character_id"] == character_id
+    assert profile_after_source_delete["origin_character_name"] == "Research Persona Source"
+    assert profile_after_source_delete["origin_character_snapshot_at"]
 
     assert db_instance.get_persona_profile(persona_id, user_id="user-2") is None
     assert db_instance.list_persona_profiles(user_id="user-2") == []

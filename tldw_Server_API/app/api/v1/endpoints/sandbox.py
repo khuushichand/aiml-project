@@ -155,18 +155,6 @@ router = APIRouter(prefix="/sandbox", tags=["sandbox"], route_class=SandboxArtif
 
 _service = SandboxService(enable_background_tasks=False)
 
-try:
-    import fcntl  # type: ignore
-    _SANDBOX_HAS_FCNTL = True
-except Exception:
-    _SANDBOX_HAS_FCNTL = False
-
-try:
-    import msvcrt  # type: ignore
-    _SANDBOX_HAS_MSVCRT = True
-except Exception:
-    _SANDBOX_HAS_MSVCRT = False
-
 
 @router.on_event("startup")
 async def _sandbox_startup() -> None:
@@ -185,71 +173,6 @@ _SANDBOX_WS_ACTIVE_BY_USER: dict[str, int] = {}
 _SANDBOX_WS_ACTIVE_BY_PERSONA: dict[str, int] = {}
 _SANDBOX_WS_ACTIVE_BY_SESSION: dict[str, int] = {}
 _SANDBOX_WS_ACTIVE_BY_RUN: dict[str, int] = {}
-_SANDBOX_UPLOAD_FALLBACK_LOCKS: dict[str, threading.Lock] = {}
-_SANDBOX_UPLOAD_FALLBACK_LOCKS_GUARD = threading.Lock()
-
-
-def _sandbox_upload_lock_path(workspace_root: str) -> str:
-    return os.path.join(workspace_root, ".sandbox-upload.lock")
-
-
-def _get_sandbox_upload_thread_lock(lock_path: str) -> threading.Lock:
-    key = str(os.path.abspath(lock_path))
-    with _SANDBOX_UPLOAD_FALLBACK_LOCKS_GUARD:
-        lock = _SANDBOX_UPLOAD_FALLBACK_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _SANDBOX_UPLOAD_FALLBACK_LOCKS[key] = lock
-    return lock
-
-
-@contextlib.asynccontextmanager
-async def _sandbox_session_upload_lock(workspace_root: str):
-    os.makedirs(workspace_root, exist_ok=True)
-    lock_path = _sandbox_upload_lock_path(workspace_root)
-
-    if _SANDBOX_HAS_FCNTL:
-        def _open_and_lock():
-            handle = open(lock_path, "a", encoding="utf-8")
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            return handle
-
-        handle = await asyncio.to_thread(_open_and_lock)
-        try:
-            yield
-        finally:
-            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                await asyncio.to_thread(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
-            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                await asyncio.to_thread(handle.close)
-        return
-
-    if _SANDBOX_HAS_MSVCRT:
-        def _open_and_lock():
-            handle = open(lock_path, "a+b")
-            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-            return handle
-
-        handle = await asyncio.to_thread(_open_and_lock)
-        try:
-            yield
-        finally:
-            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                await asyncio.to_thread(handle.seek, 0)
-            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                await asyncio.to_thread(msvcrt.locking, handle.fileno(), msvcrt.LK_UNLCK, 1)
-            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                await asyncio.to_thread(handle.close)
-        return
-
-    lock = _get_sandbox_upload_thread_lock(lock_path)
-    await asyncio.to_thread(lock.acquire)
-    try:
-        yield
-    finally:
-        lock.release()
 
 
 def _sandbox_ws_limit(env_key: str, settings_attr: str, default: int) -> int:
@@ -383,6 +306,88 @@ def _model_field_names(model: object | None) -> set[str]:
     if fields is None:
         fields = getattr(model, "__fields_set__", set())
     return {str(field) for field in (fields or set())}
+
+
+def _workspace_usage_bytes_sync(root: str) -> int:
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in filenames:
+            full_path = os.path.join(dirpath, filename)
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                if os.path.isfile(full_path):
+                    total += int(os.path.getsize(full_path))
+    return total
+
+
+def _existing_file_size_sync(target: str) -> int:
+    try:
+        if os.path.isfile(target):
+            return int(os.path.getsize(target))
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+        return 0
+    return 0
+
+
+def _prepare_temp_target_sync(target: str) -> tuple[int, str, int]:
+    parent = os.path.dirname(target)
+    os.makedirs(parent, exist_ok=True)
+    existing_size = _existing_file_size_sync(target)
+    fd, temp_path = tempfile.mkstemp(
+        dir=parent,
+        prefix=f".{os.path.basename(target)}.",
+        suffix=".upload",
+    )
+    return fd, temp_path, existing_size
+
+
+def _write_fd_chunk_sync(fd: int, chunk: bytes) -> None:
+    os.write(fd, chunk)
+
+
+def _finalize_temp_target_sync(fd: int, temp_path: str, target: str) -> None:
+    try:
+        os.close(fd)
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+        pass
+    os.replace(temp_path, target)
+
+
+def _cleanup_temp_target_sync(fd: int, temp_path: str) -> None:
+    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+        os.close(fd)
+    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+        os.unlink(temp_path)
+
+
+def _make_directory_sync(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+def _stream_reader_to_target_sync(
+    target: str,
+    read_chunk,
+    *,
+    chunk_size: int,
+    workspace_used: int,
+    cap_bytes: int,
+) -> tuple[int, int]:
+    fd, temp_path, existing_size = _prepare_temp_target_sync(target)
+    file_bytes = 0
+    try:
+        while True:
+            chunk = read_chunk(chunk_size)
+            if not chunk:
+                break
+            next_total = workspace_used - existing_size + file_bytes + len(chunk)
+            if next_total > cap_bytes:
+                raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
+            _write_fd_chunk_sync(fd, chunk)
+            file_bytes += len(chunk)
+        _finalize_temp_target_sync(fd, temp_path, target)
+        return file_bytes, workspace_used - existing_size + file_bytes
+    except Exception:
+        _cleanup_temp_target_sync(fd, temp_path)
+        raise
 
 
 def _looks_like_jwt(token: str | None) -> bool:
@@ -871,6 +876,16 @@ async def create_snapshot(
             created_at=result["created_at"],
             size_bytes=result["size_bytes"],
         )
+    except SessionActiveRunsConflict as e:
+        err = str(e) or "session_has_active_runs"
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": err,
+                "active_runs": int(getattr(e, "active_runs", 0) or 0),
+                "session_id": str(session_id),
+            },
+        ) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except OSError as e:
@@ -898,6 +913,16 @@ async def restore_snapshot(
             restored=restored,
             snapshot_id=payload.snapshot_id,
         )
+    except SessionActiveRunsConflict as e:
+        err = str(e) or "session_has_active_runs"
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": err,
+                "active_runs": int(getattr(e, "active_runs", 0) or 0),
+                "session_id": str(session_id),
+            },
+        ) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except OSError as e:
@@ -928,6 +953,16 @@ async def clone_session(
             session_id=new_session.id,
             cloned_from=session_id,
         )
+    except SessionActiveRunsConflict as e:
+        err = str(e) or "session_has_active_runs"
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": err,
+                "active_runs": int(getattr(e, "active_runs", 0) or 0),
+                "session_id": str(session_id),
+            },
+        ) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
@@ -983,92 +1018,29 @@ async def upload_files(
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxFileUploadResponse:
     _require_session_owner(session_id, current_user)
-    ws_root = _service.get_session_workspace_path(session_id)
-    if not ws_root:
-        raise HTTPException(status_code=404, detail="session_not_found")
+    written = 0
+    count = 0
 
-    async with _sandbox_session_upload_lock(ws_root):
-        try:
-            cap_mb = int(os.getenv("SANDBOX_WORKSPACE_CAP_MB") or 256)
-        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-            cap_mb = 256
-        cap_bytes = cap_mb * 1024 * 1024
-        chunk_size = 64 * 1024
-        written = 0
-        count = 0
-
-        import tarfile
-        import zipfile
-        def _workspace_usage_bytes(root: str) -> int:
-            total = 0
-            for dirpath, _dirnames, filenames in os.walk(root):
-                for filename in filenames:
-                    full_path = os.path.join(dirpath, filename)
-                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                        if os.path.isfile(full_path):
-                            total += int(os.path.getsize(full_path))
-            return total
-
-        def _existing_file_size(target: str) -> int:
+    try:
+        async with _service.async_workspace_operation_lock(session_id) as ws_root:
             try:
-                if os.path.isfile(target):
-                    return int(os.path.getsize(target))
+                cap_mb = int(os.getenv("SANDBOX_WORKSPACE_CAP_MB") or 256)
             except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                return 0
-            return 0
+                cap_mb = 256
+            cap_bytes = cap_mb * 1024 * 1024
+            chunk_size = 64 * 1024
+            import tarfile
+            import zipfile
 
-        def _stream_reader_to_target(
-            target: str,
-            read_chunk,
-            *,
-            workspace_used: int,
-        ) -> tuple[int, int]:
-            parent = os.path.dirname(target)
-            os.makedirs(parent, exist_ok=True)
-            existing_size = _existing_file_size(target)
-            fd, temp_path = tempfile.mkstemp(
-                dir=parent,
-                prefix=f".{os.path.basename(target)}.",
-                suffix=".upload",
-            )
-            os.close(fd)
-            file_bytes = 0
-            try:
-                with open(temp_path, "wb") as out:
-                    while True:
-                        chunk = read_chunk(chunk_size)
-                        if not chunk:
-                            break
-                        next_total = workspace_used - existing_size + file_bytes + len(chunk)
-                        if next_total > cap_bytes:
-                            raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
-                        out.write(chunk)
-                        file_bytes += len(chunk)
-                os.replace(temp_path, target)
-                return file_bytes, workspace_used - existing_size + file_bytes
-            except Exception:
-                with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                    os.unlink(temp_path)
-                raise
-
-        async def _stream_upload_to_target(
-            upload: UploadFile,
-            target: str,
-            *,
-            workspace_used: int,
-        ) -> tuple[int, int]:
-            parent = os.path.dirname(target)
-            os.makedirs(parent, exist_ok=True)
-            existing_size = _existing_file_size(target)
-            fd, temp_path = tempfile.mkstemp(
-                dir=parent,
-                prefix=f".{os.path.basename(target)}.",
-                suffix=".upload",
-            )
-            os.close(fd)
-            file_bytes = 0
-            try:
-                with open(temp_path, "wb") as out:
+            async def _stream_upload_to_target(
+                upload: UploadFile,
+                target: str,
+                *,
+                workspace_used: int,
+            ) -> tuple[int, int]:
+                fd, temp_path, existing_size = await asyncio.to_thread(_prepare_temp_target_sync, target)
+                file_bytes = 0
+                try:
                     while True:
                         chunk = await upload.read(chunk_size)
                         if not chunk:
@@ -1076,95 +1048,104 @@ async def upload_files(
                         next_total = workspace_used - existing_size + file_bytes + len(chunk)
                         if next_total > cap_bytes:
                             raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
-                        out.write(chunk)
+                        await asyncio.to_thread(_write_fd_chunk_sync, fd, chunk)
                         file_bytes += len(chunk)
-                os.replace(temp_path, target)
-                return file_bytes, workspace_used - existing_size + file_bytes
-            except Exception:
-                with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                    os.unlink(temp_path)
-                raise
+                    await asyncio.to_thread(_finalize_temp_target_sync, fd, temp_path, target)
+                    return file_bytes, workspace_used - existing_size + file_bytes
+                except Exception:
+                    await asyncio.to_thread(_cleanup_temp_target_sync, fd, temp_path)
+                    raise
 
-        workspace_used = _workspace_usage_bytes(ws_root)
+            workspace_used = await asyncio.to_thread(_workspace_usage_bytes_sync, ws_root)
 
-        for up in files:
-            lower = (up.filename or "").lower()
-            if lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2")):
-                try:
-                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                        await up.seek(0)
-                    with tarfile.open(fileobj=up.file, mode="r:*") as tf:
-                        for member in tf.getmembers():
-                            if member.isdev() or member.issym() or member.islnk():
-                                continue
-                            target = safe_join(ws_root, member.name)
-                            if target is None:
-                                continue
-                            if member.isdir():
-                                os.makedirs(target, exist_ok=True)
-                                continue
-                            fileobj = tf.extractfile(member)
-                            if fileobj is None:
-                                continue
-                            try:
-                                file_bytes, workspace_used = _stream_reader_to_target(
-                                    target,
-                                    fileobj.read,
-                                    workspace_used=workspace_used,
-                                )
-                            finally:
-                                with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                                    fileobj.close()
-                            written += file_bytes
-                            count += 1
-                except HTTPException:
-                    raise
-                except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
-                    logger.warning(f"Failed to extract tar: {e}")
-            elif lower.endswith(".zip"):
-                try:
-                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                        await up.seek(0)
-                    with zipfile.ZipFile(up.file) as zf:
-                        for member in zf.infolist():
-                            if member.is_dir():
-                                continue
-                            if (member.external_attr >> 16) & 0xF000 == 0xA000:
-                                continue
-                            target = safe_join(ws_root, member.filename)
-                            if target is None:
-                                continue
-                            with zf.open(member) as fileobj:
-                                file_bytes, workspace_used = _stream_reader_to_target(
-                                    target,
-                                    fileobj.read,
-                                    workspace_used=workspace_used,
-                                )
-                            written += file_bytes
-                            count += 1
-                except HTTPException:
-                    raise
-                except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
-                    logger.warning(f"Failed to extract zip: {e}")
-            else:
-                target = safe_join(ws_root, up.filename or f"file_{count}")
-                if target is None:
-                    continue
-                try:
-                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-                        await up.seek(0)
-                    file_bytes, workspace_used = await _stream_upload_to_target(
-                        up,
-                        target,
-                        workspace_used=workspace_used,
-                    )
-                except HTTPException:
-                    raise
-                except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
-                    logger.warning(f"Failed reading upload file {up.filename}: {e}")
-                    continue
-                written += file_bytes
-                count += 1
+            for up in files:
+                lower = (up.filename or "").lower()
+                if lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2")):
+                    try:
+                        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                            await up.seek(0)
+                        with tarfile.open(fileobj=up.file, mode="r:*") as tf:
+                            for member in tf.getmembers():
+                                if member.isdev() or member.issym() or member.islnk():
+                                    continue
+                                target = safe_join(ws_root, member.name)
+                                if target is None:
+                                    continue
+                                if member.isdir():
+                                    await asyncio.to_thread(_make_directory_sync, target)
+                                    continue
+                                fileobj = tf.extractfile(member)
+                                if fileobj is None:
+                                    continue
+                                try:
+                                    file_bytes, workspace_used = await asyncio.to_thread(
+                                        _stream_reader_to_target_sync,
+                                        target,
+                                        fileobj.read,
+                                        chunk_size=chunk_size,
+                                        workspace_used=workspace_used,
+                                        cap_bytes=cap_bytes,
+                                    )
+                                finally:
+                                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                                        fileobj.close()
+                                written += file_bytes
+                                count += 1
+                    except HTTPException:
+                        raise
+                    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"Failed to extract tar: {e}")
+                elif lower.endswith(".zip"):
+                    try:
+                        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                            await up.seek(0)
+                        with zipfile.ZipFile(up.file) as zf:
+                            for member in zf.infolist():
+                                if member.is_dir():
+                                    continue
+                                if (member.external_attr >> 16) & 0xF000 == 0xA000:
+                                    continue
+                                target = safe_join(ws_root, member.filename)
+                                if target is None:
+                                    continue
+                                with zf.open(member) as fileobj:
+                                    file_bytes, workspace_used = await asyncio.to_thread(
+                                        _stream_reader_to_target_sync,
+                                        target,
+                                        fileobj.read,
+                                        chunk_size=chunk_size,
+                                        workspace_used=workspace_used,
+                                        cap_bytes=cap_bytes,
+                                    )
+                                written += file_bytes
+                                count += 1
+                    except HTTPException:
+                        raise
+                    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"Failed to extract zip: {e}")
+                else:
+                    target = safe_join(ws_root, up.filename or f"file_{count}")
+                    if target is None:
+                        continue
+                    try:
+                        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                            await up.seek(0)
+                        file_bytes, workspace_used = await _stream_upload_to_target(
+                            up,
+                            target,
+                            workspace_used=workspace_used,
+                        )
+                    except HTTPException:
+                        raise
+                    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"Failed reading upload file {up.filename}: {e}")
+                        continue
+                    written += file_bytes
+                    count += 1
+    except ValueError as e:
+        if str(e) == "session_not_found":
+            raise HTTPException(status_code=404, detail="session_not_found") from e
+        raise
 
     # Metrics
     try:
@@ -1230,12 +1211,8 @@ async def start_run(
         HTTPException: 409 with code "idempotency_conflict" when an idempotent request conflicts.
         HTTPException: 400 with code "invalid_spec_version" when the provided spec_version is unsupported.
     """
-    session = None
     if payload.session_id:
         _require_session_owner(payload.session_id, current_user)
-        session = _service.get_session(payload.session_id)
-        if session is None:
-            raise HTTPException(status_code=404, detail="session_not_found")
     try:
         files_inline = _service.parse_inline_files([(f.model_dump() if hasattr(f, "model_dump") else f.dict()) for f in (payload.files or [])])
     except ValueError as e:
@@ -1260,57 +1237,21 @@ async def start_run(
 
     payload_fields = _model_field_names(payload)
     resource_fields = _model_field_names(payload.resources)
+    explicit_fields = set(payload_fields)
+    explicit_fields.update({f"resources.{field}" for field in resource_fields})
 
-    runtime = (CoreRuntimeType(payload.runtime) if payload.runtime else None) if "runtime" in payload_fields else None
-    if runtime is None and session is not None and session.runtime is not None:
-        runtime = session.runtime
-
-    base_image = payload.base_image if "base_image" in payload_fields else None
-    if base_image is None and session is not None and session.base_image:
-        base_image = session.base_image
-    if payload.session_id and not base_image:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": {
-                    "code": "session_base_image_required",
-                    "message": "Session-backed runs require a base_image",
-                }
-            },
-        )
-
-    env = dict(payload.env or {}) if "env" in payload_fields else (
-        dict(session.env or {}) if session is not None else {}
-    )
-    timeout_sec = int(payload.timeout_sec) if "timeout_sec" in payload_fields else (
-        int(session.timeout_sec) if session is not None and session.timeout_sec is not None else default_exec_to
-    )
-    cpu = (payload.resources.cpu if payload.resources else None) if "cpu" in resource_fields else (
-        session.cpu_limit if session is not None else None
-    )
-    memory_mb = (payload.resources.memory_mb if payload.resources else None) if "memory_mb" in resource_fields else (
-        session.memory_mb if session is not None else None
-    )
-    network_policy = payload.network_policy if "network_policy" in payload_fields else (
-        session.network_policy if session is not None else None
-    )
-    trust_level = (
-        CoreTrustLevel(payload.trust_level) if payload.trust_level else None
-    ) if "trust_level" in payload_fields else (
-        session.trust_level if session is not None else None
-    )
-    persona_id = payload.persona_id if "persona_id" in payload_fields else (
-        session.persona_id if session is not None else None
-    )
-    workspace_id = payload.workspace_id if "workspace_id" in payload_fields else (
-        session.workspace_id if session is not None else None
-    )
-    workspace_group_id = payload.workspace_group_id if "workspace_group_id" in payload_fields else (
-        session.workspace_group_id if session is not None else None
-    )
-    scope_snapshot_id = payload.scope_snapshot_id if "scope_snapshot_id" in payload_fields else (
-        session.scope_snapshot_id if session is not None else None
-    )
+    runtime = CoreRuntimeType(payload.runtime) if payload.runtime else None
+    base_image = payload.base_image or None
+    env = dict(payload.env or {})
+    timeout_sec = int(payload.timeout_sec) if payload.timeout_sec is not None else default_exec_to
+    cpu = payload.resources.cpu if payload.resources else None
+    memory_mb = payload.resources.memory_mb if payload.resources else None
+    network_policy = payload.network_policy
+    trust_level = CoreTrustLevel(payload.trust_level) if payload.trust_level else None
+    persona_id = payload.persona_id
+    workspace_id = payload.workspace_id
+    workspace_group_id = payload.workspace_group_id
+    scope_snapshot_id = payload.scope_snapshot_id
 
     spec = RunSpec(
         session_id=payload.session_id,
@@ -1344,6 +1285,7 @@ async def start_run(
             spec_version=payload.spec_version,
             idem_key=idempotency_key,
             raw_body=payload.model_dump(exclude_none=True),
+            explicit_fields=explicit_fields,
         )
     except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         if isinstance(e, SandboxPolicy.RuntimeUnavailable):
@@ -1434,6 +1376,18 @@ async def start_run(
                     "details": e.details,
                 }
             })
+        if isinstance(e, ValueError) and str(e) == "session_not_found":
+            raise HTTPException(status_code=404, detail="session_not_found") from e
+        if isinstance(e, ValueError) and str(e) == "session_base_image_required":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": {
+                        "code": "session_base_image_required",
+                        "message": "Session-backed runs require a base_image",
+                    }
+                },
+            ) from e
         raise
     try:
         rt = (status.runtime.value if status.runtime else (payload.runtime or "unknown"))
