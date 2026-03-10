@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional, Union
 
+from pydantic import ValidationError
+
 try:  # psycopg v3 preferred; fall back to psycopg2 if installed
     from psycopg import sql as psycopg_sql  # type: ignore
 except ImportError:  # pragma: no cover
@@ -42,6 +44,11 @@ from .backends.query_utils import (
 
 # Local imports
 from .Prompts_DB import ConflictError, DatabaseError, InputError, PromptsDatabase, SchemaError
+from ..Prompt_Management.structured_prompts import (
+    PromptDefinition,
+    render_legacy_snapshot,
+    validate_prompt_definition,
+)
 
 _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -135,6 +142,82 @@ def _format_test_case_record(record: Optional[dict[str, Any]]) -> Optional[dict[
                 normalised[json_field] = json.loads(value)
 
     return normalised
+
+
+def _render_definition_legacy_fields(definition: PromptDefinition) -> tuple[str, str]:
+    messages = [
+        {"role": block.role, "content": block.content}
+        for block in sorted(definition.blocks, key=lambda item: item.order)
+        if block.enabled
+    ]
+    legacy = render_legacy_snapshot(messages, definition)
+    return legacy.system_prompt, legacy.user_prompt
+
+
+def _prepare_prompt_record_fields(
+    *,
+    prompt_format: Optional[str],
+    prompt_schema_version: Optional[int],
+    prompt_definition: Optional[Any],
+    system_prompt: Optional[str],
+    user_prompt: Optional[str],
+    current_prompt: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    effective_format = prompt_format or (
+        current_prompt.get("prompt_format") if current_prompt else "legacy"
+    ) or "legacy"
+
+    if effective_format == "structured":
+        effective_schema_version = prompt_schema_version
+        if effective_schema_version is None and current_prompt:
+            effective_schema_version = current_prompt.get("prompt_schema_version")
+        effective_definition = prompt_definition
+        if effective_definition is None and current_prompt:
+            effective_definition = current_prompt.get("prompt_definition")
+
+        if effective_schema_version is None:
+            raise InputError("Structured prompts require prompt_schema_version.")  # noqa: TRY003
+        if not isinstance(effective_definition, dict):
+            raise InputError("Structured prompts require prompt_definition.")  # noqa: TRY003
+
+        try:
+            definition = PromptDefinition.model_validate(effective_definition)
+        except ValidationError as exc:
+            raise InputError(f"Invalid prompt_definition: {exc}") from exc  # noqa: TRY003
+
+        issues = validate_prompt_definition(definition)
+        if issues:
+            raise InputError(issues[0].message)  # noqa: TRY003
+
+        derived_system_prompt, derived_user_prompt = _render_definition_legacy_fields(definition)
+        return {
+            "prompt_format": "structured",
+            "prompt_schema_version": int(effective_schema_version),
+            "prompt_definition": definition.model_dump(),
+            "system_prompt": derived_system_prompt,
+            "user_prompt": derived_user_prompt,
+        }
+
+    if prompt_definition is not None:
+        raise InputError("Legacy prompts cannot include prompt_definition.")  # noqa: TRY003
+    if prompt_schema_version is not None:
+        raise InputError("Legacy prompts cannot include prompt_schema_version.")  # noqa: TRY003
+
+    return {
+        "prompt_format": "legacy",
+        "prompt_schema_version": None,
+        "prompt_definition": None,
+        "system_prompt": (
+            system_prompt
+            if system_prompt is not None
+            else current_prompt.get("system_prompt") if current_prompt else None
+        ),
+        "user_prompt": (
+            user_prompt
+            if user_prompt is not None
+            else current_prompt.get("user_prompt") if current_prompt else None
+        ),
+    }
 
 
 ########################################################################################################################
@@ -553,6 +636,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         # 003 triggers file intentionally omitted (no-op placeholder)
         # 004 FTS handled via backend abstraction
         "005_add_chunking_templates.sql",
+        "006_prompt_studio_structured_prompts.sql",
     ]
 
     _FTS_CONFIG = (
@@ -569,6 +653,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         "validation_rules",
         "few_shot_examples",
         "modules_config",
+        "prompt_definition",
         "model_params",
         "inputs",
         "outputs",
@@ -706,6 +791,36 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 except BackendDatabaseError:
                     self.backend.execute(
                         "ALTER TABLE prompt_studio_optimizations ADD COLUMN test_case_ids JSONB",
+                        connection=conn,
+                    )
+                try:
+                    self.backend.execute(
+                        "SELECT prompt_format FROM prompt_studio_prompts LIMIT 1",
+                        connection=conn,
+                    )
+                except BackendDatabaseError:
+                    self.backend.execute(
+                        "ALTER TABLE prompt_studio_prompts ADD COLUMN prompt_format TEXT NOT NULL DEFAULT 'legacy'",
+                        connection=conn,
+                    )
+                try:
+                    self.backend.execute(
+                        "SELECT prompt_schema_version FROM prompt_studio_prompts LIMIT 1",
+                        connection=conn,
+                    )
+                except BackendDatabaseError:
+                    self.backend.execute(
+                        "ALTER TABLE prompt_studio_prompts ADD COLUMN prompt_schema_version INTEGER",
+                        connection=conn,
+                    )
+                try:
+                    self.backend.execute(
+                        "SELECT prompt_definition FROM prompt_studio_prompts LIMIT 1",
+                        connection=conn,
+                    )
+                except BackendDatabaseError:
+                    self.backend.execute(
+                        "ALTER TABLE prompt_studio_prompts ADD COLUMN prompt_definition JSONB",
                         connection=conn,
                     )
         self._ensure_postgres_fts()
@@ -1169,12 +1284,22 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         version_number: int = 1,
         system_prompt: Optional[str] = None,
         user_prompt: Optional[str] = None,
+        prompt_format: str = "legacy",
+        prompt_schema_version: Optional[int] = None,
+        prompt_definition: Optional[Any] = None,
         few_shot_examples: Optional[Any] = None,
         modules_config: Optional[Any] = None,
         parent_version_id: Optional[int] = None,
         change_description: Optional[str] = None,
         client_id: Optional[str] = None,
     ) -> dict[str, Any]:
+        normalized_prompt_fields = _prepare_prompt_record_fields(
+            prompt_format=prompt_format,
+            prompt_schema_version=prompt_schema_version,
+            prompt_definition=prompt_definition,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
         prompt_uuid = str(uuid.uuid4())
         payload = (
             prompt_uuid,
@@ -1182,8 +1307,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             signature_id,
             version_number,
             name,
-            system_prompt,
-            user_prompt,
+            normalized_prompt_fields["system_prompt"],
+            normalized_prompt_fields["user_prompt"],
+            normalized_prompt_fields["prompt_format"],
+            normalized_prompt_fields["prompt_schema_version"],
+            json.dumps(normalized_prompt_fields["prompt_definition"])
+            if normalized_prompt_fields["prompt_definition"] is not None
+            else None,
             json.dumps(few_shot_examples) if few_shot_examples is not None else None,
             json.dumps(modules_config) if modules_config is not None else None,
             parent_version_id,
@@ -1194,12 +1324,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         insert_sql = """
             INSERT INTO prompt_studio_prompts (
                 uuid, project_id, signature_id, version_number, name, system_prompt,
-                user_prompt, few_shot_examples, modules_config, parent_version_id,
+                user_prompt, prompt_format, prompt_schema_version, prompt_definition,
+                few_shot_examples, modules_config, parent_version_id,
                 change_description, client_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id, uuid, project_id, signature_id, version_number, name,
-                      system_prompt, user_prompt, few_shot_examples, modules_config,
-                      parent_version_id, change_description, client_id, deleted,
+                      system_prompt, user_prompt, prompt_format, prompt_schema_version,
+                      prompt_definition, few_shot_examples, modules_config, parent_version_id, change_description, client_id, deleted,
                       deleted_at, created_at, updated_at
         """
 
@@ -2866,6 +2997,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         name: Optional[str] = None,
         system_prompt: Optional[str] = None,
         user_prompt: Optional[str] = None,
+        prompt_format: Optional[str] = None,
+        prompt_schema_version: Optional[int] = None,
+        prompt_definition: Optional[Any] = None,
         few_shot_examples: Optional[Any] = None,
         modules_config: Optional[Any] = None,
         client_id: Optional[str] = None,
@@ -2893,15 +3027,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             new_version = int(current_prompt.get("version_number", 0)) + 1
 
             next_name = name if name is not None else current_prompt.get("name")
-            next_system = (
-                system_prompt
-                if system_prompt is not None
-                else current_prompt.get("system_prompt")
-            )
-            next_user = (
-                user_prompt
-                if user_prompt is not None
-                else current_prompt.get("user_prompt")
+            normalized_prompt_fields = _prepare_prompt_record_fields(
+                prompt_format=prompt_format,
+                prompt_schema_version=prompt_schema_version,
+                prompt_definition=prompt_definition,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                current_prompt=current_prompt,
             )
             next_examples = (
                 few_shot_examples
@@ -2923,12 +3055,15 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         name,
                         system_prompt,
                         user_prompt,
+                        prompt_format,
+                        prompt_schema_version,
+                        prompt_definition,
                         few_shot_examples,
                         modules_config,
                         parent_version_id,
                         change_description,
                         client_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     RETURNING *
                 """
 
@@ -2938,8 +3073,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 current_prompt.get("signature_id"),
                 new_version,
                 next_name,
-                next_system,
-                next_user,
+                normalized_prompt_fields["system_prompt"],
+                normalized_prompt_fields["user_prompt"],
+                normalized_prompt_fields["prompt_format"],
+                normalized_prompt_fields["prompt_schema_version"],
+                json.dumps(normalized_prompt_fields["prompt_definition"])
+                if normalized_prompt_fields["prompt_definition"] is not None
+                else None,
                 json.dumps(next_examples) if next_examples is not None else None,
                 json.dumps(next_modules) if next_modules is not None else None,
                 prompt_id,
@@ -3023,6 +3163,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             next_version = int(max_version_row[0]) + 1 if max_version_row else 1
 
             new_uuid = str(uuid.uuid4())
+            normalized_prompt_fields = _prepare_prompt_record_fields(
+                prompt_format=target_prompt.get("prompt_format"),
+                prompt_schema_version=target_prompt.get("prompt_schema_version"),
+                prompt_definition=target_prompt.get("prompt_definition"),
+                system_prompt=target_prompt.get("system_prompt"),
+                user_prompt=target_prompt.get("user_prompt"),
+            )
             insert_sql = """
                     INSERT INTO prompt_studio_prompts (
                         uuid,
@@ -3032,12 +3179,15 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         name,
                         system_prompt,
                         user_prompt,
+                        prompt_format,
+                        prompt_schema_version,
+                        prompt_definition,
                         few_shot_examples,
                         modules_config,
                         parent_version_id,
                         change_description,
                         client_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     RETURNING *
                 """
 
@@ -3047,8 +3197,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 target_prompt.get("signature_id"),
                 next_version,
                 target_prompt.get("name"),
-                target_prompt.get("system_prompt"),
-                target_prompt.get("user_prompt"),
+                normalized_prompt_fields["system_prompt"],
+                normalized_prompt_fields["user_prompt"],
+                normalized_prompt_fields["prompt_format"],
+                normalized_prompt_fields["prompt_schema_version"],
+                json.dumps(normalized_prompt_fields["prompt_definition"])
+                if normalized_prompt_fields["prompt_definition"] is not None
+                else None,
                 json.dumps(target_prompt.get("few_shot_examples"))
                 if target_prompt.get("few_shot_examples") is not None
                 else None,
@@ -3633,6 +3788,36 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     conn.commit()
                 except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     pass
+            try:
+                cursor.execute("SELECT prompt_format FROM prompt_studio_prompts LIMIT 1")
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
+                try:
+                    cursor.execute(
+                        "ALTER TABLE prompt_studio_prompts ADD COLUMN prompt_format TEXT NOT NULL DEFAULT 'legacy'"
+                    )
+                    conn.commit()
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
+                    pass
+            try:
+                cursor.execute("SELECT prompt_schema_version FROM prompt_studio_prompts LIMIT 1")
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
+                try:
+                    cursor.execute(
+                        "ALTER TABLE prompt_studio_prompts ADD COLUMN prompt_schema_version INTEGER"
+                    )
+                    conn.commit()
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
+                    pass
+            try:
+                cursor.execute("SELECT prompt_definition FROM prompt_studio_prompts LIMIT 1")
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
+                try:
+                    cursor.execute(
+                        "ALTER TABLE prompt_studio_prompts ADD COLUMN prompt_definition JSON"
+                    )
+                    conn.commit()
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
+                    pass
 
         except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error initializing Prompt Studio schema: {e}")
@@ -3680,6 +3865,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             "002_prompt_studio_indexes.sql",
             "003_prompt_studio_triggers.sql",
             "004_prompt_studio_fts.sql",
+            "006_prompt_studio_structured_prompts.sql",
         ]
         # Allow explicitly skipping FTS migrations when requested, but default to running them
         try:
@@ -4737,6 +4923,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         version_number: int = 1,
         system_prompt: Optional[str] = None,
         user_prompt: Optional[str] = None,
+        prompt_format: str = "legacy",
+        prompt_schema_version: Optional[int] = None,
+        prompt_definition: Optional[Any] = None,
         few_shot_examples: Optional[Any] = None,
         modules_config: Optional[Any] = None,
         parent_version_id: Optional[int] = None,
@@ -4746,6 +4935,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         import random
         import time
 
+        normalized_prompt_fields = _prepare_prompt_record_fields(
+            prompt_format=prompt_format,
+            prompt_schema_version=prompt_schema_version,
+            prompt_definition=prompt_definition,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
         prompt_uuid = str(uuid.uuid4())
         payload = (
             prompt_uuid,
@@ -4753,8 +4949,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             signature_id,
             version_number,
             name,
-            system_prompt,
-            user_prompt,
+            normalized_prompt_fields["system_prompt"],
+            normalized_prompt_fields["user_prompt"],
+            normalized_prompt_fields["prompt_format"],
+            normalized_prompt_fields["prompt_schema_version"],
+            json.dumps(normalized_prompt_fields["prompt_definition"])
+            if normalized_prompt_fields["prompt_definition"] is not None
+            else None,
             json.dumps(few_shot_examples) if few_shot_examples is not None else None,
             json.dumps(modules_config) if modules_config is not None else None,
             parent_version_id,
@@ -4765,9 +4966,10 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         insert_sql = """
             INSERT INTO prompt_studio_prompts (
                 uuid, project_id, signature_id, version_number, name, system_prompt,
-                user_prompt, few_shot_examples, modules_config, parent_version_id,
+                user_prompt, prompt_format, prompt_schema_version, prompt_definition,
+                few_shot_examples, modules_config, parent_version_id,
                 change_description, client_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
         conn = self.get_connection()
@@ -4884,6 +5086,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         # Parse JSON fields
         json_fields = ["metadata", "input_schema", "output_schema", "constraints",
                       "validation_rules", "few_shot_examples", "modules_config",
+                      "prompt_definition",
                       "model_params", "inputs", "outputs", "expected_outputs",
                       "actual_outputs", "scores", "test_case_ids", "test_run_ids",
                       "aggregate_metrics", "model_configs", "payload", "result",
@@ -5031,6 +5234,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         name: Optional[str] = None,
         system_prompt: Optional[str] = None,
         user_prompt: Optional[str] = None,
+        prompt_format: Optional[str] = None,
+        prompt_schema_version: Optional[int] = None,
+        prompt_definition: Optional[Any] = None,
         few_shot_examples: Optional[Any] = None,
         modules_config: Optional[Any] = None,
         client_id: Optional[str] = None,
@@ -5067,15 +5273,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     new_version = int(current_prompt.get("version_number", 0)) + 1
 
                     next_name = name if name is not None else current_prompt.get("name")
-                    next_system = (
-                        system_prompt
-                        if system_prompt is not None
-                        else current_prompt.get("system_prompt")
-                    )
-                    next_user = (
-                        user_prompt
-                        if user_prompt is not None
-                        else current_prompt.get("user_prompt")
+                    normalized_prompt_fields = _prepare_prompt_record_fields(
+                        prompt_format=prompt_format,
+                        prompt_schema_version=prompt_schema_version,
+                        prompt_definition=prompt_definition,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        current_prompt=current_prompt,
                     )
                     next_examples = (
                         few_shot_examples
@@ -5092,9 +5296,10 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         """
                         INSERT INTO prompt_studio_prompts (
                             uuid, project_id, signature_id, version_number, name,
-                            system_prompt, user_prompt, few_shot_examples, modules_config,
+                            system_prompt, user_prompt, prompt_format, prompt_schema_version,
+                            prompt_definition, few_shot_examples, modules_config,
                             parent_version_id, change_description, client_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             new_uuid,
@@ -5102,8 +5307,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                             current_prompt.get("signature_id"),
                             new_version,
                             next_name,
-                            next_system,
-                            next_user,
+                            normalized_prompt_fields["system_prompt"],
+                            normalized_prompt_fields["user_prompt"],
+                            normalized_prompt_fields["prompt_format"],
+                            normalized_prompt_fields["prompt_schema_version"],
+                            json.dumps(normalized_prompt_fields["prompt_definition"])
+                            if normalized_prompt_fields["prompt_definition"] is not None
+                            else None,
                             json.dumps(next_examples) if next_examples is not None else None,
                             json.dumps(next_modules) if next_modules is not None else None,
                             prompt_id,
@@ -5210,13 +5420,21 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     new_version = max_version + 1
 
                     new_uuid = str(uuid.uuid4())
+                    normalized_prompt_fields = _prepare_prompt_record_fields(
+                        prompt_format=target_prompt.get("prompt_format"),
+                        prompt_schema_version=target_prompt.get("prompt_schema_version"),
+                        prompt_definition=target_prompt.get("prompt_definition"),
+                        system_prompt=target_prompt.get("system_prompt"),
+                        user_prompt=target_prompt.get("user_prompt"),
+                    )
                     cursor.execute(
                         """
                         INSERT INTO prompt_studio_prompts (
                             uuid, project_id, signature_id, version_number, name,
-                            system_prompt, user_prompt, few_shot_examples, modules_config,
+                            system_prompt, user_prompt, prompt_format, prompt_schema_version,
+                            prompt_definition, few_shot_examples, modules_config,
                             parent_version_id, change_description, client_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             new_uuid,
@@ -5224,8 +5442,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                             target_prompt.get("signature_id"),
                             new_version,
                             target_prompt.get("name"),
-                            target_prompt.get("system_prompt"),
-                            target_prompt.get("user_prompt"),
+                            normalized_prompt_fields["system_prompt"],
+                            normalized_prompt_fields["user_prompt"],
+                            normalized_prompt_fields["prompt_format"],
+                            normalized_prompt_fields["prompt_schema_version"],
+                            json.dumps(normalized_prompt_fields["prompt_definition"])
+                            if normalized_prompt_fields["prompt_definition"] is not None
+                            else None,
                             json.dumps(target_prompt.get("few_shot_examples"))
                             if target_prompt.get("few_shot_examples") is not None
                             else None,

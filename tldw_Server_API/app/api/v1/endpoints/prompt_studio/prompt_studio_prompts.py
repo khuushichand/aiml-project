@@ -200,6 +200,9 @@ async def create_prompt(
             version_number=1,
             system_prompt=prompt_data.system_prompt,
             user_prompt=prompt_data.user_prompt,
+            prompt_format=prompt_data.prompt_format,
+            prompt_schema_version=prompt_data.prompt_schema_version,
+            prompt_definition=prompt_data.prompt_definition,
             few_shot_examples=few_shot_payload,
             modules_config=modules_payload,
             parent_version_id=prompt_data.parent_version_id,
@@ -234,6 +237,12 @@ async def create_prompt(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create prompt"
+        ) from e
+    except InputError as e:
+        logger.warning(f"Prompt studio input error creating prompt: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=getattr(e, "safe_message", str(e)),
         ) from e
 
 @router.get(
@@ -517,6 +526,9 @@ async def update_prompt(
             name=updates.name,
             system_prompt=updates.system_prompt,
             user_prompt=updates.user_prompt,
+            prompt_format=updates.prompt_format,
+            prompt_schema_version=updates.prompt_schema_version,
+            prompt_definition=updates.prompt_definition,
             few_shot_examples=few_shot_payload,
             modules_config=modules_payload,
             client_id=user_context.get("client_id"),
@@ -539,6 +551,12 @@ async def update_prompt(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update prompt"
+        ) from e
+    except InputError as e:
+        logger.warning(f"Prompt studio input error updating prompt: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=getattr(e, "safe_message", str(e)),
         ) from e
     except InputError as e:
         logger.warning(f"Prompt studio input error updating prompt: {getattr(e, 'original_message', str(e))}")
