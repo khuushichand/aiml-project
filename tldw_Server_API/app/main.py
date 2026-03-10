@@ -5544,6 +5544,12 @@ elif _MINIMAL_TEST_APP:
         app.include_router(personalization_router, prefix=f"{API_V1_PREFIX}/personalization", tags=["personalization"])
     except _IMPORT_EXCEPTIONS as _pers_min_err:
         logger.debug(f"Skipping personalization router in minimal test app: {_pers_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.companion import router as companion_router
+
+        app.include_router(companion_router, prefix=f"{API_V1_PREFIX}/companion", tags=["companion"])
+    except _IMPORT_EXCEPTIONS as _companion_min_err:
+        logger.debug(f"Skipping companion router in minimal test app: {_companion_min_err}")
     # Guardian controls (parental/supervised account controls)
     try:
         from tldw_Server_API.app.api.v1.endpoints.guardian_controls import router as guardian_controls_router
@@ -6342,12 +6348,22 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.personalization import (
         router as personalization_router,
     )
+    from tldw_Server_API.app.api.v1.endpoints.companion import (
+        router as companion_router,
+    )
 
     _include_if_enabled(
         "personalization",
         personalization_router,
         prefix=f"{API_V1_PREFIX}/personalization",
         tags=["personalization"],
+        default_stable=False,
+    )
+    _include_if_enabled(
+        "companion",
+        companion_router,
+        prefix=f"{API_V1_PREFIX}/companion",
+        tags=["companion"],
         default_stable=False,
     )
     try:

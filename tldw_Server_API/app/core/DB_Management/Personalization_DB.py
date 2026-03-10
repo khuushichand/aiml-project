@@ -863,6 +863,61 @@ class PersonalizationDB:
             finally:
                 conn.close()
 
+    def update_companion_goal(self, goal_id: str, user_id: str, **updates: Any) -> dict[str, Any] | None:
+        allowed_fields = {"title", "description", "config", "progress", "status"}
+        filtered_updates = {key: value for key, value in updates.items() if key in allowed_fields}
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                if filtered_updates:
+                    set_clauses: list[str] = []
+                    params: list[Any] = []
+                    for key, value in filtered_updates.items():
+                        if key == "config":
+                            set_clauses.append("config_json = ?")
+                            params.append(json.dumps(value or {}))
+                        elif key == "progress":
+                            set_clauses.append("progress_json = ?")
+                            params.append(json.dumps(value or {}))
+                        else:
+                            set_clauses.append(f"{key} = ?")
+                            params.append(value)
+                    set_clauses.append("updated_at = ?")
+                    params.append(_utcnow_iso())
+                    params.extend([str(goal_id), str(user_id)])
+                    set_clause_sql = ", ".join(set_clauses)
+                    # The dynamic SET clause is built exclusively from the fixed allowlist above.
+                    update_sql = f"UPDATE companion_goals SET {set_clause_sql} WHERE id = ? AND user_id = ?"  # nosec B608
+                    cur = conn.execute(update_sql, params)
+                    if (cur.rowcount or 0) == 0:
+                        return None
+                    conn.commit()
+
+                row = conn.execute(
+                    """
+                    SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at
+                    FROM companion_goals
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (str(goal_id), str(user_id)),
+                ).fetchone()
+                if row is None:
+                    return None
+                return {
+                    "id": row["id"],
+                    "title": row["title"],
+                    "description": row["description"],
+                    "goal_type": row["goal_type"],
+                    "config": json.loads(row["config_json"] or "{}"),
+                    "progress": json.loads(row["progress_json"] or "{}"),
+                    "status": row["status"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            finally:
+                conn.close()
+
     def list_companion_goals(self, user_id: str, status: str | None = None) -> list[dict[str, Any]]:
         params: list[Any] = [str(user_id)]
         where = "WHERE user_id = ?"
