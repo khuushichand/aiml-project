@@ -879,7 +879,8 @@ END;
 CREATE TRIGGER notes_au
 AFTER UPDATE ON notes BEGIN
   INSERT INTO notes_fts(notes_fts,rowid,title,content)
-  VALUES('delete',old.rowid,old.title,old.content);
+  SELECT 'delete',old.rowid,old.title,old.content
+  WHERE old.deleted = 0;
 
   INSERT INTO notes_fts(rowid,title,content)
   SELECT new.rowid,new.title,new.content
@@ -889,7 +890,8 @@ END;
 CREATE TRIGGER notes_ad
 AFTER DELETE ON notes BEGIN
   INSERT INTO notes_fts(notes_fts,rowid,title,content)
-  VALUES('delete',old.rowid,old.title,old.content);
+  SELECT 'delete',old.rowid,old.title,old.content
+  WHERE old.deleted = 0;
 END;
 
 /*----------------------------------------------------------------
@@ -4546,6 +4548,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     # Verify core FTS tables exist to avoid silent search failures
                     self._verify_required_fts_tables_sqlite(conn)
                     self._ensure_character_cards_fts_triggers_sqlite(conn)
+                    self._ensure_notes_fts_triggers_sqlite(conn)
                     # Seed/heal character_cards_fts before request traffic. Schema V4
                     # inserts "Default Assistant" before FTS triggers are created.
                     self._self_heal_character_cards_fts_sqlite(conn)
@@ -5012,6 +5015,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 # Verify core FTS tables after migrations complete
                 self._verify_required_fts_tables_sqlite(conn)
                 self._ensure_character_cards_fts_triggers_sqlite(conn)
+                self._ensure_notes_fts_triggers_sqlite(conn)
                 # Seed/heal character_cards_fts before request traffic. Schema V4
                 # inserts "Default Assistant" before FTS triggers are created.
                 self._self_heal_character_cards_fts_sqlite(conn)
@@ -5129,6 +5133,52 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring character_cards FTS triggers: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_notes_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Normalize notes FTS triggers to avoid invalid delete operations.
+
+        When restoring a soft-deleted note (`deleted: 1 -> 0`), the old trigger
+        shape always issued an FTS `delete` against the previous row snapshot.
+        If the row was already absent from FTS because of the earlier soft-delete,
+        SQLite could surface `database disk image is malformed` from FTS internals.
+        We guard this by deleting from FTS only when `old.deleted = 0`.
+        """
+
+        try:
+            conn.executescript(
+                """
+                DROP TRIGGER IF EXISTS notes_ai;
+                DROP TRIGGER IF EXISTS notes_au;
+                DROP TRIGGER IF EXISTS notes_ad;
+
+                CREATE TRIGGER notes_ai
+                AFTER INSERT ON notes BEGIN
+                  INSERT INTO notes_fts(rowid,title,content)
+                  SELECT new.rowid,new.title,new.content
+                  WHERE new.deleted = 0;
+                END;
+
+                CREATE TRIGGER notes_au
+                AFTER UPDATE ON notes BEGIN
+                  INSERT INTO notes_fts(notes_fts,rowid,title,content)
+                  SELECT 'delete',old.rowid,old.title,old.content
+                  WHERE old.deleted = 0;
+
+                  INSERT INTO notes_fts(rowid,title,content)
+                  SELECT new.rowid,new.title,new.content
+                  WHERE new.deleted = 0;
+                END;
+
+                CREATE TRIGGER notes_ad
+                AFTER DELETE ON notes BEGIN
+                  INSERT INTO notes_fts(notes_fts,rowid,title,content)
+                  SELECT 'delete',old.rowid,old.title,old.content
+                  WHERE old.deleted = 0;
+                END;
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring notes FTS triggers: {exc}") from exc  # noqa: TRY003
 
     def _self_heal_character_cards_fts_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild character_cards_fts when active card rows are not indexed.
@@ -13108,9 +13158,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error adding note '{title.strip()}': {e}")
             raise
 
-    def get_note_by_id(self, note_id: str) -> dict[str, Any] | None:
-        query = "SELECT * FROM notes WHERE id = ? AND deleted = 0"
-        cursor = self.execute_query(query, (note_id,))
+    def get_note_by_id(self, note_id: str, include_deleted: bool = False) -> dict[str, Any] | None:
+        query = "SELECT * FROM notes WHERE id = ?"
+        params: list[Any] = [note_id]
+        if not include_deleted:
+            query += " AND deleted = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        cursor = self.execute_query(query, tuple(params))
         row = cursor.fetchone()
         return dict(row) if row else None
 

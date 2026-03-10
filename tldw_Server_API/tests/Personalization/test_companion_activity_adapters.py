@@ -7,6 +7,8 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Personalization.companion_activity import (
     record_companion_activity,
     record_note_created,
+    record_note_deleted,
+    record_note_restored,
     record_note_updated,
 )
 from tldw_Server_API.app.core.config import settings
@@ -133,3 +135,48 @@ def test_note_activity_adapters_capture_compact_metadata(companion_db_env):
     assert created_event["event_type"] == "note_created"
     assert created_event["provenance"]["route"] == "/api/v1/notes/"
     assert created_event["metadata"]["content_preview"].startswith("This is a note body")
+
+
+def test_note_delete_and_restore_adapters_capture_state_changes(companion_db_env):
+    user_id = "79"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    db.update_profile(user_id, enabled=1)
+
+    deleted_note = {
+        "id": "note-2",
+        "title": "Archive Me",
+        "content": "A note that is about to be removed from the active list.",
+        "created_at": "2026-03-09T11:00:00Z",
+        "last_modified": "2026-03-09T11:05:00Z",
+        "version": 2,
+        "keywords": [{"keyword": "cleanup"}],
+    }
+    restored_note = {
+        **deleted_note,
+        "last_modified": "2026-03-09T11:10:00Z",
+        "version": 4,
+    }
+
+    deleted = record_note_deleted(user_id=user_id, note=deleted_note, deleted_version=3)
+    restored = record_note_restored(user_id=user_id, note=restored_note)
+
+    assert deleted
+    assert restored
+
+    events, total = db.list_companion_activity_events(user_id, limit=10)
+    assert total == 2
+
+    restored_event = events[0]
+    assert restored_event["event_type"] == "note_restored"
+    assert restored_event["metadata"]["version"] == 4
+    assert restored_event["metadata"]["deleted"] is False
+    assert restored_event["provenance"]["action"] == "restore"
+
+    deleted_event = events[1]
+    assert deleted_event["event_type"] == "note_deleted"
+    assert deleted_event["tags"] == ["cleanup"]
+    assert deleted_event["metadata"]["version"] == 3
+    assert deleted_event["metadata"]["deleted"] is True
+    assert deleted_event["metadata"]["hard_delete"] is False
+    assert deleted_event["metadata"]["content_preview"].startswith("A note that is about to be removed")
+    assert "content" not in deleted_event["metadata"]

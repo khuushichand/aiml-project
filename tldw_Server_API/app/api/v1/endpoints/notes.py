@@ -99,6 +99,8 @@ from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Personalization import (
     record_note_created,
+    record_note_deleted,
+    record_note_restored,
     record_note_updated,
 )
 from tldw_Server_API.app.core.Writing.note_title import TitleGenOptions, generate_note_title
@@ -3282,6 +3284,13 @@ async def delete_note(
         _: None = Depends(rbac_rate_limit("notes.delete")),
 ) -> Response:
     try:
+        existing_note = db.get_note_by_id(note_id=note_id, include_deleted=True)
+        was_active = bool(existing_note) and not bool(existing_note.get("deleted"))
+        note_for_activity = (
+            _attach_keywords_inline(db, dict(existing_note))
+            if was_active and existing_note
+            else None
+        )
         # Rate limit: notes.delete
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.delete")
@@ -3299,6 +3308,12 @@ async def delete_note(
         )
         if not success:
             raise CharactersRAGDBError("Note soft delete reported non-success without specific exception.")
+        if note_for_activity is not None:
+            record_note_deleted(
+                user_id=current_user.id,
+                note=note_for_activity,
+                deleted_version=expected_version + 1,
+            )
         logger.info(
             f"Note '{note_id}' soft-deleted successfully (or was already deleted) for user (DB client_id: {db.client_id}).")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -3331,6 +3346,8 @@ async def restore_note(
     Returns the restored note on success.
     """
     try:
+        existing_note = db.get_note_by_id(note_id=note_id, include_deleted=True)
+        was_deleted = bool(existing_note) and bool(existing_note.get("deleted"))
         # Rate limit: notes.restore
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.restore")
@@ -3362,6 +3379,10 @@ async def restore_note(
 
         # Fetch keywords for the note
         keywords = db.get_keywords_for_note(note_id)
+        if was_deleted:
+            restored_note_for_activity = dict(restored_note)
+            restored_note_for_activity["keywords"] = list(keywords or [])
+            record_note_restored(user_id=current_user.id, note=restored_note_for_activity)
         keyword_responses = [
             KeywordResponse(
                 id=kw['id'],

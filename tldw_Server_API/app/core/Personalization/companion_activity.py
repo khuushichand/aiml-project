@@ -442,6 +442,62 @@ def record_note_updated(
     )
 
 
+def record_note_deleted(
+    *,
+    user_id: str | int | None,
+    note: Any,
+    deleted_version: int | None = None,
+) -> str | None:
+    note_id = str(_value(note, "id"))
+    source_timestamp = _note_timestamp(note)
+    effective_version = deleted_version if deleted_version is not None else _value(note, "version")
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="note_deleted",
+        source_type="note",
+        source_id=note_id,
+        surface="api.notes",
+        dedupe_key=f"notes.delete:{note_id}:{effective_version or source_timestamp or 'na'}",
+        tags=_note_tags(note),
+        provenance=_explicit_provenance(
+            route=f"/api/v1/notes/{note_id}",
+            action="delete",
+            source_timestamp=source_timestamp,
+        ),
+        metadata={
+            **_note_metadata(note),
+            "version": effective_version,
+            "deleted": True,
+            "hard_delete": False,
+        },
+    )
+
+
+def record_note_restored(*, user_id: str | int | None, note: Any) -> str | None:
+    note_id = str(_value(note, "id"))
+    source_timestamp = _note_timestamp(note)
+    version = _value(note, "version")
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="note_restored",
+        source_type="note",
+        source_id=note_id,
+        surface="api.notes",
+        dedupe_key=f"notes.restore:{note_id}:{version or source_timestamp or 'na'}",
+        tags=_note_tags(note),
+        provenance=_explicit_provenance(
+            route=f"/api/v1/notes/{note_id}/restore",
+            action="restore",
+            source_timestamp=source_timestamp,
+        ),
+        metadata={
+            **_note_metadata(note),
+            "deleted": False,
+            "hard_delete": False,
+        },
+    )
+
+
 def record_persona_session_started(
     *,
     user_id: str | int | None,

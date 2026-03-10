@@ -103,3 +103,60 @@ def test_note_create_and_patch_record_companion_activity(notes_client_with_compa
     assert updated_event["provenance"]["route"] == f"/api/v1/notes/{note_id}"
     assert updated_event["metadata"]["title"] == "Companion Note Updated"
     assert updated_event["metadata"]["version"] == updated["version"]
+
+
+def test_note_delete_and_restore_record_companion_activity(notes_client_with_companion_opt_in):
+    client, personalization_db = notes_client_with_companion_opt_in
+
+    create_resp = client.post(
+        "/api/v1/notes/",
+        json={
+            "title": "Recoverable Note",
+            "content": "This note will be deleted and restored.",
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    created = create_resp.json()
+    note_id = created["id"]
+
+    delete_resp = client.delete(
+        f"/api/v1/notes/{note_id}",
+        headers={"expected-version": str(created["version"])},
+    )
+    assert delete_resp.status_code == 204, delete_resp.text
+
+    trash_resp = client.get("/api/v1/notes/trash")
+    assert trash_resp.status_code == 200, trash_resp.text
+    trash_notes = trash_resp.json()["notes"]
+    deleted_note = next(note for note in trash_notes if note["id"] == note_id)
+
+    restore_resp = client.post(
+        f"/api/v1/notes/{note_id}/restore",
+        params={"expected_version": deleted_note["version"]},
+    )
+    assert restore_resp.status_code == 200, restore_resp.text
+    restored = restore_resp.json()
+
+    events, total = personalization_db.list_companion_activity_events(str(TEST_USER_ID), limit=10)
+    assert total == 3
+
+    event_types = [event["event_type"] for event in events]
+    assert event_types == ["note_restored", "note_deleted", "note_created"]
+
+    deleted_event = events[1]
+    assert deleted_event["source_type"] == "note"
+    assert deleted_event["source_id"] == note_id
+    assert deleted_event["surface"] == "api.notes"
+    assert deleted_event["provenance"]["route"] == f"/api/v1/notes/{note_id}"
+    assert deleted_event["metadata"]["title"] == "Recoverable Note"
+    assert deleted_event["metadata"]["version"] == deleted_note["version"]
+    assert deleted_event["metadata"]["deleted"] is True
+
+    restored_event = events[0]
+    assert restored_event["source_type"] == "note"
+    assert restored_event["source_id"] == note_id
+    assert restored_event["surface"] == "api.notes"
+    assert restored_event["provenance"]["route"] == f"/api/v1/notes/{note_id}/restore"
+    assert restored_event["metadata"]["title"] == "Recoverable Note"
+    assert restored_event["metadata"]["version"] == restored["version"]
+    assert restored_event["metadata"]["deleted"] is False
