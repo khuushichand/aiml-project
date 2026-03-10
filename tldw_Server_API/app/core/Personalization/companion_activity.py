@@ -203,3 +203,50 @@ def record_persona_session_started(
             "scope_snapshot_id": scope_snapshot_id,
         },
     )
+
+
+def record_watchlist_source_created(*, user_id: str | int | None, source: Any) -> str | None:
+    source_id = str(getattr(source, "id"))
+    source_timestamp = getattr(source, "updated_at", None) or getattr(source, "created_at", None)
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="watchlist_source_created",
+        source_type="watchlist_source",
+        source_id=source_id,
+        surface="api.watchlists",
+        dedupe_key=f"watchlists.source.create:{source_id}",
+        tags=list(getattr(source, "tags", None) or []),
+        provenance=_explicit_provenance(
+            route="/api/v1/watchlists/sources",
+            action="create",
+            source_timestamp=source_timestamp,
+        ),
+        metadata={
+            "name": getattr(source, "name", None),
+            "url": getattr(source, "url", None),
+            "source_type": getattr(source, "source_type", None),
+        },
+    )
+
+
+def record_reminder_task_created(*, user_id: str | int | None, task: Any) -> str | None:
+    task_id = str(getattr(task, "id"))
+    source_timestamp = getattr(task, "updated_at", None) or getattr(task, "created_at", None)
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="reminder_task_created",
+        source_type="reminder_task",
+        source_id=task_id,
+        surface="api.tasks",
+        dedupe_key=f"reminder.task.create:{task_id}",
+        provenance=_explicit_provenance(
+            route="/api/v1/tasks",
+            action="create",
+            source_timestamp=source_timestamp,
+        ),
+        metadata={
+            "title": getattr(task, "title", None),
+            "schedule_kind": getattr(task, "schedule_kind", None),
+            "enabled": getattr(task, "enabled", None),
+        },
+    )

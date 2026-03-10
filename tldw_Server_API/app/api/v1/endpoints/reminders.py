@@ -14,6 +14,7 @@ from tldw_Server_API.app.api.v1.schemas.reminders_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import TASKS_CONTROL, TASKS_READ
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase, ReminderTaskRow
+from tldw_Server_API.app.core.Personalization.companion_activity import record_reminder_task_created
 from tldw_Server_API.app.services.reminders_scheduler import get_reminders_scheduler
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -99,7 +100,9 @@ async def create_task(
         link_url=payload.link_url,
     )
     await _reconcile_task_best_effort(task_id=task_id, user_id=int(db.user_id))
-    return _row_to_response(db.get_reminder_task(task_id))
+    task = _row_to_response(db.get_reminder_task(task_id))
+    record_reminder_task_created(user_id=db.user_id, task=task)
+    return task
 
 
 @router.get(

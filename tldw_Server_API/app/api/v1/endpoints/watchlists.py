@@ -63,6 +63,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _get_scope
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.exceptions import TemplateValidationError
+from tldw_Server_API.app.core.Personalization.companion_activity import record_watchlist_source_created
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime as _is_explicit_pytest_runtime
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
@@ -1468,7 +1469,7 @@ async def create_source(
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"create_source failed: {e}")
         raise HTTPException(status_code=400, detail="source_create_failed") from e
-    return Source(
+    source = Source(
         id=row.id,
         name=row.name,
         url=row.url,
@@ -1482,6 +1483,8 @@ async def create_source(
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+    record_watchlist_source_created(user_id=current_user.id, source=source)
+    return source
 
 
 @router.get("/sources", response_model=SourcesListResponse, summary="List sources")
