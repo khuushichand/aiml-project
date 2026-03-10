@@ -106,6 +106,30 @@ export type PromptUpdatePayload = {
   change_description: string
 }
 
+export type StructuredPromptPreviewRequest = {
+  project_id: number
+  signature_id?: number | null
+  prompt_format: PromptFormat
+  system_prompt?: string | null
+  user_prompt?: string | null
+  prompt_schema_version?: number | null
+  prompt_definition?: StructuredPromptDefinition | null
+  few_shot_examples?: FewShotExample[] | null
+  modules_config?: PromptModule[] | null
+  variables?: Record<string, any>
+}
+
+export type StructuredPromptPreviewResponse = {
+  prompt_format: PromptFormat
+  prompt_schema_version?: number | null
+  assembled_messages: Array<{
+    role: string
+    content: string
+  }>
+  legacy_system_prompt: string
+  legacy_user_prompt: string
+}
+
 export type PromptVersion = {
   id: number
   uuid?: string
@@ -372,6 +396,16 @@ export async function updatePrompt(promptId: number, payload: PromptUpdatePayloa
       `/api/v1/prompt-studio/prompts/update/${encodeURIComponent(promptId)}`
     ),
     method: "PUT",
+    body: payload
+  })
+}
+
+export async function previewPromptDefinition(
+  payload: StructuredPromptPreviewRequest
+) {
+  return await apiSend<StandardResponse<StructuredPromptPreviewResponse>>({
+    path: "/api/v1/prompt-studio/prompts/preview",
+    method: "POST",
     body: payload
   })
 }

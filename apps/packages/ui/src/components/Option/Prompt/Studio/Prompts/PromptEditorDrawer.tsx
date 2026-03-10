@@ -1,18 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Drawer, Form, Input, notification, Skeleton, Collapse, Alert } from "antd"
-import { Plus, Trash2 } from "lucide-react"
-import React, { useEffect } from "react"
+import { Drawer, Form, Input, notification, Skeleton, Collapse, Alert, Radio } from "antd"
+import React, { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   createPrompt,
   updatePrompt,
   getPrompt,
+  previewPromptDefinition,
   type PromptCreatePayload,
   type PromptUpdatePayload,
   type FewShotExample,
-  type PromptModule
+  type PromptModule,
+  type PromptFormat,
+  type StructuredPromptDefinition,
+  type StructuredPromptPreviewResponse,
+  type StructuredPromptPreviewRequest
 } from "@/services/prompt-studio"
 import { Button } from "@/components/Common/Button"
+import { StructuredPromptEditor } from "../../Structured/StructuredPromptEditor"
 
 type PromptEditorDrawerProps = {
   open: boolean
@@ -30,6 +35,58 @@ type FormValues = {
   modules_config?: string // JSON string for modules config
 }
 
+const createDefaultStructuredDefinition = (): StructuredPromptDefinition => ({
+  schema_version: 1,
+  format: "structured",
+  variables: [],
+  blocks: [
+    {
+      id: "task",
+      name: "Task",
+      role: "user",
+      content: "Describe the task here.",
+      enabled: true,
+      order: 10,
+      is_template: false
+    }
+  ]
+})
+
+const createStructuredDefinitionFromLegacy = (
+  systemPrompt?: string | null,
+  userPrompt?: string | null
+): StructuredPromptDefinition => {
+  const blocks: StructuredPromptDefinition["blocks"] = []
+  if (systemPrompt?.trim()) {
+    blocks.push({
+      id: "system",
+      name: "System Instructions",
+      role: "system",
+      content: systemPrompt.trim(),
+      enabled: true,
+      order: 10,
+      is_template: false
+    })
+  }
+  if (userPrompt?.trim()) {
+    blocks.push({
+      id: "task",
+      name: "Task",
+      role: "user",
+      content: userPrompt.trim(),
+      enabled: true,
+      order: blocks.length === 0 ? 10 : 20,
+      is_template: true
+    })
+  }
+  return {
+    schema_version: 1,
+    format: "structured",
+    variables: [],
+    blocks: blocks.length > 0 ? blocks : createDefaultStructuredDefinition().blocks
+  }
+}
+
 export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
   open,
   promptId,
@@ -39,6 +96,11 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
   const { t } = useTranslation(["settings", "common"])
   const [form] = Form.useForm<FormValues>()
   const queryClient = useQueryClient()
+  const [promptFormat, setPromptFormat] = useState<PromptFormat>("legacy")
+  const [structuredDefinition, setStructuredDefinition] =
+    useState<StructuredPromptDefinition>(createDefaultStructuredDefinition())
+  const [previewResult, setPreviewResult] =
+    useState<StructuredPromptPreviewResponse | null>(null)
 
   const isEditing = promptId !== null
 
@@ -66,8 +128,28 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
           ? JSON.stringify(existingPrompt.modules_config, null, 2)
           : ""
       })
+      setPromptFormat(existingPrompt.prompt_format || "legacy")
+      setStructuredDefinition(
+        existingPrompt.prompt_definition ||
+          createStructuredDefinitionFromLegacy(
+            existingPrompt.system_prompt,
+            existingPrompt.user_prompt
+          )
+      )
+      setPreviewResult(null)
     } else if (open && !isEditing) {
       form.resetFields()
+      form.setFieldsValue({
+        name: "",
+        system_prompt: "",
+        user_prompt: "",
+        change_description: "",
+        few_shot_examples: "",
+        modules_config: ""
+      })
+      setPromptFormat("legacy")
+      setStructuredDefinition(createDefaultStructuredDefinition())
+      setPreviewResult(null)
     }
   }, [open, isEditing, existingPrompt, form])
 
@@ -123,6 +205,20 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
     }
   })
 
+  const previewMutation = useMutation({
+    mutationFn: (payload: StructuredPromptPreviewRequest) =>
+      previewPromptDefinition(payload),
+    onSuccess: (response) => {
+      setPreviewResult((response as any)?.data?.data || null)
+    },
+    onError: (error: any) => {
+      notification.error({
+        message: t("common:error", { defaultValue: "Error" }),
+        description: error?.message || t("common:unknownError")
+      })
+    }
+  })
+
   const parseJsonField = <T,>(value: string | undefined, defaultValue: T): T => {
     if (!value?.trim()) return defaultValue
     try {
@@ -145,8 +241,17 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
     if (isEditing) {
       const payload: PromptUpdatePayload = {
         name: values.name.trim(),
-        system_prompt: values.system_prompt?.trim() || null,
-        user_prompt: values.user_prompt?.trim() || null,
+        system_prompt:
+          promptFormat === "legacy" ? values.system_prompt?.trim() || null : null,
+        user_prompt:
+          promptFormat === "legacy" ? values.user_prompt?.trim() || null : null,
+        prompt_format: promptFormat,
+        prompt_schema_version:
+          promptFormat === "structured"
+            ? Number((structuredDefinition as any)?.schema_version || 1)
+            : null,
+        prompt_definition:
+          promptFormat === "structured" ? structuredDefinition : null,
         change_description:
           values.change_description?.trim() || "Updated prompt",
         few_shot_examples: fewShotExamples,
@@ -157,14 +262,53 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
       const payload: PromptCreatePayload = {
         project_id: projectId,
         name: values.name.trim(),
-        system_prompt: values.system_prompt?.trim() || null,
-        user_prompt: values.user_prompt?.trim() || null,
+        system_prompt:
+          promptFormat === "legacy" ? values.system_prompt?.trim() || null : null,
+        user_prompt:
+          promptFormat === "legacy" ? values.user_prompt?.trim() || null : null,
+        prompt_format: promptFormat,
+        prompt_schema_version:
+          promptFormat === "structured"
+            ? Number((structuredDefinition as any)?.schema_version || 1)
+            : null,
+        prompt_definition:
+          promptFormat === "structured" ? structuredDefinition : null,
         change_description: values.change_description?.trim() || "Initial version",
         few_shot_examples: fewShotExamples,
         modules_config: modulesConfig
       }
       createMutation.mutate(payload)
     }
+  }
+
+  const handlePreview = (variables: Record<string, string>) => {
+    const values = form.getFieldsValue()
+    const fewShotExamples = parseJsonField<FewShotExample[] | null>(
+      values.few_shot_examples,
+      null
+    )
+    const modulesConfig = parseJsonField<PromptModule[] | null>(
+      values.modules_config,
+      null
+    )
+
+    previewMutation.mutate({
+      project_id: projectId,
+      prompt_format: promptFormat,
+      system_prompt:
+        promptFormat === "legacy" ? values.system_prompt?.trim() || null : null,
+      user_prompt:
+        promptFormat === "legacy" ? values.user_prompt?.trim() || null : null,
+      prompt_schema_version:
+        promptFormat === "structured"
+          ? Number((structuredDefinition as any)?.schema_version || 1)
+          : null,
+      prompt_definition:
+        promptFormat === "structured" ? structuredDefinition : null,
+      few_shot_examples: fewShotExamples,
+      modules_config: modulesConfig,
+      variables
+    })
   }
 
   const validateJson = (_: any, value: string) => {
@@ -198,7 +342,7 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
               defaultValue: "Create Prompt"
             })
       }
-      styles={{ wrapper: { width: 640 } }}
+      styles={{ wrapper: { width: promptFormat === "structured" ? 1120 : 640 } }}
       destroyOnHidden
       footer={
         <div className="flex justify-end gap-2">
@@ -248,53 +392,98 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
             />
           </Form.Item>
 
-          <Form.Item
-            name="system_prompt"
-            label={t("managePrompts.studio.prompts.form.systemPrompt", {
-              defaultValue: "System Prompt"
-            })}
-            tooltip={t("managePrompts.studio.prompts.form.systemPromptHelp", {
-              defaultValue:
-                "Instructions that set the behavior and context for the AI"
-            })}
-          >
-            <Input.TextArea
-              placeholder={t(
-                "managePrompts.studio.prompts.form.systemPromptPlaceholder",
-                {
-                  defaultValue:
-                    "You are a helpful customer support agent..."
+          <div className="mb-6">
+            <div className="mb-2 text-sm font-medium text-text">
+              Authoring mode
+            </div>
+            <Radio.Group
+              value={promptFormat}
+              onChange={(event) => {
+                const nextFormat = event.target.value as PromptFormat
+                setPromptFormat(nextFormat)
+                setPreviewResult(null)
+                if (nextFormat === "structured") {
+                  setStructuredDefinition((current) => {
+                    if (
+                      current &&
+                      Array.isArray((current as any).blocks) &&
+                      (current as any).blocks.length > 0
+                    ) {
+                      return current
+                    }
+                    const currentValues = form.getFieldsValue()
+                    return createStructuredDefinitionFromLegacy(
+                      currentValues.system_prompt,
+                      currentValues.user_prompt
+                    )
+                  })
                 }
-              )}
-              rows={5}
-              showCount
-              maxLength={10000}
-            />
-          </Form.Item>
+              }}
+            >
+              <Radio.Button value="legacy">Legacy text</Radio.Button>
+              <Radio.Button value="structured">Structured builder</Radio.Button>
+            </Radio.Group>
+          </div>
 
-          <Form.Item
-            name="user_prompt"
-            label={t("managePrompts.studio.prompts.form.userPrompt", {
-              defaultValue: "User Prompt Template"
-            })}
-            tooltip={t("managePrompts.studio.prompts.form.userPromptHelp", {
-              defaultValue:
-                "Template for user messages. Use {{variable}} for inputs."
-            })}
-          >
-            <Input.TextArea
-              placeholder={t(
-                "managePrompts.studio.prompts.form.userPromptPlaceholder",
-                {
+          {promptFormat === "legacy" ? (
+            <>
+              <Form.Item
+                name="system_prompt"
+                label={t("managePrompts.studio.prompts.form.systemPrompt", {
+                  defaultValue: "System Prompt"
+                })}
+                tooltip={t("managePrompts.studio.prompts.form.systemPromptHelp", {
                   defaultValue:
-                    "Please help the customer with: {{customer_query}}"
-                }
-              )}
-              rows={5}
-              showCount
-              maxLength={10000}
+                    "Instructions that set the behavior and context for the AI"
+                })}
+              >
+                <Input.TextArea
+                  placeholder={t(
+                    "managePrompts.studio.prompts.form.systemPromptPlaceholder",
+                    {
+                      defaultValue:
+                        "You are a helpful customer support agent..."
+                    }
+                  )}
+                  rows={5}
+                  showCount
+                  maxLength={10000}
+                />
+              </Form.Item>
+
+              <Form.Item
+                name="user_prompt"
+                label={t("managePrompts.studio.prompts.form.userPrompt", {
+                  defaultValue: "User Prompt Template"
+                })}
+                tooltip={t("managePrompts.studio.prompts.form.userPromptHelp", {
+                  defaultValue:
+                    "Template for user messages. Use {{variable}} for inputs."
+                })}
+              >
+                <Input.TextArea
+                  placeholder={t(
+                    "managePrompts.studio.prompts.form.userPromptPlaceholder",
+                    {
+                      defaultValue:
+                        "Please help the customer with: {{customer_query}}"
+                    }
+                  )}
+                  rows={5}
+                  showCount
+                  maxLength={10000}
+                />
+              </Form.Item>
+            </>
+          ) : (
+            <StructuredPromptEditor
+              value={structuredDefinition}
+              onChange={setStructuredDefinition}
+              previewResult={previewResult}
+              previewLoading={previewMutation.isPending}
+              onPreview={handlePreview}
             />
-          </Form.Item>
+          )}
 
           {isEditing && (
             <Form.Item
