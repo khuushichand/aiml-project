@@ -802,6 +802,31 @@ class ChatCompletionRequest(BaseModel):
         description="Provider-specific extra body content. For Bedrock guardrails, include"
         " 'amazon-bedrock-guardrailConfig': { 'tagSuffix': '...'} if needed.",
     )
+    thinking_budget_tokens: Optional[int] = Field(
+        None,
+        ge=0,
+        description="[llama.cpp extension] App-level thinking budget in tokens. Only valid when the resolved target provider is llama.cpp.",
+    )
+    grammar_mode: Optional[Literal["none", "library", "inline"]] = Field(
+        None,
+        description="[llama.cpp extension] How to resolve the outbound grammar payload.",
+    )
+    grammar_id: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=128,
+        description="[llama.cpp extension] Saved grammar identifier when grammar_mode='library'.",
+    )
+    grammar_inline: Optional[str] = Field(
+        None,
+        max_length=200_000,
+        description="[llama.cpp extension] Inline grammar when grammar_mode='inline'.",
+    )
+    grammar_override: Optional[str] = Field(
+        None,
+        max_length=200_000,
+        description="[llama.cpp extension] Optional per-request override applied on top of a saved grammar selection.",
+    )
 
     # --- Extended Parameters for chat_api_call ---
     minp: Optional[float] = Field(None, description="[Extension] Minimum probability threshold (provider specific).")
@@ -902,6 +927,14 @@ class ChatCompletionRequest(BaseModel):
         if top_logprobs is not None and not logprobs:
             raise ValueError("If top_logprobs is specified, logprobs must be set to true.")
         return values
+
+    @model_validator(mode="after")
+    def validate_llamacpp_grammar_fields(self) -> "ChatCompletionRequest":
+        if self.grammar_mode == "library" and not self.grammar_id:
+            raise ValueError("grammar_id is required when grammar_mode is 'library'")
+        if self.grammar_mode == "inline" and not self.grammar_inline:
+            raise ValueError("grammar_inline is required when grammar_mode is 'inline'")
+        return self
 
 
 #

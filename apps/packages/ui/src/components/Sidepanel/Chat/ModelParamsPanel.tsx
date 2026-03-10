@@ -11,16 +11,19 @@ import { useTranslation } from "react-i18next"
 import { classNames } from "@/libs/class-name"
 import { useStoreChatModelSettings } from "@/store/model"
 import { useUiModeStore } from "@/store/ui-mode"
+import { LlamaCppAdvancedControls } from "@/components/Common/Settings/LlamaCppAdvancedControls"
 
 const { TextArea } = Input
 
 interface ModelParamsPanelProps {
   onOpenFullSettings?: () => void
   className?: string
+  selectedModel?: string | null
 }
 
 const PROVIDER_OPTIONS = [
   { value: "", label: "Default" },
+  { value: "llama.cpp", label: "llama.cpp" },
   { value: "openai", label: "OpenAI" },
   { value: "anthropic", label: "Anthropic" },
   { value: "azure", label: "Azure OpenAI" },
@@ -40,7 +43,8 @@ const validateJson = (value: string): string | null => {
 
 const ModelParamsPanelBase: React.FC<ModelParamsPanelProps> = ({
   onOpenFullSettings,
-  className
+  className,
+  selectedModel
 }) => {
   const { t } = useTranslation(["sidepanel", "playground"])
   const mode = useUiModeStore((state) => state.mode)
@@ -215,6 +219,8 @@ const ModelParamsPanelBase: React.FC<ModelParamsPanelProps> = ({
               )}
             />
           </div>
+
+          <LlamaCppAdvancedControls selectedModel={selectedModel} />
 
           {/* JSON Mode Toggle */}
           <div className="flex items-center justify-between gap-2 pt-2 border-t border-border/50">

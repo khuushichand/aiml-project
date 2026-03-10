@@ -36,6 +36,7 @@ import {
   AdvancedParamsTab,
   ActorTab
 } from "./tabs"
+import { LlamaCppAdvancedControls } from "./LlamaCppAdvancedControls"
 
 type Props = {
   open: boolean
@@ -60,6 +61,11 @@ type ModelConfigData = {
   tfsZ?: number
   numKeep?: number
   numThread?: number
+  llamaThinkingBudgetTokens?: number
+  llamaGrammarMode?: "none" | "library" | "inline"
+  llamaGrammarId?: string
+  llamaGrammarInline?: string
+  llamaGrammarOverride?: string
 }
 
 type ModelDetails = {
@@ -113,6 +119,11 @@ const CHAT_MODEL_SETTING_KEYS: ReadonlySet<keyof ChatModelSettings> = new Set([
   "apiProvider",
   "extraHeaders",
   "extraBody",
+  "llamaThinkingBudgetTokens",
+  "llamaGrammarMode",
+  "llamaGrammarId",
+  "llamaGrammarInline",
+  "llamaGrammarOverride",
   "jsonMode"
 ])
 
@@ -156,6 +167,11 @@ export const CurrentChatModelSettings = ({
     apiProvider,
     extraHeaders,
     extraBody,
+    llamaThinkingBudgetTokens: storeLlamaThinkingBudgetTokens,
+    llamaGrammarMode: storeLlamaGrammarMode,
+    llamaGrammarId: storeLlamaGrammarId,
+    llamaGrammarInline: storeLlamaGrammarInline,
+    llamaGrammarOverride: storeLlamaGrammarOverride,
     jsonMode,
     systemPrompt,
     ocrLanguage,
@@ -187,6 +203,11 @@ export const CurrentChatModelSettings = ({
       apiProvider: state.apiProvider,
       extraHeaders: state.extraHeaders,
       extraBody: state.extraBody,
+      llamaThinkingBudgetTokens: state.llamaThinkingBudgetTokens,
+      llamaGrammarMode: state.llamaGrammarMode,
+      llamaGrammarId: state.llamaGrammarId,
+      llamaGrammarInline: state.llamaGrammarInline,
+      llamaGrammarOverride: state.llamaGrammarOverride,
       jsonMode: state.jsonMode,
       systemPrompt: state.systemPrompt,
       ocrLanguage: state.ocrLanguage,
@@ -240,6 +261,12 @@ export const CurrentChatModelSettings = ({
     React.useState<ActorTarget>("user")
   const [newAspectName, setNewAspectName] = React.useState<string>("")
   const actorPositionValue = Form.useWatch("actorChatPosition", form)
+  const llamaThinkingBudgetTokens = Form.useWatch("llamaThinkingBudgetTokens", form)
+  const llamaGrammarMode = Form.useWatch("llamaGrammarMode", form)
+  const llamaGrammarId = Form.useWatch("llamaGrammarId", form)
+  const llamaGrammarInline = Form.useWatch("llamaGrammarInline", form)
+  const llamaGrammarOverride = Form.useWatch("llamaGrammarOverride", form)
+  const llamaExtraBody = Form.useWatch("extraBody", form)
 
   const savePrompt = useCallback(
     (value: string) => {
@@ -334,6 +361,13 @@ export const CurrentChatModelSettings = ({
     ]
   )
 
+  const handleLlamaControlChange = useCallback(
+    (key: keyof ChatModelSettings, value: number | string | undefined) => {
+      form.setFieldValue(key, value)
+    },
+    [form]
+  )
+
   const buildBaseValues = useCallback(
     (data?: ModelConfigData | null, promptFallback?: string) => ({
       temperature: temperature ?? data?.temperature,
@@ -361,6 +395,13 @@ export const CurrentChatModelSettings = ({
       apiProvider,
       extraHeaders,
       extraBody,
+      llamaThinkingBudgetTokens:
+        storeLlamaThinkingBudgetTokens ?? data?.llamaThinkingBudgetTokens,
+      llamaGrammarMode: storeLlamaGrammarMode ?? data?.llamaGrammarMode,
+      llamaGrammarId: storeLlamaGrammarId ?? data?.llamaGrammarId,
+      llamaGrammarInline: storeLlamaGrammarInline ?? data?.llamaGrammarInline,
+      llamaGrammarOverride:
+        storeLlamaGrammarOverride ?? data?.llamaGrammarOverride,
       jsonMode
     }),
     [
@@ -389,6 +430,11 @@ export const CurrentChatModelSettings = ({
       apiProvider,
       extraHeaders,
       extraBody,
+      storeLlamaThinkingBudgetTokens,
+      storeLlamaGrammarMode,
+      storeLlamaGrammarId,
+      storeLlamaGrammarInline,
+      storeLlamaGrammarOverride,
       jsonMode
     ]
   )
@@ -754,6 +800,18 @@ export const CurrentChatModelSettings = ({
               items={tabItems}
               className="settings-tabs"
             />
+            <div className="mt-4">
+              <LlamaCppAdvancedControls
+                selectedModel={selectedModel}
+                thinkingBudget={llamaThinkingBudgetTokens}
+                grammarMode={llamaGrammarMode}
+                grammarId={llamaGrammarId}
+                grammarInline={llamaGrammarInline}
+                grammarOverride={llamaGrammarOverride}
+                extraBody={llamaExtraBody}
+                onChange={handleLlamaControlChange}
+              />
+            </div>
             <div className="mt-4 border-t border-border pt-4">
               <SaveButton
                 className="w-full text-center inline-flex items-center justify-center"

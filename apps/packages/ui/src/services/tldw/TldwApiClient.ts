@@ -364,6 +364,11 @@ export interface ChatCompletionRequest {
   api_provider?: string
   extra_headers?: Record<string, unknown>
   extra_body?: Record<string, unknown>
+  thinking_budget_tokens?: number
+  grammar_mode?: "none" | "library" | "inline"
+  grammar_id?: string
+  grammar_inline?: string
+  grammar_override?: string
   response_format?: { type: "json_object" | "text" }
 }
 

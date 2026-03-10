@@ -99,6 +99,7 @@ _ORDER_BY_EXPR_RE = re.compile(
     re.IGNORECASE,
 )
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_CHAT_GRAMMAR_VALIDATION_STATUSES = frozenset({"unchecked", "valid", "invalid"})
 
 # --- Custom Exceptions ---
 class CharactersRAGDBError(Exception):
@@ -6480,6 +6481,591 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
         except CharactersRAGDBError as exc:
             logger.error(f"Database error deleting skill '{name}': {exc}")
+            raise
+
+    # ----------------------
+    # Chat grammar library
+    # ----------------------
+    def ensure_chat_grammars_table(self) -> None:
+        """Ensure the chat_grammars table exists for the active backend."""
+        self._ensure_chat_grammars_table()
+
+    def _ensure_chat_grammars_table(self) -> None:
+        """Create the user-scoped grammar-library table and indexes when missing."""
+        if self.backend_type == BackendType.SQLITE:
+            self.execute_query(
+                """
+                CREATE TABLE IF NOT EXISTS chat_grammars (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    grammar_text TEXT NOT NULL,
+                    validation_status TEXT NOT NULL DEFAULT 'unchecked',
+                    validation_error TEXT,
+                    last_validated_at DATETIME,
+                    is_archived BOOLEAN NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted BOOLEAN NOT NULL DEFAULT 0,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(user_id, name)
+                )
+                """,
+                script=False,
+                commit=True,
+            )
+            self._migrate_sqlite_chat_grammars_table()
+            self._ensure_chat_grammars_indexes()
+            return
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_grammars (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    grammar_text TEXT NOT NULL,
+                    validation_status TEXT NOT NULL DEFAULT 'unchecked',
+                    validation_error TEXT,
+                    last_validated_at TIMESTAMP,
+                    is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    CONSTRAINT uq_chat_grammars_user_name UNIQUE (user_id, name)
+                )
+                """
+            )
+            self._migrate_postgres_chat_grammars_table()
+            self._ensure_chat_grammars_indexes()
+            return
+
+        raise NotImplementedError(
+            f"chat_grammars table creation not supported for backend {self.backend_type.value}"
+        )
+
+    def _chat_grammar_owner_id(self) -> str:
+        """Return the effective owner identifier for grammar-library rows."""
+        owner_id = str(self.client_id or "").strip()
+        return owner_id or "unknown"
+
+    def _chat_grammar_column_names(self, conn: Any | None = None) -> set[str]:
+        """Return the current chat_grammars column names for the active backend."""
+        return {
+            str(column.get("name"))
+            for column in self.backend.get_table_info("chat_grammars", connection=conn)
+            if column.get("name")
+        }
+
+    def _ensure_chat_grammars_indexes(self) -> None:
+        """Create the owner-scoped lookup indexes used by grammar-library CRUD."""
+        index_statements = (
+            "CREATE INDEX IF NOT EXISTS idx_chat_grammars_user_name ON chat_grammars(user_id, name)",
+            "CREATE INDEX IF NOT EXISTS idx_chat_grammars_user_archived_deleted "
+            "ON chat_grammars(user_id, is_archived, deleted)",
+        )
+        for statement in index_statements:
+            if self.backend_type == BackendType.POSTGRESQL:
+                self.backend.execute(statement)
+            else:
+                self.execute_query(statement, script=False, commit=True)
+
+    def _migrate_sqlite_chat_grammars_table(self) -> None:
+        """Rebuild legacy SQLite chat_grammars tables so rows are owner-scoped."""
+        with self.transaction() as conn:
+            existing_cols = self._chat_grammar_column_names(conn)
+            if "user_id" in existing_cols:
+                return
+
+            owner_id = self._chat_grammar_owner_id()
+            conn.execute("ALTER TABLE chat_grammars RENAME TO chat_grammars_legacy")
+            conn.execute(
+                """
+                CREATE TABLE chat_grammars (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    grammar_text TEXT NOT NULL,
+                    validation_status TEXT NOT NULL DEFAULT 'unchecked',
+                    validation_error TEXT,
+                    last_validated_at DATETIME,
+                    is_archived BOOLEAN NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted BOOLEAN NOT NULL DEFAULT 0,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(user_id, name)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO chat_grammars (
+                    id,
+                    user_id,
+                    name,
+                    description,
+                    grammar_text,
+                    validation_status,
+                    validation_error,
+                    last_validated_at,
+                    is_archived,
+                    created_at,
+                    updated_at,
+                    deleted,
+                    version
+                )
+                SELECT
+                    id,
+                    ?,
+                    name,
+                    description,
+                    grammar_text,
+                    validation_status,
+                    validation_error,
+                    last_validated_at,
+                    is_archived,
+                    created_at,
+                    updated_at,
+                    deleted,
+                    version
+                FROM chat_grammars_legacy
+                """,
+                (owner_id,),
+            )
+            conn.execute("DROP TABLE chat_grammars_legacy")
+
+    def _migrate_postgres_chat_grammars_table(self) -> None:
+        """Backfill owner scoping for legacy PostgreSQL chat_grammars tables."""
+        owner_id = self._chat_grammar_owner_id()
+        existing_cols = self._chat_grammar_column_names()
+        if "user_id" not in existing_cols:
+            self.backend.execute("ALTER TABLE chat_grammars ADD COLUMN IF NOT EXISTS user_id TEXT")
+        self.backend.execute(
+            "UPDATE chat_grammars SET user_id = %s WHERE user_id IS NULL OR BTRIM(user_id) = ''",
+            (owner_id,),
+        )
+        self.backend.execute("ALTER TABLE chat_grammars ALTER COLUMN user_id SET NOT NULL")
+        self.backend.execute("ALTER TABLE chat_grammars DROP CONSTRAINT IF EXISTS chat_grammars_name_key")
+        self.backend.execute("ALTER TABLE chat_grammars DROP CONSTRAINT IF EXISTS uq_chat_grammars_user_name")
+        self.backend.execute(
+            "ALTER TABLE chat_grammars ADD CONSTRAINT uq_chat_grammars_user_name UNIQUE (user_id, name)"
+        )
+
+    def _coerce_chat_grammar_datetime(self, value: Any) -> datetime | None:
+        """Best-effort conversion of stored chat-grammar timestamps."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        return None
+
+    def _chat_grammar_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a chat_grammars row into a normalized dict."""
+        if not row:
+            return None
+        item = dict(row)
+        item.pop("user_id", None)
+        item["validation_status"] = str(item.get("validation_status") or "unchecked").strip().lower()
+        item["is_archived"] = bool(item.get("is_archived", False))
+        item["deleted"] = bool(item.get("deleted", False))
+        item["version"] = int(item.get("version") or 1)
+        item["created_at"] = self._coerce_chat_grammar_datetime(item.get("created_at"))
+        item["updated_at"] = self._coerce_chat_grammar_datetime(item.get("updated_at"))
+        item["last_validated_at"] = self._coerce_chat_grammar_datetime(item.get("last_validated_at"))
+        return item
+
+    def list_chat_grammars(
+        self,
+        *,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List saved grammars for the current user."""
+        self._ensure_chat_grammars_table()
+        clauses: list[str] = ["user_id = ?"]
+        params: list[Any] = [self._chat_grammar_owner_id()]
+        if not include_deleted:
+            clauses.append("deleted = ?")
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        if not include_archived:
+            clauses.append("is_archived = ?")
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = (
+            "SELECT * FROM chat_grammars "  # nosec B608
+            f"{where_sql} "
+            "ORDER BY name ASC LIMIT ? OFFSET ?"
+        )
+        params.extend([limit, offset])
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            return [self._chat_grammar_row_to_dict(row) for row in cursor.fetchall() if row]
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error listing chat grammars: {exc}")
+            raise
+
+    def count_chat_grammars(
+        self,
+        *,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> int:
+        """Return the number of saved grammars for the current user."""
+        self._ensure_chat_grammars_table()
+        clauses: list[str] = ["user_id = ?"]
+        params: list[Any] = [self._chat_grammar_owner_id()]
+        if not include_deleted:
+            clauses.append("deleted = ?")
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        if not include_archived:
+            clauses.append("is_archived = ?")
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = f"SELECT COUNT(*) AS cnt FROM chat_grammars {where_sql}"  # nosec B608
+        try:
+            cursor = self.execute_query(query, tuple(params) if params else None)
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error counting chat grammars: {exc}")
+            raise
+
+    def get_chat_grammar(
+        self,
+        grammar_id: str,
+        *,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a saved grammar by identifier."""
+        self._ensure_chat_grammars_table()
+        grammar_id = str(grammar_id or "").strip()
+        if not grammar_id:
+            raise InputError("grammar_id is required.")  # noqa: TRY003
+        query = "SELECT * FROM chat_grammars WHERE id = ? AND user_id = ?"
+        params: list[Any] = [grammar_id, self._chat_grammar_owner_id()]
+        if not include_deleted:
+            query += " AND deleted = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        if not include_archived:
+            query += " AND is_archived = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            row = cursor.fetchone()
+            return self._chat_grammar_row_to_dict(row)
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error fetching chat grammar '{grammar_id}': {exc}")
+            raise
+
+    def insert_chat_grammar(self, grammar_data: dict[str, Any]) -> str:
+        """Insert a new saved grammar and return its identifier."""
+        self._ensure_chat_grammars_table()
+        name = str(grammar_data.get("name") or "").strip()
+        if not name:
+            raise InputError("Grammar name is required.")  # noqa: TRY003
+        grammar_text = str(grammar_data.get("grammar_text") or "")
+        if not grammar_text.strip():
+            raise InputError("grammar_text is required.")  # noqa: TRY003
+
+        validation_status = str(grammar_data.get("validation_status") or "unchecked").strip().lower()
+        if validation_status not in _CHAT_GRAMMAR_VALIDATION_STATUSES:
+            raise InputError("validation_status must be one of unchecked, valid, invalid.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        grammar_id = str(grammar_data.get("id") or f"grammar_{self._generate_uuid().replace('-', '')}")
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        owner_id = self._chat_grammar_owner_id()
+
+        query = (
+            "INSERT INTO chat_grammars ("
+            "id, user_id, name, description, grammar_text, validation_status, validation_error, "
+            "last_validated_at, is_archived, created_at, updated_at, deleted, version"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            grammar_id,
+            owner_id,
+            name,
+            grammar_data.get("description"),
+            grammar_text,
+            validation_status,
+            grammar_data.get("validation_error"),
+            grammar_data.get("last_validated_at"),
+            bool_cast(bool(grammar_data.get("is_archived", False))),
+            grammar_data.get("created_at") or now,
+            grammar_data.get("updated_at") or now,
+            bool_cast(bool(grammar_data.get("deleted", False))),
+            int(grammar_data.get("version", 1)),
+        )
+        try:
+            with self.transaction() as conn:
+                prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+                conn.execute(prepared_query, prepared_params)
+                return grammar_id  # noqa: TRY300
+        except sqlite3.IntegrityError as exc:
+            lowered = str(exc).lower()
+            if "unique constraint failed: chat_grammars.user_id, chat_grammars.name" in lowered or (
+                "unique constraint failed: chat_grammars.name" in lowered
+            ):
+                raise ConflictError(  # noqa: TRY003
+                    f"Grammar '{name}' already exists.",
+                    entity="chat_grammars",
+                    entity_id=name,
+                ) from exc
+            if "unique constraint failed: chat_grammars.id" in str(exc).lower():
+                raise ConflictError(  # noqa: TRY003
+                    "Grammar ID already exists.",
+                    entity="chat_grammars",
+                    entity_id=grammar_id,
+                ) from exc
+            raise CharactersRAGDBError(f"Database integrity error adding grammar '{name}': {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(  # noqa: TRY003
+                    f"Grammar '{name}' already exists.",
+                    entity="chat_grammars",
+                    entity_id=name,
+                ) from exc
+            raise CharactersRAGDBError(f"Database integrity error adding grammar '{name}': {exc}") from exc  # noqa: TRY003
+
+    def update_chat_grammar(
+        self,
+        grammar_id: str,
+        update_data: dict[str, Any],
+        *,
+        expected_version: int,
+    ) -> bool:
+        """Update a saved grammar using optimistic locking."""
+        if not update_data:
+            raise InputError(f"No data provided for grammar update '{grammar_id}'.")  # noqa: TRY003
+
+        self._ensure_chat_grammars_table()
+        now = self._get_current_utc_timestamp_iso()
+        allowed_fields = {
+            "name",
+            "description",
+            "grammar_text",
+            "validation_status",
+            "validation_error",
+            "last_validated_at",
+            "is_archived",
+        }
+
+        set_parts: list[str] = []
+        params: list[Any] = []
+        grammar_text_updated = False
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            if key == "name":
+                normalized = str(value or "").strip()
+                if not normalized:
+                    raise InputError("Grammar name cannot be empty.")  # noqa: TRY003
+                params.append(normalized)
+                set_parts.append("name = ?")
+            elif key == "grammar_text":
+                normalized_text = str(value or "")
+                if not normalized_text.strip():
+                    raise InputError("grammar_text cannot be empty.")  # noqa: TRY003
+                params.append(normalized_text)
+                set_parts.append("grammar_text = ?")
+                grammar_text_updated = True
+            elif key == "validation_status":
+                normalized_status = str(value or "").strip().lower()
+                if normalized_status not in _CHAT_GRAMMAR_VALIDATION_STATUSES:
+                    raise InputError("validation_status must be one of unchecked, valid, invalid.")  # noqa: TRY003
+                params.append(normalized_status)
+                set_parts.append("validation_status = ?")
+            elif key == "is_archived":
+                params.append(bool(value) if self.backend_type == BackendType.POSTGRESQL else int(bool(value)))
+                set_parts.append("is_archived = ?")
+            else:
+                params.append(value)
+                set_parts.append(f"{key} = ?")
+
+        if not set_parts:
+            raise InputError(f"No supported data provided for grammar update '{grammar_id}'.")  # noqa: TRY003
+
+        if grammar_text_updated and "validation_status" not in update_data:
+            params.append("unchecked")
+            set_parts.append("validation_status = ?")
+        if grammar_text_updated and "validation_error" not in update_data:
+            params.append(None)
+            set_parts.append("validation_error = ?")
+        if grammar_text_updated and "last_validated_at" not in update_data:
+            params.append(None)
+            set_parts.append("last_validated_at = ?")
+
+        owner_id = self._chat_grammar_owner_id()
+        next_version = expected_version + 1
+        set_parts.extend(["updated_at = ?", "version = ?"])
+        params.extend([now, next_version, grammar_id, owner_id, expected_version])
+        query = (
+            f"UPDATE chat_grammars SET {', '.join(set_parts)} "  # nosec B608
+            "WHERE id = ? AND user_id = ? AND version = ? AND deleted = 0"
+        )
+
+        try:
+            with self.transaction() as conn:
+                lookup_query, lookup_params = self._prepare_backend_statement(
+                    "SELECT version FROM chat_grammars WHERE id = ? AND user_id = ? AND deleted = 0",
+                    (grammar_id, owner_id),
+                )
+                current_row = conn.execute(lookup_query, lookup_params).fetchone()
+                current_db_version = int(current_row["version"]) if current_row else None
+                if current_db_version != expected_version:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Version mismatch. Expected {expected_version}, found {current_db_version}. Please refresh and try again.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+
+                prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+                cursor = conn.execute(prepared_query, prepared_params)
+                if cursor.rowcount == 0:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Grammar '{grammar_id}' update affected 0 rows.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+                return True
+        except sqlite3.IntegrityError as exc:
+            if "unique constraint failed: chat_grammars.name" in str(exc).lower():
+                raise ConflictError(  # noqa: TRY003
+                    f"Grammar '{update_data.get('name')}' already exists.",
+                    entity="chat_grammars",
+                    entity_id=update_data.get("name"),
+                ) from exc
+            raise CharactersRAGDBError(f"Database error updating grammar '{grammar_id}': {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(  # noqa: TRY003
+                    f"Grammar '{update_data.get('name')}' already exists.",
+                    entity="chat_grammars",
+                    entity_id=update_data.get("name"),
+                ) from exc
+            raise CharactersRAGDBError(f"Database error updating grammar '{grammar_id}': {exc}") from exc  # noqa: TRY003
+
+    def archive_chat_grammar(self, grammar_id: str, *, expected_version: int) -> bool:
+        """Archive a saved grammar using optimistic locking."""
+        self._ensure_chat_grammars_table()
+        now = self._get_current_utc_timestamp_iso()
+        next_version = expected_version + 1
+        query = (
+            "UPDATE chat_grammars SET is_archived = ?, updated_at = ?, version = ? "
+            "WHERE id = ? AND user_id = ? AND version = ? AND deleted = 0"
+        )
+        owner_id = self._chat_grammar_owner_id()
+        params = (
+            True if self.backend_type == BackendType.POSTGRESQL else 1,
+            now,
+            next_version,
+            grammar_id,
+            owner_id,
+            expected_version,
+        )
+
+        try:
+            with self.transaction() as conn:
+                lookup_query, lookup_params = self._prepare_backend_statement(
+                    "SELECT version FROM chat_grammars WHERE id = ? AND user_id = ? AND deleted = 0",
+                    (grammar_id, owner_id),
+                )
+                current_row = conn.execute(lookup_query, lookup_params).fetchone()
+                current_db_version = int(current_row["version"]) if current_row else None
+                if current_db_version != expected_version:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Version mismatch. Expected {expected_version}, found {current_db_version}. Please refresh and try again.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+
+                prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+                cursor = conn.execute(prepared_query, prepared_params)
+                if cursor.rowcount == 0:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Grammar '{grammar_id}' archive affected 0 rows.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+                return True
+        except ConflictError:
+            raise
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error archiving grammar '{grammar_id}': {exc}")
+            raise
+
+    def delete_chat_grammar(
+        self,
+        grammar_id: str,
+        *,
+        expected_version: int,
+        hard_delete: bool = False,
+    ) -> bool:
+        """Delete a saved grammar using optimistic locking."""
+        self._ensure_chat_grammars_table()
+        now = self._get_current_utc_timestamp_iso()
+        owner_id = self._chat_grammar_owner_id()
+
+        try:
+            with self.transaction() as conn:
+                lookup_query, lookup_params = self._prepare_backend_statement(
+                    "SELECT version FROM chat_grammars WHERE id = ? AND user_id = ?",
+                    (grammar_id, owner_id),
+                )
+                current_row = conn.execute(lookup_query, lookup_params).fetchone()
+                current_db_version = int(current_row["version"]) if current_row else None
+                if current_db_version != expected_version:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Version mismatch. Expected {expected_version}, found {current_db_version}. Please refresh and try again.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+
+                if hard_delete:
+                    prepared_query, prepared_params = self._prepare_backend_statement(
+                        "DELETE FROM chat_grammars WHERE id = ? AND user_id = ? AND version = ?",
+                        (grammar_id, owner_id, expected_version),
+                    )
+                else:
+                    prepared_query, prepared_params = self._prepare_backend_statement(
+                        "UPDATE chat_grammars SET deleted = ?, updated_at = ?, version = ? "
+                        "WHERE id = ? AND user_id = ? AND version = ? AND deleted = 0",
+                        (
+                            True if self.backend_type == BackendType.POSTGRESQL else 1,
+                            now,
+                            expected_version + 1,
+                            grammar_id,
+                            owner_id,
+                            expected_version,
+                        ),
+                    )
+                cursor = conn.execute(prepared_query, prepared_params)
+                if cursor.rowcount == 0:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Grammar '{grammar_id}' delete affected 0 rows.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+                return True
+        except ConflictError:
+            raise
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error deleting grammar '{grammar_id}': {exc}")
             raise
 
     # ----------------------
