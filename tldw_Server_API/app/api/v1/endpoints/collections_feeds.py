@@ -420,7 +420,12 @@ async def create_feed_subscription(
         async def _run_first_job(user_id: int, job_id: int) -> None:
             try:
                 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
-                await run_watchlist_job(user_id, job_id)
+                await run_watchlist_job(
+                    user_id,
+                    job_id,
+                    capture_companion_activity=True,
+                    companion_route="/api/v1/collections/feeds",
+                )
             except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"collections_feeds: first run failed for job {job_id}: {exc}")
 
