@@ -4,7 +4,7 @@
 
 **Goal:** Add an admin-only macOS sandbox diagnostics endpoint backed by a shared probe layer, while keeping `/api/v1/sandbox/runtimes` summarized and aligned with the same readiness logic.
 
-**Architecture:** Add a new `macos_diagnostics.py` probe module in the sandbox core to compute host/helper/template/runtime readiness from existing config and env signals. Expose that payload through `SandboxService` and a new admin route, then reuse only the runtime summary subset inside `feature_discovery()` so the public discovery contract stays shallow.
+**Architecture:** Add a new `macos_diagnostics.py` probe module in the sandbox core to compute host/helper/template/runtime readiness from existing config and env signals. Derive the runtime subsection from the same runner preflight path already used by admission and feature discovery, then layer on extra operator metadata such as optional helper/template source details. Expose that payload through `SandboxService` and a new admin route while keeping `/api/v1/sandbox/runtimes` shallow.
 
 **Tech Stack:** FastAPI, Pydantic, pytest, existing sandbox runtime preflight code, Loguru, Bandit
 
@@ -33,16 +33,23 @@ from tldw_Server_API.app.core.Sandbox.macos_diagnostics import collect_macos_dia
 def test_collect_macos_diagnostics_reports_missing_helper_and_templates(monkeypatch) -> None:
     monkeypatch.setattr("tldw_Server_API.app.core.Sandbox.macos_diagnostics.sys.platform", "darwin")
     monkeypatch.setattr("tldw_Server_API.app.core.Sandbox.macos_diagnostics.platform.machine", lambda: "arm64")
+    monkeypatch.delenv("TLDW_SANDBOX_MACOS_HELPER_PATH", raising=False)
     monkeypatch.delenv("TLDW_SANDBOX_MACOS_HELPER_READY", raising=False)
+    monkeypatch.delenv("TLDW_SANDBOX_VZ_LINUX_TEMPLATE_SOURCE", raising=False)
     monkeypatch.delenv("TLDW_SANDBOX_VZ_LINUX_TEMPLATE_READY", raising=False)
     monkeypatch.delenv("TLDW_SANDBOX_VZ_MACOS_TEMPLATE_READY", raising=False)
 
     data = collect_macos_diagnostics()
 
     assert data["host"]["supported"] is True
+    assert data["helper"]["configured"] is False
+    assert data["helper"]["path"] is None
     assert data["helper"]["ready"] is False
+    assert data["templates"]["vz_linux"]["configured"] is False
+    assert data["templates"]["vz_linux"]["source"] is None
     assert data["templates"]["vz_linux"]["ready"] is False
     assert "macos_helper_missing" in data["runtimes"]["vz_linux"]["reasons"]
+    assert data["runtimes"]["vz_linux"]["execution_mode"] == "none"
 
 
 def test_collect_macos_diagnostics_separates_policy_from_host_readiness(monkeypatch) -> None:
@@ -53,6 +60,16 @@ def test_collect_macos_diagnostics_separates_policy_from_host_readiness(monkeypa
 
     assert data["runtimes"]["seatbelt"]["supported_trust_levels"] == ["trusted"]
     assert data["runtimes"]["seatbelt"]["available"] in (True, False)
+
+
+def test_collect_macos_diagnostics_uses_optional_operator_metadata_env(monkeypatch) -> None:
+    monkeypatch.setenv("TLDW_SANDBOX_MACOS_HELPER_PATH", "/tmp/macos-helper")
+    monkeypatch.setenv("TLDW_SANDBOX_VZ_LINUX_TEMPLATE_SOURCE", "/tmp/vz-linux.img")
+
+    data = collect_macos_diagnostics()
+
+    assert data["helper"]["path"] == "/tmp/macos-helper"
+    assert data["templates"]["vz_linux"]["source"] == "/tmp/vz-linux.img"
 ```
 
 **Step 2: Run the tests to verify they fail**
@@ -91,7 +108,13 @@ def collect_macos_diagnostics() -> dict[str, object]:
     host = probe_host()
     helper = probe_helper()
     templates = probe_templates()
-    runtimes = probe_runtime_statuses(host=host, helper=helper, templates=templates)
+    runtime_preflights = collect_runtime_preflights(network_policy="deny_all")
+    runtimes = probe_runtime_statuses(
+        runtime_preflights=runtime_preflights,
+        host=host,
+        helper=helper,
+        templates=templates,
+    )
     return {
         "host": host,
         "helper": helper,
@@ -99,6 +122,14 @@ def collect_macos_diagnostics() -> dict[str, object]:
         "runtimes": runtimes,
     }
 ```
+
+Add a minimal diagnostics-only metadata contract for operator detail:
+
+- `TLDW_SANDBOX_MACOS_HELPER_PATH`
+- `TLDW_SANDBOX_VZ_LINUX_TEMPLATE_SOURCE`
+- `TLDW_SANDBOX_VZ_MACOS_TEMPLATE_SOURCE`
+
+These keys should be optional. When they are absent, the diagnostics payload should return `path=None` / `source=None` rather than inventing fake filesystem locations.
 
 Keep this slice read-only:
 
@@ -298,15 +329,14 @@ git add tldw_Server_API/app/api/v1/endpoints/sandbox.py tldw_Server_API/tests/sa
 git commit -m "feat: add sandbox admin macOS diagnostics endpoint"
 ```
 
-### Task 4: Reuse the Probe Results in `/sandbox/runtimes` Without Leaking Admin Detail
+### Task 4: Keep `/sandbox/runtimes` Summarized and Aligned With Shared Preflight Inputs
 
 **Files:**
 - Modify: `tldw_Server_API/app/core/Sandbox/service.py`
-- Modify: `tldw_Server_API/app/core/Sandbox/runtime_capabilities.py`
 - Modify: `tldw_Server_API/tests/sandbox/test_feature_discovery_flags.py`
 - Check: `tldw_Server_API/tests/sandbox/test_lima_feature_discovery_capabilities.py`
 
-**Step 1: Write the failing summary-contract tests**
+**Step 1: Write the failing alignment and summary-contract tests**
 
 Add a new test to `test_feature_discovery_flags.py`:
 
@@ -329,7 +359,23 @@ def test_runtimes_discovery_keeps_macos_diagnostics_summarized(monkeypatch) -> N
     assert isinstance(vz_linux.get("host"), dict)
 ```
 
-Also add a test that derived runtime reasons still reflect the shared diagnostics inputs rather than a second, divergent code path.
+Also add a test that the admin diagnostics runtime subsection stays aligned with the same preflight facts used by feature discovery:
+
+```python
+def test_macos_diagnostics_runtime_reasons_align_with_feature_discovery(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
+    monkeypatch.setenv("TLDW_SANDBOX_MACOS_HELPER_READY", "0")
+    clear_config_cache()
+
+    svc = SandboxService()
+    diagnostics = svc.macos_diagnostics()
+    discovery = {item["name"]: item for item in svc.feature_discovery()}
+
+    assert diagnostics["runtimes"]["vz_linux"]["reasons"] == discovery["vz_linux"]["reasons"]
+    assert diagnostics["runtimes"]["vz_macos"]["reasons"] == discovery["vz_macos"]["reasons"]
+    assert diagnostics["runtimes"]["seatbelt"]["supported_trust_levels"] == discovery["seatbelt"]["supported_trust_levels"]
+```
 
 **Step 2: Run the discovery tests to verify they fail**
 
@@ -339,19 +385,11 @@ Run:
 python -m pytest tldw_Server_API/tests/sandbox/test_feature_discovery_flags.py -q
 ```
 
-Expected: FAIL because `feature_discovery()` still derives its macOS status independently.
+Expected: FAIL if the new diagnostics runtime section is derived from a parallel logic path instead of the same preflight inputs.
 
-**Step 3: Refactor `feature_discovery()` to reuse shared diagnostics**
+**Step 3: Refactor only as needed to keep both views aligned**
 
-Keep Docker, Firecracker, and Lima behavior intact. Only refactor the macOS-specific runtime entries to read from the shared diagnostics contract or shared low-level helpers.
-
-Use a small helper inside `service.py` if needed:
-
-```python
-def _macos_runtime_summary(self) -> dict[str, dict[str, object]]:
-    diagnostics = self.macos_diagnostics()
-    return diagnostics["runtimes"]
-```
+Keep Docker, Firecracker, and Lima behavior intact. The important requirement is that macOS runtime diagnostics and `/sandbox/runtimes` must reflect the same underlying preflight reasons and supported trust levels. If `feature_discovery()` already uses the shared preflight path, do not add an unnecessary second abstraction just to satisfy the task wording.
 
 Preserve the public summary boundary:
 
@@ -371,7 +409,7 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/core/Sandbox/service.py tldw_Server_API/app/core/Sandbox/runtime_capabilities.py tldw_Server_API/tests/sandbox/test_feature_discovery_flags.py
+git add tldw_Server_API/app/core/Sandbox/service.py tldw_Server_API/tests/sandbox/test_feature_discovery_flags.py
 git commit -m "feat: reuse macOS diagnostics in runtime discovery"
 ```
 
@@ -383,7 +421,7 @@ git commit -m "feat: reuse macOS diagnostics in runtime discovery"
 - Modify: `tldw_Server_API/app/core/Sandbox/README.md`
 - Check: `Docs/Plans/2026-03-10-macos-sandbox-admin-diagnostics-design.md`
 
-**Step 1: Write the failing host-gated smoke test**
+**Step 1: Add the host-gated diagnostics smoke test**
 
 Extend `test_vz_runtime_macos_host_gated.py` with a diagnostics smoke test:
 
@@ -398,7 +436,7 @@ def test_collect_macos_diagnostics_smoke_on_real_host() -> None:
     assert isinstance(data["host"].get("macos_version"), (str, type(None)))
 ```
 
-**Step 2: Run the smoke test to verify it fails**
+**Step 2: Run the smoke test**
 
 Run:
 
@@ -406,7 +444,7 @@ Run:
 python -m pytest tldw_Server_API/tests/sandbox/test_vz_runtime_macos_host_gated.py -q
 ```
 
-Expected: FAIL on missing import or missing `macos_version` field before the final probe contract is complete.
+Expected: PASS once the diagnostics contract is in place. Treat this as host-gated verification rather than a forced red phase.
 
 **Step 3: Finish the last implementation bits and update the docs**
 

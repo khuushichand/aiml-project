@@ -19,7 +19,7 @@ The design stays conservative:
 - diagnostics are operator-facing, not client-facing
 - detailed host paths and remediation hints remain admin-only
 - readiness distinguishes `host not ready` from `policy unsupported`
-- probe logic should become the single source of truth for macOS runtime readiness rather than drifting separately inside each runner and API surface
+- diagnostics should share low-level facts with the existing runner preflight path instead of inventing a second runtime-readiness engine
 
 ## 2. User-Confirmed Decisions
 
@@ -82,6 +82,8 @@ These probes should consume the same config and environment knobs already used b
 
 That keeps the endpoint safe for operators, tests, and future health checks.
 
+For runtime-level availability and reasons, phase 1 should prefer existing runner preflight contracts over a new parallel interpretation layer. In practice, the diagnostics module should derive runtime entries from the same runner preflight results already used by admission and feature discovery, then layer on extra operator metadata such as helper/template configuration detail.
+
 ### 5.2 Admin diagnostics endpoint
 
 Add an admin-only endpoint under the existing sandbox router:
@@ -128,6 +130,8 @@ This section answers whether the machine is even a valid target for the macOS ru
 
 This section must separate “not configured” from “configured incorrectly” and “configured but not ready.” That distinction matters for operator remediation and test assertions.
 
+Because the current scaffold only has boolean readiness flags, phase 1 should treat `path` and `transport` as optional fields. If no explicit helper-path configuration exists yet, `path` may be `null`, `configured` should be `false`, and `transport` should remain `null` except for known cases such as `fake` in test mode.
+
 ### 6.3 `templates`
 
 Return one entry per template-backed runtime, initially at least:
@@ -143,6 +147,8 @@ Each entry should include:
 - `reasons`
 
 The design intentionally avoids promising a richer image-store contract in this slice. The goal is readiness proof, not full template management.
+
+Like helper metadata, `source` should be optional in phase 1. If the runtime only exposes template readiness booleans today, diagnostics may return `source=null` until an explicit operator-facing template source contract exists.
 
 ### 6.4 `runtimes`
 
@@ -164,7 +170,7 @@ This section is the derived operator view. It should explain the runtime’s cur
 
 ## 7. Readiness Semantics
 
-The diagnostics layer should use explicit derived states:
+The diagnostics layer should use explicit derived states internally:
 
 - `ready`
 - `degraded`
@@ -186,6 +192,8 @@ Examples:
 - `vz_linux` may have a valid host and template but still report `execution_mode=none` until real execution is implemented
 
 This distinction should survive into tests and user-visible remediation text.
+
+Phase 1 does not have to expose a separate `status` field if that would widen the schema unnecessarily. Booleans plus reason codes are acceptable as the stable contract, as long as internal derivation still distinguishes these cases consistently.
 
 ## 8. Security and Data Exposure
 
@@ -211,7 +219,7 @@ Land the diagnostics layer first as a standalone module and admin endpoint.
 
 ### 9.2 Reuse in runtime discovery
 
-After the probe contract is trustworthy, refactor runtime discovery and preflight collection to reuse shared helpers where practical. The goal is to reduce duplicate readiness rules without forcing a risky “big bang” refactor into one patch.
+After the probe contract is trustworthy, refactor diagnostics and runtime discovery to share the same runner preflight inputs where practical. The goal is to reduce duplicate readiness rules without forcing a risky “big bang” refactor into one patch.
 
 ### 9.3 Execution-time truth remains authoritative
 
@@ -243,6 +251,7 @@ Diagnostics help operators understand readiness, but they do not replace authori
 2. Helper probe distinguishes missing path, non-executable helper, and ready helper.
 3. Template probe distinguishes configured versus ready template state per runtime.
 4. Runtime status derivation separates host-readiness failures from policy-limit failures.
+5. Admin runtime diagnostics stay aligned with the same runner preflight reasons used by `/api/v1/sandbox/runtimes`.
 
 ### API tests
 
