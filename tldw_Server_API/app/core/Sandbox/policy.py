@@ -212,6 +212,12 @@ class SandboxPolicy:
             for level in (preflight.supported_trust_levels or [])
             if str(level).strip()
         }
+        if runtime == RuntimeType.seatbelt and trust == TrustLevel.standard and "standard" not in supported:
+            raise SandboxPolicy.PolicyUnsupported(
+                runtime,
+                requirement="standard_not_enabled",
+                reasons=["seatbelt_standard_disabled"],
+            )
         if supported and trust.value not in supported:
             raise SandboxPolicy.PolicyUnsupported(
                 runtime,

@@ -31,6 +31,7 @@ from .models import (
     RuntimeType,
     Session,
     SessionSpec,
+    TrustLevel,
 )
 from .orchestrator import SandboxOrchestrator, SessionActiveRunsConflict
 from .policy import SandboxPolicy, SandboxPolicyConfig, compute_policy_hash
@@ -38,6 +39,7 @@ from .runtime_capabilities import RuntimePreflightResult, collect_runtime_prefli
 from .runners.docker_runner import DockerRunner, docker_available
 from .runners.firecracker_runner import FirecrackerRunner, firecracker_available, firecracker_real_enabled
 from .runners.lima_runner import LimaRunner, lima_available
+from .runners.seatbelt_runner import SeatbeltRunner
 from .runners.vz_linux_runner import VZLinuxRunner
 from .runners.vz_macos_runner import VZMacOSRunner
 from .snapshots import SnapshotManager
@@ -228,6 +230,22 @@ class SandboxService:
             raise SandboxPolicy.RuntimeUnavailable(RuntimeType.vz_macos, reasons=list(preflight.reasons or []))
         return VZMacOSRunner().start_run(run_id, spec, workspace_path)
 
+    def _start_seatbelt_run_with_execution_preflight(
+        self,
+        run_id: str,
+        spec: RunSpec,
+        workspace_path: str | None,
+    ) -> RunStatus:
+        preflight = SeatbeltRunner().preflight(network_policy=spec.network_policy)
+        if not preflight.available:
+            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.seatbelt, reasons=list(preflight.reasons or []))
+        self.policy._require_trust_level_supported(
+            RuntimeType.seatbelt,
+            spec.trust_level or TrustLevel.standard,
+            runtime_preflights={RuntimeType.seatbelt: preflight},
+        )
+        return SeatbeltRunner().start_run(run_id, spec, workspace_path)
+
     def _effective_claim_lease_seconds(self) -> int:
         try:
             raw = os.getenv("SANDBOX_RUN_CLAIM_LEASE_SEC")
@@ -254,6 +272,12 @@ class SandboxService:
                 RuntimeType.lima: RuntimePreflightResult(
                     runtime=RuntimeType.lima,
                     available=bool(lima_available()),
+                ),
+                RuntimeType.seatbelt: RuntimePreflightResult(
+                    runtime=RuntimeType.seatbelt,
+                    available=False,
+                    reasons=["seatbelt_unavailable"],
+                    supported_trust_levels=["trusted"],
                 ),
                 RuntimeType.vz_linux: RuntimePreflightResult(
                     runtime=RuntimeType.vz_linux,
@@ -1400,6 +1424,38 @@ class SandboxService:
                 self._orch.update_run(status.id, status)
             except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                 self._mark_run_failed(status, reason="vz_macos_failed")
+        elif execute_enabled and spec.runtime == RuntimeType.seatbelt:
+            try:
+                ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+                admitted = self._admit_run_starting(status.id)
+                if admitted is None:
+                    existing = self._orch.get_run(status.id)
+                    return existing or status
+                if admitted.phase != RunPhase.starting:
+                    return admitted
+                self._apply_admitted_status(status, admitted)
+                try:
+                    real = self._run_with_claim_lease(
+                        status.id,
+                        lambda: self._start_seatbelt_run_with_execution_preflight(status.id, spec, ws),
+                    )
+                except (SandboxPolicy.RuntimeUnavailable, SandboxPolicy.PolicyUnsupported):
+                    status.phase = RunPhase.failed
+                    status.message = "seatbelt_policy_failed"
+                    status.finished_at = datetime.utcnow()
+                    self._orch.update_run(status.id, status)
+                    return status
+                real.id = status.id
+                status.phase = real.phase
+                status.exit_code = real.exit_code
+                status.started_at = real.started_at
+                status.finished_at = real.finished_at
+                status.message = real.message
+                status.image_digest = real.image_digest
+                status.runtime_version = real.runtime_version
+                self._orch.update_run(status.id, status)
+            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+                self._mark_run_failed(status, reason="seatbelt_failed")
         else:
             # Stub artifacts even without execution
             artifacts: dict[str, bytes] = {}
@@ -1451,6 +1507,8 @@ class SandboxService:
                 cancelled = DockerRunner.cancel_run(run_id)
             elif st.runtime == RuntimeType.lima:
                 cancelled = LimaRunner.cancel_run(run_id)
+            elif st.runtime == RuntimeType.seatbelt:
+                cancelled = SeatbeltRunner.cancel_run(run_id)
             elif st.runtime == RuntimeType.vz_linux:
                 cancelled = VZLinuxRunner.cancel_run(run_id)
             elif st.runtime == RuntimeType.vz_macos:

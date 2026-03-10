@@ -58,3 +58,30 @@ def test_runtime_preflight_trust_levels_are_enforced() -> None:
 
     assert exc.value.runtime == RuntimeType.vz_linux
     assert "trust_level_not_supported" in exc.value.reasons
+
+
+def test_seatbelt_standard_requires_explicit_opt_in() -> None:
+    policy = SandboxPolicy()
+    spec = RunSpec(
+        session_id=None,
+        runtime=RuntimeType.seatbelt,
+        base_image=None,
+        command=["echo", "ok"],
+        trust_level=TrustLevel.standard,
+    )
+
+    with pytest.raises(SandboxPolicy.PolicyUnsupported) as exc:
+        policy.apply_to_run(
+            spec,
+            firecracker_available=True,
+            runtime_preflights={
+                RuntimeType.seatbelt: RuntimePreflightResult(
+                    runtime=RuntimeType.seatbelt,
+                    available=True,
+                    supported_trust_levels=["trusted"],
+                )
+            },
+        )
+
+    assert exc.value.runtime == RuntimeType.seatbelt
+    assert "seatbelt_standard_disabled" in exc.value.reasons

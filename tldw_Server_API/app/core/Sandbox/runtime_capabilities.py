@@ -42,6 +42,7 @@ def collect_runtime_preflights(
     from .runners.docker_runner import docker_available
     from .runners.firecracker_runner import firecracker_available
     from .runners.lima_runner import LimaRunner
+    from .runners.seatbelt_runner import SeatbeltRunner
     from .runners.vz_linux_runner import VZLinuxRunner
     from .runners.vz_macos_runner import VZMacOSRunner
 
@@ -62,6 +63,7 @@ def collect_runtime_preflights(
             reasons=[] if firecracker_ok else ["firecracker_unavailable"],
         ),
         RuntimeType.lima: LimaRunner().preflight(network_policy=requested_policy),
+        RuntimeType.seatbelt: SeatbeltRunner().preflight(network_policy=requested_policy),
         RuntimeType.vz_linux: VZLinuxRunner().preflight(network_policy=requested_policy),
         RuntimeType.vz_macos: VZMacOSRunner().preflight(network_policy=requested_policy),
     }
