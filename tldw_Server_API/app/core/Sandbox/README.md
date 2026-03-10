@@ -59,7 +59,13 @@ Current limitations:
 - Recommended validation endpoints:
   - `/api/v1/sandbox/health`
   - `/api/v1/sandbox/runtimes`
+  - `/api/v1/sandbox/admin/macos-diagnostics`
   - `/api/v1/sandbox/runs`
+
+`/api/v1/sandbox/runtimes` is the summarized discovery surface used by clients and ACP.
+`/api/v1/sandbox/admin/macos-diagnostics` is an admin-only diagnostics surface for
+operator troubleshooting and exposes helper/template readiness details that are not
+included in the public discovery payload.
 
 Selected configuration knobs:
 
@@ -69,12 +75,15 @@ Selected configuration knobs:
   - `SANDBOX_IDEMPOTENCY_TTL_SEC`
 - macOS scaffolding:
   - `TLDW_SANDBOX_MACOS_HELPER_READY`
+  - `TLDW_SANDBOX_MACOS_HELPER_PATH`
   - `TLDW_SANDBOX_VZ_LINUX_AVAILABLE`
   - `TLDW_SANDBOX_VZ_LINUX_FAKE_EXEC`
   - `TLDW_SANDBOX_VZ_LINUX_TEMPLATE_READY`
+  - `TLDW_SANDBOX_VZ_LINUX_TEMPLATE_SOURCE`
   - `TLDW_SANDBOX_VZ_MACOS_AVAILABLE`
   - `TLDW_SANDBOX_VZ_MACOS_FAKE_EXEC`
   - `TLDW_SANDBOX_VZ_MACOS_TEMPLATE_READY`
+  - `TLDW_SANDBOX_VZ_MACOS_TEMPLATE_SOURCE`
   - `TLDW_SANDBOX_SEATBELT_AVAILABLE`
   - `TLDW_SANDBOX_SEATBELT_FAKE_EXEC`
   - `TLDW_SANDBOX_SEATBELT_STANDARD_ENABLED`
