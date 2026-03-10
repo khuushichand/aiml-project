@@ -26,6 +26,7 @@ export type CompanionActivityCreate = {
 export type CompanionCheckInCreate = {
   title?: string
   summary: string
+  surface?: string
   tags?: string[]
 }
 

@@ -163,6 +163,28 @@ def test_companion_check_in_create_records_explicit_capture(client_with_companio
     assert rows[0]["tags"] == ["planning", "focus"]
 
 
+def test_companion_check_in_create_accepts_surface_override(client_with_companion_db) -> None:
+    client, db = client_with_companion_db
+
+    response = client.post(
+        "/api/v1/companion/check-ins",
+        json={
+            "summary": "Logged a quick update from the persona sidepanel.",
+            "surface": "persona.sidepanel",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["surface"] == "persona.sidepanel"
+    assert payload["metadata"]["summary"] == "Logged a quick update from the persona sidepanel."
+    assert payload["provenance"]["route"] == "/api/v1/companion/check-ins"
+
+    rows, total = db.list_companion_activity_events("1", limit=10, offset=0)
+    assert total == 1
+    assert rows[0]["surface"] == "persona.sidepanel"
+
+
 def test_companion_goals_create_and_list(client_with_companion_db) -> None:
     client, _db = client_with_companion_db
 

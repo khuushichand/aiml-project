@@ -47,11 +47,12 @@ class CompanionActivityCreate(BaseModel):
 class CompanionCheckInCreate(BaseModel):
     title: str | None = None
     summary: str
+    surface: str | None = None
     tags: list[str] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid")
 
-    @field_validator("title", "summary", mode="before")
+    @field_validator("title", "summary", "surface", mode="before")
     @classmethod
     def _strip_text(cls, value: Any) -> Any:
         return value.strip() if isinstance(value, str) else value
@@ -71,6 +72,8 @@ class CompanionCheckInCreate(BaseModel):
             raise ValueError("summary is required")
         if self.title == "":
             self.title = None
+        if self.surface == "":
+            self.surface = None
         return self
 
 

@@ -5,9 +5,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 const mocks = vi.hoisted(() => ({
   isOnline: true,
   capabilitiesState: {
-    capabilities: { hasPersona: true },
+    capabilities: { hasPersona: true, hasPersonalization: true },
     loading: false
-  } as { capabilities: { hasPersona: boolean } | null; loading: boolean },
+  } as {
+    capabilities:
+      | { hasPersona: boolean; hasPersonalization?: boolean }
+      | null
+    loading: boolean
+  },
   navigate: vi.fn(),
   useBlocker: vi.fn(),
   blocker: {
@@ -195,7 +200,10 @@ describe("SidepanelPersona", () => {
     MockWebSocket.instances = []
     window.localStorage.clear()
     mocks.isOnline = true
-    mocks.capabilitiesState.capabilities = { hasPersona: true }
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true
+    }
     mocks.capabilitiesState.loading = false
     mocks.navigate.mockReset()
     mocks.useBlocker.mockReset()
@@ -221,10 +229,68 @@ describe("SidepanelPersona", () => {
   })
 
   it("shows unavailable state when persona capability is missing", () => {
-    mocks.capabilitiesState.capabilities = { hasPersona: false }
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: false,
+      hasPersonalization: true
+    }
     render(<SidepanelPersona />)
 
     expect(screen.getByText("Persona unavailable")).toBeInTheDocument()
+  })
+
+  it("records the current draft as a companion check-in", async () => {
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
+      if (path.includes("/api/v1/companion/check-ins")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "activity-checkin-1",
+            event_type: "companion_check_in_recorded",
+            source_type: "companion_check_in",
+            source_id: "checkin-1",
+            surface: String(init?.body?.surface || "companion.workspace"),
+            tags: [],
+            provenance: {
+              capture_mode: "explicit",
+              route: "/api/v1/companion/check-ins",
+              action: "manual_check_in"
+            },
+            metadata: {
+              summary: String(init?.body?.summary || "")
+            },
+            created_at: "2026-03-10T12:30:00Z"
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    const draft = "Log this as an explicit companion check-in from persona."
+    fireEvent.change(screen.getByPlaceholderText("Ask Persona..."), {
+      target: { value: draft }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save check-in" }))
+
+    await waitFor(() => {
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
+        "/api/v1/companion/check-ins",
+        {
+          method: "POST",
+          body: {
+            summary: draft,
+            surface: "persona.sidepanel"
+          }
+        }
+      )
+    })
+    expect(screen.getByText("Saved draft to companion")).toBeInTheDocument()
+    expect(screen.getByPlaceholderText("Ask Persona...")).toHaveValue(draft)
   })
 
   it.each([390, 1280])(

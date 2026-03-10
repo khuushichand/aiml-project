@@ -209,6 +209,7 @@ const SidepanelPersona = () => {
   >(null)
   const [connected, setConnected] = React.useState(false)
   const [connecting, setConnecting] = React.useState(false)
+  const [savingCompanionCheckIn, setSavingCompanionCheckIn] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [input, setInput] = React.useState("")
   const [logs, setLogs] = React.useState<PersonaLogEntry[]>([])
@@ -783,6 +784,10 @@ const SidepanelPersona = () => {
   }, [])
 
   const canSend = connected && Boolean(sessionId) && Boolean(input.trim())
+  const canSaveCompanionCheckIn =
+    Boolean(input.trim()) &&
+    Boolean(capabilities?.hasPersonalization) &&
+    !savingCompanionCheckIn
   const hasUnsavedPersonaStateChanges =
     soulMd !== savedSoulMd ||
     identityMd !== savedIdentityMd ||
@@ -953,6 +958,30 @@ const SidepanelPersona = () => {
     personaStateContextEnabled,
     sessionId
   ])
+
+  const saveCompanionCheckIn = React.useCallback(async () => {
+    const trimmed = input.trim()
+    if (!trimmed || savingCompanionCheckIn || !capabilities?.hasPersonalization) return
+    setSavingCompanionCheckIn(true)
+    setError(null)
+    try {
+      const response = await tldwClient.fetchWithAuth("/api/v1/companion/check-ins" as any, {
+        method: "POST",
+        body: {
+          summary: trimmed,
+          surface: "persona.sidepanel"
+        }
+      })
+      if (!response.ok) {
+        throw new Error(response.error || "Failed to save companion check-in")
+      }
+      appendLog("notice", "Saved draft to companion")
+    } catch (err: any) {
+      setError(String(err?.message || "Failed to save companion check-in"))
+    } finally {
+      setSavingCompanionCheckIn(false)
+    }
+  }, [appendLog, capabilities?.hasPersonalization, input, savingCompanionCheckIn])
 
   const loadSessionHistory = React.useCallback(async () => {
     if (!sessionId) return
@@ -1515,6 +1544,18 @@ const SidepanelPersona = () => {
               sendUserMessage()
             }}
           />
+          {capabilities?.hasPersonalization ? (
+            <Button
+              data-testid="persona-save-checkin-button"
+              disabled={!canSaveCompanionCheckIn}
+              loading={savingCompanionCheckIn}
+              onClick={() => {
+                void saveCompanionCheckIn()
+              }}
+            >
+              {t("sidepanel:persona.saveCheckIn", "Save check-in")}
+            </Button>
+          ) : null}
           <Button
             type="primary"
             icon={<Send className="h-4 w-4" />}

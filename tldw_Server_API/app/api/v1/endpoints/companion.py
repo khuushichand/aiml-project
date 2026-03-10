@@ -106,6 +106,7 @@ async def create_companion_check_in(
         source_id=source_id,
         title=payload.title,
         summary=payload.summary,
+        surface=payload.surface or "companion.workspace",
         tags=payload.tags,
         event_timestamp=created_at.isoformat(),
     )
