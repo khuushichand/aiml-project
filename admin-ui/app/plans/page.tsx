@@ -17,7 +17,7 @@ import { Form, FormInput, FormSelect } from '@/components/ui/form';
 import { CreditCard, Plus, Pencil, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { isBillingEnabled } from '@/lib/billing';
-import { Plan, PlanTier } from '@/types';
+import { Plan } from '@/types';
 
 const planSchema = z.object({
   name: z.string().min(1, 'Plan name is required'),
