@@ -11,40 +11,68 @@
 #   env: Environment variables to pass (dict)
 #   requires_api_key: Env var that must be set (null if none required)
 #   default: Whether this is the default agent (only one should be true)
+#   install_instructions: Steps to install the agent (list of strings)
+#   docs_url: Link to agent documentation
 
 agents:
   - type: claude_code
     name: Claude Code
-    description: "Anthropic's Claude Code agent for software development tasks"
+    description: "Anthropic's Claude Code agent"
     command: claude
-    args: []
-    env: {}
     requires_api_key: ANTHROPIC_API_KEY
     default: true
+    install_instructions:
+      - "npm install -g @anthropic-ai/claude-code"
+    docs_url: "https://docs.anthropic.com/en/docs/claude-code"
 
   - type: codex
     name: OpenAI Codex CLI
-    description: "OpenAI's Codex agent for code generation and analysis"
+    description: "OpenAI's coding agent"
     command: codex
-    args: []
-    env: {}
     requires_api_key: OPENAI_API_KEY
-    default: false
+    install_instructions:
+      - "npm install -g @openai/codex"
+    docs_url: "https://github.com/openai/codex"
+
+  - type: aider
+    name: Aider
+    description: "AI pair programming in your terminal"
+    command: aider
+    requires_api_key: null
+    install_instructions:
+      - "pip install aider-chat"
+    docs_url: "https://aider.chat"
+
+  - type: goose
+    name: Goose
+    description: "Block's autonomous coding agent"
+    command: goose
+    requires_api_key: null
+    install_instructions:
+      - "brew install block/goose/goose"
+      - "# or: cargo install goose-cli"
+    docs_url: "https://github.com/block/goose"
+
+  - type: continue_dev
+    name: Continue
+    description: "Open-source AI code assistant"
+    command: continue
+    requires_api_key: null
+    install_instructions:
+      - "npm install -g @continuedev/cli"
+    docs_url: "https://continue.dev"
 
   - type: opencode
     name: OpenCode
-    description: "Open-source coding agent (github.com/sst/opencode)"
+    description: "Terminal-based AI coding assistant"
     command: opencode
-    args: []
-    env: {}
     requires_api_key: null
-    default: false
+    install_instructions:
+      - "go install github.com/sst/opencode@latest"
+    docs_url: "https://github.com/sst/opencode"
 
   - type: custom
     name: Custom Agent
-    description: "Configure a custom agent with your own settings"
+    description: "Configure a custom agent"
     command: ""
-    args: []
-    env: {}
     requires_api_key: null
-    default: false

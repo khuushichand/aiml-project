@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
 from tldw_Server_API.app.services.admin_acp_sessions_service import ACPSessionStore
 
 
@@ -9,8 +10,9 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.asyncio
-async def test_register_and_record_prompt_preserve_creation_config_and_bootstrap_ready_transcript():
-    store = ACPSessionStore()
+async def test_register_and_record_prompt_preserve_creation_config_and_bootstrap_ready_transcript(tmp_path):
+    _db = ACPSessionsDB(db_path=str(tmp_path / "store_test.db"))
+    store = ACPSessionStore(db=_db)
 
     await store.register_session(
         session_id="session-1",
@@ -44,8 +46,9 @@ async def test_register_and_record_prompt_preserve_creation_config_and_bootstrap
 
 
 @pytest.mark.asyncio
-async def test_record_prompt_marks_session_non_bootstrappable_when_assistant_text_cannot_be_normalized():
-    store = ACPSessionStore()
+async def test_record_prompt_marks_session_non_bootstrappable_when_assistant_text_cannot_be_normalized(tmp_path):
+    _db = ACPSessionsDB(db_path=str(tmp_path / "store_test.db"))
+    store = ACPSessionStore(db=_db)
     await store.register_session(
         session_id="session-2",
         user_id=7,
@@ -70,8 +73,9 @@ async def test_record_prompt_marks_session_non_bootstrappable_when_assistant_tex
 
 
 @pytest.mark.asyncio
-async def test_fork_session_copies_lineage_config_and_bootstrap_state():
-    store = ACPSessionStore()
+async def test_fork_session_copies_lineage_config_and_bootstrap_state(tmp_path):
+    _db = ACPSessionsDB(db_path=str(tmp_path / "store_test.db"))
+    store = ACPSessionStore(db=_db)
     await store.register_session(
         session_id="session-source",
         user_id=7,

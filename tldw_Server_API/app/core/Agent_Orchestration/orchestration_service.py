@@ -293,3 +293,18 @@ async def get_orchestration_service() -> OrchestrationService:
             if _service is None:
                 _service = OrchestrationService()
     return _service
+
+
+# ---------------------------------------------------------------------------
+# Per-user SQLite-backed factory
+# ---------------------------------------------------------------------------
+
+import functools
+
+from tldw_Server_API.app.core.DB_Management.Orchestration_DB import OrchestrationDB
+
+
+@functools.lru_cache(maxsize=64)
+def get_orchestration_db(user_id: int) -> OrchestrationDB:
+    """Get or create per-user OrchestrationDB instance."""
+    return OrchestrationDB(user_id=user_id)
