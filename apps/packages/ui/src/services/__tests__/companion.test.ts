@@ -11,6 +11,7 @@ vi.mock("@/services/background-proxy", () => ({
 import {
   createCompanionGoal,
   fetchCompanionWorkspaceSnapshot,
+  recordExplicitCompanionCapture,
   setCompanionGoalStatus
 } from "../companion"
 
@@ -210,6 +211,73 @@ describe("companion service", () => {
         body: {
           title: "Capture a weekly review",
           goal_type: "manual"
+        }
+      })
+    )
+  })
+
+  it("records explicit companion capture through the activity endpoint", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      id: "activity-1",
+      event_type: "extension.selection_saved",
+      source_type: "browser_selection",
+      source_id: "capture-1",
+      surface: "extension.sidepanel",
+      tags: ["extension", "selection"],
+      provenance: {
+        capture_mode: "explicit",
+        route: "extension.context_menu",
+        action: "save_selection"
+      },
+      metadata: {
+        selection: "Remember this paragraph.",
+        page_url: "https://example.com/article",
+        page_title: "Example article"
+      },
+      created_at: "2026-03-10T14:00:00Z"
+    })
+
+    await recordExplicitCompanionCapture({
+      event_type: "extension.selection_saved",
+      source_type: "browser_selection",
+      source_id: "capture-1",
+      surface: "extension.sidepanel",
+      dedupe_key: "extension.selection_saved:capture-1",
+      tags: ["extension", "selection"],
+      provenance: {
+        capture_mode: "explicit",
+        route: "extension.context_menu",
+        action: "save_selection"
+      },
+      metadata: {
+        selection: "Remember this paragraph.",
+        page_url: "https://example.com/article",
+        page_title: "Example article"
+      }
+    })
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/companion/activity",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: {
+          event_type: "extension.selection_saved",
+          source_type: "browser_selection",
+          source_id: "capture-1",
+          surface: "extension.sidepanel",
+          dedupe_key: "extension.selection_saved:capture-1",
+          tags: ["extension", "selection"],
+          provenance: {
+            capture_mode: "explicit",
+            route: "extension.context_menu",
+            action: "save_selection"
+          },
+          metadata: {
+            selection: "Remember this paragraph.",
+            page_url: "https://example.com/article",
+            page_title: "Example article"
+          }
         }
       })
     )

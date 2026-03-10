@@ -12,6 +12,17 @@ export type CompanionActivityItem = {
   created_at: string
 }
 
+export type CompanionActivityCreate = {
+  event_type: string
+  source_type: string
+  source_id: string
+  surface: string
+  dedupe_key?: string
+  tags?: string[]
+  provenance: Record<string, unknown>
+  metadata?: Record<string, unknown>
+}
+
 export type CompanionKnowledgeCard = {
   id: string
   card_type: string
@@ -166,6 +177,17 @@ export const fetchCompanionActivity = async (params?: {
   return bgRequest<CompanionActivityListResponse>({
     path: `/api/v1/companion/activity${qs}` as any,
     method: "GET"
+  })
+}
+
+export const recordExplicitCompanionCapture = async (
+  payload: CompanionActivityCreate
+): Promise<CompanionActivityItem> => {
+  return bgRequest<CompanionActivityItem>({
+    path: "/api/v1/companion/activity" as any,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: payload
   })
 }
 

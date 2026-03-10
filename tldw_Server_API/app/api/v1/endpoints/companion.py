@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
@@ -8,7 +11,9 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
 )
 from tldw_Server_API.app.api.v1.schemas.companion import (
+    CompanionActivityCreate,
     CompanionActivityListResponse,
+    CompanionActivityItem,
     CompanionGoal,
     CompanionGoalCreate,
     CompanionGoalListResponse,
@@ -25,6 +30,59 @@ router = APIRouter()
 def _ensure_personalization_enabled() -> None:
     if not is_personalization_enabled():
         raise HTTPException(status_code=404, detail="Personalization disabled")
+
+
+@router.post(
+    "/activity",
+    response_model=CompanionActivityItem,
+    tags=["companion"],
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_companion_activity(
+    payload: CompanionActivityCreate = Body(...),
+    db: PersonalizationDB = Depends(get_personalization_db_for_user),
+    log: UsageEventLogger = Depends(get_usage_event_logger),
+) -> CompanionActivityItem:
+    _ensure_personalization_enabled()
+    dedupe_key = (
+        payload.dedupe_key
+        or f"{payload.event_type}:{payload.source_type}:{payload.source_id}"
+    )
+    try:
+        event_id = db.insert_companion_activity_event(
+            user_id=log.user_id,
+            event_type=payload.event_type,
+            source_type=payload.source_type,
+            source_id=payload.source_id,
+            surface=payload.surface,
+            dedupe_key=dedupe_key,
+            tags=payload.tags,
+            provenance=payload.provenance,
+            metadata=payload.metadata,
+        )
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Companion activity already captured",
+        ) from exc
+
+    log.log_event(
+        "companion.activity.create",
+        resource_id=event_id,
+        tags=list(payload.tags or []),
+        metadata={"event_type": payload.event_type, "surface": payload.surface},
+    )
+    return CompanionActivityItem(
+        id=event_id,
+        event_type=payload.event_type,
+        source_type=payload.source_type,
+        source_id=payload.source_id,
+        surface=payload.surface,
+        tags=list(payload.tags or []),
+        provenance=dict(payload.provenance),
+        metadata=dict(payload.metadata or {}),
+        created_at=datetime.now(timezone.utc),
+    )
 
 
 @router.get("/activity", response_model=CompanionActivityListResponse, tags=["companion"])

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CompanionActivityItem(BaseModel):
@@ -23,6 +23,25 @@ class CompanionActivityListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class CompanionActivityCreate(BaseModel):
+    event_type: str
+    source_type: str
+    source_id: str
+    surface: str
+    dedupe_key: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    provenance: dict[str, Any]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_provenance(self) -> "CompanionActivityCreate":
+        if not self.provenance:
+            raise ValueError("provenance is required")
+        return self
 
 
 class CompanionKnowledgeCard(BaseModel):
@@ -83,4 +102,3 @@ class CompanionReflectionItem(BaseModel):
     summary: str
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
-

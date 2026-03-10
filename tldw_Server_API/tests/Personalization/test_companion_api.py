@@ -76,6 +76,65 @@ def test_companion_knowledge_endpoint_returns_cards(client_with_companion_db) ->
     assert payload["items"][0]["evidence"] == [{"source_id": "42"}]
 
 
+def test_companion_activity_create_records_explicit_capture(client_with_companion_db) -> None:
+    client, db = client_with_companion_db
+
+    response = client.post(
+        "/api/v1/companion/activity",
+        json={
+            "event_type": "extension.selection_saved",
+            "source_type": "browser_selection",
+            "source_id": "capture-1",
+            "surface": "extension.sidepanel",
+            "dedupe_key": "extension.selection_saved:capture-1",
+            "tags": ["extension", "selection"],
+            "provenance": {
+                "capture_mode": "explicit",
+                "route": "extension.context_menu",
+                "action": "save_selection",
+            },
+            "metadata": {
+                "selection": "Remember this paragraph.",
+                "page_url": "https://example.com/article",
+                "page_title": "Example article",
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["event_type"] == "extension.selection_saved"
+    assert payload["source_id"] == "capture-1"
+    assert payload["provenance"]["capture_mode"] == "explicit"
+    assert payload["metadata"]["selection"] == "Remember this paragraph."
+
+    rows, total = db.list_companion_activity_events("1", limit=10, offset=0)
+    assert total == 1
+    assert rows[0]["source_id"] == "capture-1"
+    assert rows[0]["provenance"]["action"] == "save_selection"
+
+
+def test_companion_activity_create_rejects_missing_provenance(
+    client_with_companion_db,
+) -> None:
+    client, _db = client_with_companion_db
+
+    response = client.post(
+        "/api/v1/companion/activity",
+        json={
+            "event_type": "extension.selection_saved",
+            "source_type": "browser_selection",
+            "source_id": "capture-1",
+            "surface": "extension.sidepanel",
+            "metadata": {
+                "selection": "Remember this paragraph.",
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.text
+
+
 def test_companion_goals_create_and_list(client_with_companion_db) -> None:
     client, _db = client_with_companion_db
 
