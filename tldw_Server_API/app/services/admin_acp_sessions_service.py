@@ -457,13 +457,7 @@ class ACPSessionStore:
             _, result_bootstrap_ready = _normalize_result_message(result, now)
 
             if not (prompt_bootstrap_ready and result_bootstrap_ready):
-                # Update bootstrap_ready in DB
-                conn = self._db._get_conn()
-                conn.execute(
-                    "UPDATE sessions SET bootstrap_ready = 0 WHERE session_id = ? AND bootstrap_ready = 1",
-                    (session_id,),
-                )
-                conn.commit()
+                self._db.set_bootstrap_ready(session_id, False)
 
             return SessionTokenUsage(
                 prompt_tokens=usage_dict["prompt_tokens"],
@@ -497,12 +491,7 @@ class ACPSessionStore:
             messages = self._db_messages_to_record_messages(db_messages)
 
             if not _messages_bootstrap_ready(messages):
-                conn = self._db._get_conn()
-                conn.execute(
-                    "UPDATE sessions SET bootstrap_ready = 0 WHERE session_id = ?",
-                    (session_id,),
-                )
-                conn.commit()
+                self._db.set_bootstrap_ready(session_id, False)
                 raise ValueError("fork_not_resumable")
 
             bootstrap_prompt = [
@@ -512,13 +501,7 @@ class ACPSessionStore:
             return bootstrap_prompt + copy.deepcopy(prompt), True
 
     async def clear_bootstrap(self, session_id: str) -> None:
-        conn = self._db._get_conn()
-        now = datetime.now(timezone.utc).isoformat()
-        conn.execute(
-            "UPDATE sessions SET needs_bootstrap = 0, last_activity_at = ? WHERE session_id = ?",
-            (now, session_id),
-        )
-        conn.commit()
+        self._db.clear_needs_bootstrap(session_id)
 
     async def list_sessions(
         self,
@@ -558,12 +541,7 @@ class ACPSessionStore:
 
             # Check bootstrap readiness based on message content
             if not _messages_bootstrap_ready(messages):
-                conn = self._db._get_conn()
-                conn.execute(
-                    "UPDATE sessions SET bootstrap_ready = 0 WHERE session_id = ?",
-                    (new_session_id,),
-                )
-                conn.commit()
+                self._db.set_bootstrap_ready(new_session_id, False)
                 d["bootstrap_ready"] = False
 
             return self._dict_to_record(d, messages)

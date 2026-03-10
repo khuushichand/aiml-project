@@ -272,6 +272,24 @@ class ACPSessionsDB:
         )
         conn.commit()
 
+    def set_bootstrap_ready(self, session_id: str, ready: bool) -> None:
+        """Set the bootstrap_ready flag for a session."""
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE sessions SET bootstrap_ready = ? WHERE session_id = ?",
+            (int(ready), session_id),
+        )
+        conn.commit()
+
+    def clear_needs_bootstrap(self, session_id: str) -> None:
+        """Clear the needs_bootstrap flag and update activity timestamp."""
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE sessions SET needs_bootstrap = 0, last_activity_at = ? WHERE session_id = ?",
+            (_utcnow_iso(), session_id),
+        )
+        conn.commit()
+
     def delete_session(self, session_id: str) -> bool:
         """Delete a session. Returns True if a row was actually removed."""
         conn = self._get_conn()
@@ -694,21 +712,20 @@ class ACPSessionsDB:
         return result
 
     def evict_expired_sessions(self) -> int:
-        """Close active sessions that have exceeded TTL or max duration.
+        """Close active sessions that have exceeded TTL (since last activity)
+        or max duration (since creation).
 
         Returns the number of sessions evicted.
         """
         ttl = getattr(self, "_session_ttl_seconds", 86400)
         max_dur = getattr(self, "_max_session_duration_seconds", 14400)
-        # Use the smaller of the two as the effective cutoff
-        cutoff_seconds = min(ttl, max_dur)
 
         conn = self._get_conn()
         now = datetime.now(timezone.utc)
 
         # Fetch active sessions and check expiry in Python
         rows = conn.execute(
-            "SELECT session_id, created_at FROM sessions WHERE status = 'active'"
+            "SELECT session_id, created_at, last_activity_at FROM sessions WHERE status = 'active'"
         ).fetchall()
 
         expired_ids: list[str] = []
@@ -717,8 +734,19 @@ class ACPSessionsDB:
                 created = datetime.fromisoformat(r["created_at"])
             except (ValueError, TypeError):
                 continue
+            # Check max duration (time since creation)
             age = (now - created).total_seconds()
-            if age >= cutoff_seconds:
+            if age >= max_dur:
+                expired_ids.append(r["session_id"])
+                continue
+            # Check TTL (time since last activity, fall back to creation)
+            activity_ts = r["last_activity_at"] or r["created_at"]
+            try:
+                last_active = datetime.fromisoformat(activity_ts)
+            except (ValueError, TypeError):
+                last_active = created
+            idle = (now - last_active).total_seconds()
+            if idle >= ttl:
                 expired_ids.append(r["session_id"])
 
         if not expired_ids:
