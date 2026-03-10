@@ -4,6 +4,7 @@ type StructuredPromptBlock = {
   id: string
   name: string
   role: "system" | "developer" | "user" | "assistant"
+  kind?: string
   content: string
   enabled: boolean
   order: number
@@ -18,8 +19,20 @@ type StructuredPromptVariable = {
   input_type?: string
 }
 
+type StructuredPromptAssemblyConfig = {
+  legacy_system_roles: string[]
+  legacy_user_roles: string[]
+  block_separator: string
+}
+
 const LEGACY_TEMPLATE_PATTERN =
   /{{\s*([a-zA-Z0-9_]+)\s*}}|\{([a-zA-Z0-9_]+)\}|\$([a-zA-Z0-9_]+)|<([a-zA-Z0-9_]+)>/g
+
+const DEFAULT_ASSEMBLY_CONFIG: StructuredPromptAssemblyConfig = {
+  legacy_system_roles: ["system", "developer"],
+  legacy_user_roles: ["user"],
+  block_separator: "\n\n"
+}
 
 const matchVariableName = (
   groups: Array<string | undefined>
@@ -66,12 +79,14 @@ export const createDefaultStructuredPromptDefinition =
   (): StructuredPromptDefinition => ({
     schema_version: 1,
     format: "structured",
+    assembly_config: { ...DEFAULT_ASSEMBLY_CONFIG },
     variables: [],
     blocks: [
       {
         id: "task",
         name: "Task",
         role: "user",
+        kind: "task",
         content: "Describe the task here.",
         enabled: true,
         order: 10,
@@ -92,6 +107,7 @@ export const createStructuredPromptDefinition = ({
 }): StructuredPromptDefinition => ({
   schema_version: 1,
   format: "structured",
+  assembly_config: { ...DEFAULT_ASSEMBLY_CONFIG },
   variables: variables.map((variable) => ({
     name: variable.name,
     label: variable.label,
@@ -121,9 +137,10 @@ export const convertLegacyPromptToStructuredDefinition = (
 
   if (normalizedSystemPrompt.trim()) {
     blocks.push({
-      id: "system",
+      id: "legacy_system",
       name: "System Instructions",
       role: "system",
+      kind: "instructions",
       content: normalizedSystemPrompt.trim(),
       enabled: true,
       order: 10,
@@ -133,9 +150,10 @@ export const convertLegacyPromptToStructuredDefinition = (
 
   if (normalizedUserPrompt.trim()) {
     blocks.push({
-      id: "task",
-      name: "Task",
+      id: "legacy_user",
+      name: "User Prompt",
       role: "user",
+      kind: "task",
       content: normalizedUserPrompt.trim(),
       enabled: true,
       order: blocks.length === 0 ? 10 : 20,
@@ -146,6 +164,7 @@ export const convertLegacyPromptToStructuredDefinition = (
   return {
     schema_version: 1,
     format: "structured",
+    assembly_config: { ...DEFAULT_ASSEMBLY_CONFIG },
     variables: variables.map((variableName) => ({
       name: variableName,
       label: variableName.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()),
@@ -182,6 +201,24 @@ export const renderStructuredPromptLegacySnapshot = (
         })
     : []
 
+  const assemblyConfig = (
+    definition?.assembly_config &&
+    typeof definition.assembly_config === "object" &&
+    !Array.isArray(definition.assembly_config)
+      ? definition.assembly_config
+      : DEFAULT_ASSEMBLY_CONFIG
+  ) as Partial<StructuredPromptAssemblyConfig>
+  const separator =
+    typeof assemblyConfig.block_separator === "string"
+      ? assemblyConfig.block_separator
+      : DEFAULT_ASSEMBLY_CONFIG.block_separator
+  const systemRoles = Array.isArray(assemblyConfig.legacy_system_roles)
+    ? assemblyConfig.legacy_system_roles.map((role) => String(role))
+    : DEFAULT_ASSEMBLY_CONFIG.legacy_system_roles
+  const userRoles = Array.isArray(assemblyConfig.legacy_user_roles)
+    ? assemblyConfig.legacy_user_roles.map((role) => String(role))
+    : DEFAULT_ASSEMBLY_CONFIG.legacy_user_roles
+
   const pickContent = (roles: string[]) =>
     blocks
       .filter((block: any) => roles.includes(String(block?.role || "")))
@@ -189,10 +226,10 @@ export const renderStructuredPromptLegacySnapshot = (
         typeof block?.content === "string" ? block.content.trim() : ""
       )
       .filter((content: string) => content.length > 0)
-      .join("\n\n")
+      .join(separator)
 
-  const systemPrompt = pickContent(["system", "developer"])
-  const userPrompt = pickContent(["user"])
+  const systemPrompt = pickContent(systemRoles)
+  const userPrompt = pickContent(userRoles)
 
   return {
     systemPrompt,

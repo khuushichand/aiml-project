@@ -386,6 +386,57 @@ class TestPromptEndpoints:
         assert data["assembled_messages"][4]["content"].startswith("Evaluate SQLite FTS")
         assert "Please format your response as JSON" in data["assembled_messages"][4]["content"]
 
+    def test_preview_prompt_rejects_oversized_assistant_block(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        app.dependency_overrides[get_security_config] = lambda: SecurityConfig(
+            max_prompt_length=100,
+            allowed_models=[],
+            blocked_patterns=[],
+            rate_limits={},
+        )
+
+        try:
+            definition = {
+                "schema_version": 1,
+                "format": "structured",
+                "variables": [],
+                "blocks": [
+                    {
+                        "id": "assistant_example",
+                        "name": "Assistant Example",
+                        "role": "assistant",
+                        "content": "x" * 140,
+                        "enabled": True,
+                        "order": 10,
+                        "is_template": False,
+                    }
+                ],
+            }
+
+            response = client.post(
+                "/api/v1/prompt-studio/prompts/preview",
+                json={
+                    "project_id": project_id,
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": definition,
+                    "variables": {},
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == 400, response.text
+            assert "exceeds maximum length" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_security_config, None)
+
     def test_convert_prompt_returns_structured_definition(self, client, project_id, auth_headers):
 
         """Test converting a legacy prompt payload into a structured definition."""
@@ -437,6 +488,58 @@ class TestPromptEndpoints:
                 json={
                     "project_id": project_id,
                     "name": "Too Long Structured Prompt",
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": definition,
+                    "change_description": "Initial version",
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == 400, response.text
+            assert "exceeds maximum length" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_security_config, None)
+
+    def test_create_prompt_rejects_oversized_assistant_block(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        app.dependency_overrides[get_security_config] = lambda: SecurityConfig(
+            max_prompt_length=100,
+            allowed_models=[],
+            blocked_patterns=[],
+            rate_limits={},
+        )
+
+        try:
+            definition = {
+                "schema_version": 1,
+                "format": "structured",
+                "variables": [],
+                "blocks": [
+                    {
+                        "id": "assistant_example",
+                        "name": "Assistant Example",
+                        "role": "assistant",
+                        "content": "x" * 140,
+                        "enabled": True,
+                        "order": 10,
+                        "is_template": False,
+                    }
+                ],
+            }
+
+            response = client.post(
+                "/api/v1/prompt-studio/prompts",
+                json={
+                    "project_id": project_id,
+                    "name": "Oversized Structured Assistant Prompt",
                     "prompt_format": "structured",
                     "prompt_schema_version": 1,
                     "prompt_definition": definition,

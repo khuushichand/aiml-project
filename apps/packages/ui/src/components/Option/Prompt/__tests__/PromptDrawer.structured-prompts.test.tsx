@@ -117,7 +117,7 @@ describe("PromptDrawer structured prompts", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /convert to structured/i })
     )
-    fireEvent.click(screen.getByTestId("structured-block-item-task"))
+    fireEvent.click(screen.getByTestId("structured-block-item-legacy_user"))
     fireEvent.change(screen.getByTestId("structured-block-content"), {
       target: { value: "Summarize {{topic}} clearly" }
     })
@@ -134,7 +134,7 @@ describe("PromptDrawer structured prompts", () => {
           structuredPromptDefinition: expect.objectContaining({
             blocks: expect.arrayContaining([
               expect.objectContaining({
-                id: "task",
+                id: "legacy_user",
                 content: "Summarize {{topic}} clearly"
               })
             ])

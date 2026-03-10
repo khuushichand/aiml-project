@@ -133,6 +133,51 @@ def _validate_prompt_lengths(
         )
 
 
+def _validate_message_lengths(
+    *,
+    messages: list[dict[str, str]],
+    security_config: SecurityConfig,
+) -> None:
+    for message in messages:
+        content = message.get("content") or ""
+        if len(content) <= security_config.max_prompt_length:
+            continue
+        role = str(message.get("role") or "prompt")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"{role.title()} prompt exceeds maximum length of "
+                f"{security_config.max_prompt_length}"
+            ),
+        )
+
+
+def _placeholder_variables(definition: PromptDefinition) -> dict[str, str]:
+    return {variable.name: "" for variable in definition.variables}
+
+
+def _validate_prompt_content(
+    *,
+    definition: PromptDefinition,
+    extras: dict[str, Any],
+    security_config: SecurityConfig,
+) -> None:
+    assembly = assemble_prompt_definition(
+        definition,
+        _placeholder_variables(definition),
+        extras=extras,
+    )
+    _validate_prompt_lengths(
+        system_prompt=assembly.legacy.system_prompt,
+        user_prompt=assembly.legacy.user_prompt,
+        security_config=security_config,
+    )
+    _validate_message_lengths(
+        messages=assembly.messages,
+        security_config=security_config,
+    )
+
+
 def _coerce_preview_definition(
     *,
     prompt_format: str,
@@ -265,6 +310,25 @@ async def create_prompt(
         modules_payload = None
         if prompt_data.modules_config:
             modules_payload = [model_dump_compat(mod) for mod in prompt_data.modules_config]
+
+        extras = {
+            "few_shot_examples": few_shot_payload or [],
+            "modules_config": modules_payload or [],
+        }
+        if normalized_prompt_fields["prompt_format"] == "structured":
+            definition = PromptDefinition.model_validate(
+                normalized_prompt_fields["prompt_definition"]
+            )
+        else:
+            definition = convert_legacy_prompt_to_definition(
+                system_prompt=normalized_prompt_fields["system_prompt"],
+                user_prompt=normalized_prompt_fields["user_prompt"],
+            )
+        _validate_prompt_content(
+            definition=definition,
+            extras=extras,
+            security_config=security_config,
+        )
 
         # Idempotency: if provided, return existing prompt for this key
         user_id_str = str(user_context.get("user_id", "anonymous"))
@@ -464,6 +528,7 @@ async def execute_prompt_simple(
 async def preview_prompt(
     payload: StructuredPromptPreviewRequest,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    security_config: SecurityConfig = Depends(get_security_config),
     user_context: dict = Depends(get_prompt_studio_user),
 ) -> StandardResponse:
     from tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_executor import PromptExecutor
@@ -500,6 +565,15 @@ async def preview_prompt(
             messages = PromptExecutor(db)._apply_signature_to_messages(messages, signature)
 
         legacy = render_legacy_snapshot(messages, definition)
+        _validate_prompt_lengths(
+            system_prompt=legacy.system_prompt,
+            user_prompt=legacy.user_prompt,
+            security_config=security_config,
+        )
+        _validate_message_lengths(
+            messages=messages,
+            security_config=security_config,
+        )
         preview_data = StructuredPromptPreviewResponse(
             prompt_format=prompt_format,
             prompt_schema_version=prompt_schema_version,
@@ -699,6 +773,25 @@ async def update_prompt(
         if updates.modules_config is not None:
             modules_payload = [model_dump_compat(mod) for mod in updates.modules_config]
 
+        extras = {
+            "few_shot_examples": few_shot_payload or [],
+            "modules_config": modules_payload or [],
+        }
+        if normalized_prompt_fields["prompt_format"] == "structured":
+            definition = PromptDefinition.model_validate(
+                normalized_prompt_fields["prompt_definition"]
+            )
+        else:
+            definition = convert_legacy_prompt_to_definition(
+                system_prompt=normalized_prompt_fields["system_prompt"],
+                user_prompt=normalized_prompt_fields["user_prompt"],
+            )
+        _validate_prompt_content(
+            definition=definition,
+            extras=extras,
+            security_config=security_config,
+        )
+
         new_prompt = db.create_prompt_version(
             prompt_id,
             change_description=updates.change_description,
@@ -736,12 +829,6 @@ async def update_prompt(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=getattr(e, "safe_message", str(e)),
-        ) from e
-    except InputError as e:
-        logger.warning(f"Prompt studio input error updating prompt: {getattr(e, 'original_message', str(e))}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=getattr(e, "safe_message", "Invalid input.")
         ) from e
 
 @router.get("/history/{prompt_id}", response_model=StandardResponse, openapi_extra={
