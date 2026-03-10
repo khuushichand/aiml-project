@@ -2,7 +2,7 @@
 
 import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 const storageValues: Record<string, unknown> = {
   speechToTextLanguage: "fr",
@@ -21,6 +21,15 @@ const storageValues: Record<string, unknown> = {
 }
 
 let comparisonPanelProps: Record<string, unknown> | null = null
+const {
+  getTranscriptionModelsMock,
+  transcribeAudioMock,
+  createNoteMock
+} = vi.hoisted(() => ({
+  getTranscriptionModelsMock: vi.fn(),
+  transcribeAudioMock: vi.fn(),
+  createNoteMock: vi.fn()
+}))
 
 // Mock all dependencies before importing the component
 vi.mock("@plasmohq/storage/hook", () => ({
@@ -36,11 +45,9 @@ vi.mock("react-i18next", () => ({
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
-    getTranscriptionModels: vi
-      .fn()
-      .mockResolvedValue({ all_models: ["whisper-1", "distil-v3"] }),
-    transcribeAudio: vi.fn().mockResolvedValue({ text: "test" }),
-    createNote: vi.fn().mockResolvedValue({})
+    getTranscriptionModels: getTranscriptionModelsMock,
+    transcribeAudio: transcribeAudioMock,
+    createNote: createNoteMock
   }
 }))
 
@@ -59,7 +66,11 @@ vi.mock("@/hooks/useAntdNotification", () => ({
 }))
 
 vi.mock("@/utils/request-timeout", () => ({
-  isTimeoutLikeError: () => false
+  isTimeoutLikeError: (error: unknown) => {
+    const message =
+      error instanceof Error ? `${error.name} ${error.message}` : String(error ?? "")
+    return /timeout|timed out/i.test(message)
+  }
 }))
 
 // Mock the sub-components to keep tests focused
@@ -99,6 +110,14 @@ import { SttPlaygroundPage } from "../SttPlaygroundPage"
 describe("SttPlaygroundPage", () => {
   beforeEach(() => {
     comparisonPanelProps = null
+    getTranscriptionModelsMock.mockReset()
+    transcribeAudioMock.mockReset()
+    createNoteMock.mockReset()
+    getTranscriptionModelsMock.mockResolvedValue({
+      all_models: ["whisper-1", "distil-v3"]
+    })
+    transcribeAudioMock.mockResolvedValue({ text: "test" })
+    createNoteMock.mockResolvedValue({})
   })
 
   it("renders page title 'STT Playground'", () => {
@@ -134,6 +153,32 @@ describe("SttPlaygroundPage", () => {
       seg_utterance_expansion_width: 3,
       seg_embeddings_provider: "openai",
       seg_embeddings_model: "text-embedding-3-small"
+    })
+  })
+
+  it("shows inline retry recovery when transcription model loading fails", async () => {
+    getTranscriptionModelsMock
+      .mockRejectedValueOnce(new Error("timeout while loading transcription models"))
+      .mockResolvedValueOnce({ all_models: ["whisper-1", "canary"] })
+
+    render(<SttPlaygroundPage />)
+
+    await screen.findByText(
+      "Model list took longer than 10 seconds. Check server health and retry."
+    )
+
+    const retryButton = screen.getByRole("button", { name: "Retry" })
+    fireEvent.click(retryButton)
+
+    await waitFor(() => {
+      expect(getTranscriptionModelsMock).toHaveBeenCalledTimes(2)
+    })
+    await waitFor(() => {
+      expect(
+        screen.queryByText(
+          "Model list took longer than 10 seconds. Check server health and retry."
+        )
+      ).toBeNull()
     })
   })
 })

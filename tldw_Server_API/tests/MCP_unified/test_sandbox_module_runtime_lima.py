@@ -22,6 +22,7 @@ class _FakeSandboxService:
         spec_version: str,
         idem_key: str | None,
         raw_body,  # noqa: ANN001 - minimal test stub
+        explicit_fields=None,  # noqa: ANN001 - minimal test stub
     ) -> RunStatus:
         self.runtimes.append(spec.runtime)
         return RunStatus(
@@ -54,4 +55,3 @@ async def test_sandbox_module_accepts_lima_runtime() -> None:
 
     assert module._svc.runtimes == [RuntimeType.lima]
     assert result["runtime"] == "lima"
-
