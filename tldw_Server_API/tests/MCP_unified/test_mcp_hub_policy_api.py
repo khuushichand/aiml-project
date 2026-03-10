@@ -267,11 +267,73 @@ class _FakePolicyResolver:
         }
 
 
+class _FakeToolRegistryService:
+    def __init__(self) -> None:
+        self.entries = [
+            {
+                "tool_name": "notes.search",
+                "display_name": "notes.search",
+                "module": "notes",
+                "category": "search",
+                "risk_class": "low",
+                "capabilities": ["filesystem.read"],
+                "mutates_state": False,
+                "uses_filesystem": False,
+                "uses_processes": False,
+                "uses_network": False,
+                "uses_credentials": False,
+                "supports_arguments_preview": True,
+                "path_boundable": False,
+                "metadata_source": "explicit",
+                "metadata_warnings": [],
+            },
+            {
+                "tool_name": "sandbox.run",
+                "display_name": "sandbox.run",
+                "module": "sandbox",
+                "category": "execution",
+                "risk_class": "high",
+                "capabilities": ["process.execute"],
+                "mutates_state": True,
+                "uses_filesystem": True,
+                "uses_processes": True,
+                "uses_network": False,
+                "uses_credentials": False,
+                "supports_arguments_preview": True,
+                "path_boundable": False,
+                "metadata_source": "heuristic",
+                "metadata_warnings": ["Derived from tool category"],
+            },
+        ]
+
+    async def list_entries(self):
+        return list(self.entries)
+
+    async def list_modules(self):
+        return [
+            {
+                "module": "notes",
+                "display_name": "notes",
+                "tool_count": 1,
+                "risk_summary": {"low": 1, "medium": 0, "high": 0, "unclassified": 0},
+                "metadata_warnings": [],
+            },
+            {
+                "module": "sandbox",
+                "display_name": "sandbox",
+                "tool_count": 1,
+                "risk_summary": {"low": 0, "medium": 0, "high": 1, "unclassified": 0},
+                "metadata_warnings": ["Derived metadata present"],
+            },
+        ]
+
+
 def _build_app(
     principal: AuthPrincipal,
     service: _FakePolicyService | None = None,
     resolver: _FakePolicyResolver | None = None,
     *,
+    tool_registry: _FakeToolRegistryService | None = None,
     rate_limit_calls: list[str] | None = None,
 ) -> FastAPI:
     app = FastAPI()
@@ -285,6 +347,10 @@ def _build_app(
     app.dependency_overrides[mcp_hub_management.get_mcp_hub_policy_resolver_dep] = (
         lambda: resolver or _FakePolicyResolver()
     )
+    if hasattr(mcp_hub_management, "get_mcp_hub_tool_registry_dep"):
+        app.dependency_overrides[mcp_hub_management.get_mcp_hub_tool_registry_dep] = (
+            lambda: tool_registry or _FakeToolRegistryService()
+        )
     if rate_limit_calls is not None:
         async def _fake_check_rate_limit(_request: Request) -> None:
             rate_limit_calls.append("called")
@@ -605,6 +671,48 @@ def test_get_effective_policy_returns_resolved_payload() -> None:
     assert payload["allowed_tools"] == ["Bash(git *)"]
     assert payload["approval_mode"] == "ask_outside_profile"
     assert payload["sources"][0]["target_id"] == "researcher"
+
+
+def test_list_tool_registry_returns_normalized_entries() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[],
+        ),
+        tool_registry=_FakeToolRegistryService(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/tool-registry")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert len(payload) == 2
+    assert payload[0]["tool_name"] == "notes.search"
+    assert payload[0]["risk_class"] == "low"
+    assert payload[1]["tool_name"] == "sandbox.run"
+    assert payload[1]["metadata_warnings"] == ["Derived from tool category"]
+
+
+def test_list_tool_registry_modules_returns_grouped_summary() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[],
+        ),
+        tool_registry=_FakeToolRegistryService(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/tool-registry/modules")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert len(payload) == 2
+    assert payload[0]["module"] == "notes"
+    assert payload[0]["tool_count"] == 1
+    assert payload[1]["module"] == "sandbox"
+    assert payload[1]["risk_summary"]["high"] == 1
 
 
 def test_list_permission_profiles_returns_visible_rows() -> None:

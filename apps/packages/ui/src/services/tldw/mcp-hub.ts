@@ -12,6 +12,8 @@ export type McpHubApprovalMode =
   | "temporary_elevation_allowed"
 export type McpHubApprovalDecision = "approved" | "denied"
 export type McpHubApprovalDuration = "once" | "session" | "conversation"
+export type McpHubToolRiskClass = "low" | "medium" | "high" | "unclassified"
+export type McpHubToolMetadataSource = "explicit" | "heuristic" | "fallback"
 
 export type McpHubProfile = {
   id: number
@@ -207,6 +209,34 @@ export type McpHubEffectivePolicy = {
   sources: McpHubEffectivePolicySource[]
 }
 
+export type McpHubToolRegistryEntry = {
+  tool_name: string
+  display_name: string
+  description?: string | null
+  module: string
+  module_display_name?: string | null
+  category: string
+  risk_class: McpHubToolRiskClass
+  capabilities: string[]
+  mutates_state: boolean
+  uses_filesystem: boolean
+  uses_processes: boolean
+  uses_network: boolean
+  uses_credentials: boolean
+  supports_arguments_preview: boolean
+  path_boundable: boolean
+  metadata_source: McpHubToolMetadataSource
+  metadata_warnings: string[]
+}
+
+export type McpHubToolRegistryModule = {
+  module: string
+  display_name: string
+  tool_count: number
+  risk_summary: Record<string, number>
+  metadata_warnings: string[]
+}
+
 export type McpHubExternalServer = {
   id: string
   name: string
@@ -368,6 +398,20 @@ export const listPermissionProfiles = async (params: {
       owner_scope_type: params.owner_scope_type,
       owner_scope_id: params.owner_scope_id
     }),
+    method: "GET"
+  })
+}
+
+export const listToolRegistry = async (): Promise<McpHubToolRegistryEntry[]> => {
+  return await bgRequestClient<McpHubToolRegistryEntry[]>({
+    path: "/api/v1/mcp/hub/tool-registry",
+    method: "GET"
+  })
+}
+
+export const listToolRegistryModules = async (): Promise<McpHubToolRegistryModule[]> => {
+  return await bgRequestClient<McpHubToolRegistryModule[]>({
+    path: "/api/v1/mcp/hub/tool-registry/modules",
     method: "GET"
   })
 }

@@ -5,16 +5,17 @@ import {
   createPermissionProfile,
   deletePermissionProfile,
   listPermissionProfiles,
+  listToolRegistry,
+  listToolRegistryModules,
   updatePermissionProfile,
-  type McpHubPermissionProfile
+  type McpHubPermissionPolicyDocument,
+  type McpHubPermissionProfile,
+  type McpHubToolRegistryEntry,
+  type McpHubToolRegistryModule
 } from "@/services/tldw/mcp-hub"
 
-import {
-  buildPolicyDocument,
-  MCP_HUB_CAPABILITY_OPTIONS,
-  MCP_HUB_PROFILE_MODE_OPTIONS,
-  MCP_HUB_SCOPE_OPTIONS
-} from "./policyHelpers"
+import { MCP_HUB_PROFILE_MODE_OPTIONS, MCP_HUB_SCOPE_OPTIONS } from "./policyHelpers"
+import { PolicyDocumentEditor } from "./PolicyDocumentEditor"
 
 export const PermissionProfilesTab = () => {
   const [profiles, setProfiles] = useState<McpHubPermissionProfile[]>([])
@@ -27,10 +28,10 @@ export const PermissionProfilesTab = () => {
   const [description, setDescription] = useState("")
   const [ownerScopeType, setOwnerScopeType] = useState<"global" | "org" | "team" | "user">("global")
   const [mode, setMode] = useState<"custom" | "preset">("custom")
-  const [capabilities, setCapabilities] = useState<string[]>([])
-  const [allowedToolsText, setAllowedToolsText] = useState("")
-  const [deniedToolsText, setDeniedToolsText] = useState("")
+  const [policyDocument, setPolicyDocument] = useState<McpHubPermissionPolicyDocument>({})
   const [isActive, setIsActive] = useState(true)
+  const [registryEntries, setRegistryEntries] = useState<McpHubToolRegistryEntry[]>([])
+  const [registryModules, setRegistryModules] = useState<McpHubToolRegistryModule[]>([])
 
   const canSave = useMemo(() => name.trim().length > 0 && !saving, [name, saving])
 
@@ -52,6 +53,28 @@ export const PermissionProfilesTab = () => {
     void loadProfiles()
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    const loadRegistry = async () => {
+      try {
+        const [entries, modules] = await Promise.all([listToolRegistry(), listToolRegistryModules()])
+        if (!cancelled) {
+          setRegistryEntries(Array.isArray(entries) ? entries : [])
+          setRegistryModules(Array.isArray(modules) ? modules : [])
+        }
+      } catch {
+        if (!cancelled) {
+          setRegistryEntries([])
+          setRegistryModules([])
+        }
+      }
+    }
+    void loadRegistry()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const resetForm = () => {
     setCreateOpen(false)
     setEditingId(null)
@@ -59,9 +82,7 @@ export const PermissionProfilesTab = () => {
     setDescription("")
     setOwnerScopeType("global")
     setMode("custom")
-    setCapabilities([])
-    setAllowedToolsText("")
-    setDeniedToolsText("")
+    setPolicyDocument({})
     setIsActive(true)
   }
 
@@ -72,9 +93,7 @@ export const PermissionProfilesTab = () => {
     setDescription(String(profile.description || ""))
     setOwnerScopeType(profile.owner_scope_type)
     setMode(profile.mode)
-    setCapabilities(Array.isArray(profile.policy_document.capabilities) ? profile.policy_document.capabilities : [])
-    setAllowedToolsText(Array.isArray(profile.policy_document.allowed_tools) ? profile.policy_document.allowed_tools.join("\n") : "")
-    setDeniedToolsText(Array.isArray(profile.policy_document.denied_tools) ? profile.policy_document.denied_tools.join("\n") : "")
+    setPolicyDocument(profile.policy_document || {})
     setIsActive(profile.is_active)
   }
 
@@ -88,11 +107,7 @@ export const PermissionProfilesTab = () => {
         description: description.trim() || null,
         owner_scope_type: ownerScopeType,
         mode,
-        policy_document: buildPolicyDocument({
-          capabilities,
-          allowedToolsText,
-          deniedToolsText
-        }),
+        policy_document: policyDocument,
         is_active: isActive
       }
       if (editingId) {
@@ -129,7 +144,7 @@ export const PermissionProfilesTab = () => {
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
       <Typography.Text type="secondary">
-        Reusable tool-access profiles define capabilities, tool allowlists, and baseline restrictions.
+        Reusable tool-access profiles define capabilities, exact tool allowlists, and baseline restrictions.
       </Typography.Text>
       {errorMessage ? <Alert type="error" title={errorMessage} showIcon /> : null}
 
@@ -147,7 +162,7 @@ export const PermissionProfilesTab = () => {
                 aria-label="Profile Name"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Process Exec"
+                placeholder="Read Only"
               />
             </Space>
             <Space orientation="vertical" style={{ width: "100%" }}>
@@ -157,7 +172,7 @@ export const PermissionProfilesTab = () => {
                 aria-label="Description"
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
-                placeholder="Allows tool execution for shell workflows"
+                placeholder="Restricts this persona to low-risk read flows"
               />
             </Space>
             <Space>
@@ -192,48 +207,15 @@ export const PermissionProfilesTab = () => {
                 </select>
               </Space>
             </Space>
-            <Space orientation="vertical" style={{ width: "100%" }}>
-              <Typography.Text strong>Capabilities</Typography.Text>
-              <Space wrap>
-                {MCP_HUB_CAPABILITY_OPTIONS.map((capability) => (
-                  <Checkbox
-                    key={capability}
-                    checked={capabilities.includes(capability)}
-                    onChange={(event) => {
-                      setCapabilities((prev) =>
-                        event.target.checked
-                          ? [...prev, capability]
-                          : prev.filter((entry) => entry !== capability)
-                      )
-                    }}
-                  >
-                    {capability}
-                  </Checkbox>
-                ))}
-              </Space>
-            </Space>
-            <Space orientation="vertical" style={{ width: "100%" }}>
-              <label htmlFor="mcp-permission-profile-allowed-tools">Allowed Tools</label>
-              <textarea
-                id="mcp-permission-profile-allowed-tools"
-                aria-label="Allowed Tools"
-                value={allowedToolsText}
-                onChange={(event) => setAllowedToolsText(event.target.value)}
-                placeholder={"Bash(git *)\nnotes.search"}
-                rows={4}
-              />
-            </Space>
-            <Space orientation="vertical" style={{ width: "100%" }}>
-              <label htmlFor="mcp-permission-profile-denied-tools">Denied Tools</label>
-              <textarea
-                id="mcp-permission-profile-denied-tools"
-                aria-label="Denied Tools"
-                value={deniedToolsText}
-                onChange={(event) => setDeniedToolsText(event.target.value)}
-                placeholder={"Bash(rm *)\nBash(sudo *)"}
-                rows={4}
-              />
-            </Space>
+
+            <PolicyDocumentEditor
+              formId="mcp-permission-profile"
+              policy={policyDocument}
+              onChange={setPolicyDocument}
+              registryEntries={registryEntries}
+              registryModules={registryModules}
+            />
+
             <Checkbox checked={isActive} onChange={(event) => setIsActive(event.target.checked)}>
               Active
             </Checkbox>

@@ -8,19 +8,20 @@ import {
   listApprovalPolicies,
   listPermissionProfiles,
   listPolicyAssignments,
+  listToolRegistry,
+  listToolRegistryModules,
   updatePolicyAssignment,
   type McpHubApprovalPolicy,
   type McpHubEffectivePolicy,
+  type McpHubPermissionPolicyDocument,
   type McpHubPermissionProfile,
-  type McpHubPolicyAssignment
+  type McpHubPolicyAssignment,
+  type McpHubToolRegistryEntry,
+  type McpHubToolRegistryModule
 } from "@/services/tldw/mcp-hub"
 
-import {
-  buildPolicyDocument,
-  MCP_HUB_CAPABILITY_OPTIONS,
-  MCP_HUB_SCOPE_OPTIONS,
-  MCP_HUB_TARGET_OPTIONS
-} from "./policyHelpers"
+import { MCP_HUB_SCOPE_OPTIONS, MCP_HUB_TARGET_OPTIONS } from "./policyHelpers"
+import { PolicyDocumentEditor } from "./PolicyDocumentEditor"
 
 export const PolicyAssignmentsTab = () => {
   const [assignments, setAssignments] = useState<McpHubPolicyAssignment[]>([])
@@ -37,16 +38,15 @@ export const PolicyAssignmentsTab = () => {
   const [ownerScopeType, setOwnerScopeType] = useState<"global" | "org" | "team" | "user">("user")
   const [profileId, setProfileId] = useState<string>("")
   const [approvalPolicyId, setApprovalPolicyId] = useState<string>("")
-  const [capabilities, setCapabilities] = useState<string[]>([])
-  const [allowedToolsText, setAllowedToolsText] = useState("")
-  const [deniedToolsText, setDeniedToolsText] = useState("")
+  const [policyDocument, setPolicyDocument] = useState<McpHubPermissionPolicyDocument>({})
   const [isActive, setIsActive] = useState(true)
+  const [registryEntries, setRegistryEntries] = useState<McpHubToolRegistryEntry[]>([])
+  const [registryModules, setRegistryModules] = useState<McpHubToolRegistryModule[]>([])
 
-  const canSave = useMemo(() => !saving && (targetType === "default" || targetId.trim().length > 0), [
-    saving,
-    targetId,
-    targetType
-  ])
+  const canSave = useMemo(
+    () => !saving && (targetType === "default" || targetId.trim().length > 0),
+    [saving, targetId, targetType]
+  )
 
   const loadAll = async () => {
     setLoading(true)
@@ -61,8 +61,12 @@ export const PolicyAssignmentsTab = () => {
       setProfiles(Array.isArray(profileRows) ? profileRows : [])
       setApprovalPolicies(Array.isArray(approvalRows) ? approvalRows : [])
 
-      const firstPersonaAssignment = assignmentRows.find((row) => row.target_type === "persona" && row.target_id)
-      const firstGroupAssignment = assignmentRows.find((row) => row.target_type === "group" && row.target_id)
+      const firstPersonaAssignment = assignmentRows.find(
+        (row) => row.target_type === "persona" && row.target_id
+      )
+      const firstGroupAssignment = assignmentRows.find(
+        (row) => row.target_type === "group" && row.target_id
+      )
       const preview = await getEffectivePolicy({
         persona_id: firstPersonaAssignment?.target_id ?? null,
         group_id: firstGroupAssignment?.target_id ?? null
@@ -83,6 +87,28 @@ export const PolicyAssignmentsTab = () => {
     void loadAll()
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    const loadRegistry = async () => {
+      try {
+        const [entries, modules] = await Promise.all([listToolRegistry(), listToolRegistryModules()])
+        if (!cancelled) {
+          setRegistryEntries(Array.isArray(entries) ? entries : [])
+          setRegistryModules(Array.isArray(modules) ? modules : [])
+        }
+      } catch {
+        if (!cancelled) {
+          setRegistryEntries([])
+          setRegistryModules([])
+        }
+      }
+    }
+    void loadRegistry()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const resetForm = () => {
     setCreateOpen(false)
     setEditingId(null)
@@ -91,9 +117,7 @@ export const PolicyAssignmentsTab = () => {
     setOwnerScopeType("user")
     setProfileId("")
     setApprovalPolicyId("")
-    setCapabilities([])
-    setAllowedToolsText("")
-    setDeniedToolsText("")
+    setPolicyDocument({})
     setIsActive(true)
   }
 
@@ -105,21 +129,7 @@ export const PolicyAssignmentsTab = () => {
     setOwnerScopeType(assignment.owner_scope_type)
     setProfileId(assignment.profile_id ? String(assignment.profile_id) : "")
     setApprovalPolicyId(assignment.approval_policy_id ? String(assignment.approval_policy_id) : "")
-    setCapabilities(
-      Array.isArray(assignment.inline_policy_document.capabilities)
-        ? assignment.inline_policy_document.capabilities
-        : []
-    )
-    setAllowedToolsText(
-      Array.isArray(assignment.inline_policy_document.allowed_tools)
-        ? assignment.inline_policy_document.allowed_tools.join("\n")
-        : ""
-    )
-    setDeniedToolsText(
-      Array.isArray(assignment.inline_policy_document.denied_tools)
-        ? assignment.inline_policy_document.denied_tools.join("\n")
-        : ""
-    )
+    setPolicyDocument(assignment.inline_policy_document || {})
     setIsActive(assignment.is_active)
   }
 
@@ -134,11 +144,7 @@ export const PolicyAssignmentsTab = () => {
         owner_scope_type: ownerScopeType,
         profile_id: profileId ? Number(profileId) : null,
         approval_policy_id: approvalPolicyId ? Number(approvalPolicyId) : null,
-        inline_policy_document: buildPolicyDocument({
-          capabilities,
-          allowedToolsText,
-          deniedToolsText
-        }),
+        inline_policy_document: policyDocument,
         is_active: isActive
       }
       if (editingId) {
@@ -173,7 +179,8 @@ export const PolicyAssignmentsTab = () => {
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
       <Typography.Text type="secondary">
-        Assign profiles to default, group, or persona targets, then layer in manual overrides where needed.
+        Assign profiles to default, group, or persona targets, then layer in exact tool overrides where
+        needed.
       </Typography.Text>
       {errorMessage ? <Alert type="error" title={errorMessage} showIcon /> : null}
 
@@ -262,46 +269,15 @@ export const PolicyAssignmentsTab = () => {
                 </select>
               </Space>
             </Space>
-            <Space orientation="vertical" style={{ width: "100%" }}>
-              <Typography.Text strong>Inline Capabilities</Typography.Text>
-              <Space wrap>
-                {MCP_HUB_CAPABILITY_OPTIONS.map((capability) => (
-                  <Checkbox
-                    key={capability}
-                    checked={capabilities.includes(capability)}
-                    onChange={(event) => {
-                      setCapabilities((prev) =>
-                        event.target.checked
-                          ? [...prev, capability]
-                          : prev.filter((entry) => entry !== capability)
-                      )
-                    }}
-                  >
-                    {capability}
-                  </Checkbox>
-                ))}
-              </Space>
-            </Space>
-            <Space orientation="vertical" style={{ width: "100%" }}>
-              <label htmlFor="mcp-assignment-allowed-tools">Allowed Tools</label>
-              <textarea
-                id="mcp-assignment-allowed-tools"
-                aria-label="Allowed Tools"
-                value={allowedToolsText}
-                onChange={(event) => setAllowedToolsText(event.target.value)}
-                rows={3}
-              />
-            </Space>
-            <Space orientation="vertical" style={{ width: "100%" }}>
-              <label htmlFor="mcp-assignment-denied-tools">Denied Tools</label>
-              <textarea
-                id="mcp-assignment-denied-tools"
-                aria-label="Denied Tools"
-                value={deniedToolsText}
-                onChange={(event) => setDeniedToolsText(event.target.value)}
-                rows={3}
-              />
-            </Space>
+
+            <PolicyDocumentEditor
+              formId="mcp-assignment"
+              policy={policyDocument}
+              onChange={setPolicyDocument}
+              registryEntries={registryEntries}
+              registryModules={registryModules}
+            />
+
             <Checkbox checked={isActive} onChange={(event) => setIsActive(event.target.checked)}>
               Active
             </Checkbox>
@@ -369,6 +345,11 @@ export const PolicyAssignmentsTab = () => {
               <Space wrap>
                 {(assignment.inline_policy_document.capabilities || []).map((capability) => (
                   <Tag key={capability}>{capability}</Tag>
+                ))}
+                {(assignment.inline_policy_document.allowed_tools || []).map((tool) => (
+                  <Tag key={tool} color="green">
+                    {tool}
+                  </Tag>
                 ))}
               </Space>
             </Space>

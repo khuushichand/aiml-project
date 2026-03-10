@@ -1,25 +1,21 @@
-import { useEffect, useState } from "react"
-import { Alert, Card, Empty, List, Space, Typography } from "antd"
+import { useEffect, useMemo, useState } from "react"
+import { Alert, Card, Empty, Space, Tag, Typography } from "antd"
 
 import {
-  fetchMcpToolCatalogs,
-  fetchMcpToolCatalogsViaDiscovery,
-  type McpToolCatalog
-} from "@/services/tldw/mcp"
+  listToolRegistry,
+  listToolRegistryModules,
+  type McpHubToolRegistryEntry,
+  type McpHubToolRegistryModule
+} from "@/services/tldw/mcp-hub"
 
-type CatalogScope = "global" | "org" | "team"
-
-const SCOPE_LABELS: Record<CatalogScope, string> = {
-  global: "Global",
-  org: "Org",
-  team: "Team"
-}
+import { getToolEntriesByModule } from "./policyHelpers"
 
 export const ToolCatalogsTab = () => {
-  const [scope, setScope] = useState<CatalogScope>("global")
-  const [catalogs, setCatalogs] = useState<McpToolCatalog[]>([])
+  const [entries, setEntries] = useState<McpHubToolRegistryEntry[]>([])
+  const [modules, setModules] = useState<McpHubToolRegistryModule[]>([])
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const groupedModules = useMemo(() => getToolEntriesByModule(entries, modules), [entries, modules])
 
   useEffect(() => {
     let cancelled = false
@@ -27,19 +23,16 @@ export const ToolCatalogsTab = () => {
       setLoading(true)
       setErrorMessage(null)
       try {
-        const discovered = await fetchMcpToolCatalogsViaDiscovery(scope)
-        if (!cancelled && discovered.length > 0) {
-          setCatalogs(discovered)
-          return
-        }
-        const fallback = await fetchMcpToolCatalogs()
+        const [entryRows, moduleRows] = await Promise.all([listToolRegistry(), listToolRegistryModules()])
         if (!cancelled) {
-          setCatalogs(fallback)
+          setEntries(Array.isArray(entryRows) ? entryRows : [])
+          setModules(Array.isArray(moduleRows) ? moduleRows : [])
         }
       } catch {
         if (!cancelled) {
-          setCatalogs([])
-          setErrorMessage("Failed to load tool catalogs.")
+          setEntries([])
+          setModules([])
+          setErrorMessage("Failed to load tool registry metadata.")
         }
       } finally {
         if (!cancelled) {
@@ -51,46 +44,80 @@ export const ToolCatalogsTab = () => {
     return () => {
       cancelled = true
     }
-  }, [scope])
+  }, [])
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
       <Typography.Text type="secondary">
-        Tool catalogs control which MCP tools are exposed by scope.
+        Registry-backed tool metadata powers both the catalog view and the guided policy editor.
       </Typography.Text>
       {errorMessage ? <Alert type="error" title={errorMessage} showIcon /> : null}
 
-      <Space>
-        <label htmlFor="mcp-catalog-scope">Scope</label>
-        <select
-          id="mcp-catalog-scope"
-          aria-label="Scope"
-          value={scope}
-          onChange={(event) => setScope(event.target.value as CatalogScope)}
-        >
-          <option value="global">Global</option>
-          <option value="org">Org</option>
-          <option value="team">Team</option>
-        </select>
-      </Space>
-
-      <Card title={`${SCOPE_LABELS[scope]} Catalogs`}>
-        <List
-          loading={loading}
-          dataSource={catalogs}
-          locale={{ emptyText: <Empty description="No catalogs available" /> }}
-          renderItem={(catalog) => (
-            <List.Item>
-              <Space orientation="vertical" size={2}>
-                <Typography.Text strong>{catalog.name}</Typography.Text>
-                <Typography.Text type="secondary">
-                  {catalog.description || "No description"}
-                </Typography.Text>
+      {groupedModules.length > 0 ? (
+        groupedModules.map((module) => (
+          <Card
+            key={module.module}
+            title={
+              <Space wrap>
+                <Typography.Text strong>{module.display_name}</Typography.Text>
+                <Tag>{`${module.tool_count} tools`}</Tag>
+                {Object.entries(module.risk_summary)
+                  .filter(([, count]) => Number(count) > 0)
+                  .map(([riskClass, count]) => (
+                    <Tag key={`${module.module}-${riskClass}`}>{`${riskClass}:${count}`}</Tag>
+                  ))}
               </Space>
-            </List.Item>
-          )}
-        />
-      </Card>
+            }
+            loading={loading}
+          >
+            <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+              {module.metadata_warnings.length > 0 ? (
+                <Alert type="warning" showIcon message={module.metadata_warnings.join(" ")} />
+              ) : null}
+              {module.tools.map((tool) => (
+                <Card key={tool.tool_name} size="small">
+                  <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+                    <Space wrap>
+                      <Typography.Text strong>{tool.display_name}</Typography.Text>
+                      <Tag>{tool.category}</Tag>
+                      <Tag
+                        color={
+                          tool.risk_class === "high"
+                            ? "red"
+                            : tool.risk_class === "medium"
+                              ? "gold"
+                              : "green"
+                        }
+                      >
+                        {tool.risk_class}
+                      </Tag>
+                      <Tag>{tool.metadata_source}</Tag>
+                      {tool.mutates_state ? <Tag color="volcano">mutates</Tag> : null}
+                      {tool.uses_network ? <Tag color="purple">network</Tag> : null}
+                      {tool.uses_processes ? <Tag color="magenta">process</Tag> : null}
+                    </Space>
+                    <Typography.Text type="secondary">
+                      {tool.description || "No description"}
+                    </Typography.Text>
+                    <Space wrap>
+                      {tool.capabilities.map((capability) => (
+                        <Tag key={`${tool.tool_name}-${capability}`}>{capability}</Tag>
+                      ))}
+                    </Space>
+                    {tool.metadata_warnings.length > 0 ? (
+                      <Alert type="warning" showIcon message={tool.metadata_warnings.join(" ")} />
+                    ) : null}
+                  </Space>
+                </Card>
+              ))}
+            </Space>
+          </Card>
+        ))
+      ) : (
+        <Card loading={loading}>
+          <Empty description="No registry metadata available yet" />
+        </Card>
+      )}
     </Space>
   )
 }

@@ -31,6 +31,8 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     PolicyAssignmentCreateRequest,
     PolicyAssignmentResponse,
     PolicyAssignmentUpdateRequest,
+    ToolRegistryEntryResponse,
+    ToolRegistryModuleResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
@@ -39,6 +41,7 @@ from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
 from tldw_Server_API.app.core.exceptions import BadRequestError, ResourceNotFoundError
 from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver, get_mcp_hub_policy_resolver
 from tldw_Server_API.app.services.mcp_hub_service import McpHubConflictError, McpHubService
+from tldw_Server_API.app.services.mcp_hub_tool_registry import McpHubToolRegistryService
 
 router = APIRouter(prefix="/mcp/hub", tags=["mcp-hub"], dependencies=[Depends(check_rate_limit)])
 
@@ -70,6 +73,11 @@ async def get_mcp_hub_service() -> McpHubService:
 async def get_mcp_hub_policy_resolver_dep() -> McpHubPolicyResolver:
     """Resolve MCP Hub policy resolver for effective policy previews."""
     return await get_mcp_hub_policy_resolver()
+
+
+async def get_mcp_hub_tool_registry_dep() -> McpHubToolRegistryService:
+    """Resolve the derived MCP Hub tool registry service."""
+    return McpHubToolRegistryService()
 
 
 def _load_json_object(raw: Any) -> dict[str, Any]:
@@ -431,6 +439,24 @@ def _approval_decision_lifetime(
         ttl_minutes = _approval_ttl_minutes(rules, normalized_duration)
         return False, datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     raise HTTPException(status_code=422, detail=f"Unsupported approval duration '{normalized_duration}'")
+
+
+@router.get("/tool-registry", response_model=list[ToolRegistryEntryResponse])
+async def list_tool_registry(
+    _principal: AuthPrincipal = Depends(get_auth_principal),
+    registry: McpHubToolRegistryService = Depends(get_mcp_hub_tool_registry_dep),
+) -> list[ToolRegistryEntryResponse]:
+    """List normalized MCP tool metadata derived from the live module registry."""
+    return [ToolRegistryEntryResponse.model_validate(row) for row in await registry.list_entries()]
+
+
+@router.get("/tool-registry/modules", response_model=list[ToolRegistryModuleResponse])
+async def list_tool_registry_modules(
+    _principal: AuthPrincipal = Depends(get_auth_principal),
+    registry: McpHubToolRegistryService = Depends(get_mcp_hub_tool_registry_dep),
+) -> list[ToolRegistryModuleResponse]:
+    """List grouped MCP tool metadata summaries by module."""
+    return [ToolRegistryModuleResponse.model_validate(row) for row in await registry.list_modules()]
 
 
 @router.post("/permission-profiles", response_model=PermissionProfileResponse, status_code=201)

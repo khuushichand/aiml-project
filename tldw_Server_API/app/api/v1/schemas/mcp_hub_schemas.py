@@ -17,6 +17,8 @@ ApprovalMode = Literal[
 ]
 ApprovalDecision = Literal["approved", "denied"]
 ApprovalDuration = Literal["once", "session", "conversation"]
+ToolRiskClass = Literal["low", "medium", "high", "unclassified"]
+ToolMetadataSource = Literal["explicit", "heuristic", "fallback"]
 
 
 class ACPProfileCreateRequest(BaseModel):
@@ -202,6 +204,34 @@ class EffectivePolicyResponse(BaseModel):
     approval_mode: ApprovalMode | None = None
     policy_document: dict[str, Any] = Field(default_factory=dict)
     sources: list[EffectivePolicySourceResponse] = Field(default_factory=list)
+
+
+class ToolRegistryEntryResponse(BaseModel):
+    tool_name: str
+    display_name: str
+    description: str | None = None
+    module: str
+    module_display_name: str | None = None
+    category: str
+    risk_class: ToolRiskClass
+    capabilities: list[str] = Field(default_factory=list)
+    mutates_state: bool = False
+    uses_filesystem: bool = False
+    uses_processes: bool = False
+    uses_network: bool = False
+    uses_credentials: bool = False
+    supports_arguments_preview: bool = False
+    path_boundable: bool = False
+    metadata_source: ToolMetadataSource
+    metadata_warnings: list[str] = Field(default_factory=list)
+
+
+class ToolRegistryModuleResponse(BaseModel):
+    module: str
+    display_name: str
+    tool_count: int
+    risk_summary: dict[str, int] = Field(default_factory=dict)
+    metadata_warnings: list[str] = Field(default_factory=list)
 
 
 class ExternalServerCreateRequest(BaseModel):
