@@ -77,6 +77,10 @@ from tldw_Server_API.app.core.LLM_Calls.openrouter_model_inventory import (
     clear_openrouter_model_cache as _clear_openrouter_model_cache_shared,
     discover_openrouter_models as _discover_openrouter_models_shared,
 )
+from tldw_Server_API.app.core.LLM_Calls.llamacpp_request_extensions import (
+    resolve_llamacpp_request_extensions,
+    resolve_llamacpp_runtime_caps,
+)
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.LLM_Calls.structured_generation import (
     StructuredGenerationCapabilityError,
@@ -1424,6 +1428,11 @@ def build_call_params_from_request(
             "persona_exemplar_budget_tokens",
             "persona_exemplar_strategy",
             "persona_debug",
+            "thinking_budget_tokens",
+            "grammar_mode",
+            "grammar_id",
+            "grammar_inline",
+            "grammar_override",
         },
     )
 
@@ -1446,6 +1455,21 @@ def build_call_params_from_request(
             )
             call_params["_structured_requested_response_format"] = dict(response_format)
             call_params["response_format"] = decision.response_format
+
+    llamacpp_request_fields = {
+        "thinking_budget_tokens": getattr(request_data, "thinking_budget_tokens", None),
+        "grammar_mode": getattr(request_data, "grammar_mode", None),
+        "grammar_id": getattr(request_data, "grammar_id", None),
+        "grammar_inline": getattr(request_data, "grammar_inline", None),
+        "grammar_override": getattr(request_data, "grammar_override", None),
+        "extra_body": getattr(request_data, "extra_body", None),
+    }
+    call_params["extra_body"] = resolve_llamacpp_request_extensions(
+        request_fields=llamacpp_request_fields,
+        provider=target_api_provider,
+        grammar_record=None,
+        runtime_caps=resolve_llamacpp_runtime_caps(app_config=app_config),
+    )["extra_body"]
 
     call_params.update(
         {
