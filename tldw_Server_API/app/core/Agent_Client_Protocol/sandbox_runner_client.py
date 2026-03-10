@@ -28,7 +28,9 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.permission_tiers import dete
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPMessage, ACPResponseError
 from tldw_Server_API.app.core.Agent_Client_Protocol.stream_client import ACPStreamClient
 from tldw_Server_API.app.core.config import settings as app_settings
-from tldw_Server_API.app.core.Sandbox.models import RunSpec, RuntimeType, SessionSpec
+from tldw_Server_API.app.core.Sandbox.models import RunSpec, RuntimeType, SessionSpec, TrustLevel
+from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy
+from tldw_Server_API.app.core.Sandbox.runtime_capabilities import collect_runtime_preflights
 from tldw_Server_API.app.core.Sandbox.runners.lima_runner import LimaRunner
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
 from tldw_Server_API.app.core.testing import is_truthy
@@ -385,6 +387,38 @@ class ACPSandboxRunnerManager:
             f"ACP lima strict policy requirements not satisfied: {', '.join(reasons) if reasons else 'unknown'}"
         )
 
+    def _configured_runtime(self) -> RuntimeType:
+        runtime_raw = str(self.config.runtime or "").strip().lower()
+        try:
+            return RuntimeType(runtime_raw)
+        except ValueError as exc:
+            raise ACPResponseError(f"Unsupported ACP sandbox runtime: {runtime_raw or 'unknown'}") from exc
+
+    def _validate_runtime_requirements(self, runtime: RuntimeType) -> None:
+        self._validate_lima_strict_runtime_requirements()
+        network_policy = str(self.config.network_policy or "deny_all").strip().lower() or "deny_all"
+        preflight = collect_runtime_preflights(network_policy=network_policy).get(runtime)
+        if preflight is None:
+            return
+        if not preflight.available:
+            reasons = list(preflight.reasons or [])
+            raise ACPResponseError(
+                f"ACP {runtime.value} runtime requirements not satisfied: "
+                f"{', '.join(reasons) if reasons else 'unknown'}"
+            )
+        try:
+            SandboxPolicy._require_trust_level_supported(
+                runtime,
+                TrustLevel.standard,
+                runtime_preflights={runtime: preflight},
+            )
+        except SandboxPolicy.PolicyUnsupported as exc:
+            reasons = list(getattr(exc, "reasons", []) or [])
+            detail = ", ".join(reasons) if reasons else getattr(exc, "requirement", "unsupported")
+            raise ACPResponseError(
+                f"ACP {runtime.value} runtime requirements not satisfied: {detail}"
+            ) from exc
+
     # -------------------------------------------------------------------------
     # Session lifecycle
     # -------------------------------------------------------------------------
@@ -434,7 +468,8 @@ class ACPSandboxRunnerManager:
             execute_enabled = False
         if not execute_enabled:
             raise ACPResponseError("SANDBOX_ENABLE_EXECUTION must be enabled for ACP sandbox sessions")
-        self._validate_lima_strict_runtime_requirements()
+        runtime = self._configured_runtime()
+        self._validate_runtime_requirements(runtime)
 
         sandbox_service = sandbox_ep._service  # type: ignore[attr-defined]
 
@@ -448,9 +483,10 @@ class ACPSandboxRunnerManager:
         try:
             # Create sandbox session
             sess_spec = SessionSpec(
-                runtime=RuntimeType(self.config.runtime),
+                runtime=runtime,
                 base_image=self.config.base_image,
                 network_policy=self.config.network_policy or "deny_all",
+                trust_level=TrustLevel.standard,
                 persona_id=persona_id,
                 workspace_id=workspace_id,
                 workspace_group_id=workspace_group_id,
@@ -497,7 +533,7 @@ class ACPSandboxRunnerManager:
 
             run_spec = RunSpec(
                 session_id=sandbox_session.id,
-                runtime=RuntimeType(self.config.runtime),
+                runtime=runtime,
                 base_image=self.config.base_image,
                 command=["/usr/local/bin/tldw-acp-entrypoint"],
                 env=env,
@@ -505,6 +541,7 @@ class ACPSandboxRunnerManager:
                 run_as_root=bool(self.config.run_as_root),
                 read_only_root=bool(self.config.read_only_root),
                 network_policy=self.config.network_policy or "deny_all",
+                trust_level=TrustLevel.standard,
                 port_mappings=port_mappings,
                 persona_id=persona_id,
                 workspace_id=workspace_id,

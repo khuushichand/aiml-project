@@ -141,6 +141,45 @@ async def test_create_session_requires_authenticated_user_id() -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_create_session_rejects_unavailable_vz_macos_runtime(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            runtime="vz_macos",
+            network_policy="deny_all",
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "1")
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_VZ_MACOS_AVAILABLE", "0")
+
+    with pytest.raises(ACPResponseError, match="vz_macos"):
+        await manager.create_session(cwd="/workspace", user_id=7)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_create_session_rejects_seatbelt_without_standard_opt_in(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            runtime="seatbelt",
+            network_policy="deny_all",
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "1")
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_SEATBELT_AVAILABLE", "1")
+    monkeypatch.delenv("TLDW_SANDBOX_SEATBELT_STANDARD_ENABLED", raising=False)
+
+    with pytest.raises(ACPResponseError, match="seatbelt_standard_disabled"):
+        await manager.create_session(cwd="/workspace", user_id=7)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_create_session_propagates_non_root_read_only_and_internal_ssh_port(monkeypatch) -> None:
     manager = ACPSandboxRunnerManager(
         ACPSandboxConfig(

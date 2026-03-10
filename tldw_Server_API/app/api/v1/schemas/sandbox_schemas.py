@@ -16,6 +16,8 @@ TrustLevelType = Literal["trusted", "standard", "untrusted"]
 class SandboxRuntimeInfo(BaseModel):
     name: RuntimeType
     available: bool = Field(description="Whether this runtime is detected/usable on host")
+    reasons: list[str] | None = Field(default=None, description="Preflight reasons when the runtime is unavailable or constrained")
+    supported_trust_levels: list[TrustLevelType] | None = Field(default=None, description="Trust levels supported by this runtime under current host policy")
     default_images: list[str] = Field(default_factory=list)
     max_cpu: float | None = Field(default=None, description="Max CPU (cores) per run")
     max_mem_mb: int | None = Field(default=None, description="Max memory (MB) per run")
@@ -31,7 +33,7 @@ class SandboxRuntimeInfo(BaseModel):
     strict_deny_all_supported: bool | None = Field(default=None, description="Whether strict deny-all network enforcement is supported")
     strict_allowlist_supported: bool | None = Field(default=None, description="Whether strict allowlist network enforcement is supported")
     enforcement_ready: dict[str, bool] | None = Field(default=None, description="Runtime enforcement readiness by network policy mode")
-    host: dict[str, str] | None = Field(default=None, description="Runtime host capability facts for troubleshooting")
+    host: dict[str, str | bool] | None = Field(default=None, description="Runtime host capability facts for troubleshooting")
     store_mode: str | None = Field(default=None, description="Current store backend mode (memory|sqlite|cluster)")
     notes: str | None = None
 

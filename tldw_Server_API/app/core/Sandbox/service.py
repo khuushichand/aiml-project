@@ -689,10 +689,25 @@ class SandboxService:
         docker_preflight = runtime_preflights.get(RuntimeType.docker)
         firecracker_preflight = runtime_preflights.get(RuntimeType.firecracker)
         lima_preflight = runtime_preflights.get(RuntimeType.lima)
+        vz_linux_preflight = runtime_preflights.get(RuntimeType.vz_linux)
+        vz_macos_preflight = runtime_preflights.get(RuntimeType.vz_macos)
+        seatbelt_preflight = runtime_preflights.get(RuntimeType.seatbelt)
         lima_enforcement_ready = dict((lima_preflight.enforcement_ready if lima_preflight else {}) or {})
         # Allowlist enforcement is not implemented for Lima runtime execution.
         lima_enforcement_ready["allowlist"] = False
         lima_host = dict((lima_preflight.host if lima_preflight else {}) or {})
+
+        def _preflight_fields(preflight: RuntimePreflightResult | None) -> dict[str, object]:
+            enforcement_ready = dict((preflight.enforcement_ready if preflight else {}) or {})
+            return {
+                "available": bool(preflight.available) if preflight is not None else False,
+                "reasons": list((preflight.reasons if preflight else []) or []),
+                "supported_trust_levels": list((preflight.supported_trust_levels if preflight else []) or []),
+                "strict_deny_all_supported": bool(enforcement_ready.get("deny_all")),
+                "strict_allowlist_supported": bool(enforcement_ready.get("allowlist")),
+                "enforcement_ready": enforcement_ready,
+                "host": dict((preflight.host if preflight else {}) or {}),
+            }
 
         return [
             {
@@ -783,6 +798,60 @@ class SandboxService:
                 "host": lima_host,
                 "store_mode": store_mode,
                 "notes": "Full VM isolation via Lima; recommended for macOS",
+            },
+            {
+                "name": "vz_linux",
+                "default_images": ["ubuntu-24.04"],
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
+                "notes": "Linux guest VM via Virtualization.framework on Apple silicon hosts",
+                **_preflight_fields(vz_linux_preflight),
+            },
+            {
+                "name": "vz_macos",
+                "default_images": ["macos-15"],
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
+                "notes": "macOS guest VM via Virtualization.framework on Apple silicon hosts",
+                **_preflight_fields(vz_macos_preflight),
+            },
+            {
+                "name": "seatbelt",
+                "default_images": ["host-local"],
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
+                "notes": "Host-local seatbelt process isolation for trusted workflows on macOS",
+                **_preflight_fields(seatbelt_preflight),
             },
         ]
 

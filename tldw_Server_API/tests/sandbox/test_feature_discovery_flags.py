@@ -115,3 +115,30 @@ def test_firecracker_not_available_when_real_disabled(monkeypatch) -> None:
         fc = next((rt for rt in data.get("runtimes", []) if rt.get("name") == "firecracker"), None)
         assert fc is not None
         assert fc.get("available") is False
+
+
+def test_runtimes_discovery_includes_macos_runtime_capabilities(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
+    monkeypatch.setenv("TLDW_SANDBOX_MACOS_HELPER_READY", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_VZ_LINUX_AVAILABLE", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_VZ_LINUX_TEMPLATE_READY", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_VZ_MACOS_AVAILABLE", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_VZ_MACOS_TEMPLATE_READY", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_SEATBELT_AVAILABLE", "1")
+    monkeypatch.delenv("TLDW_SANDBOX_SEATBELT_STANDARD_ENABLED", raising=False)
+    clear_config_cache()
+
+    with TestClient(app) as client:
+        r = client.get("/api/v1/sandbox/runtimes")
+        assert r.status_code == 200
+        data = r.json()
+        runtimes = {item["name"]: item for item in data["runtimes"]}
+        assert "vz_linux" in runtimes
+        assert "vz_macos" in runtimes
+        assert "seatbelt" in runtimes
+        assert "supported_trust_levels" in runtimes["vz_linux"]
+        assert "standard" in runtimes["vz_linux"]["supported_trust_levels"]
+        assert "supported_trust_levels" in runtimes["seatbelt"]
+        assert runtimes["seatbelt"]["supported_trust_levels"] == ["trusted"]
+        assert isinstance(runtimes["vz_macos"].get("host"), dict)
