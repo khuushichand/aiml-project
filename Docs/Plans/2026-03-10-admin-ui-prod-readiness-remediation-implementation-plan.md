@@ -410,7 +410,7 @@ git commit -m "ci(admin-ui): align frontend gate with production checks"
 **Goal:** Lower the probability that future production changes regress critical admin flows by extracting the highest-risk monoliths into smaller typed units.
 **Success Criteria:** The largest user-management pages and their helper state are split into section components or hooks with no behavior change.
 **Tests:** Existing page suites remain green; new extracted helpers have focused unit tests
-**Status:** Not Started
+**Status:** Complete
 
 ### Task 6: Decompose the highest-risk user-management modules after the gate is green
 
