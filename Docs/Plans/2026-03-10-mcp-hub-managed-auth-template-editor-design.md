@@ -73,6 +73,9 @@ Without an explicit template editor, slot-based governance remains incomplete.
   `ExternalMCPServerConfig` payloads before parsing.
 - Websocket adapters consume headers from parsed config.
 - Stdio adapters consume env from parsed config.
+- Managed external server create/update currently persists `config` as opaque
+  JSON and does not yet perform repo-backed validation of referenced slot names
+  on save.
 - The current UI and API do not expose auth-template presence, validity, or
   blocked reasons.
 
@@ -103,6 +106,13 @@ Where each mapping contains:
 
 This avoids a second source of truth while still giving the UI a clean authored
 object to manage.
+
+Validation boundary:
+
+- parser-facing `config_schema.py` remains the runtime transport schema
+- managed auth-template validation belongs in MCP Hub service-level managed
+  config validation, because referenced `slot_name` values require repo lookup
+- runtime compilation still performs fail-closed validation before parser load
 
 ### 2. One auth template per managed server
 
@@ -145,6 +155,13 @@ This means:
 
 There should be no side-channel auth injection mechanism parallel to parsed
 transport config.
+
+Because each managed server already has exactly one transport:
+
+- `header` mappings are valid only for `websocket` transport
+- `env` mappings are valid only for `stdio` transport
+- transport-mismatched mappings should be rejected on save, not merely ignored
+  or deferred until runtime
 
 ### 5. Template precedence is strict once a template exists
 
@@ -211,8 +228,27 @@ Rules:
 - `target_type` must be `header` or `env`
 - `target_name` must be non-empty
 - duplicate `(target_type, target_name)` is invalid
-- templates may contain both `header` and `env` mappings, but runtime only
-  materializes mappings valid for the current transport
+- websocket servers may contain only `header` mappings
+- stdio servers may contain only `env` mappings
+
+## Compatibility And Migration Window
+
+The current managed runtime still understands the older auth shape:
+
+- `auth.required_slots`
+- `auth.slot_bindings`
+
+The first auth-template editor pass must not strand those existing managed
+servers.
+
+Compatibility rules:
+
+- runtime should dual-read old and new managed auth shapes during the migration
+  window
+- MCP Hub UI writes only the new `auth.mappings` shape
+- once a managed server is saved through the new editor, the new template shape
+  becomes authoritative
+- if both shapes are present, `auth.mappings` wins
 
 ## API Response Additions
 
@@ -226,12 +262,25 @@ Allowed blocked reasons:
 
 - `no_auth_template`
 - `auth_template_invalid`
-- `required_slot_not_granted`
 - `required_slot_secret_missing`
 - `unsupported_template_transport_target`
 
 These fields are needed for the MCP Hub UI to show actual readiness state rather
 than just generic secret presence.
+
+These are config-local readiness reasons only. They must not depend on profile
+or assignment binding state.
+
+## Effective External Access Reasons
+
+Grant-dependent reasons remain in effective external access responses, not
+server inventory rows.
+
+Examples:
+
+- `required_slot_not_granted`
+- `disabled_by_assignment`
+- `not_granted`
 
 ## Runtime Semantics
 
@@ -258,6 +307,16 @@ Blocked reasons:
 - `required_slot_not_granted`
 - `required_slot_secret_missing`
 - `unsupported_template_transport_target`
+
+Server inventory status should use only config-local reasons:
+
+- `no_auth_template`
+- `auth_template_invalid`
+- `required_slot_secret_missing`
+- `unsupported_template_transport_target`
+
+Grant-dependent reasons like `required_slot_not_granted` belong in effective
+external access summaries.
 
 ## MCP Hub UI
 
@@ -297,6 +356,8 @@ For existing managed servers:
 
 - if no auth template exists, keep them visible and editable
 - migrated default-slot compatibility may continue temporarily
+- dual-read support for older `required_slots` plus `slot_bindings` should
+  remain during the migration window
 - once a template is added, runtime must prefer template compilation
   unconditionally
 

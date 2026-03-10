@@ -4,7 +4,7 @@
 
 **Goal:** Add a first-class managed auth template editor for MCP Hub external servers, compile template mappings into parser-compatible transport config, and make server readiness/status template-aware for websocket and stdio transports.
 
-**Architecture:** Extend managed external server config with a single structured auth-template mapping model, validate and compile those mappings into `websocket.headers` or `stdio.env` before runtime parser/adapter construction, then expose template presence/validity through MCP Hub APIs and the external-server UI. Keep legacy alias-based server secrets only as transitional fallback for managed servers without a template.
+**Architecture:** Extend managed external server config with a single structured auth-template mapping model, validate it in MCP Hub service-level managed config flows, compile those mappings into `websocket.headers` or `stdio.env` before runtime parser/adapter construction, and expose config-local template readiness through MCP Hub APIs and the external-server UI. Keep dual-read compatibility for the older `required_slots` plus `slot_bindings` shape during migration, but make `auth.mappings` authoritative once present.
 
 **Tech Stack:** FastAPI, AuthNZ SQLite/Postgres persistence, MCP Unified external federation runtime, React, Ant Design, pytest, Vitest, Bandit
 
@@ -20,6 +20,7 @@
 - Task 6: Not started
 - Task 7: Not started
 - Task 8: Not started
+- Task 9: Not started
 
 ### Task 1: Add failing tests for managed auth-template validation and compilation
 
@@ -37,7 +38,9 @@ Add tests that expect:
 - websocket header mappings compile from slot values
 - stdio env mappings compile from slot values
 - duplicate `(target_type, target_name)` mappings are rejected
+- transport-mismatched mappings are rejected on save
 - required mappings fail when slot grant or slot secret is missing
+- older `required_slots` plus `slot_bindings` shape still works during migration
 
 **Step 2: Write failing service/API tests**
 
@@ -47,6 +50,8 @@ Add tests that expect:
 - external server responses expose `auth_template_valid`
 - external server responses expose `auth_template_blocked_reason`
 - auth-template update endpoints round-trip correctly
+- server inventory status does not use grant-dependent reasons such as
+  `required_slot_not_granted`
 
 **Step 3: Run the focused tests to confirm failure**
 
@@ -79,8 +84,10 @@ git commit -m "test: add MCP Hub auth template coverage"
 ### Task 2: Add auth-template schema and managed config validation
 
 **Files:**
-- Modify: `tldw_Server_API/app/core/MCP_unified/external_servers/config_schema.py`
+- Modify: `tldw_Server_API/app/services/mcp_hub_service.py`
 - Modify: `tldw_Server_API/app/api/v1/schemas/mcp_hub_schemas.py`
+- Modify: `tldw_Server_API/app/api/v1/endpoints/mcp_hub_management.py`
+- Modify: `tldw_Server_API/tests/MCP_unified/test_mcp_hub_service.py`
 - Modify: `tldw_Server_API/tests/MCP_unified/test_mcp_hub_management_api.py`
 
 **Step 1: Add managed auth-template schema models**
@@ -93,12 +100,15 @@ Define typed request/response models for:
 
 **Step 2: Extend external server config validation**
 
-Add schema-level validation for:
+Add MCP Hub service-level managed config validation for:
 
 - supported `target_type`
 - non-empty `target_name`
 - valid `slot_name`
 - unique `(target_type, target_name)`
+- transport-target match against the server transport
+
+Do not rely on parser-facing `config_schema.py` for repo-backed slot validation.
 
 **Step 3: Run targeted schema/API tests**
 
@@ -106,6 +116,7 @@ Run:
 
 ```bash
 source .venv/bin/activate && python -m pytest \
+  tldw_Server_API/tests/MCP_unified/test_mcp_hub_service.py \
   tldw_Server_API/tests/MCP_unified/test_mcp_hub_management_api.py \
   -k "template or external_server" -v
 ```
@@ -116,13 +127,55 @@ Expected: PASS once implemented.
 
 ```bash
 git add \
-  tldw_Server_API/app/core/MCP_unified/external_servers/config_schema.py \
+  tldw_Server_API/app/services/mcp_hub_service.py \
   tldw_Server_API/app/api/v1/schemas/mcp_hub_schemas.py \
+  tldw_Server_API/app/api/v1/endpoints/mcp_hub_management.py \
+  tldw_Server_API/tests/MCP_unified/test_mcp_hub_service.py \
   tldw_Server_API/tests/MCP_unified/test_mcp_hub_management_api.py
-git commit -m "feat: add MCP Hub managed auth template schema"
+git commit -m "feat: validate MCP Hub managed auth templates"
 ```
 
-### Task 3: Make auth bridge compile headers and env from template mappings
+### Task 3: Add compatibility support for the older managed auth shape
+
+**Files:**
+- Modify: `tldw_Server_API/app/services/mcp_hub_external_auth_service.py`
+- Modify: `tldw_Server_API/tests/MCP_unified/test_mcp_hub_external_auth_bridge.py`
+
+**Step 1: Add dual-read normalization**
+
+Implement normalization logic that understands both:
+
+- old `required_slots` plus `slot_bindings`
+- new `auth.mappings`
+
+Rules:
+
+- if both shapes are present, `auth.mappings` wins
+- new editor/API writes only `auth.mappings`
+- legacy shape remains readable until a server is resaved
+
+**Step 2: Run compatibility bridge tests**
+
+Run:
+
+```bash
+source .venv/bin/activate && python -m pytest \
+  tldw_Server_API/tests/MCP_unified/test_mcp_hub_external_auth_bridge.py \
+  -k "legacy or template" -v
+```
+
+Expected: PASS.
+
+**Step 3: Commit**
+
+```bash
+git add \
+  tldw_Server_API/app/services/mcp_hub_external_auth_service.py \
+  tldw_Server_API/tests/MCP_unified/test_mcp_hub_external_auth_bridge.py
+git commit -m "feat: add MCP Hub auth template compatibility"
+```
+
+### Task 4: Make auth bridge compile headers and env from template mappings
 
 **Files:**
 - Modify: `tldw_Server_API/app/services/mcp_hub_external_auth_service.py`
@@ -168,7 +221,7 @@ git add \
 git commit -m "feat: compile MCP Hub auth templates"
 ```
 
-### Task 4: Compile auth templates into runtime transport config
+### Task 5: Compile auth templates into runtime transport config
 
 **Files:**
 - Modify: `tldw_Server_API/app/services/mcp_hub_external_registry_service.py`
@@ -210,7 +263,7 @@ git add \
 git commit -m "feat: compile MCP Hub auth templates into runtime config"
 ```
 
-### Task 5: Add service/API support for template CRUD and readiness status
+### Task 6: Add service/API support for template CRUD and readiness status
 
 **Files:**
 - Modify: `tldw_Server_API/app/services/mcp_hub_service.py`
@@ -237,13 +290,15 @@ Add or extend routes for:
 
 **Step 3: Map status reasons consistently**
 
-Use a small stable reason set:
+Use a small stable config-local reason set on external server inventory rows:
 
 - `no_auth_template`
 - `auth_template_invalid`
-- `required_slot_not_granted`
 - `required_slot_secret_missing`
 - `unsupported_template_transport_target`
+
+Keep grant-dependent reasons such as `required_slot_not_granted` in effective
+external access summary responses only.
 
 **Step 4: Run service/API tests**
 
@@ -271,7 +326,7 @@ git add \
 git commit -m "feat: add MCP Hub auth template API"
 ```
 
-### Task 6: Update MCP Hub client types and server editor UI
+### Task 7: Update MCP Hub client types and server editor UI
 
 **Files:**
 - Modify: `apps/packages/ui/src/services/tldw/mcp-hub.ts`
@@ -328,7 +383,7 @@ git add \
 git commit -m "feat: add MCP Hub auth template editor"
 ```
 
-### Task 7: Run full verification and Bandit
+### Task 8: Run full verification and Bandit
 
 **Files:**
 - Modify if needed based on failures in touched files only
@@ -364,7 +419,6 @@ Run:
 
 ```bash
 source .venv/bin/activate && python -m bandit -r \
-  tldw_Server_API/app/core/MCP_unified/external_servers/config_schema.py \
   tldw_Server_API/app/services/mcp_hub_external_auth_service.py \
   tldw_Server_API/app/services/mcp_hub_external_registry_service.py \
   tldw_Server_API/app/services/mcp_hub_service.py \
@@ -381,7 +435,7 @@ git add <touched files>
 git commit -m "fix: polish MCP Hub auth template flow"
 ```
 
-### Task 8: Update plan status, summarize, and prepare branch for review
+### Task 9: Update plan status, summarize, and prepare branch for review
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-10-mcp-hub-managed-auth-template-editor-implementation-plan.md`
