@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  COMPANION_CONVERSATION_PATH,
   COMPANION_PATH,
   FAMILY_WIZARD_SETTINGS_PATH,
   GUARDIAN_SETTINGS_PATH,
@@ -109,5 +110,34 @@ describe("route capability gating", () => {
     })
     expect(isCompanionAvailable(caps)).toBe(true)
     expect(isRouteEnabledForCapabilities(COMPANION_PATH, caps)).toBe(true)
+  })
+
+  it("hides the companion conversation when either persona or personalization is missing", () => {
+    expect(
+      isRouteEnabledForCapabilities(
+        COMPANION_CONVERSATION_PATH,
+        makeCapabilities({
+          hasPersona: true,
+          hasPersonalization: false
+        })
+      )
+    ).toBe(false)
+    expect(
+      isRouteEnabledForCapabilities(
+        COMPANION_CONVERSATION_PATH,
+        makeCapabilities({
+          hasPersona: false,
+          hasPersonalization: true
+        })
+      )
+    ).toBe(false)
+  })
+
+  it("enables the companion conversation only when both persona and personalization are present", () => {
+    const caps = makeCapabilities({
+      hasPersona: true,
+      hasPersonalization: true
+    })
+    expect(isRouteEnabledForCapabilities(COMPANION_CONVERSATION_PATH, caps)).toBe(true)
   })
 })

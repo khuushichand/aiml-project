@@ -236,6 +236,11 @@ describe("option companion route", () => {
       "href",
       "/collections"
     )
+    expect(screen.getByRole("link", { name: "Open conversation" })).toHaveAttribute(
+      "href",
+      "/companion/conversation"
+    )
+    expect(screen.queryByRole("link", { name: "Open persona" })).not.toBeInTheDocument()
   })
 
   it("allows pausing a goal and refreshes the workspace snapshot", async () => {

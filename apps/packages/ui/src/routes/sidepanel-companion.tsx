@@ -86,7 +86,7 @@ const SidepanelCompanion = () => {
               </div>
             </div>
           ) : null}
-          <CompanionPage key={reloadNonce} />
+          <CompanionPage key={reloadNonce} surface="sidepanel" />
         </div>
       </div>
     </RouteErrorBoundary>

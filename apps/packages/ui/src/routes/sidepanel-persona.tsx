@@ -158,18 +158,39 @@ const _confirmWithBrowserPrompt = (message: string): boolean => {
   }
 }
 
-const SidepanelPersona = () => {
-  const { t } = useTranslation(["sidepanel", "common"])
+type PersonaRouteMode = "persona" | "companion"
+type PersonaRouteShell = "sidepanel" | "options"
+
+type SidepanelPersonaProps = {
+  mode?: PersonaRouteMode
+  shell?: PersonaRouteShell
+}
+
+const DEFAULT_PERSONA_ID = "research_assistant"
+
+const SidepanelPersona = ({
+  mode = "persona",
+  shell = "sidepanel"
+}: SidepanelPersonaProps) => {
+  const { t } = useTranslation(["sidepanel", "common", "option"])
   const navigate = useNavigate()
   const isOnline = useServerOnline()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
+  const isCompanionMode = mode === "companion"
+  const routeTitle = isCompanionMode
+    ? t("option:header.companion", "Companion")
+    : t("sidepanel:persona.title", "Persona")
+  const routeRootClassName =
+    shell === "sidepanel"
+      ? "flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
+      : "flex bg-bg flex-col gap-3 mx-auto max-w-7xl"
 
   const wsRef = React.useRef<WebSocket | null>(null)
   const manuallyClosingRef = React.useRef(false)
 
   const [catalog, setCatalog] = React.useState<PersonaInfo[]>([])
   const [selectedPersonaId, setSelectedPersonaId] =
-    React.useState<string>("research_assistant")
+    React.useState<string>(DEFAULT_PERSONA_ID)
   const [sessionId, setSessionId] = React.useState<string | null>(null)
   const [sessionHistory, setSessionHistory] = React.useState<PersonaSessionSummary[]>([])
   const [resumeSessionId, setResumeSessionId] = React.useState<string>("")
@@ -177,9 +198,9 @@ const SidepanelPersona = () => {
   const [memoryTopK, setMemoryTopK] = React.useState<number>(3)
   const [companionContextEnabled, setCompanionContextEnabled] = React.useState(true)
   const [personaStateContextEnabled, setPersonaStateContextEnabled] =
-    React.useState(true)
+    React.useState(!isCompanionMode)
   const [personaStateContextProfileDefault, setPersonaStateContextProfileDefault] =
-    React.useState(true)
+    React.useState(!isCompanionMode)
   const [updatingPersonaStateContextDefault, setUpdatingPersonaStateContextDefault] =
     React.useState(false)
   const [soulMd, setSoulMd] = React.useState("")
@@ -220,6 +241,13 @@ const SidepanelPersona = () => {
   const [activeSessionPersonaId, setActiveSessionPersonaId] = React.useState<string | null>(
     null
   )
+
+  React.useEffect(() => {
+    if (!isCompanionMode) return
+    setCompanionContextEnabled(true)
+    setPersonaStateContextEnabled(false)
+    setPersonaStateContextProfileDefault(false)
+  }, [isCompanionMode])
 
   const getUnsavedStateDiscardPrompt = React.useCallback(
     (reason: UnsavedStateDiscardReason): string => {
@@ -642,34 +670,43 @@ const SidepanelPersona = () => {
         : []
       setCatalog(personas)
 
+      const preferredPersonaId = isCompanionMode
+        ? DEFAULT_PERSONA_ID
+        : selectedPersonaId
       const selectedPersonaIsValid = personas.some(
-        (persona) => String(persona.id || "") === selectedPersonaId
+        (persona) => String(persona.id || "") === preferredPersonaId
       )
       const resolvedPersonaId =
-        (selectedPersonaIsValid ? selectedPersonaId : personas[0]?.id) ||
-        selectedPersonaId ||
-        "research_assistant"
+        (selectedPersonaIsValid ? preferredPersonaId : personas[0]?.id) ||
+        preferredPersonaId ||
+        DEFAULT_PERSONA_ID
       if (resolvedPersonaId && resolvedPersonaId !== selectedPersonaId) {
         setSelectedPersonaId(resolvedPersonaId)
       }
-      setPersonaStateContextEnabled(true)
-      setPersonaStateContextProfileDefault(true)
-      try {
-        const profileResp = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(resolvedPersonaId)}` as any,
-          { method: "GET" }
-        )
-        if (profileResp.ok) {
-          const profilePayload = (await profileResp.json()) as PersonaProfileResponse
-          const stateContextDefault =
-            profilePayload?.use_persona_state_context_default !== false
-          setPersonaStateContextEnabled(stateContextDefault)
-          setPersonaStateContextProfileDefault(stateContextDefault)
+      if (isCompanionMode) {
+        setCompanionContextEnabled(true)
+        setPersonaStateContextEnabled(false)
+        setPersonaStateContextProfileDefault(false)
+      } else {
+        setPersonaStateContextEnabled(true)
+        setPersonaStateContextProfileDefault(true)
+        try {
+          const profileResp = await tldwClient.fetchWithAuth(
+            `/api/v1/persona/profiles/${encodeURIComponent(resolvedPersonaId)}` as any,
+            { method: "GET" }
+          )
+          if (profileResp.ok) {
+            const profilePayload = (await profileResp.json()) as PersonaProfileResponse
+            const stateContextDefault =
+              profilePayload?.use_persona_state_context_default !== false
+            setPersonaStateContextEnabled(stateContextDefault)
+            setPersonaStateContextProfileDefault(stateContextDefault)
+          }
+        } catch {
+          // profile fetch is optional for route initialization
         }
-      } catch {
-        // profile fetch is optional for route initialization
+        void loadPersonaStateDocs(resolvedPersonaId, { silent: true })
       }
-      void loadPersonaStateDocs(resolvedPersonaId, { silent: true })
 
       const sessionsResp = await tldwClient.fetchWithAuth(
         `/api/v1/persona/sessions?persona_id=${encodeURIComponent(resolvedPersonaId)}&limit=50` as any,
@@ -764,6 +801,7 @@ const SidepanelPersona = () => {
     connecting,
     disconnect,
     handleIncomingPayload,
+    isCompanionMode,
     loadPersonaStateDocs,
     resumeSessionId,
     selectedPersonaId
@@ -969,7 +1007,7 @@ const SidepanelPersona = () => {
         method: "POST",
         body: {
           summary: trimmed,
-          surface: "persona.sidepanel"
+          surface: isCompanionMode ? "companion.conversation" : "persona.sidepanel"
         }
       })
       if (!response.ok) {
@@ -981,7 +1019,13 @@ const SidepanelPersona = () => {
     } finally {
       setSavingCompanionCheckIn(false)
     }
-  }, [appendLog, capabilities?.hasPersonalization, input, savingCompanionCheckIn])
+  }, [
+    appendLog,
+    capabilities?.hasPersonalization,
+    input,
+    isCompanionMode,
+    savingCompanionCheckIn
+  ])
 
   const loadSessionHistory = React.useCallback(async () => {
     if (!sessionId) return
@@ -1049,24 +1093,49 @@ const SidepanelPersona = () => {
     }
   }, [appendLog, connected, sessionId])
 
-  const personaUnsupported = !capsLoading && capabilities && !capabilities.hasPersona
+  const personaUnsupported =
+    !capsLoading &&
+    capabilities &&
+    (!capabilities.hasPersona ||
+      (isCompanionMode && !capabilities.hasPersonalization))
+  const routeHeader =
+    shell === "sidepanel" ? (
+      <div className="sticky bg-surface top-0 z-10">
+        <SidepanelHeaderSimple activeTitle={routeTitle} />
+      </div>
+    ) : (
+      <div className="rounded-lg border border-border bg-surface px-4 py-3">
+        <Typography.Text strong>{routeTitle}</Typography.Text>
+        <Typography.Text type="secondary" className="mt-1 block text-sm">
+          {isCompanionMode
+            ? "A dedicated conversation surface that keeps companion context in the loop."
+            : "Live persona sessions run against your connected tldw server."}
+        </Typography.Text>
+      </div>
+    )
 
   if (!isOnline) {
     return (
       <div
         data-testid="persona-route-root"
-        className="flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
+        className={routeRootClassName}
       >
-        <div className="sticky bg-surface top-0 z-10">
-          <SidepanelHeaderSimple activeTitle="Persona" />
-        </div>
+        {routeHeader}
         <div className="p-4">
           <FeatureEmptyState
-            title={t("sidepanel:persona.connectTitle", "Connect to use Persona")}
-            description={t(
-              "sidepanel:persona.connectDescription",
-              "Persona streaming runs on your tldw server. Connect to a server to start a session."
-            )}
+            title={
+              isCompanionMode
+                ? "Connect to use Companion"
+                : t("sidepanel:persona.connectTitle", "Connect to use Persona")
+            }
+            description={
+              isCompanionMode
+                ? "Companion conversation runs on your tldw server. Connect to start a session."
+                : t(
+                    "sidepanel:persona.connectDescription",
+                    "Persona streaming runs on your tldw server. Connect to a server to start a session."
+                  )
+            }
             primaryActionLabel={t("sidepanel:header.settingsShortLabel", "Settings")}
             onPrimaryAction={() => navigate("/settings")}
           />
@@ -1079,18 +1148,24 @@ const SidepanelPersona = () => {
     return (
       <div
         data-testid="persona-route-root"
-        className="flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
+        className={routeRootClassName}
       >
-        <div className="sticky bg-surface top-0 z-10">
-          <SidepanelHeaderSimple activeTitle="Persona" />
-        </div>
+        {routeHeader}
         <div className="p-4">
           <FeatureEmptyState
-            title={t("sidepanel:persona.unavailableTitle", "Persona unavailable")}
-            description={t(
-              "sidepanel:persona.unavailableDescription",
-              "This server does not currently advertise persona support."
-            )}
+            title={
+              isCompanionMode
+                ? "Companion unavailable"
+                : t("sidepanel:persona.unavailableTitle", "Persona unavailable")
+            }
+            description={
+              isCompanionMode
+                ? "This server does not currently advertise persona support for companion conversation."
+                : t(
+                    "sidepanel:persona.unavailableDescription",
+                    "This server does not currently advertise persona support."
+                  )
+            }
             primaryActionLabel={t("sidepanel:header.settingsShortLabel", "Settings")}
             onPrimaryAction={() => navigate("/settings")}
           />
@@ -1102,27 +1177,27 @@ const SidepanelPersona = () => {
   return (
     <div
       data-testid="persona-route-root"
-      className="flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
+      className={routeRootClassName}
     >
-      <div className="sticky bg-surface top-0 z-10">
-        <SidepanelHeaderSimple activeTitle={t("sidepanel:persona.title", "Persona")} />
-      </div>
+      {routeHeader}
 
       <div className="flex flex-1 flex-col gap-3 p-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Select
-            size="small"
-            className="min-w-[180px]"
-            value={selectedPersonaId}
-            disabled={connected}
-            aria-label={t("sidepanel:persona.select", "Select persona")}
-            onChange={(value) => handlePersonaSelectionChange(String(value))}
-            options={catalog.map((persona) => ({
-              label: persona.name || persona.id,
-              value: persona.id
-            }))}
-            placeholder={t("sidepanel:persona.select", "Select persona")}
-          />
+          {!isCompanionMode ? (
+            <Select
+              size="small"
+              className="min-w-[180px]"
+              value={selectedPersonaId}
+              disabled={connected}
+              aria-label={t("sidepanel:persona.select", "Select persona")}
+              onChange={(value) => handlePersonaSelectionChange(String(value))}
+              options={catalog.map((persona) => ({
+                label: persona.name || persona.id,
+                value: persona.id
+              }))}
+              placeholder={t("sidepanel:persona.select", "Select persona")}
+            />
+          ) : null}
           <Select
             data-testid="persona-resume-session-select"
             size="small"
@@ -1147,30 +1222,36 @@ const SidepanelPersona = () => {
           >
             {t("sidepanel:persona.memoryToggle", "Memory")}
           </Checkbox>
-          <Checkbox
-            data-testid="persona-state-context-toggle"
-            checked={personaStateContextEnabled}
-            onChange={(event) => setPersonaStateContextEnabled(event.target.checked)}
-          >
-            {t("sidepanel:persona.stateContextToggle", "State context")}
-          </Checkbox>
-          <Checkbox
-            data-testid="persona-companion-context-toggle"
-            checked={companionContextEnabled}
-            onChange={(event) => setCompanionContextEnabled(event.target.checked)}
-          >
-            {t("sidepanel:persona.companionContextToggle", "Companion context")}
-          </Checkbox>
-          <Checkbox
-            data-testid="persona-state-context-default-toggle"
-            checked={personaStateContextProfileDefault}
-            disabled={!connected || updatingPersonaStateContextDefault}
-            onChange={(event) => {
-              void updatePersonaStateContextDefault(event.target.checked)
-            }}
-          >
-            {t("sidepanel:persona.stateContextDefaultToggle", "Profile default")}
-          </Checkbox>
+          {!isCompanionMode ? (
+            <Checkbox
+              data-testid="persona-state-context-toggle"
+              checked={personaStateContextEnabled}
+              onChange={(event) => setPersonaStateContextEnabled(event.target.checked)}
+            >
+              {t("sidepanel:persona.stateContextToggle", "State context")}
+            </Checkbox>
+          ) : null}
+          {!isCompanionMode ? (
+            <Checkbox
+              data-testid="persona-companion-context-toggle"
+              checked={companionContextEnabled}
+              onChange={(event) => setCompanionContextEnabled(event.target.checked)}
+            >
+              {t("sidepanel:persona.companionContextToggle", "Companion context")}
+            </Checkbox>
+          ) : null}
+          {!isCompanionMode ? (
+            <Checkbox
+              data-testid="persona-state-context-default-toggle"
+              checked={personaStateContextProfileDefault}
+              disabled={!connected || updatingPersonaStateContextDefault}
+              onChange={(event) => {
+                void updatePersonaStateContextDefault(event.target.checked)
+              }}
+            >
+              {t("sidepanel:persona.stateContextDefaultToggle", "Profile default")}
+            </Checkbox>
+          ) : null}
           <Select
             data-testid="persona-memory-topk-select"
             size="small"
@@ -1313,7 +1394,8 @@ const SidepanelPersona = () => {
           </div>
         ) : null}
 
-        <div className="rounded-lg border border-border bg-surface p-3">
+        {!isCompanionMode ? (
+          <div className="rounded-lg border border-border bg-surface p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Typography.Text strong>
               {t("sidepanel:persona.stateDocs", "Persistent state docs")}
@@ -1505,16 +1587,19 @@ const SidepanelPersona = () => {
               ) : null}
             </>
           ) : null}
-        </div>
+          </div>
+        ) : null}
 
         <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-surface p-3">
           <div className="space-y-2">
             {logs.length === 0 ? (
               <Typography.Text type="secondary" className="text-xs">
-                {t(
-                  "sidepanel:persona.empty",
-                  "Connect to persona and send a message to start."
-                )}
+                {isCompanionMode
+                  ? "Connect to companion and send a message to start."
+                  : t(
+                      "sidepanel:persona.empty",
+                      "Connect to persona and send a message to start."
+                    )}
               </Typography.Text>
             ) : (
               logs.map((entry) => (
@@ -1537,7 +1622,11 @@ const SidepanelPersona = () => {
             value={input}
             autoSize={{ minRows: 2, maxRows: 4 }}
             onChange={(event) => setInput(event.target.value)}
-            placeholder={t("sidepanel:persona.inputPlaceholder", "Ask Persona...")}
+            placeholder={
+              isCompanionMode
+                ? "Ask Companion..."
+                : t("sidepanel:persona.inputPlaceholder", "Ask Persona...")
+            }
             onPressEnter={(event) => {
               if (event.shiftKey) return
               event.preventDefault()

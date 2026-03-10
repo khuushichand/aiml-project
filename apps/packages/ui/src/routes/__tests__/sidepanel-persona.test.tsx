@@ -238,6 +238,19 @@ describe("SidepanelPersona", () => {
     expect(screen.getByText("Persona unavailable")).toBeInTheDocument()
   })
 
+  it("renders a dedicated companion conversation mode", () => {
+    render(<SidepanelPersona mode="companion" />)
+
+    expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Companion")
+    expect(screen.getByPlaceholderText("Ask Companion...")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Select persona")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("persona-companion-context-toggle")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("persona-state-context-toggle")).not.toBeInTheDocument()
+    expect(
+      screen.queryByTestId("persona-state-editor-toggle-button")
+    ).not.toBeInTheDocument()
+  })
+
   it("records the current draft as a companion check-in", async () => {
     mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
       if (path.includes("/api/v1/companion/check-ins")) {
@@ -291,6 +304,60 @@ describe("SidepanelPersona", () => {
     })
     expect(screen.getByText("Saved draft to companion")).toBeInTheDocument()
     expect(screen.getByPlaceholderText("Ask Persona...")).toHaveValue(draft)
+  })
+
+  it("records companion-mode drafts with the companion conversation surface", async () => {
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
+      if (path.includes("/api/v1/companion/check-ins")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "activity-checkin-2",
+            event_type: "companion_check_in_recorded",
+            source_type: "companion_check_in",
+            source_id: "checkin-2",
+            surface: String(init?.body?.surface || "companion.workspace"),
+            tags: [],
+            provenance: {
+              capture_mode: "explicit",
+              route: "/api/v1/companion/check-ins",
+              action: "manual_check_in"
+            },
+            metadata: {
+              summary: String(init?.body?.summary || "")
+            },
+            created_at: "2026-03-10T12:45:00Z"
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona mode="companion" />)
+
+    const draft = "Capture this from the dedicated companion conversation."
+    fireEvent.change(screen.getByPlaceholderText("Ask Companion..."), {
+      target: { value: draft }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save check-in" }))
+
+    await waitFor(() => {
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
+        "/api/v1/companion/check-ins",
+        {
+          method: "POST",
+          body: {
+            summary: draft,
+            surface: "companion.conversation"
+          }
+        }
+      )
+    })
+    expect(screen.getByText("Saved draft to companion")).toBeInTheDocument()
   })
 
   it.each([390, 1280])(

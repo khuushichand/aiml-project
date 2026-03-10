@@ -351,8 +351,12 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
         path === "/review" ||
         path === "/media" ||
         path === "/media-multi"
+      const needsCompanionConversation = path === "/companion/conversation"
       if (needsReview) {
         void ensureI18nNamespaces(["review"])
+      }
+      if (needsCompanionConversation) {
+        void ensureI18nNamespaces(["sidepanel", "common"])
       }
     } else {
       void ensureI18nNamespaces(["sidepanel", "common", "settings", "playground"])

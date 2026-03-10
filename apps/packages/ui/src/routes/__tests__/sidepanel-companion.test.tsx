@@ -1,14 +1,15 @@
 import React from "react"
 import { render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { MemoryRouter } from "react-router-dom"
 
 const mocks = vi.hoisted(() => ({
   isOnline: true,
   capabilitiesState: {
-    capabilities: { hasPersonalization: true },
+    capabilities: { hasPersonalization: true, hasPersona: true },
     loading: false
   } as {
-    capabilities: { hasPersonalization: boolean } | null
+    capabilities: { hasPersonalization: boolean; hasPersona?: boolean } | null
     loading: boolean
   },
   fetchCompanionWorkspaceSnapshot: vi.fn(),
@@ -59,12 +60,19 @@ vi.mock("react-i18next", () => ({
 
 import SidepanelCompanion from "../sidepanel-companion"
 
+const renderRoute = () =>
+  render(
+    <MemoryRouter>
+      <SidepanelCompanion />
+    </MemoryRouter>
+  )
+
 describe("SidepanelCompanion", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.sessionStorage.clear()
     mocks.isOnline = true
-    mocks.capabilitiesState.capabilities = { hasPersonalization: true }
+    mocks.capabilitiesState.capabilities = { hasPersonalization: true, hasPersona: true }
     mocks.capabilitiesState.loading = false
     mocks.fetchCompanionWorkspaceSnapshot.mockResolvedValue({
       activity: [],
@@ -98,8 +106,8 @@ describe("SidepanelCompanion", () => {
   })
 
   it("shows unavailable state when personalization capability is missing", () => {
-    mocks.capabilitiesState.capabilities = { hasPersonalization: false }
-    render(<SidepanelCompanion />)
+    mocks.capabilitiesState.capabilities = { hasPersonalization: false, hasPersona: true }
+    renderRoute()
 
     expect(screen.getByText("Companion unavailable")).toBeInTheDocument()
   })
@@ -116,7 +124,7 @@ describe("SidepanelCompanion", () => {
       })
     )
 
-    render(<SidepanelCompanion />)
+    renderRoute()
 
     await waitFor(() => {
       expect(mocks.recordExplicitCompanionCapture).toHaveBeenCalledWith(
@@ -138,5 +146,17 @@ describe("SidepanelCompanion", () => {
         })
       )
     })
+  })
+
+  it("offers the companion conversation route and hides option-only navigation links", async () => {
+    renderRoute()
+
+    await screen.findByTestId("companion-page")
+    expect(screen.getByRole("link", { name: "Open conversation" })).toHaveAttribute(
+      "href",
+      "/companion/conversation"
+    )
+    expect(screen.queryByRole("link", { name: "Open collections" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Open watchlists" })).not.toBeInTheDocument()
   })
 })

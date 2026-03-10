@@ -21,4 +21,9 @@ describe("sidepanel route registry companion parity", () => {
   it("registers a dedicated companion sidepanel route", () => {
     expect(routeRegistrySource).toMatch(/path:\s*"\/companion"/)
   })
+
+  it("registers the companion conversation route in both option and sidepanel shells", () => {
+    const matches = routeRegistrySource.match(/path:\s*"\/companion\/conversation"/g) ?? []
+    expect(matches).toHaveLength(2)
+  })
 })

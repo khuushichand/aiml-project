@@ -72,7 +72,11 @@ const reflectionInboxLabel = (
   return linkedNotification.read_at ? "In inbox" : "New in inbox"
 }
 
-export const CompanionPage = () => {
+type CompanionPageProps = {
+  surface?: "options" | "sidepanel"
+}
+
+export const CompanionPage = ({ surface = "options" }: CompanionPageProps) => {
   const { t } = useTranslation(["option", "common"])
   const isOnline = useServerOnline()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
@@ -246,6 +250,7 @@ export const CompanionPage = () => {
   const knowledge = snapshot?.knowledge ?? []
   const goals = snapshot?.goals ?? []
   const reflections = snapshot?.reflections ?? []
+  const showAdjacentLinks = surface === "options"
 
   return (
     <section className="mx-auto max-w-7xl px-6 py-8" data-testid="companion-page">
@@ -272,24 +277,28 @@ export const CompanionPage = () => {
             >
               Refresh
             </button>
-            <Link
-              className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"
-              to="/collections"
-            >
-              Open collections
-            </Link>
-            <Link
-              className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"
-              to="/watchlists"
-            >
-              Open watchlists
-            </Link>
+            {showAdjacentLinks ? (
+              <Link
+                className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"
+                to="/collections"
+              >
+                Open collections
+              </Link>
+            ) : null}
+            {showAdjacentLinks ? (
+              <Link
+                className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"
+                to="/watchlists"
+              >
+                Open watchlists
+              </Link>
+            ) : null}
             {capabilities?.hasPersona ? (
               <Link
                 className="rounded-full border border-slate-900 bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-                to="/persona"
+                to="/companion/conversation"
               >
-                Open persona
+                Open conversation
               </Link>
             ) : null}
           </div>

@@ -6,7 +6,7 @@ export default function OptionCompanion() {
   return (
     <RouteErrorBoundary routeId="companion" routeLabel="Companion">
       <OptionLayout>
-        <CompanionPage />
+        <CompanionPage surface="options" />
       </OptionLayout>
     </RouteErrorBoundary>
   )
