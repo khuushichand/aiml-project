@@ -2,7 +2,7 @@
 #
 # Imports
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -41,6 +41,19 @@ class PromptBase(BaseModel):
     details: Optional[str] = Field(None, max_length=4000, description="Detailed description or notes about the prompt.")
     system_prompt: Optional[str] = Field(None, max_length=20000, description="The system part of the prompt.")
     user_prompt: Optional[str] = Field(None, max_length=20000, description="The user part of the prompt.")
+    prompt_format: Literal["legacy", "structured"] = Field(
+        "legacy",
+        description="Whether the prompt is stored as legacy text fields or a structured definition.",
+    )
+    prompt_schema_version: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Structured prompt schema version when prompt_format is 'structured'.",
+    )
+    prompt_definition: Optional[dict[str, Any]] = Field(
+        None,
+        description="Structured prompt definition when prompt_format is 'structured'.",
+    )
 
 
 class PromptCreate(PromptBase):
