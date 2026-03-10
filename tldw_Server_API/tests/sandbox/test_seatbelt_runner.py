@@ -146,6 +146,68 @@ def test_seatbelt_start_run_executes_real_subprocess_and_collects_artifacts(monk
     assert not run_root.exists()
 
 
+def test_seatbelt_start_run_times_out_and_cleans_up(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("TLDW_SANDBOX_SEATBELT_FAKE_EXEC", raising=False)
+    monkeypatch.setattr(seatbelt_module, "_sandbox_exec_exists", lambda: True)
+
+    run_root = tmp_path / "seatbelt-timeout-run"
+    run_root.mkdir()
+    workspace_root = run_root / "workspace"
+
+    monkeypatch.setattr(seatbelt_module.tempfile, "mkdtemp", lambda prefix: str(run_root))
+    killpg_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(seatbelt_module.os, "killpg", lambda pid, sig: killpg_calls.append((pid, sig)))
+
+    class _TimeoutPopen:
+        def __init__(self, argv, cwd=None, env=None, stdout=None, stderr=None, stdin=None, start_new_session=None):
+            del argv, env, stdout, stderr, stdin, start_new_session
+            assert cwd == str(workspace_root)
+            self.pid = 2121
+            self.returncode = None
+
+        def communicate(self, timeout=None):
+            raise seatbelt_module.subprocess.TimeoutExpired(
+                cmd=["/usr/bin/sandbox-exec"],
+                timeout=timeout,
+                output=b"partial-stdout\n",
+                stderr=b"partial-stderr\n",
+            )
+
+        def wait(self, timeout=None):
+            del timeout
+            return 0
+
+    monkeypatch.setattr(seatbelt_module.subprocess, "Popen", _TimeoutPopen)
+
+    runner = SeatbeltRunner()
+    run_id = "run-seatbelt-timeout-1"
+    hub = get_hub()
+    hub._buffers.pop(run_id, None)  # type: ignore[attr-defined]
+
+    status = runner.start_run(
+        run_id=run_id,
+        spec=RunSpec(
+            session_id=None,
+            runtime=RuntimeType.seatbelt,
+            base_image="host-local",
+            command=["/bin/echo", "ok"],
+            network_policy="deny_all",
+            trust_level=TrustLevel.trusted,
+            timeout_sec=3,
+        ),
+        session_workspace=None,
+    )
+
+    assert status.phase == RunPhase.timed_out
+    assert status.message == "execution_timeout"
+    frames = list(hub._buffers.get(run_id, []))  # type: ignore[attr-defined]
+    assert any(frame.get("type") == "stdout" and "partial-stdout" in frame.get("data", "") for frame in frames)
+    assert any(frame.get("type") == "stderr" and "partial-stderr" in frame.get("data", "") for frame in frames)
+    assert any(frame.get("type") == "event" and frame.get("event") == "end" and frame.get("data", {}).get("reason") == "execution_timeout" for frame in frames)
+    assert killpg_calls == [(2121, seatbelt_module.signal.SIGTERM)]
+    assert not run_root.exists()
+
+
 def test_seatbelt_runner_docstring_covers_constraints() -> None:
     doc = SeatbeltRunner.__doc__ or ""
 
