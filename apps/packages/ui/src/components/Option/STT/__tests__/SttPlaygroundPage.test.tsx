@@ -74,7 +74,11 @@ vi.mock("@/hooks/useAntdNotification", () => ({
 }))
 
 vi.mock("@/utils/request-timeout", () => ({
-  isTimeoutLikeError: isTimeoutLikeErrorMock
+  isTimeoutLikeError: (error: unknown) => {
+    const message =
+      error instanceof Error ? `${error.name} ${error.message}` : String(error ?? "")
+    return /timeout|timed out/i.test(message)
+  }
 }))
 
 // Mock the sub-components to keep tests focused

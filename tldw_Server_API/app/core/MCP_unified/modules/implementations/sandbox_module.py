@@ -125,35 +125,6 @@ class SandboxModule(BaseModule):
                 raise ValueError("session_not_found")
             if not self._is_admin(context) and str(owner) != user_id:
                 raise PermissionError("sandbox.run session not found")
-            session = self._svc.get_session(session_id)
-            if session is None:
-                raise ValueError("session_not_found")
-            if "runtime" not in args and session.runtime is not None:
-                runtime = session.runtime
-            if "base_image" not in args and session.base_image:
-                base_image = session.base_image
-            if "env" not in args:
-                env = dict(session.env or {})
-            if "timeout_sec" not in args and session.timeout_sec is not None:
-                timeout = int(session.timeout_sec)
-            if "cpu" not in args and session.cpu_limit is not None:
-                cpu = float(session.cpu_limit)
-            if "memory_mb" not in args and session.memory_mb is not None:
-                memory_mb = int(session.memory_mb)
-            if "network_policy" not in args and session.network_policy:
-                network_policy = str(session.network_policy)
-            if "trust_level" not in args and session.trust_level is not None:
-                trust_level = session.trust_level
-            if "persona_id" not in args and session.persona_id is not None:
-                persona_id = str(session.persona_id)
-            if "workspace_id" not in args and session.workspace_id is not None:
-                workspace_id = str(session.workspace_id)
-            if "workspace_group_id" not in args and session.workspace_group_id is not None:
-                workspace_group_id = str(session.workspace_group_id)
-            if "scope_snapshot_id" not in args and session.scope_snapshot_id is not None:
-                scope_snapshot_id = str(session.scope_snapshot_id)
-            if not base_image:
-                raise ValueError("session-backed runs require a base_image")
 
         files_inline = self._decode_inline_files(args.get("files") or [])
         command = [str(x) for x in (args.get("command") or [])]
@@ -190,6 +161,7 @@ class SandboxModule(BaseModule):
                 spec_version=spec_version,
                 idem_key=idem_key,
                 raw_body=args,
+                explicit_fields={str(key) for key in args.keys()},
             )
         except Exception as e:
             raise RuntimeError(f"Sandbox execution failed: {e}") from e

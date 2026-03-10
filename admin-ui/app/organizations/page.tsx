@@ -21,9 +21,14 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Form, FormField } from '@/components/ui/form';
 import { Plus, Eye, Search, BookmarkPlus, BookmarkX, Pencil, Trash2 } from 'lucide-react';
-import { Organization, Subscription, PlanTier } from '@/types';
+import { Organization } from '@/types';
 import { api } from '@/lib/api-client';
-import { isBillingEnabled } from '@/lib/billing';
+import {
+  EMPTY_BILLING_CELL_PLACEHOLDER,
+  fetchOrganizationPlanMap,
+  isBillingEnabled,
+  type OrganizationPlanMap,
+} from '@/lib/billing';
 import { PlanBadge } from '@/components/PlanBadge';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import Link from 'next/link';
@@ -62,7 +67,7 @@ function OrganizationsPageContent() {
   const [updatingOrganization, setUpdatingOrganization] = useState(false);
   const [deletingOrganizationId, setDeletingOrganizationId] = useState<number | null>(null);
   const [totalItems, setTotalItems] = useState(0);
-  const [orgPlans, setOrgPlans] = useState<Record<number, { tier: PlanTier; status: string }>>({});
+  const [orgPlans, setOrgPlans] = useState<OrganizationPlanMap>({});
   const [slugTouched, setSlugTouched] = useState(false);
   const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
   const [savedViews, setSavedViews] = useState<SavedOrgView[]>([]);
@@ -587,7 +592,7 @@ function OrganizationsPageContent() {
                             )}
                             {isBillingEnabled() && (
                               <TableCell className="capitalize text-sm">
-                                {orgPlans[org.id]?.status ?? '\u2014'}
+                                {orgPlans[org.id]?.status ?? EMPTY_BILLING_CELL_PLACEHOLDER}
                               </TableCell>
                             )}
                             <TableCell className="text-right">
