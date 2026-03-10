@@ -732,11 +732,23 @@ class ACPSessionsDB:
 
         conn.execute(
             """
-            INSERT OR REPLACE INTO agent_registry (
+            INSERT INTO agent_registry (
                 agent_type, name, description, command, args, env,
                 requires_api_key, is_default, install_instructions, docs_url,
                 source, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(agent_type) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                command = excluded.command,
+                args = excluded.args,
+                env = excluded.env,
+                requires_api_key = excluded.requires_api_key,
+                is_default = excluded.is_default,
+                install_instructions = excluded.install_instructions,
+                docs_url = excluded.docs_url,
+                source = excluded.source,
+                updated_at = excluded.updated_at
             """,
             (
                 agent_type, name, description, command, args, env,

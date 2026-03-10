@@ -208,11 +208,11 @@ class AgentRegistry:
 
         API-registered entries override YAML entries with the same type.
         """
-        if not self._entries:
-            self.load()
-        else:
-            self._maybe_reload()
         with self._lock:
+            if not self._entries:
+                self.load()
+            else:
+                self._maybe_reload()
             api_types = {e.type for e in self._api_entries}
             merged = [e for e in self._entries if e.type not in api_types]
             merged.extend(self._api_entries)
@@ -287,9 +287,14 @@ class AgentRegistry:
             before = len(self._api_entries)
             self._api_entries = [e for e in self._api_entries if e.type != agent_type]
             removed = len(self._api_entries) < before
-            if self._db is not None:
+            if removed and self._db is not None:
                 self._db.delete_agent_entry(agent_type)
             return removed
+
+    _UPDATABLE_FIELDS = frozenset({
+        "name", "description", "command", "args", "env",
+        "requires_api_key", "install_instructions", "docs_url",
+    })
 
     def update_agent(self, agent_type: str, **kwargs: Any) -> AgentRegistryEntry | None:
         """Update fields on an existing dynamic agent entry."""
@@ -302,7 +307,7 @@ class AgentRegistry:
             if existing is None:
                 return None
             for key, value in kwargs.items():
-                if hasattr(existing, key) and key != "type":
+                if key in self._UPDATABLE_FIELDS:
                     setattr(existing, key, value)
             if self._db is not None:
                 self._db.save_agent_entry({
@@ -329,3 +334,14 @@ def get_agent_registry() -> AgentRegistry:
     if _registry is None:
         _registry = AgentRegistry()
     return _registry
+
+
+def set_registry_db(db: Any) -> None:
+    """Wire the singleton registry with a DB backend for persistence.
+
+    Call this once at application startup (e.g., in ``main.py`` or router init)
+    after the ``ACPSessionsDB`` instance is available.
+    """
+    registry = get_agent_registry()
+    registry._db = db
+    registry._load_api_entries()
