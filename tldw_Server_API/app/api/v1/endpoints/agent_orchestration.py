@@ -18,6 +18,10 @@ from tldw_Server_API.app.core.Agent_Orchestration.orchestration_service import (
     CycleDependencyError,
     get_orchestration_db,
 )
+from tldw_Server_API.app.core.DB_Management.Orchestration_DB import (
+    InvalidTransitionError,
+    OrchestrationNotFoundError,
+)
 
 router = APIRouter(prefix="/agent-orchestration", tags=["agent-orchestration"])
 
@@ -226,6 +230,8 @@ async def create_task(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
+    except OrchestrationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return TaskResponse(**task.to_dict())
@@ -311,7 +317,7 @@ async def dispatch_run(
     # Transition to in_progress
     try:
         await _run_sync(lambda: db.transition_task(task_id, TaskStatus.IN_PROGRESS))
-    except ValueError as exc:
+    except (InvalidTransitionError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Create ACP session with quota check, session-store registration, and audit
@@ -435,6 +441,8 @@ async def submit_review(
         raise HTTPException(status_code=404, detail="Task not found")
     try:
         updated = await _run_sync(lambda: db.submit_review(task_id, payload.approved, payload.feedback))
-    except ValueError as exc:
+    except OrchestrationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (InvalidTransitionError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return TaskResponse(**updated.to_dict())

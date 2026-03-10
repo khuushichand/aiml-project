@@ -23,6 +23,19 @@ from tldw_Server_API.app.core.Agent_Orchestration.models import (
     is_valid_transition,
 )
 
+# ---------------------------------------------------------------------------
+# Custom exceptions
+# ---------------------------------------------------------------------------
+
+
+class OrchestrationNotFoundError(ValueError):
+    """Raised when a project, task, or run is not found."""
+
+
+class InvalidTransitionError(ValueError):
+    """Raised when a task state transition is not allowed."""
+
+
 _SCHEMA_VERSION = 1
 
 _SCHEMA_SQL = """\
@@ -263,12 +276,12 @@ class OrchestrationDB:
 
         # Validate project exists
         if conn.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone() is None:
-            raise ValueError(f"Project {project_id} not found")
+            raise OrchestrationNotFoundError(f"Project {project_id} not found")
 
         # Validate dependency exists
         if dependency_id is not None:
             if conn.execute("SELECT 1 FROM tasks WHERE id = ?", (dependency_id,)).fetchone() is None:
-                raise ValueError(f"Dependency task {dependency_id} not found")
+                raise OrchestrationNotFoundError(f"Dependency task {dependency_id} not found")
             # Cycle detection is not meaningful at creation since the new task
             # doesn't have an id yet, but we keep the helper for potential
             # future use when updating dependencies.
@@ -337,11 +350,11 @@ class OrchestrationDB:
         conn = self._get_conn()
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if row is None:
-            raise ValueError(f"Task {task_id} not found")
+            raise OrchestrationNotFoundError(f"Task {task_id} not found")
 
         current = TaskStatus(row["status"])
         if not is_valid_transition(current, new_status):
-            raise ValueError(
+            raise InvalidTransitionError(
                 f"Invalid transition from {current.value} to {new_status.value}"
             )
 
@@ -361,7 +374,7 @@ class OrchestrationDB:
             "SELECT dependency_id FROM tasks WHERE id = ?", (task_id,),
         ).fetchone()
         if row is None:
-            raise ValueError(f"Task {task_id} not found")
+            raise OrchestrationNotFoundError(f"Task {task_id} not found")
         dep_id = row["dependency_id"]
         if dep_id is None:
             return True
@@ -477,9 +490,9 @@ class OrchestrationDB:
         conn = self._get_conn()
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if row is None:
-            raise ValueError(f"Task {task_id} not found")
+            raise OrchestrationNotFoundError(f"Task {task_id} not found")
         if TaskStatus(row["status"]) != TaskStatus.REVIEW:
-            raise ValueError(f"Task {task_id} is not in review status")
+            raise InvalidTransitionError(f"Task {task_id} is not in review status")
 
         now = _now_iso()
         new_review_count = row["review_count"] + 1
