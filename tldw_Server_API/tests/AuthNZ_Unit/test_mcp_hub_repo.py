@@ -371,5 +371,29 @@ async def test_repo_can_crud_approval_policy_and_match_active_decision(tmp_path,
     )
     assert consumed_again is None
 
+    wildcard_candidate = await repo.create_approval_decision(
+        approval_policy_id=int(policy["id"]),
+        context_key="user:7|persona:researcher",
+        conversation_id=None,
+        tool_name="Bash",
+        scope_key="tool:Bash|command:git-status",
+        decision="approved",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        consume_on_match=False,
+        actor_id=7,
+    )
+    assert wildcard_candidate["conversation_id"] is None
+
+    should_not_match_foreign_conversation = await repo.find_active_approval_decision(
+        approval_policy_id=int(policy["id"]),
+        context_key="user:7|persona:researcher",
+        conversation_id="sess-2",
+        tool_name="Bash",
+        scope_key="tool:Bash|command:git-status",
+        decision="approved",
+        now=datetime.now(timezone.utc),
+    )
+    assert should_not_match_foreign_conversation is None
+
     deleted = await repo.delete_approval_policy(int(policy["id"]))
     assert deleted is True

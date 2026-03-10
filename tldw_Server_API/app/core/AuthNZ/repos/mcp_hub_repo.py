@@ -1047,7 +1047,6 @@ class McpHubRepo:
               AND (
                 (? IS NULL AND conversation_id IS NULL)
                 OR conversation_id = ?
-                OR conversation_id IS NULL
               )
               AND tool_name = ?
               AND scope_key = ?
@@ -1110,7 +1109,6 @@ class McpHubRepo:
                       AND (
                         ($3::TEXT IS NULL AND conversation_id IS NULL)
                         OR conversation_id = $3
-                        OR conversation_id IS NULL
                       )
                       AND tool_name = $4
                       AND scope_key = $5
@@ -1162,7 +1160,6 @@ class McpHubRepo:
                   AND (
                     (? IS NULL AND conversation_id IS NULL)
                     OR conversation_id = ?
-                    OR conversation_id IS NULL
                   )
                   AND tool_name = ?
                   AND scope_key = ?

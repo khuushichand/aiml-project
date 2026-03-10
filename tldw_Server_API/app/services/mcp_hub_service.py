@@ -293,6 +293,10 @@ class McpHubService:
             owner_scope_id=owner_scope_id,
         )
 
+    async def get_approval_policy(self, approval_policy_id: int) -> dict[str, Any] | None:
+        """Fetch a single approval policy by id."""
+        return await self.repo.get_approval_policy(approval_policy_id)
+
     async def update_approval_policy(
         self,
         approval_policy_id: int,

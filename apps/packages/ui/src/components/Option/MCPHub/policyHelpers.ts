@@ -1,4 +1,5 @@
 import type {
+  McpHubApprovalDuration,
   McpHubApprovalMode,
   McpHubAssignmentTargetType,
   McpHubPermissionPolicyDocument,
@@ -30,6 +31,15 @@ export const MCP_HUB_APPROVAL_MODE_OPTIONS: Array<{ label: string; value: McpHub
   { label: "Ask outside profile", value: "ask_outside_profile" },
   { label: "Ask on sensitive actions", value: "ask_on_sensitive_actions" },
   { label: "Temporary elevation", value: "temporary_elevation_allowed" }
+]
+
+export const MCP_HUB_APPROVAL_DURATION_OPTIONS: Array<{
+  label: string
+  value: McpHubApprovalDuration
+}> = [
+  { label: "Once", value: "once" },
+  { label: "Session", value: "session" },
+  { label: "Conversation", value: "conversation" }
 ]
 
 export const MCP_HUB_CAPABILITY_OPTIONS = [

@@ -481,7 +481,8 @@ describe("SidepanelPersona", () => {
             tool_name: init?.body?.tool_name,
             scope_key: init?.body?.scope_key,
             decision: init?.body?.decision,
-            expires_at: init?.body?.expires_at ?? null
+            consume_on_match: init?.body?.duration === "once",
+            expires_at: init?.body?.duration === "session" ? "2099-01-01T00:00:00Z" : null
           })
         })
       }
@@ -547,8 +548,7 @@ describe("SidepanelPersona", () => {
               approval_policy_id?: number
               tool_name?: string
               decision?: string
-              consume_on_match?: boolean
-              expires_at?: string | null
+              duration?: string
             }
           }
         )?.body
@@ -556,17 +556,8 @@ describe("SidepanelPersona", () => {
         approval_policy_id: 17,
         tool_name: "knowledge.search",
         decision: "approved",
-        consume_on_match: true,
+        duration: "once",
       })
-      expect(
-        (
-          approvalCall?.[1] as {
-            body?: {
-              expires_at?: string | null
-            }
-          }
-        )?.body?.expires_at ?? null
-      ).toBeNull()
       const sentPayloads = getSentPayloads(ws)
       expect(
         sentPayloads.some(
@@ -616,7 +607,8 @@ describe("SidepanelPersona", () => {
             tool_name: init?.body?.tool_name,
             scope_key: init?.body?.scope_key,
             decision: init?.body?.decision,
-            expires_at: init?.body?.expires_at ?? null
+            consume_on_match: false,
+            expires_at: null
           })
         })
       }
@@ -677,14 +669,12 @@ describe("SidepanelPersona", () => {
         approvalCall?.[1] as {
           body?: {
             decision?: string
-            consume_on_match?: boolean
-            expires_at?: string | null
+            duration?: string
           }
         }
       )?.body
       expect(body?.decision).toBe("denied")
-      expect(body?.consume_on_match ?? false).toBe(false)
-      expect(body?.expires_at ?? null).toBeNull()
+      expect(body?.duration).toBe("once")
       const sentPayloads = getSentPayloads(ws)
       expect(sentPayloads.some((payload) => payload.type === "retry_tool_call")).toBe(false)
     })

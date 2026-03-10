@@ -67,6 +67,8 @@ type PersonaRuntimeApprovalPayload = {
   arguments_summary?: Record<string, unknown>
 }
 
+type PersonaRuntimeApprovalDuration = "once" | "session" | "conversation"
+
 type PersonaRuntimeApprovalRequest = {
   key: string
   approval_policy_id?: number | null
@@ -76,9 +78,9 @@ type PersonaRuntimeApprovalRequest = {
   conversation_id?: string | null
   scope_key: string
   reason?: string | null
-  duration_options: string[]
+  duration_options: PersonaRuntimeApprovalDuration[]
   arguments_summary: Record<string, unknown>
-  selected_duration: string
+  selected_duration: PersonaRuntimeApprovalDuration
   session_id?: string | null
   plan_id?: string | null
   step_idx?: number
@@ -163,15 +165,18 @@ const _approvalRequestKey = (
 const _approvalDecisionPayload = (
   decision: "approved" | "denied",
   duration: string
-): { consume_on_match: boolean; expires_at: string | null } => {
-  if (decision !== "approved") {
-    return { consume_on_match: false, expires_at: null }
-  }
+): { duration: PersonaRuntimeApprovalDuration } => {
   const normalized = String(duration || "").trim().toLowerCase()
-  if (normalized === "once") {
-    return { consume_on_match: true, expires_at: null }
+  if (decision !== "approved") {
+    return { duration: "once" }
   }
-  return { consume_on_match: false, expires_at: null }
+  if (normalized === "conversation") {
+    return { duration: "conversation" }
+  }
+  if (normalized === "session") {
+    return { duration: "session" }
+  }
+  return { duration: "once" }
 }
 
 const _readBoolPreference = (key: string, fallback: boolean): boolean => {
@@ -457,7 +462,10 @@ const SidepanelPersona = () => {
           const durationOptions = Array.isArray(approvalPayload.duration_options)
             ? approvalPayload.duration_options
                 .map((entry) => String(entry || "").trim())
-                .filter(Boolean)
+                .filter(
+                  (entry): entry is PersonaRuntimeApprovalDuration =>
+                    entry === "once" || entry === "session" || entry === "conversation"
+                )
             : []
           const request: PersonaRuntimeApprovalRequest = {
             key: _approvalRequestKey(
@@ -1126,15 +1134,18 @@ const SidepanelPersona = () => {
     }
   }, [appendLog, connected, sessionId])
 
-  const updateApprovalDuration = React.useCallback((approvalKey: string, duration: string) => {
+  const updateApprovalDuration = React.useCallback(
+    (approvalKey: string, duration: PersonaRuntimeApprovalDuration) => {
     setPendingApprovals((prev) =>
       prev.map((approval) =>
         approval.key === approvalKey
-          ? { ...approval, selected_duration: String(duration || "once") }
+          ? { ...approval, selected_duration: duration }
           : approval
       )
     )
-  }, [])
+    },
+    []
+  )
 
   const submitApprovalDecision = React.useCallback(
     async (
@@ -1156,8 +1167,7 @@ const SidepanelPersona = () => {
               tool_name: approval.tool_name,
               scope_key: approval.scope_key,
               decision,
-              consume_on_match: approvalDecision.consume_on_match,
-              expires_at: approvalDecision.expires_at
+              duration: approvalDecision.duration
             }
           }
         )
@@ -1396,7 +1406,10 @@ const SidepanelPersona = () => {
                         value={approval.selected_duration}
                         disabled={isSubmitting}
                         onChange={(event) =>
-                          updateApprovalDuration(approval.key, event.target.value)
+                          updateApprovalDuration(
+                            approval.key,
+                            event.target.value as PersonaRuntimeApprovalDuration
+                          )
                         }
                       >
                         {approval.duration_options.map((option) => (

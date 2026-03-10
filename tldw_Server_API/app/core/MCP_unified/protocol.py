@@ -1639,8 +1639,15 @@ class MCPProtocol:
                 metadata=metadata,
             )
         except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Failed to resolve MCP Hub effective policy: {}", exc)
-            policy = None
+            logger.warning("Failed to resolve MCP Hub effective policy: {}", exc)
+            policy = {
+                "enabled": True,
+                "allowed_tools": [],
+                "denied_tools": [],
+                "capabilities": [],
+                "sources": [],
+                "resolution_error": "policy_resolution_failed",
+            }
         if policy is not None:
             metadata["_mcp_effective_tool_policy"] = policy
         return policy
@@ -1653,6 +1660,8 @@ class MCPProtocol:
     ) -> bool:
         if not isinstance(policy, dict) or not bool(policy.get("enabled", False)):
             return True
+        if str(policy.get("resolution_error") or "").strip():
+            return False
         denied_tools = [
             str(pattern).strip()
             for pattern in (policy.get("denied_tools") or [])
@@ -1683,6 +1692,8 @@ class MCPProtocol:
         policy = dict(effective_policy or {})
         if not bool(policy.get("enabled", False)):
             return {"status": "allow", "reason": "policy_disabled"}
+        if str(policy.get("resolution_error") or "").strip():
+            return {"status": "deny", "reason": "policy_unavailable"}
         try:
             from tldw_Server_API.app.services.mcp_hub_approval_service import (
                 get_mcp_hub_approval_service,

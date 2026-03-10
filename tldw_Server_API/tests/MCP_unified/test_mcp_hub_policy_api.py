@@ -194,6 +194,12 @@ class _FakePolicyService:
         self.approval_policies = [policy]
         return policy
 
+    async def get_approval_policy(self, approval_policy_id: int):
+        for policy in self.approval_policies:
+            if int(policy.get("id") or 0) == int(approval_policy_id):
+                return dict(policy)
+        return None
+
     async def update_approval_policy(self, approval_policy_id: int, **kwargs):
         if approval_policy_id != 17:
             return None
@@ -264,7 +270,9 @@ class _FakePolicyResolver:
 def _build_app(
     principal: AuthPrincipal,
     service: _FakePolicyService | None = None,
-    resolver: _FakePolicyResolver | None = None
+    resolver: _FakePolicyResolver | None = None,
+    *,
+    rate_limit_calls: list[str] | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(mcp_hub_management.router, prefix="/api/v1")
@@ -277,6 +285,11 @@ def _build_app(
     app.dependency_overrides[mcp_hub_management.get_mcp_hub_policy_resolver_dep] = (
         lambda: resolver or _FakePolicyResolver()
     )
+    if rate_limit_calls is not None:
+        async def _fake_check_rate_limit(_request: Request) -> None:
+            rate_limit_calls.append("called")
+
+        app.dependency_overrides[mcp_hub_management.check_rate_limit] = _fake_check_rate_limit
     return app
 
 
@@ -303,6 +316,31 @@ def test_create_permission_profile_requires_grant_authority_for_capabilities() -
 
     assert resp.status_code == 403
     assert "grant.process.execute" in resp.json()["detail"]
+
+
+def test_create_permission_profile_requires_grant_authority_for_allowed_tools() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/permission-profiles",
+            json={
+                "name": "Git Only",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "mode": "custom",
+                "policy_document": {"allowed_tools": ["Bash(git *)"]},
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 403
+    assert "grant.tool.invoke" in resp.json()["detail"]
 
 
 def test_create_permission_profile_returns_created_payload_when_grant_is_present() -> None:
@@ -391,6 +429,31 @@ def test_create_approval_policy_returns_created_payload() -> None:
     assert payload["rules"]["duration_options"] == ["once", "session"]
 
 
+def test_create_approval_policy_rejects_unsupported_duration_option() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/approval-policies",
+            json={
+                "name": "Invalid Durations",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "mode": "ask_outside_profile",
+                "rules": {"duration_options": ["forever"]},
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 422
+    assert "duration_options" in resp.json()["detail"]
+
+
 def test_record_approval_decision_returns_created_payload() -> None:
     app = _build_app(
         _make_principal(
@@ -409,7 +472,7 @@ def test_record_approval_decision_returns_created_payload() -> None:
                 "tool_name": "Bash",
                 "scope_key": "tool:Bash|command:abc123",
                 "decision": "approved",
-                "consume_on_match": True,
+                "duration": "once",
             },
         )
 
@@ -419,6 +482,85 @@ def test_record_approval_decision_returns_created_payload() -> None:
     assert payload["context_key"] == "user:7|group:|persona:researcher"
     assert payload["decision"] == "approved"
     assert payload["consume_on_match"] is True
+
+
+def test_record_approval_decision_for_session_duration_sets_server_side_expiry() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/approval-decisions",
+            json={
+                "approval_policy_id": 17,
+                "context_key": "user:7|group:|persona:researcher",
+                "conversation_id": "sess-1",
+                "tool_name": "Bash",
+                "scope_key": "tool:Bash|command:abc123",
+                "decision": "approved",
+                "duration": "session",
+            },
+        )
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    assert payload["consume_on_match"] is False
+    assert payload["expires_at"] is not None
+
+
+def test_record_approval_decision_rejects_duration_not_allowed_by_policy() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/approval-decisions",
+            json={
+                "approval_policy_id": 17,
+                "context_key": "user:7|group:|persona:researcher",
+                "conversation_id": "sess-1",
+                "tool_name": "Bash",
+                "scope_key": "tool:Bash|command:abc123",
+                "decision": "approved",
+                "duration": "conversation",
+            },
+        )
+
+    assert resp.status_code == 422
+    assert "duration" in resp.json()["detail"]
+
+
+def test_record_approval_decision_rejects_scoped_duration_without_conversation_id() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/approval-decisions",
+            json={
+                "approval_policy_id": 17,
+                "context_key": "user:7|group:|persona:researcher",
+                "tool_name": "Bash",
+                "scope_key": "tool:Bash|command:abc123",
+                "decision": "approved",
+                "duration": "session",
+            },
+        )
+
+    assert resp.status_code == 422
+    assert "conversation_id" in resp.json()["detail"]
 
 
 def test_record_approval_decision_rejects_foreign_context_key() -> None:
@@ -439,6 +581,7 @@ def test_record_approval_decision_rejects_foreign_context_key() -> None:
                 "tool_name": "Bash",
                 "scope_key": "tool:Bash|command:abc123",
                 "decision": "approved",
+                "duration": "once",
             },
         )
 
@@ -573,3 +716,19 @@ def test_delete_policy_assignment_returns_ok() -> None:
 
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
+
+
+def test_mcp_hub_routes_apply_rate_limit_dependency() -> None:
+    rate_limit_calls: list[str] = []
+    app = _build_app(
+        _make_principal(
+            permissions=[SYSTEM_CONFIGURE, "grant.process.execute"],
+        ),
+        rate_limit_calls=rate_limit_calls,
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/permission-profiles")
+
+    assert resp.status_code == 200
+    assert rate_limit_calls == ["called"]

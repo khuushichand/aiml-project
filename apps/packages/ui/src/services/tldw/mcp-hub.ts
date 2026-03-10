@@ -11,6 +11,7 @@ export type McpHubApprovalMode =
   | "ask_on_sensitive_actions"
   | "temporary_elevation_allowed"
 export type McpHubApprovalDecision = "approved" | "denied"
+export type McpHubApprovalDuration = "once" | "session" | "conversation"
 
 export type McpHubProfile = {
   id: number
@@ -168,8 +169,7 @@ export type McpHubApprovalDecisionCreateInput = {
   tool_name: string
   scope_key: string
   decision: McpHubApprovalDecision
-  consume_on_match?: boolean
-  expires_at?: string | null
+  duration: McpHubApprovalDuration
 }
 
 export type McpHubApprovalDecisionResponse = {

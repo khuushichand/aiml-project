@@ -16,6 +16,7 @@ ApprovalMode = Literal[
     "temporary_elevation_allowed",
 ]
 ApprovalDecision = Literal["approved", "denied"]
+ApprovalDuration = Literal["once", "session", "conversation"]
 
 
 class ACPProfileCreateRequest(BaseModel):
@@ -165,8 +166,7 @@ class ApprovalDecisionCreateRequest(BaseModel):
     tool_name: str = Field(..., min_length=1, max_length=255)
     scope_key: str = Field(..., min_length=1, max_length=255)
     decision: ApprovalDecision
-    consume_on_match: bool = False
-    expires_at: datetime | str | None = None
+    duration: ApprovalDuration = "once"
 
 
 class ApprovalDecisionResponse(BaseModel):

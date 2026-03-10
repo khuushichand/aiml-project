@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, get_auth_principal
 from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     ACPProfileCreateRequest,
     ACPProfileResponse,
@@ -39,7 +40,7 @@ from tldw_Server_API.app.core.exceptions import BadRequestError, ResourceNotFoun
 from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver, get_mcp_hub_policy_resolver
 from tldw_Server_API.app.services.mcp_hub_service import McpHubConflictError, McpHubService
 
-router = APIRouter(prefix="/mcp/hub", tags=["mcp-hub"])
+router = APIRouter(prefix="/mcp/hub", tags=["mcp-hub"], dependencies=[Depends(check_rate_limit)])
 
 _MCP_HUB_ADMIN_PERMISSIONS = frozenset({SYSTEM_CONFIGURE, "*"})
 _VALID_SCOPE_TYPES = frozenset({"global", "org", "team", "user"})
@@ -53,6 +54,9 @@ _CAPABILITY_GRANT_PERMISSIONS = {
     "process.execute": "grant.process.execute",
     "tool.invoke": "grant.tool.invoke",
 }
+_TOOL_GRANT_KEYS = ("allowed_tools", "tool_patterns", "tool_names")
+_SUPPORTED_APPROVAL_DURATIONS = frozenset({"once", "session", "conversation"})
+_DEFAULT_SCOPED_APPROVAL_TTL_MINUTES = 480
 
 
 async def get_mcp_hub_service() -> McpHubService:
@@ -134,6 +138,12 @@ def _require_grant_authority(principal: AuthPrincipal, policy_document: dict[str
         for capability in raw_capabilities
         if str(capability).strip()
     }
+    if any(
+        str(entry).strip()
+        for key in _TOOL_GRANT_KEYS
+        for entry in (policy_document.get(key) or [])
+    ):
+        capabilities.add("tool.invoke")
     missing = [
         required
         for capability in sorted(capabilities)
@@ -356,6 +366,73 @@ def _extract_context_key_user_id(context_key: str) -> int | None:
         return None
 
 
+def _validated_duration_options(rules: dict[str, Any] | None) -> list[str]:
+    """Return supported approval durations from policy rules or raise for unsupported entries."""
+    raw = (rules or {}).get("duration_options")
+    if raw is None:
+        return ["once", "session"]
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=422, detail="rules.duration_options must be a list")
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in raw:
+        value = str(entry or "").strip().lower()
+        if not value:
+            continue
+        if value not in _SUPPORTED_APPROVAL_DURATIONS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"rules.duration_options contains unsupported duration '{value}'",
+            )
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out or ["once", "session"]
+
+
+def _normalized_approval_rules(rules: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize approval policy rules to the server-supported shape."""
+    normalized = dict(rules or {})
+    normalized["duration_options"] = _validated_duration_options(normalized)
+    return normalized
+
+
+def _approval_ttl_minutes(rules: dict[str, Any], duration: str) -> int:
+    """Resolve a bounded TTL for scoped approvals."""
+    duration_key = str(duration or "").strip().lower()
+    raw = rules.get(f"{duration_key}_ttl_minutes")
+    if raw is None:
+        raw = rules.get("scoped_ttl_minutes")
+    try:
+        value = int(raw) if raw is not None else _DEFAULT_SCOPED_APPROVAL_TTL_MINUTES
+    except (TypeError, ValueError):
+        value = _DEFAULT_SCOPED_APPROVAL_TTL_MINUTES
+    return max(1, min(value, 24 * 60))
+
+
+def _approval_decision_lifetime(
+    *,
+    decision: str,
+    duration: str,
+    conversation_id: str | None,
+    rules: dict[str, Any],
+) -> tuple[bool, datetime | None]:
+    """Compute server-side approval persistence from a validated duration selection."""
+    normalized_decision = str(decision or "").strip().lower()
+    normalized_duration = str(duration or "").strip().lower()
+    if normalized_decision != "approved":
+        return False, datetime.now(timezone.utc)
+    if normalized_duration == "once":
+        return True, None
+    if normalized_duration in {"session", "conversation"}:
+        if not str(conversation_id or "").strip():
+            raise HTTPException(status_code=422, detail="conversation_id is required for scoped approvals")
+        ttl_minutes = _approval_ttl_minutes(rules, normalized_duration)
+        return False, datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+    raise HTTPException(status_code=422, detail=f"Unsupported approval duration '{normalized_duration}'")
+
+
 @router.post("/permission-profiles", response_model=PermissionProfileResponse, status_code=201)
 async def create_permission_profile(
     payload: PermissionProfileCreateRequest,
@@ -415,13 +492,16 @@ async def update_permission_profile(
     update_fields = payload.model_dump(exclude_unset=True)
     if "policy_document" in update_fields:
         _require_grant_authority(principal, update_fields.get("policy_document") or {})
-    row = await svc.update_permission_profile(
-        profile_id,
-        actor_id=principal.user_id,
-        **update_fields,
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="Permission profile not found")
+    try:
+        row = await svc.update_permission_profile(
+            profile_id,
+            actor_id=principal.user_id,
+            **update_fields,
+        )
+        if not row:
+            raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _permission_profile_row_to_response(row)
 
 
@@ -433,9 +513,12 @@ async def delete_permission_profile(
 ) -> MCPHubDeleteResponse:
     """Delete a permission profile by id."""
     _require_mutation_permission(principal)
-    deleted = await svc.delete_permission_profile(profile_id, actor_id=principal.user_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Permission profile not found")
+    try:
+        deleted = await svc.delete_permission_profile(profile_id, actor_id=principal.user_id)
+        if not deleted:
+            raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return MCPHubDeleteResponse(ok=True)
 
 
@@ -503,13 +586,16 @@ async def update_policy_assignment(
     update_fields = payload.model_dump(exclude_unset=True)
     if "inline_policy_document" in update_fields:
         _require_grant_authority(principal, update_fields.get("inline_policy_document") or {})
-    row = await svc.update_policy_assignment(
-        assignment_id,
-        actor_id=principal.user_id,
-        **update_fields,
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="Policy assignment not found")
+    try:
+        row = await svc.update_policy_assignment(
+            assignment_id,
+            actor_id=principal.user_id,
+            **update_fields,
+        )
+        if not row:
+            raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _policy_assignment_row_to_response(row)
 
 
@@ -521,9 +607,12 @@ async def delete_policy_assignment(
 ) -> MCPHubDeleteResponse:
     """Delete a policy assignment by id."""
     _require_mutation_permission(principal)
-    deleted = await svc.delete_policy_assignment(assignment_id, actor_id=principal.user_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Policy assignment not found")
+    try:
+        deleted = await svc.delete_policy_assignment(assignment_id, actor_id=principal.user_id)
+        if not deleted:
+            raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return MCPHubDeleteResponse(ok=True)
 
 
@@ -535,13 +624,14 @@ async def create_approval_policy(
 ) -> ApprovalPolicyResponse:
     """Create a new runtime approval policy within the provided owner scope."""
     _require_mutation_permission(principal)
+    normalized_rules = _normalized_approval_rules(payload.rules)
     row = await svc.create_approval_policy(
         name=payload.name,
         description=payload.description,
         owner_scope_type=payload.owner_scope_type,
         owner_scope_id=payload.owner_scope_id,
         mode=payload.mode,
-        rules=payload.rules,
+        rules=normalized_rules,
         is_active=payload.is_active,
         actor_id=principal.user_id,
     )
@@ -582,13 +672,19 @@ async def update_approval_policy(
 ) -> ApprovalPolicyResponse:
     """Update an approval policy by id."""
     _require_mutation_permission(principal)
-    row = await svc.update_approval_policy(
-        approval_policy_id,
-        actor_id=principal.user_id,
-        **payload.model_dump(exclude_unset=True),
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="Approval policy not found")
+    update_fields = payload.model_dump(exclude_unset=True)
+    if "rules" in update_fields:
+        update_fields["rules"] = _normalized_approval_rules(update_fields.get("rules"))
+    try:
+        row = await svc.update_approval_policy(
+            approval_policy_id,
+            actor_id=principal.user_id,
+            **update_fields,
+        )
+        if not row:
+            raise ResourceNotFoundError("mcp_approval_policy", identifier=str(approval_policy_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _approval_policy_row_to_response(row)
 
 
@@ -600,9 +696,12 @@ async def delete_approval_policy(
 ) -> MCPHubDeleteResponse:
     """Delete an approval policy by id."""
     _require_mutation_permission(principal)
-    deleted = await svc.delete_approval_policy(approval_policy_id, actor_id=principal.user_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Approval policy not found")
+    try:
+        deleted = await svc.delete_approval_policy(approval_policy_id, actor_id=principal.user_id)
+        if not deleted:
+            raise ResourceNotFoundError("mcp_approval_policy", identifier=str(approval_policy_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return MCPHubDeleteResponse(ok=True)
 
 
@@ -622,6 +721,26 @@ async def create_approval_decision(
     if context_user_id != actor_id and not _is_mutation_allowed(principal):
         raise HTTPException(status_code=403, detail="Forbidden approval context")
 
+    approval_rules: dict[str, Any] = {"duration_options": ["once", "session"]}
+    if payload.approval_policy_id is not None:
+        policy_row = await svc.get_approval_policy(int(payload.approval_policy_id))
+        if policy_row is None:
+            raise HTTPException(status_code=404, detail="Approval policy not found")
+        approval_rules = _normalized_approval_rules(policy_row.get("rules") if isinstance(policy_row, dict) else {})
+
+    if payload.duration not in _validated_duration_options(approval_rules):
+        raise HTTPException(
+            status_code=422,
+            detail=f"duration '{payload.duration}' is not allowed by the approval policy",
+        )
+
+    consume_on_match, expires_at = _approval_decision_lifetime(
+        decision=payload.decision,
+        duration=payload.duration,
+        conversation_id=payload.conversation_id,
+        rules=approval_rules,
+    )
+
     row = await svc.record_approval_decision(
         approval_policy_id=payload.approval_policy_id,
         context_key=payload.context_key,
@@ -629,8 +748,8 @@ async def create_approval_decision(
         tool_name=payload.tool_name,
         scope_key=payload.scope_key,
         decision=payload.decision,
-        consume_on_match=payload.consume_on_match,
-        expires_at=payload.expires_at,
+        consume_on_match=consume_on_match,
+        expires_at=expires_at,
         actor_id=actor_id,
     )
     return _approval_decision_row_to_response(row)

@@ -12,8 +12,9 @@ import {
 
 import {
   MCP_HUB_APPROVAL_MODE_OPTIONS,
+  MCP_HUB_APPROVAL_DURATION_OPTIONS,
   MCP_HUB_SCOPE_OPTIONS,
-  parseCommaList
+  toggleStringValue
 } from "./policyHelpers"
 
 export const ApprovalPoliciesTab = () => {
@@ -26,10 +27,13 @@ export const ApprovalPoliciesTab = () => {
   const [name, setName] = useState("")
   const [ownerScopeType, setOwnerScopeType] = useState<"global" | "org" | "team" | "user">("global")
   const [mode, setMode] = useState<McpHubApprovalMode>("ask_outside_profile")
-  const [durationOptionsText, setDurationOptionsText] = useState("session")
+  const [durationOptions, setDurationOptions] = useState<string[]>(["session"])
   const [isActive, setIsActive] = useState(true)
 
-  const canSave = useMemo(() => name.trim().length > 0 && !saving, [name, saving])
+  const canSave = useMemo(
+    () => name.trim().length > 0 && durationOptions.length > 0 && !saving,
+    [durationOptions.length, name, saving]
+  )
 
   const loadPolicies = async () => {
     setLoading(true)
@@ -55,7 +59,7 @@ export const ApprovalPoliciesTab = () => {
     setName("")
     setOwnerScopeType("global")
     setMode("ask_outside_profile")
-    setDurationOptionsText("session")
+    setDurationOptions(["session"])
     setIsActive(true)
   }
 
@@ -65,10 +69,10 @@ export const ApprovalPoliciesTab = () => {
     setName(policy.name)
     setOwnerScopeType(policy.owner_scope_type)
     setMode(policy.mode)
-    setDurationOptionsText(
+    setDurationOptions(
       Array.isArray(policy.rules?.duration_options)
-        ? policy.rules.duration_options.map((entry) => String(entry)).join(",")
-        : "session"
+        ? policy.rules.duration_options.map((entry) => String(entry))
+        : ["session"]
     )
     setIsActive(policy.is_active)
   }
@@ -83,7 +87,7 @@ export const ApprovalPoliciesTab = () => {
         owner_scope_type: ownerScopeType,
         mode,
         rules: {
-          duration_options: parseCommaList(durationOptionsText)
+          duration_options: durationOptions
         },
         is_active: isActive
       }
@@ -172,16 +176,28 @@ export const ApprovalPoliciesTab = () => {
                 </select>
               </Space>
             </Space>
-            <Space orientation="vertical" style={{ width: "100%" }}>
-              <label htmlFor="mcp-approval-policy-duration-options">Duration Options</label>
-              <input
-                id="mcp-approval-policy-duration-options"
-                aria-label="Duration Options"
-                value={durationOptionsText}
-                onChange={(event) => setDurationOptionsText(event.target.value)}
-                placeholder="session,conversation"
-              />
-            </Space>
+            <fieldset
+              aria-label="Duration Options"
+              className="mcp-approval-policy-duration-options"
+              style={{ border: 0, margin: 0, padding: 0 }}
+            >
+              <legend>Duration Options</legend>
+              <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+                {MCP_HUB_APPROVAL_DURATION_OPTIONS.map((option) => (
+                  <Checkbox
+                    key={option.value}
+                    checked={durationOptions.includes(option.value)}
+                    onChange={(event) =>
+                      setDurationOptions((prev) =>
+                        toggleStringValue(prev, option.value, event.target.checked)
+                      )
+                    }
+                  >
+                    {option.label}
+                  </Checkbox>
+                ))}
+              </Space>
+            </fieldset>
             <Checkbox checked={isActive} onChange={(event) => setIsActive(event.target.checked)}>
               Active
             </Checkbox>

@@ -14,10 +14,12 @@ _UNION_LIST_KEYS = {"allowed_tools", "denied_tools", "tool_names", "tool_pattern
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
+    """Return a shallow dict copy for mapping values, otherwise an empty dict."""
     return dict(value) if isinstance(value, dict) else {}
 
 
 def _as_str_list(value: Any) -> list[str]:
+    """Normalize a scalar or iterable value into a list of non-empty strings."""
     if isinstance(value, str):
         cleaned = value.strip()
         return [cleaned] if cleaned else []
@@ -32,6 +34,7 @@ def _as_str_list(value: Any) -> list[str]:
 
 
 def _unique(items: list[str]) -> list[str]:
+    """Preserve order while removing duplicate strings."""
     seen: set[str] = set()
     out: list[str] = []
     for item in items:
@@ -43,6 +46,7 @@ def _unique(items: list[str]) -> list[str]:
 
 
 def _collect_scope_ids(metadata: dict[str, Any], singular_key: str, plural_key: str) -> list[int]:
+    """Collect integer scope ids from singular and plural metadata keys."""
     raw_values: list[Any] = []
     if singular_key in metadata:
         raw_values.append(metadata.get(singular_key))
@@ -60,6 +64,7 @@ def _collect_scope_ids(metadata: dict[str, Any], singular_key: str, plural_key: 
 
 
 def _extract_targets(metadata: dict[str, Any]) -> list[tuple[str, str | None]]:
+    """Return the ordered assignment targets applicable to the runtime metadata."""
     targets: list[tuple[str, str | None]] = [("default", None)]
     group_id = str(metadata.get("group_id") or "").strip()
     if group_id:
@@ -71,6 +76,7 @@ def _extract_targets(metadata: dict[str, Any]) -> list[tuple[str, str | None]]:
 
 
 def _candidate_scope_filters(user_id: int | None, metadata: dict[str, Any]) -> list[tuple[str, int | None]]:
+    """Build candidate owner-scope filters for assignment lookup."""
     filters: list[tuple[str, int | None]] = [("global", None)]
     filters.extend(("org", org_id) for org_id in _collect_scope_ids(metadata, "org_id", "org_ids"))
     filters.extend(("team", team_id) for team_id in _collect_scope_ids(metadata, "team_id", "team_ids"))
@@ -80,6 +86,7 @@ def _candidate_scope_filters(user_id: int | None, metadata: dict[str, Any]) -> l
 
 
 def _merge_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Merge policy documents with union semantics for list-based capability fields."""
     merged = deepcopy(base)
     for key, value in overlay.items():
         if key in _UNION_LIST_KEYS:
@@ -93,6 +100,7 @@ def _merge_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> di
 
 
 def _allowed_tool_patterns(policy_document: dict[str, Any]) -> list[str]:
+    """Return the effective allowed-tool pattern list from a policy document."""
     patterns = (
         _as_str_list(policy_document.get("allowed_tools"))
         + _as_str_list(policy_document.get("tool_patterns"))

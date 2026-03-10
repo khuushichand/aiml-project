@@ -8,13 +8,30 @@ from typing import Any
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
 
+_SENSITIVE_ARGUMENT_KEYS = {
+    "api_key",
+    "authorization",
+    "content",
+    "content_b64",
+    "cookie",
+    "cookies",
+    "env",
+    "headers",
+    "secret",
+    "token",
+}
+_SUMMARY_MAX_ITEMS = 8
+_SUMMARY_MAX_STRING = 160
+
 
 def _context_metadata(context: Any | None) -> dict[str, Any]:
+    """Return a shallow metadata mapping from an MCP request context."""
     metadata = getattr(context, "metadata", None)
     return dict(metadata) if isinstance(metadata, dict) else {}
 
 
 def _context_key_for_request(context: Any | None) -> str:
+    """Build the approval context key from the active request context."""
     metadata = _context_metadata(context)
     user_id = str(getattr(context, "user_id", "") or "").strip()
     group_id = str(metadata.get("group_id") or "").strip()
@@ -23,6 +40,7 @@ def _context_key_for_request(context: Any | None) -> str:
 
 
 def _conversation_id_for_request(context: Any | None) -> str | None:
+    """Extract the active conversation/session identifier from the request context."""
     metadata = _context_metadata(context)
     for key in ("conversation_id", "session_id"):
         value = str(metadata.get(key) or "").strip()
@@ -32,38 +50,150 @@ def _conversation_id_for_request(context: Any | None) -> str | None:
     return session_id or None
 
 
+def _truncate_summary_text(value: Any) -> str:
+    """Return a bounded string for approval summaries."""
+    text = str(value or "")
+    if len(text) <= _SUMMARY_MAX_STRING:
+        return text
+    return f"{text[: _SUMMARY_MAX_STRING - 3]}..."
+
+
+def _normalized_command(value: Any) -> str | None:
+    """Normalize string or list command inputs for stable approval scoping."""
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, (list, tuple)):
+        parts = [str(part).strip() for part in value if str(part).strip()]
+        return " ".join(parts) if parts else None
+    return None
+
+
+def _scope_fingerprint_payload(tool_args: Any) -> dict[str, Any]:
+    """Select a small canonical subset of tool args for scope hashing."""
+    if not isinstance(tool_args, dict):
+        return {}
+    payload: dict[str, Any] = {}
+    for key in ("command", "cmd", "args", "arguments"):
+        command = _normalized_command(tool_args.get(key))
+        if command:
+            payload["command"] = command
+            break
+    for key in ("path", "file_path", "url"):
+        value = str(tool_args.get(key) or "").strip()
+        if value:
+            payload[key] = value
+    for key in ("paths", "file_paths"):
+        raw = tool_args.get(key)
+        if isinstance(raw, (list, tuple)):
+            values = [str(entry).strip() for entry in raw if str(entry).strip()]
+            if values:
+                payload[key] = values[:_SUMMARY_MAX_ITEMS]
+    files = tool_args.get("files")
+    if isinstance(files, list):
+        file_paths = [
+            str(item.get("path") or "").strip()
+            for item in files
+            if isinstance(item, dict) and str(item.get("path") or "").strip()
+        ]
+        if file_paths:
+            payload["files"] = file_paths[:_SUMMARY_MAX_ITEMS]
+    return payload
+
+
 def _scope_key_for_tool_call(tool_name: str, tool_args: Any) -> str:
-    command: str | None = None
-    if isinstance(tool_args, dict):
-        for key in ("command", "cmd"):
-            value = tool_args.get(key)
-            if isinstance(value, str) and value.strip():
-                command = value.strip()
-                break
-    if command:
-        digest = hashlib.sha256(command.encode("utf-8")).hexdigest()[:16]
-        return f"tool:{tool_name}|command:{digest}"
+    """Build a stable scope key for a tool invocation."""
+    fingerprint_payload = _scope_fingerprint_payload(tool_args)
+    if fingerprint_payload:
+        canonical = json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+        return f"tool:{tool_name}|args:{digest}"
     return f"tool:{tool_name}"
 
 
+def _redacted_env_summary(value: Any) -> dict[str, Any]:
+    """Return env metadata without exposing values."""
+    if not isinstance(value, dict):
+        return {"redacted": True}
+    keys = [
+        str(key).strip()
+        for key in value.keys()
+        if str(key).strip()
+    ][: _SUMMARY_MAX_ITEMS]
+    return {"redacted": True, "keys": keys}
+
+
+def _summarize_files(value: Any) -> list[dict[str, Any]]:
+    """Summarize file inputs by path only."""
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in value[:_SUMMARY_MAX_ITEMS]:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        if not path:
+            continue
+        out.append({"path": path})
+    return out
+
+
 def _arguments_summary(tool_args: Any) -> dict[str, Any]:
+    """Build a redacted, bounded preview of tool arguments for approval prompts."""
     if not isinstance(tool_args, dict):
         return {}
-    try:
-        payload = json.loads(json.dumps(tool_args, default=str))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        payload = {}
-    return payload if isinstance(payload, dict) else {}
+    summary: dict[str, Any] = {}
+    for key, value in list(tool_args.items())[:_SUMMARY_MAX_ITEMS]:
+        clean_key = str(key or "").strip()
+        if not clean_key:
+            continue
+        lowered = clean_key.lower()
+        if lowered in _SENSITIVE_ARGUMENT_KEYS or lowered.endswith("_b64"):
+            if lowered == "env":
+                summary[clean_key] = _redacted_env_summary(value)
+            continue
+        if lowered == "files":
+            file_summary = _summarize_files(value)
+            if file_summary:
+                summary[clean_key] = file_summary
+            continue
+        if lowered in {"command", "cmd", "args", "arguments"}:
+            command = _normalized_command(value)
+            if command is not None:
+                summary[clean_key] = value if isinstance(value, list) else _truncate_summary_text(command)
+            continue
+        if isinstance(value, str):
+            summary[clean_key] = _truncate_summary_text(value)
+            continue
+        if isinstance(value, (int, float, bool)) or value is None:
+            summary[clean_key] = value
+            continue
+        if isinstance(value, (list, tuple)):
+            items = [_truncate_summary_text(item) for item in list(value)[:_SUMMARY_MAX_ITEMS]]
+            summary[clean_key] = items
+            continue
+        if isinstance(value, dict):
+            summary[clean_key] = {
+                "keys": [
+                    str(item_key).strip()
+                    for item_key in list(value.keys())[:_SUMMARY_MAX_ITEMS]
+                    if str(item_key).strip()
+                ]
+            }
+            continue
+        summary[clean_key] = _truncate_summary_text(value)
+    return summary
 
 
 def _duration_options(rules: dict[str, Any]) -> list[str]:
+    """Return supported approval durations from stored rules."""
     raw = rules.get("duration_options")
     if not isinstance(raw, list):
         return ["once", "session"]
     out: list[str] = []
     for entry in raw:
-        value = str(entry or "").strip()
-        if value:
+        value = str(entry or "").strip().lower()
+        if value in {"once", "session", "conversation"}:
             out.append(value)
     return out or ["once", "session"]
 

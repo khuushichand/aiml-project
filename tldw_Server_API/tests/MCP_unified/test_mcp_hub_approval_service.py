@@ -147,6 +147,44 @@ async def test_approval_service_requires_approval_for_outside_profile_call() -> 
     assert result["approval"]["duration_options"] == ["once", "session"]
 
 
+def test_scope_key_for_tool_call_hashes_list_commands_distinctly() -> None:
+    from tldw_Server_API.app.services.mcp_hub_approval_service import _scope_key_for_tool_call
+
+    first = _scope_key_for_tool_call("sandbox.run", {"command": ["git", "status"]})
+    second = _scope_key_for_tool_call("sandbox.run", {"command": ["git", "log"]})
+    repeated = _scope_key_for_tool_call("sandbox.run", {"command": ["git", "status"]})
+
+    assert first.startswith("tool:sandbox.run|args:")
+    assert second.startswith("tool:sandbox.run|args:")
+    assert first != second
+    assert first == repeated
+
+
+def test_arguments_summary_redacts_sensitive_tool_args() -> None:
+    from tldw_Server_API.app.services.mcp_hub_approval_service import _arguments_summary
+
+    summary = _arguments_summary(
+        {
+            "command": ["python", "script.py"],
+            "env": {"API_KEY": "secret-value", "MODE": "dev"},
+            "files": [
+                {"path": "/tmp/demo.txt", "content_b64": "QUJD"},
+                {"path": "/tmp/notes.md", "content_b64": "REVG"},
+            ],
+            "content_b64": "a" * 512,
+            "path": "/workspace/project.txt",
+            "description": "x" * 256,
+        }
+    )
+
+    assert summary["command"] == ["python", "script.py"]
+    assert summary["env"] == {"redacted": True, "keys": ["API_KEY", "MODE"]}
+    assert summary["files"] == [{"path": "/tmp/demo.txt"}, {"path": "/tmp/notes.md"}]
+    assert "content_b64" not in summary
+    assert summary["description"].endswith("...")
+    assert len(summary["description"]) < 200
+
+
 @pytest.mark.asyncio
 async def test_approval_service_allows_call_with_active_elevation() -> None:
     from tldw_Server_API.app.services.mcp_hub_approval_service import McpHubApprovalService
