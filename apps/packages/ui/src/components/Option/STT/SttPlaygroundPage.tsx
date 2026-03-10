@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
-import { Typography } from "antd"
+import { Alert, Button, Typography } from "antd"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { PageShell } from "@/components/Common/PageShell"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
-import { isTimeoutLikeError } from "@/utils/request-timeout"
+import { useTranscriptionModelsCatalog } from "@/hooks/useTranscriptionModelsCatalog"
 import { RecordingStrip } from "./RecordingStrip"
 import { InlineSettingsPanel } from "./InlineSettingsPanel"
 import type { SttLocalSettings } from "./InlineSettingsPanel"
@@ -26,39 +26,15 @@ export const SttPlaygroundPage: React.FC = () => {
   const notification = useAntdNotification()
 
   // ── Server models (fetched on mount) ──────────────────────────────
-  const [serverModels, setServerModels] = useState<string[]>([])
-
-  useEffect(() => {
-    let cancelled = false
-    const fetchModels = async () => {
-      try {
-        const res = await tldwClient.getTranscriptionModels({
-          timeoutMs: 10_000
-        })
-        const all = Array.isArray(res?.all_models)
-          ? (res.all_models as string[])
-          : []
-        if (!cancelled && all.length > 0) {
-          const unique = Array.from(new Set(all)).sort()
-          setServerModels(unique)
-        }
-      } catch (e) {
-        if (!cancelled) {
-          notification.error({
-            message: t("playground:stt.modelsLoadError", "Model load failed"),
-            description: isTimeoutLikeError(e)
-              ? t("playground:stt.modelsTimeout", "Model list took longer than 10 seconds. Check server health and retry.")
-              : t("playground:stt.modelsLoadErrorDesc", "Unable to load transcription models. Retry or check server settings.")
-          })
-        }
-      }
-    }
-    fetchModels()
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const {
+    serverModels,
+    serverModelsLoading,
+    serverModelsError,
+    retryServerModels
+  } = useTranscriptionModelsCatalog({
+    autoRetryOnFailureCount: 1,
+    warnLabel: "STT Playground"
+  })
 
   // ── Current blob from RecordingStrip ──────────────────────────────
   const [currentBlob, setCurrentBlob] = useState<Blob | null>(null)
@@ -349,6 +325,25 @@ export const SttPlaygroundPage: React.FC = () => {
       </Text>
 
       <div className="mt-4 space-y-4">
+        {serverModelsError && (
+          <Alert
+            type="warning"
+            showIcon
+            title={t("playground:stt.modelsLoadError", "Model load failed")}
+            description={serverModelsError}
+            action={
+              <Button
+                size="small"
+                onClick={() => {
+                  retryServerModels()
+                }}
+                disabled={serverModelsLoading}
+              >
+                {t("common:retry", "Retry")}
+              </Button>
+            }
+          />
+        )}
         <RecordingStrip
           onBlobReady={handleBlobReady}
           onSettingsToggle={toggleSettings}

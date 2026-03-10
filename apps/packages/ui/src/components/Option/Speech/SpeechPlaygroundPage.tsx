@@ -29,6 +29,7 @@ import {
 } from "@/services/tldw/audio-providers"
 import { useTtsPlayground, TTS_PRESETS, type TtsPresetKey } from "@/hooks/useTtsPlayground"
 import { useStreamingAudioPlayer } from "@/hooks/useStreamingAudioPlayer"
+import { useTranscriptionModelsCatalog } from "@/hooks/useTranscriptionModelsCatalog"
 import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
@@ -282,13 +283,18 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const [sttSegEmbeddingsProvider] = useStorage("sttSegEmbeddingsProvider", "")
   const [sttSegEmbeddingsModel] = useStorage("sttSegEmbeddingsModel", "")
 
-  const [serverModels, setServerModels] = React.useState<string[]>([])
-  const [serverModelsLoading, setServerModelsLoading] = React.useState(false)
-  const [serverModelsError, setServerModelsError] = React.useState<string | null>(
-    null
-  )
-  const [modelsLoadAttempt, setModelsLoadAttempt] = React.useState(0)
   const [activeModel, setActiveModel] = React.useState<string | undefined>()
+  const {
+    serverModels,
+    serverModelsLoading,
+    serverModelsError,
+    retryServerModels
+  } = useTranscriptionModelsCatalog({
+    activeModel,
+    defaultModel: sttModel,
+    onInitialModel: setActiveModel,
+    warnLabel: "Speech Playground"
+  })
   const [isRecording, setIsRecording] = React.useState(false)
   const [isTranscribing, setIsTranscribing] = React.useState(false)
   const [useLongRunning, setUseLongRunning] = React.useState(false)
@@ -301,54 +307,6 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const chunksRef = React.useRef<BlobPart[]>([])
   const startedAtRef = React.useRef<number | null>(null)
   const liveTextRef = React.useRef<string>("")
-
-  React.useEffect(() => {
-    let cancelled = false
-    const fetchModels = async () => {
-      setServerModelsLoading(true)
-      setServerModelsError(null)
-      try {
-        const res = await tldwClient.getTranscriptionModels({
-          timeoutMs: 10_000
-        })
-        const all = Array.isArray(res?.all_models) ? (res.all_models as string[]) : []
-        if (!cancelled && all.length > 0) {
-          const unique = Array.from(new Set(all)).sort()
-          setServerModels(unique)
-          if (!activeModel) {
-            const initial = sttModel && unique.includes(sttModel) ? sttModel : unique[0]
-            setActiveModel(initial)
-          }
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setServerModelsError(
-            isTimeoutLikeError(e)
-              ? (t(
-                  "playground:stt.modelsTimeout",
-                  "Model list took longer than 10 seconds. Check server health and retry."
-                ) as string)
-              : (t(
-                  "playground:stt.modelsLoadError",
-                  "Unable to load transcription models. Retry or check server settings."
-                ) as string)
-          )
-        }
-        if ((import.meta as any)?.env?.DEV) {
-          // eslint-disable-next-line no-console
-          console.warn("Failed to load transcription models for Speech Playground", e)
-        }
-      } finally {
-        if (!cancelled) {
-          setServerModelsLoading(false)
-        }
-      }
-    }
-    fetchModels()
-    return () => {
-      cancelled = true
-    }
-  }, [activeModel, modelsLoadAttempt, sttModel, t])
 
   const appendLiveText = React.useCallback((textChunk: string) => {
     if (!textChunk) return
@@ -2068,9 +2026,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                         action={
                           <Button
                             size="small"
-                            onClick={() =>
-                              setModelsLoadAttempt((prev) => prev + 1)
-                            }
+                            onClick={retryServerModels}
                             disabled={serverModelsLoading}
                           >
                             {t("common:retry", "Retry")}
