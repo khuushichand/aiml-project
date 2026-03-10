@@ -68,6 +68,7 @@ from tldw_Server_API.app.core.Persona.memory_integration import (
     retrieve_top_memories,
 )
 from tldw_Server_API.app.core.Personalization.companion_activity import (
+    normalize_persona_activity_surface,
     record_persona_session_started,
     record_persona_session_summarized,
     record_persona_tool_executed,
@@ -1991,6 +1992,7 @@ async def persona_session(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     requested_persona_id = str(req.persona_id or "").strip() or _DEFAULT_PERSONA_ID
+    requested_activity_surface = normalize_persona_activity_surface(req.surface)
     session_manager = get_session_manager()
 
     try:
@@ -2059,8 +2061,20 @@ async def persona_session(
                 persona_id=persona_id,
                 resume_session_id=session_id,
             )
+            if created_new_session or req.surface is not None:
+                session_manager.update_preferences(
+                    session_id=session_id,
+                    user_id=user_id,
+                    preferences={"companion_activity_surface": requested_activity_surface},
+                )
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        activity_surface = normalize_persona_activity_surface(
+            session_manager.get_preferences(
+                session_id=session_id,
+                user_id=user_id,
+            ).get("companion_activity_surface")
+        )
 
         allow_export, allow_delete = _get_persona_rbac_flags()
         scopes = sorted(_get_persona_session_scopes(allow_export=allow_export, allow_delete=allow_delete))
@@ -2080,6 +2094,7 @@ async def persona_session(
                 persona_id=response.persona.id,
                 runtime_mode=response.runtime_mode,
                 scope_snapshot_id=response.scope_snapshot_id,
+                surface=activity_surface,
             )
         return response
     except HTTPException:
@@ -2859,6 +2874,9 @@ async def persona_stream(
                     session_id=session_id,
                     user_id=connection_user_id,
                 )
+                activity_surface = normalize_persona_activity_surface(
+                    existing_preferences.get("companion_activity_surface")
+                )
                 configured_top_k = _get_persona_memory_top_k()
                 default_use_memory = _coerce_bool(
                     existing_preferences.get("use_memory_context"),
@@ -3373,6 +3391,9 @@ async def persona_stream(
                     session_id=session_id,
                     user_id=connection_user_id,
                 )
+                activity_surface = normalize_persona_activity_surface(
+                    current_preferences.get("companion_activity_surface")
+                )
                 if "session_policy_rules" in msg:
                     session_policy_rules = normalize_policy_rules(msg.get("session_policy_rules"))
                     with contextlib.suppress(Exception):
@@ -3477,6 +3498,7 @@ async def persona_stream(
                             runtime_mode=runtime_mode,
                             scope_snapshot_id=runtime_scope_snapshot_id,
                             summary_text=assistant_text,
+                            surface=activity_surface,
                         )
                         await _emit_assistant_delta(
                             session_id=session_id,
@@ -3540,6 +3562,7 @@ async def persona_stream(
                         runtime_mode=runtime_mode,
                         scope_snapshot_id=runtime_scope_snapshot_id,
                         outcome=result,
+                        surface=activity_surface,
                     )
                     await _emit_tool_result(
                         session_id=session_id,

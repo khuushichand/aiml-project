@@ -10,6 +10,7 @@ from tldw_Server_API.app.core.Personalization.companion_activity import (
     record_note_deleted,
     record_note_restored,
     record_note_updated,
+    record_persona_session_started,
     record_persona_session_summarized,
     record_persona_tool_executed,
     record_reminder_task_deleted,
@@ -329,6 +330,65 @@ def test_persona_summary_and_tool_adapters_capture_compact_metadata(companion_db
     assert len(summary_event["metadata"]["summary_preview"]) < len(summary_text)
     assert summary_event["provenance"]["route"] == "/api/v1/persona/stream"
     assert summary_event["provenance"]["action"] == "session_summary"
+
+
+def test_persona_activity_adapters_accept_surface_overrides_and_normalize_invalid_values(
+    companion_db_env,
+):
+    user_id = "81b"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    db.update_profile(user_id, enabled=1)
+
+    started = record_persona_session_started(
+        user_id=user_id,
+        session_id="sess-81b",
+        persona_id="research_assistant",
+        runtime_mode="session_scoped",
+        scope_snapshot_id="scope-81b",
+        surface="invalid.surface",
+    )
+    summarized = record_persona_session_summarized(
+        user_id=user_id,
+        session_id="sess-81b",
+        persona_id="research_assistant",
+        plan_id="plan-81b",
+        step_idx=2,
+        runtime_mode="session_scoped",
+        scope_snapshot_id="scope-81b",
+        summary_text="Summarized companion work for the session.",
+        surface="companion.conversation",
+    )
+    executed = record_persona_tool_executed(
+        user_id=user_id,
+        session_id="sess-81b",
+        persona_id="research_assistant",
+        plan_id="plan-81b",
+        step_idx=1,
+        step_type="mcp_tool",
+        tool_name="ingest_url",
+        runtime_mode="session_scoped",
+        scope_snapshot_id="scope-81b",
+        surface="companion.conversation",
+        outcome={"ok": True, "output": {"saved": True}},
+    )
+
+    assert started
+    assert summarized
+    assert executed
+
+    events, total = db.list_companion_activity_events(user_id, limit=10)
+    assert total == 3
+
+    started_event = next(event for event in events if event["event_type"] == "persona_session_started")
+    assert started_event["surface"] == "api.persona"
+
+    summary_event = next(
+        event for event in events if event["event_type"] == "persona_session_summarized"
+    )
+    assert summary_event["surface"] == "companion.conversation"
+
+    tool_event = next(event for event in events if event["event_type"] == "persona_tool_executed")
+    assert tool_event["surface"] == "companion.conversation"
 
 
 def test_watchlist_source_update_delete_and_restore_adapters_capture_compact_metadata(companion_db_env):

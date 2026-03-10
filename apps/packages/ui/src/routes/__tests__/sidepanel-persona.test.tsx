@@ -507,6 +507,54 @@ describe("SidepanelPersona", () => {
     })
   })
 
+  it("creates companion-mode persona sessions with the companion conversation surface", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-companion" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona mode="companion" />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith("/api/v1/persona/session", {
+        method: "POST",
+        body: {
+          persona_id: "research_assistant",
+          resume_session_id: undefined,
+          surface: "companion.conversation"
+        }
+      })
+    })
+  })
+
   it("prefers tool_result.output and falls back to legacy result alias", async () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",

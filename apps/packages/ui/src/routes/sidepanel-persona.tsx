@@ -727,7 +727,8 @@ const SidepanelPersona = ({
         method: "POST",
         body: {
           persona_id: resolvedPersonaId,
-          resume_session_id: resumeSessionId || undefined
+          resume_session_id: resumeSessionId || undefined,
+          surface: isCompanionMode ? "companion.conversation" : undefined
         }
       })
       if (!sessionResp.ok) {

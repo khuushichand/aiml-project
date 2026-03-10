@@ -121,6 +121,21 @@ def _normalize_companion_tags(tags: list[str] | None) -> list[str]:
     return normalized
 
 
+_PERSONA_ACTIVITY_SURFACES = {
+    "api.persona",
+    "persona.sidepanel",
+    "companion.conversation",
+}
+_DEFAULT_PERSONA_ACTIVITY_SURFACE = "api.persona"
+
+
+def normalize_persona_activity_surface(surface: Any) -> str:
+    candidate = str(surface or "").strip().lower()
+    if candidate in _PERSONA_ACTIVITY_SURFACES:
+        return candidate
+    return _DEFAULT_PERSONA_ACTIVITY_SURFACE
+
+
 def build_manual_check_in_activity(
     *,
     source_id: str,
@@ -566,13 +581,15 @@ def record_persona_session_started(
     persona_id: str,
     runtime_mode: str | None,
     scope_snapshot_id: str | None,
+    surface: str | None = None,
 ) -> str | None:
+    normalized_surface = normalize_persona_activity_surface(surface)
     return record_companion_activity(
         user_id=user_id,
         event_type="persona_session_started",
         source_type="persona_session",
         source_id=session_id,
-        surface="api.persona",
+        surface=normalized_surface,
         dedupe_key=f"persona.session.started:{session_id}",
         tags=[persona_id],
         provenance=_explicit_provenance(
@@ -646,6 +663,7 @@ def record_persona_session_summarized(
     runtime_mode: str | None,
     scope_snapshot_id: str | None,
     summary_text: str,
+    surface: str | None = None,
 ) -> str | None:
     normalized_summary = str(summary_text or "").strip()
     if not normalized_summary:
@@ -654,12 +672,13 @@ def record_persona_session_summarized(
         normalized_summary.encode("utf-8"),
         usedforsecurity=False,
     ).hexdigest()[:12]
+    normalized_surface = normalize_persona_activity_surface(surface)
     return record_companion_activity(
         user_id=user_id,
         event_type="persona_session_summarized",
         source_type="persona_session",
         source_id=str(session_id),
-        surface="api.persona",
+        surface=normalized_surface,
         dedupe_key=f"persona.session.summary:{session_id}:{plan_id}:{step_idx}:{summary_digest}",
         tags=[str(persona_id)],
         provenance=_explicit_provenance(
@@ -690,6 +709,7 @@ def record_persona_tool_executed(
     runtime_mode: str | None,
     scope_snapshot_id: str | None,
     outcome: dict[str, Any] | None,
+    surface: str | None = None,
 ) -> str | None:
     normalized_step_type = str(step_type or "").strip().lower()
     normalized_tool_name = str(tool_name or "").strip()
@@ -702,12 +722,13 @@ def record_persona_tool_executed(
         return None
     source_id = f"{session_id}:{plan_id}:{int(step_idx)}"
     fingerprint = _payload_fingerprint(metadata)
+    normalized_surface = normalize_persona_activity_surface(surface)
     return record_companion_activity(
         user_id=user_id,
         event_type="persona_tool_executed",
         source_type="persona_tool_step",
         source_id=source_id,
-        surface="api.persona",
+        surface=normalized_surface,
         dedupe_key=f"persona.tool.executed:{source_id}:{normalized_tool_name}:{fingerprint}",
         tags=[str(persona_id), normalized_tool_name],
         provenance=_explicit_provenance(

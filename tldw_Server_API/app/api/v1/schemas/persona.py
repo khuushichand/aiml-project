@@ -5,9 +5,9 @@ Scaffold only - minimal models to enable endpoint stubs.
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 PersonaMode = Literal["session_scoped", "persistent_scoped"]
@@ -30,6 +30,15 @@ class PersonaSessionRequest(BaseModel):
     persona_id: str
     project_id: str | None = None
     resume_session_id: str | None = None
+    surface: str | None = Field(default=None, max_length=120)
+
+    @field_validator("project_id", "resume_session_id", "surface", mode="before")
+    @classmethod
+    def _strip_optional_text(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        return stripped or None
 
 
 class PersonaSessionResponse(BaseModel):

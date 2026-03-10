@@ -93,6 +93,28 @@ def test_persona_session_creation_records_companion_activity(persona_client_with
     assert event["metadata"]["runtime_mode"] == payload["runtime_mode"]
 
 
+def test_persona_session_creation_accepts_companion_surface_override(
+    persona_client_with_companion_opt_in,
+):
+    client, personalization_db = persona_client_with_companion_opt_in
+
+    created = client.post(
+        "/api/v1/persona/session",
+        json={
+            "persona_id": "research_assistant",
+            "surface": "companion.conversation",
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    events, total = personalization_db.list_companion_activity_events("1", limit=10)
+    assert total == 1
+    event = events[0]
+    assert event["event_type"] == "persona_session_started"
+    assert event["surface"] == "companion.conversation"
+    assert event["provenance"]["route"] == "/api/v1/persona/session"
+
+
 def test_persona_stream_records_companion_summary_and_tool_activity(
     monkeypatch,
     persona_client_with_companion_opt_in,
@@ -166,3 +188,86 @@ def test_persona_stream_records_companion_summary_and_tool_activity(
     assert summary_event["metadata"]["summary_preview"] == assistant_delta["text_delta"]
     assert summary_event["metadata"]["summary_char_count"] == len(assistant_delta["text_delta"])
     assert summary_event["provenance"]["action"] == "session_summary"
+
+
+def test_companion_session_surface_propagates_to_persona_stream_activity(
+    monkeypatch,
+    persona_client_with_companion_opt_in,
+):
+    client, personalization_db = persona_client_with_companion_opt_in
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            return SimpleNamespace(
+                error=None,
+                result={
+                    "ok": True,
+                    "saved": True,
+                    "url": "https://example.com/companion",
+                },
+            )
+
+    async def _fake_resolve(*args, **kwargs):
+        return "1", True, True
+
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: _FakeServer())
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+
+    created = client.post(
+        "/api/v1/persona/session",
+        json={
+            "persona_id": "research_assistant",
+            "surface": "companion.conversation",
+        },
+    )
+    assert created.status_code == 200, created.text
+    session_id = created.json()["session_id"]
+
+    with client.websocket_connect("/api/v1/persona/stream") as ws:
+        _ = json.loads(ws.receive_text())
+        ws.send_text(
+            json.dumps(
+                {
+                    "type": "user_message",
+                    "session_id": session_id,
+                    "text": "https://example.com/companion",
+                }
+            )
+        )
+        plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+        approved_steps = [int(step["idx"]) for step in plan.get("steps", [])]
+        ws.send_text(
+            json.dumps(
+                {
+                    "type": "confirm_plan",
+                    "session_id": session_id,
+                    "plan_id": plan["plan_id"],
+                    "approved_steps": approved_steps,
+                }
+            )
+        )
+        _ = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+        tool_result = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+        assistant_delta = _recv_until(ws, lambda d: d.get("event") == "assistant_delta")
+
+    events, total = personalization_db.list_companion_activity_events("1", limit=10)
+    assert total == 3
+
+    started_event = next(event for event in events if event["event_type"] == "persona_session_started")
+    assert started_event["surface"] == "companion.conversation"
+
+    tool_event = next(event for event in events if event["event_type"] == "persona_tool_executed")
+    assert tool_event["surface"] == "companion.conversation"
+    assert tool_event["source_id"] == f"{session_id}:{plan['plan_id']}:{tool_result['step_idx']}"
+
+    summary_event = next(
+        event for event in events if event["event_type"] == "persona_session_summarized"
+    )
+    assert summary_event["surface"] == "companion.conversation"
+    assert summary_event["metadata"]["summary_preview"] == assistant_delta["text_delta"]
