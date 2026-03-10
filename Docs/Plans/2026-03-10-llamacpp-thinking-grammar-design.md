@@ -9,7 +9,7 @@ Scope: `POST /api/v1/chat/completions`, shared chat/playground UI state, sidepan
 Add first-class llama.cpp advanced controls for:
 
 - constrained generation via reusable custom GBNF grammars
-- thinking-budget control when the deployment can map an app-level budget field to a verified llama.cpp request parameter
+- thinking-budget control when the deployment has an explicit operator-configured mapping from the app-level budget field to a llama.cpp request parameter
 
 The design keeps these controls llama.cpp-specific, reuses the existing chat model settings state pipeline, stores reusable grammars as a user-owned resource, and translates app-level fields into llama.cpp request payload extensions at send time.
 
@@ -28,10 +28,12 @@ The design keeps these controls llama.cpp-specific, reuses the existing chat mod
 This design was revised after a design review to address these issues:
 
 1. Do not assume a stable upstream per-request thinking-budget request key for llama.cpp.
-2. Reuse the existing `ChatModelSettings` store and session snapshot pipeline instead of inventing a new preset backend.
-3. Treat advanced llama.cpp controls as unavailable when `strict_openai_compat` disables non-standard request keys.
-4. Make `chat/completions` the only v1 request surface. `/api/v1/messages` support is a follow-on task.
-5. Define conflict rules between first-class controls and raw `extra_body`.
+2. Guard on the resolved target provider, not only the raw `api_provider` field.
+3. Reuse the existing `ChatModelSettings` store and session snapshot pipeline instead of inventing a new preset backend.
+4. Treat advanced llama.cpp controls as unavailable when `strict_openai_compat` disables non-standard request keys.
+5. Make `chat/completions` the only v1 request surface. `/api/v1/messages` support is a follow-on task.
+6. Define conflict rules between first-class controls and raw `extra_body`.
+7. Expose enough provider metadata for the UI to detect reserved `extra_body` key conflicts.
 
 ## 4. Current State
 
@@ -42,6 +44,7 @@ This design was revised after a design review to address these issues:
 - The backend already forwards provider-specific payload extensions through `extra_body`.
 - llama.cpp already advertises `grammar` as a known extra-body compatibility key in `tldw_Server_API/app/core/LLM_Calls/extra_body_compat_catalog.py`.
 - `GET /api/v1/llm/providers` already exposes capability metadata and extra-body compatibility hints that UIs can consume.
+- The chat service can resolve the effective provider from the model name or alias routing even when `api_provider` is omitted.
 
 ### 4.2 Gaps
 
@@ -91,6 +94,16 @@ This means “saved chat/session presets” in v1 are implemented by:
 
 This phase does not add a separate reusable preset resource.
 
+### 6.1.1 Frontend Provider Resolution
+
+The llama.cpp controls must be gated by the resolved provider for the currently selected model, not by the raw `apiProvider` override field alone.
+
+Implications:
+
+1. If the selected model resolves to `llama.cpp`, the controls should appear even when `apiProvider` is blank.
+2. If the user forces a different provider through `apiProvider`, the controls should hide/disable based on that resolved result.
+3. `ModelParamsPanel` may need selected-model context or a precomputed resolved-provider prop from its parent; this should be treated as explicit UI plumbing work, not assumed to already exist.
+
 ### 6.2 Backend Translation Layer
 
 Add a dedicated llama.cpp request-extension resolver, for example:
@@ -100,11 +113,11 @@ Add a dedicated llama.cpp request-extension resolver, for example:
 Responsibilities:
 
 1. Accept app-level request fields from `ChatCompletionRequest`.
-2. Enforce provider guard: only valid when `api_provider == "llama.cpp"`.
+2. Enforce provider guard against the resolved target provider selected by chat normalization, not just the raw `api_provider` request field.
 3. Resolve grammar selection into final GBNF text.
 4. Merge first-class llama.cpp controls into `extra_body` with deterministic precedence.
 5. Refuse advanced llama.cpp controls when runtime strict compatibility disables non-standard fields.
-6. Map `thinking_budget_tokens` into the deployment’s configured/verified upstream request key.
+6. Map `thinking_budget_tokens` into the deployment’s configured thinking-budget request key.
 
 ### 6.3 Capability-Gated Thinking Budget
 
@@ -115,10 +128,26 @@ Thinking-budget support must be capability-gated.
 The server should not hard-code a guessed upstream request-body field. Instead:
 
 1. Expose a dedicated capability such as `llama_cpp_controls.thinking_budget`.
-2. Mark it `supported=true` only when the deployment can map the app-level field to a verified upstream request key.
+2. Mark it `supported=true` only when the deployment has an explicit configured mapping to an upstream request key.
 3. Return `supported=false` with an `effective_reason` when the deployment cannot safely support it.
 
 This allows the grammar workflow to ship even if a given llama.cpp deployment cannot yet expose a safe per-request thinking budget.
+
+### 6.4 Operator Configuration Contract For Thinking Budget
+
+v1 treats thinking-budget mapping as explicit operator opt-in.
+
+Runtime configuration contract:
+
+1. Environment variable override: `LLAMA_CPP_THINKING_BUDGET_PARAM`
+2. Config fallback: `Local-API.llama_cpp_thinking_budget_param`
+3. Shared runtime helpers must read the same contract for both:
+   - `GET /api/v1/llm/providers` capability metadata
+   - chat request translation at send time
+
+If no mapping is configured, `thinking_budget.supported` must be `false`.
+
+v1 does not attempt active probing of the upstream llama.cpp deployment. In this phase, “verified mapping” means the operator explicitly configured the request key for the deployment they run.
 
 ## 7. API And Data Model
 
@@ -134,7 +163,7 @@ Extend `ChatCompletionRequest` with llama.cpp-only top-level extension fields:
 
 Server behavior:
 
-1. Reject these fields with `400` when `api_provider != "llama.cpp"`.
+1. Reject these fields with `400` when the resolved target provider is not `llama.cpp`.
 2. Reject these fields with `400` when llama.cpp strict compatibility disables advanced controls.
 3. Reject invalid combinations:
    - `grammar_mode == "library"` without `grammar_id`
@@ -180,13 +209,17 @@ Extend provider capability metadata returned from `GET /api/v1/llm/providers` wi
     },
     "thinking_budget": {
       "supported": false,
-      "effective_reason": "no verified request mapping configured for this deployment"
-    }
+      "request_key": null,
+      "effective_reason": "no configured thinking-budget mapping for this deployment"
+    },
+    "reserved_extra_body_keys": ["grammar"]
   }
 }
 ```
 
 This metadata is separate from existing `extra_body_compat`. `extra_body_compat` remains a low-level passthrough hint; `llama_cpp_controls` becomes the first-class UI contract.
+
+When a thinking-budget mapping is configured, `reserved_extra_body_keys` must also include that configured request key so the UI can warn about raw `extraBody` conflicts without hard-coding backend transport details.
 
 ## 8. Persistence Model
 
@@ -216,11 +249,24 @@ Library records store:
 
 - reusable named grammar text and metadata
 
+### 8.3 Exact Frontend Touchpoints
+
+The persistence/send path is currently duplicated across several files. This feature is not complete unless all of these are updated consistently:
+
+- `apps/packages/ui/src/store/model.tsx`
+- `apps/packages/ui/src/store/sidepanel-chat-tabs.tsx`
+- `apps/packages/ui/src/routes/sidepanel-chat.tsx`
+- `apps/packages/ui/src/services/model-settings.ts`
+- `apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx`
+- `apps/packages/ui/src/services/tldw/TldwChat.ts`
+
+Missing any one of these will silently drop the new fields during restore, persistence, or outbound request serialization.
+
 ## 9. UX Flow
 
 ### 9.1 Surface
 
-Show a llama.cpp-only advanced section when the selected provider is `llama.cpp`.
+Show a llama.cpp-only advanced section when the selected model/provider resolution resolves to `llama.cpp`.
 
 Controls:
 
@@ -233,7 +279,7 @@ Controls:
 
 ### 9.2 Runtime Behavior
 
-1. When provider changes away from `llama.cpp`, keep the values in local state but disable the controls.
+1. When the resolved provider changes away from `llama.cpp`, keep the values in local state but disable the controls.
 2. Exclude llama.cpp extension fields from outgoing non-llama.cpp requests.
 3. When a saved grammar reference is missing or archived, surface a degraded-state warning and require reselection or inline replacement before send.
 4. When capability metadata says `thinking_budget.supported == false`, disable the numeric input and show the provider-reported reason.
@@ -245,7 +291,7 @@ This phase must define deterministic merge behavior between first-class controls
 Rule set:
 
 1. First-class llama.cpp controls win over conflicting raw `extraBody` keys.
-2. If raw `extraBody` contains reserved keys such as `grammar` or the deployment’s configured thinking-budget key, the UI should warn and the backend should overwrite them with first-class values.
+2. If raw `extraBody` contains reserved keys such as `grammar` or the deployment’s configured thinking-budget key, the UI should warn using provider metadata and the backend should overwrite them with first-class values.
 3. Raw `extraBody` remains available for other advanced llama.cpp keys.
 
 Reserved keys:
@@ -317,7 +363,7 @@ This must be explicit in docs and tests to avoid mismatched user expectations.
 
 - `ChatModelSettings` store round-trip of new fields
 - sidepanel/workspace snapshot persistence
-- provider-gated rendering for llama.cpp controls
+- resolved-provider-gated rendering for llama.cpp controls
 - disabled thinking-budget UI when provider metadata says unsupported
 - warning state when raw `extraBody` conflicts with first-class controls
 
@@ -343,6 +389,7 @@ This must be explicit in docs and tests to avoid mismatched user expectations.
 3. Existing chat/session persistence restores grammar and thinking-budget selections.
 4. Grammar selections are translated into llama.cpp request payloads without requiring users to hand-edit `extra_body`.
 5. If strict OpenAI compatibility disables advanced llama.cpp fields, the UI reflects that and the backend rejects unsupported requests clearly.
-6. Thinking budget is only exposed when the deployment can safely map it to a verified llama.cpp request parameter.
+6. Thinking budget is only exposed when the deployment has an explicit configured llama.cpp request-key mapping.
 7. Raw `extraBody` conflicts are handled deterministically and documented.
 8. `/api/v1/messages` is explicitly documented as out of scope for this phase.
+9. The UI surfaces llama.cpp controls whenever the selected model resolves to `llama.cpp`, even when `api_provider` is omitted.
