@@ -100,3 +100,24 @@ def test_vz_linux_unavailable_returns_503_without_fallback_suggestions(monkeypat
         assert d.get("runtime") == "vz_linux"
         assert d.get("available") is False
         assert d.get("suggested") == []
+
+
+def test_vz_macos_unavailable_returns_503_without_fallback_suggestions(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("ROUTES_ENABLE", "sandbox")
+    monkeypatch.setenv("TLDW_SANDBOX_VZ_MACOS_AVAILABLE", "0")
+
+    with TestClient(app) as client:
+        body = {
+            "spec_version": "1.0",
+            "runtime": "vz_macos",
+            "base_image": "macos-15",
+            "command": ["echo", "ok"],
+        }
+        r = client.post("/api/v1/sandbox/runs", json=body)
+        assert r.status_code == 503
+        j = r.json()
+        d = j.get("error", {}).get("details", {})
+        assert d.get("runtime") == "vz_macos"
+        assert d.get("available") is False
+        assert d.get("suggested") == []

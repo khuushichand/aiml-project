@@ -43,6 +43,7 @@ def collect_runtime_preflights(
     from .runners.firecracker_runner import firecracker_available
     from .runners.lima_runner import LimaRunner
     from .runners.vz_linux_runner import VZLinuxRunner
+    from .runners.vz_macos_runner import VZMacOSRunner
 
     requested_policy = str(network_policy or "deny_all").strip().lower() or "deny_all"
 
@@ -62,4 +63,5 @@ def collect_runtime_preflights(
         ),
         RuntimeType.lima: LimaRunner().preflight(network_policy=requested_policy),
         RuntimeType.vz_linux: VZLinuxRunner().preflight(network_policy=requested_policy),
+        RuntimeType.vz_macos: VZMacOSRunner().preflight(network_policy=requested_policy),
     }
