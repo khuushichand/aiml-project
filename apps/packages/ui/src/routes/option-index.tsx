@@ -1,6 +1,7 @@
 import React from "react"
 
 import {
+  ConnectionPhase,
   useConnectionActions,
   useConnectionState,
   useConnectionUxState
@@ -41,11 +42,13 @@ const OptionIndex = () => {
 
   React.useEffect(() => {
     if (!didHydrate) return
-    if (!hasCompletedFirstRun && !onboardingInitiated.current) {
-      onboardingInitiated.current = true
-      void beginOnboarding()
-    }
-  }, [hasCompletedFirstRun, beginOnboarding, didHydrate])
+    if (hasCompletedFirstRun) return
+    if (onboardingInitiated.current) return
+    if (phase !== ConnectionPhase.UNCONFIGURED) return
+
+    onboardingInitiated.current = true
+    void beginOnboarding()
+  }, [beginOnboarding, didHydrate, hasCompletedFirstRun, phase])
 
   useFocusComposerOnConnect(phase ?? null)
 

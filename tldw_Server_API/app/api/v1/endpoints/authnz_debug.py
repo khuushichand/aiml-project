@@ -23,6 +23,14 @@ _DEBUG_ALLOWED_ROLES = {"super_admin", "owner"}
 async def require_debug_roles(
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
 ) -> AuthPrincipal:
+    """
+    Authorize access to AuthNZ debug endpoints.
+
+    Single-user compatibility principals are allowed so the default self-hosted
+    admin can continue using the debug tools. In multi-user mode, the caller
+    must hold either the ``super_admin`` or ``owner`` role. Raises ``HTTP 403``
+    when the principal does not satisfy either policy.
+    """
     if getattr(principal, "subject", None) == "single_user":
         return principal
 
