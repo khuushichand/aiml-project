@@ -350,12 +350,19 @@ vi.mock("@/components/Common/Markdown", () => ({
 vi.mock("@/components/Review/ContentRenderer", () => ({
   ContentRenderer: ({
     content,
-    headingAnchorIds = []
+    headingAnchorIds: explicitIds
   }: {
     content: string
     headingAnchorIds?: string[]
   }) => {
     const React = require('react') as typeof import('react')
+
+    // Auto-generate heading anchor IDs from content (mirrors real ContentRenderer behavior)
+    const autoIds: string[] = []
+    content.split('\n').forEach((line, i) => {
+      if (/^#{1,6}\s+/.test(line)) autoIds.push(`section-${i}`)
+    })
+    const anchorIds = explicitIds && explicitIds.length > 0 ? explicitIds : autoIds
     let headingIndex = 0
 
     return (
@@ -364,7 +371,7 @@ vi.mock("@/components/Review/ContentRenderer", () => ({
           const headingMatch = line.match(/^(#{1,6})\s+(.+)$/)
           if (headingMatch) {
             const level = Math.min(headingMatch[1].length, 6)
-            const anchorId = headingAnchorIds[headingIndex]
+            const anchorId = anchorIds[headingIndex]
             headingIndex += 1
             return React.createElement(`h${level}`, {
               key: `${line}-${index}`,
@@ -740,6 +747,63 @@ describe('MediaReviewPage stage7 three-panel layout', () => {
 
     await waitFor(() => {
       expect(screen.getByText('1 / 30 selected')).toBeInTheDocument()
+    })
+  })
+
+  it('section navigator scrolls to rendered anchors', async () => {
+    const headingContent = '## Introduction\nSome intro text.\n## Methods\nMethodology here.\n## Results\nFindings.'
+
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      const idMatch = path.match(/\/api\/v1\/media\/([^?]+)/)
+      const id = idMatch ? Number(idMatch[1]) : 1
+      return {
+        id,
+        title: `Item ${id}`,
+        type: 'pdf',
+        content: headingContent
+      }
+    })
+
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('resizable-panels')).toBeInTheDocument()
+    })
+
+    // Preview Item 1 to load its content into the reading pane
+    fireEvent.click(getResultRowByTitle('Item 1'))
+
+    // Wait for the content to appear in the reading pane via ContentRenderer
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-content-renderer')).toBeInTheDocument()
+    })
+
+    // Verify anchors rendered by mock ContentRenderer
+    const rendererEl = screen.getByTestId('mock-content-renderer')
+    const h2s = rendererEl.querySelectorAll('h2')
+    expect(h2s.length).toBe(3)
+    const anchorAttrs = Array.from(h2s).map(h => h.getAttribute('data-section-anchor'))
+    expect(anchorAttrs).toEqual(['section-0', 'section-2', 'section-4'])
+
+    // Mock scrollIntoView on all heading elements
+    h2s.forEach((h) => {
+      h.scrollIntoView = vi.fn()
+    })
+
+    // The SectionNavigator should appear (3 sections detected from headings)
+    const sectionButton = screen.getByTestId('section-navigator')
+    expect(sectionButton).toBeInTheDocument()
+
+    // The mock Dropdown renders section items as buttons — click the "Methods" section
+    const methodsButton = screen.getByRole('button', { name: /Methods/ })
+    fireEvent.click(methodsButton)
+
+    // scrollSectionIntoView should find the heading with data-section-anchor="section-2"
+    await waitFor(() => {
+      const anchoredHeading = document.querySelector('[data-section-anchor="section-2"]')
+      expect(anchoredHeading).toBeTruthy()
+      expect(anchoredHeading!.scrollIntoView).toHaveBeenCalledTimes(1)
     })
   })
 })
