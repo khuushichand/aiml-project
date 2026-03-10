@@ -17,6 +17,10 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     ExternalServerResponse,
     ExternalServerUpdateRequest,
     MCPHubDeleteResponse,
+    PermissionProfileCreateRequest,
+    PermissionProfileResponse,
+    PolicyAssignmentCreateRequest,
+    PolicyAssignmentResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
@@ -29,6 +33,16 @@ router = APIRouter(prefix="/mcp/hub", tags=["mcp-hub"])
 
 _MCP_HUB_ADMIN_PERMISSIONS = frozenset({SYSTEM_CONFIGURE, "*"})
 _VALID_SCOPE_TYPES = frozenset({"global", "org", "team", "user"})
+_CAPABILITY_GRANT_PERMISSIONS = {
+    "credentials.use": "grant.credentials.use",
+    "filesystem.delete": "grant.filesystem.delete",
+    "filesystem.read": "grant.filesystem.read",
+    "filesystem.write": "grant.filesystem.write",
+    "mcp.server.connect": "grant.mcp.server.connect",
+    "network.external": "grant.network.external",
+    "process.execute": "grant.process.execute",
+    "tool.invoke": "grant.tool.invoke",
+}
 
 
 async def get_mcp_hub_service() -> McpHubService:
@@ -79,6 +93,42 @@ def _require_mutation_permission(principal: AuthPrincipal) -> None:
     if _is_mutation_allowed(principal):
         return
     raise HTTPException(status_code=403, detail=f"{SYSTEM_CONFIGURE} permission required")
+
+
+def _require_grant_authority(principal: AuthPrincipal, policy_document: dict[str, Any]) -> None:
+    """Require capability grant authority for the requested policy document."""
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return
+
+    granted = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    if "*" in granted:
+        return
+
+    raw_capabilities = policy_document.get("capabilities") or []
+    capabilities = {
+        str(capability).strip().lower()
+        for capability in raw_capabilities
+        if str(capability).strip()
+    }
+    missing = [
+        required
+        for capability in sorted(capabilities)
+        if (required := _CAPABILITY_GRANT_PERMISSIONS.get(capability)) and required.lower() not in granted
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Grant authority required: {', '.join(missing)}",
+        )
 
 
 def _collect_scope_ids(values: list[int] | None, active_id: int | None) -> list[int]:
@@ -210,6 +260,86 @@ def _external_row_to_response(row: dict[str, Any]) -> ExternalServerResponse:
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
     )
+
+
+def _permission_profile_row_to_response(row: dict[str, Any]) -> PermissionProfileResponse:
+    return PermissionProfileResponse(
+        id=int(row.get("id")),
+        name=str(row.get("name") or ""),
+        description=row.get("description"),
+        owner_scope_type=str(row.get("owner_scope_type") or "global"),
+        owner_scope_id=row.get("owner_scope_id"),
+        mode=str(row.get("mode") or "custom"),
+        policy_document=_load_json_object(row.get("policy_document")),
+        is_active=bool(row.get("is_active")),
+        created_by=row.get("created_by"),
+        updated_by=row.get("updated_by"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+def _policy_assignment_row_to_response(row: dict[str, Any]) -> PolicyAssignmentResponse:
+    return PolicyAssignmentResponse(
+        id=int(row.get("id")),
+        target_type=str(row.get("target_type") or "default"),
+        target_id=row.get("target_id"),
+        owner_scope_type=str(row.get("owner_scope_type") or "global"),
+        owner_scope_id=row.get("owner_scope_id"),
+        profile_id=row.get("profile_id"),
+        inline_policy_document=_load_json_object(row.get("inline_policy_document")),
+        approval_policy_id=row.get("approval_policy_id"),
+        is_active=bool(row.get("is_active")),
+        created_by=row.get("created_by"),
+        updated_by=row.get("updated_by"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+@router.post("/permission-profiles", response_model=PermissionProfileResponse, status_code=201)
+async def create_permission_profile(
+    payload: PermissionProfileCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> PermissionProfileResponse:
+    """Create a new permission profile within the provided owner scope."""
+    _require_mutation_permission(principal)
+    _require_grant_authority(principal, payload.policy_document)
+    row = await svc.create_permission_profile(
+        name=payload.name,
+        description=payload.description,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+        mode=payload.mode,
+        policy_document=payload.policy_document,
+        is_active=payload.is_active,
+        actor_id=principal.user_id,
+    )
+    return _permission_profile_row_to_response(row)
+
+
+@router.post("/policy-assignments", response_model=PolicyAssignmentResponse, status_code=201)
+async def create_policy_assignment(
+    payload: PolicyAssignmentCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> PolicyAssignmentResponse:
+    """Create a new policy assignment for a default, group, or persona target."""
+    _require_mutation_permission(principal)
+    _require_grant_authority(principal, payload.inline_policy_document)
+    row = await svc.create_policy_assignment(
+        target_type=payload.target_type,
+        target_id=payload.target_id,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+        profile_id=payload.profile_id,
+        inline_policy_document=payload.inline_policy_document,
+        approval_policy_id=payload.approval_policy_id,
+        is_active=payload.is_active,
+        actor_id=principal.user_id,
+    )
+    return _policy_assignment_row_to_response(row)
 
 
 @router.get("/acp-profiles", response_model=list[ACPProfileResponse])

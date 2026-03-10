@@ -79,6 +79,74 @@ class McpHubService:
     def __init__(self, repo: McpHubRepo):
         self.repo = repo
 
+    async def create_permission_profile(
+        self,
+        *,
+        name: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        mode: str,
+        policy_document: dict[str, Any],
+        actor_id: int | None,
+        description: str | None = None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        row = await self.repo.create_permission_profile(
+            name=name,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            mode=mode,
+            policy_document=policy_document,
+            actor_id=actor_id,
+            description=description,
+            is_active=is_active,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.permission_profile.create",
+                actor_id=actor_id,
+                resource_type="mcp_permission_profile",
+                resource_id=str(row.get("id") or ""),
+                metadata={"name": row.get("name"), "owner_scope_type": row.get("owner_scope_type")},
+            )
+        )
+        return row
+
+    async def create_policy_assignment(
+        self,
+        *,
+        target_type: str,
+        target_id: str | None,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        profile_id: int | None,
+        inline_policy_document: dict[str, Any],
+        approval_policy_id: int | None,
+        actor_id: int | None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        row = await self.repo.create_policy_assignment(
+            target_type=target_type,
+            target_id=target_id,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            profile_id=profile_id,
+            inline_policy_document=inline_policy_document,
+            approval_policy_id=approval_policy_id,
+            actor_id=actor_id,
+            is_active=is_active,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.policy_assignment.create",
+                actor_id=actor_id,
+                resource_type="mcp_policy_assignment",
+                resource_id=str(row.get("id") or ""),
+                metadata={"target_type": row.get("target_type"), "target_id": row.get("target_id")},
+            )
+        )
+        return row
+
     async def create_acp_profile(
         self,
         *,
