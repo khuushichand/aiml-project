@@ -3,6 +3,45 @@ from __future__ import annotations
 import tldw_Server_API.app.core.Sandbox.macos_diagnostics as diagnostics_module
 
 
+def _sample_diagnostics_payload() -> dict:
+    return {
+        "host": {
+            "os": "darwin",
+            "arch": "arm64",
+            "apple_silicon": True,
+            "macos_version": "15.0",
+            "supported": True,
+            "reasons": [],
+        },
+        "helper": {
+            "configured": True,
+            "path": "/tmp/helper",
+            "exists": True,
+            "executable": True,
+            "ready": True,
+            "transport": "fake",
+            "reasons": [],
+        },
+        "templates": {
+            "vz_linux": {
+                "configured": True,
+                "ready": True,
+                "source": "/tmp/vz-linux.img",
+                "reasons": [],
+            },
+        },
+        "runtimes": {
+            "vz_linux": {
+                "available": True,
+                "supported_trust_levels": ["trusted", "standard", "untrusted"],
+                "reasons": [],
+                "execution_mode": "fake",
+                "remediation": None,
+            }
+        },
+    }
+
+
 def test_collect_macos_diagnostics_reports_missing_helper_and_templates(monkeypatch) -> None:
     monkeypatch.setattr(diagnostics_module.sys, "platform", "darwin")
     monkeypatch.setattr(diagnostics_module.platform, "machine", lambda: "arm64")
@@ -52,3 +91,28 @@ def test_collect_macos_diagnostics_uses_optional_operator_metadata_env(monkeypat
 
     assert data["helper"]["path"] == "/tmp/macos-helper"
     assert data["templates"]["vz_linux"]["source"] == "/tmp/vz-linux.img"
+
+
+def test_service_macos_diagnostics_returns_probe_payload(monkeypatch) -> None:
+    from tldw_Server_API.app.core.Sandbox.service import SandboxService
+
+    expected = _sample_diagnostics_payload()
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Sandbox.service.collect_macos_diagnostics",
+        lambda: expected,
+    )
+
+    svc = SandboxService()
+
+    assert svc.macos_diagnostics() == expected
+
+
+def test_admin_schema_accepts_macos_diagnostics_payload() -> None:
+    from tldw_Server_API.app.api.v1.schemas.sandbox_schemas import (
+        SandboxAdminMacOSDiagnosticsResponse,
+    )
+
+    model = SandboxAdminMacOSDiagnosticsResponse.model_validate(_sample_diagnostics_payload())
+
+    assert model.host.supported is True
+    assert model.runtimes["vz_linux"].execution_mode == "fake"
