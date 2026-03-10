@@ -37,6 +37,7 @@ from .models import (
     SessionSpec,
     TrustLevel,
 )
+from .macos_diagnostics import collect_macos_diagnostics
 from .orchestrator import SandboxOrchestrator, SessionActiveRunsConflict
 from .policy import SandboxPolicy, SandboxPolicyConfig, compute_policy_hash
 from .runtime_capabilities import RuntimePreflightResult, collect_runtime_preflights
@@ -962,6 +963,9 @@ class SandboxService:
                 **_preflight_fields(seatbelt_preflight),
             },
         ]
+
+    def macos_diagnostics(self) -> dict[str, object]:
+        return collect_macos_diagnostics()
 
     def _audit_run_completion(self, *, user_id: str | int | None, run_id: str, status: RunStatus, spec_version: str, session_id: str | None) -> None:
         """Log a completion audit event in a fire-and-forget manner."""

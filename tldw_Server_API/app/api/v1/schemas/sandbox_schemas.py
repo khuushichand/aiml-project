@@ -269,6 +269,57 @@ class SandboxAdminUsageResponse(BaseModel):
     items: list[SandboxAdminUsageItem]
 
 
+class SandboxAdminMacOSHostDiagnostics(BaseModel):
+    """Admin-facing host facts for macOS sandbox readiness checks."""
+
+    os: str
+    arch: str
+    apple_silicon: bool
+    macos_version: str | None = None
+    supported: bool
+    reasons: list[str] = Field(default_factory=list)
+
+
+class SandboxAdminMacOSHelperDiagnostics(BaseModel):
+    """Admin-facing helper readiness and optional helper metadata."""
+
+    configured: bool
+    path: str | None = None
+    exists: bool
+    executable: bool
+    ready: bool
+    transport: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class SandboxAdminMacOSTemplateDiagnostics(BaseModel):
+    """Admin-facing template readiness for a single VZ runtime family."""
+
+    configured: bool
+    ready: bool
+    source: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class SandboxAdminMacOSRuntimeDiagnostics(BaseModel):
+    """Admin-facing runtime posture derived from shared runtime preflight checks."""
+
+    available: bool
+    supported_trust_levels: list[TrustLevelType] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    execution_mode: Literal["fake", "real", "none"]
+    remediation: str | None = None
+
+
+class SandboxAdminMacOSDiagnosticsResponse(BaseModel):
+    """Structured admin response for macOS sandbox diagnostics."""
+
+    host: SandboxAdminMacOSHostDiagnostics
+    helper: SandboxAdminMacOSHelperDiagnostics
+    templates: dict[str, SandboxAdminMacOSTemplateDiagnostics] = Field(default_factory=dict)
+    runtimes: dict[str, SandboxAdminMacOSRuntimeDiagnostics] = Field(default_factory=dict)
+
+
 # Snapshot/Clone Schemas
 class SnapshotCreateResponse(BaseModel):
     """Response when creating a session snapshot."""

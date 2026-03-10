@@ -142,3 +142,41 @@ def test_runtimes_discovery_includes_macos_runtime_capabilities(monkeypatch) -> 
         assert "supported_trust_levels" in runtimes["seatbelt"]
         assert runtimes["seatbelt"]["supported_trust_levels"] == ["trusted"]
         assert isinstance(runtimes["vz_macos"].get("host"), dict)
+
+
+def test_runtimes_discovery_keeps_macos_diagnostics_summarized(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
+    monkeypatch.setenv("TLDW_SANDBOX_MACOS_HELPER_READY", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_MACOS_HELPER_PATH", "/tmp/macos-helper")
+    monkeypatch.setenv("TLDW_SANDBOX_VZ_LINUX_AVAILABLE", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_VZ_LINUX_TEMPLATE_READY", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_VZ_LINUX_TEMPLATE_SOURCE", "/tmp/vz-linux.img")
+    clear_config_cache()
+
+    with TestClient(app) as client:
+        data = client.get("/api/v1/sandbox/runtimes").json()
+        vz_linux = next(item for item in data["runtimes"] if item["name"] == "vz_linux")
+
+    assert "helper" not in vz_linux
+    assert "templates" not in vz_linux
+    assert "remediation" not in vz_linux
+    assert "supported_trust_levels" in vz_linux
+    assert isinstance(vz_linux.get("host"), dict)
+
+
+def test_macos_diagnostics_runtime_reasons_align_with_feature_discovery(monkeypatch) -> None:
+    from tldw_Server_API.app.core.Sandbox.service import SandboxService
+
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
+    monkeypatch.setenv("TLDW_SANDBOX_MACOS_HELPER_READY", "0")
+    clear_config_cache()
+
+    svc = SandboxService()
+    diagnostics = svc.macos_diagnostics()
+    discovery = {item["name"]: item for item in svc.feature_discovery()}
+
+    assert diagnostics["runtimes"]["vz_linux"]["reasons"] == discovery["vz_linux"]["reasons"]
+    assert diagnostics["runtimes"]["vz_macos"]["reasons"] == discovery["vz_macos"]["reasons"]
+    assert diagnostics["runtimes"]["seatbelt"]["supported_trust_levels"] == discovery["seatbelt"]["supported_trust_levels"]

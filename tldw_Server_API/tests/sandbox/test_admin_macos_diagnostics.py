@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from starlette.requests import Request
+
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.api.v1.endpoints import sandbox as sandbox_mod
+from tldw_Server_API.app.core.AuthNZ.permissions import ROLE_ADMIN
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+
+
+def _make_principal(
+    *,
+    is_admin: bool,
+) -> AuthPrincipal:
+    return AuthPrincipal(
+        kind="user",
+        user_id=1,
+        api_key_id=None,
+        subject=None,
+        token_type="access",
+        jti=None,
+        roles=[ROLE_ADMIN] if is_admin else ["user"],
+        permissions=[],
+        is_admin=is_admin,
+        org_ids=[],
+        team_ids=[],
+    )
+
+
+def _build_app_with_overrides(principal: AuthPrincipal) -> FastAPI:
+    app = FastAPI()
+    app.include_router(sandbox_mod.router, prefix="/api/v1")
+
+    async def _fake_get_auth_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        request.state.auth = AuthContext(
+            principal=principal,
+            ip=(request.client.host if getattr(request, "client", None) else None),
+            user_agent=(request.headers.get("User-Agent") if getattr(request, "headers", None) else None),
+            request_id=(request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None),
+        )
+        return principal
+
+    async def _fake_get_request_user() -> SimpleNamespace:
+        return SimpleNamespace(
+            id=1,
+            username="sandbox-admin",
+            is_active=True,
+            roles=list(principal.roles),
+            permissions=list(principal.permissions),
+            is_admin=principal.is_admin,
+            tenant_id="default",
+        )
+
+    app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
+    app.dependency_overrides[sandbox_mod.get_request_user] = _fake_get_request_user
+    return app
+
+
+def _diagnostics_payload() -> dict:
+    return {
+        "host": {
+            "os": "darwin",
+            "arch": "arm64",
+            "apple_silicon": True,
+            "macos_version": "15.0",
+            "supported": True,
+            "reasons": [],
+        },
+        "helper": {
+            "configured": False,
+            "path": None,
+            "exists": False,
+            "executable": False,
+            "ready": False,
+            "transport": None,
+            "reasons": ["macos_helper_missing"],
+        },
+        "templates": {
+            "vz_linux": {
+                "configured": False,
+                "ready": False,
+                "source": None,
+                "reasons": ["vz_linux_template_missing"],
+            }
+        },
+        "runtimes": {
+            "vz_linux": {
+                "available": False,
+                "supported_trust_levels": ["trusted", "standard", "untrusted"],
+                "reasons": ["macos_helper_missing", "vz_linux_template_missing"],
+                "execution_mode": "none",
+                "remediation": "Configure the macOS virtualization helper and mark it ready.",
+            }
+        },
+    }
+
+
+def test_admin_macos_diagnostics_returns_structured_payload(monkeypatch) -> None:
+    fake_service = SimpleNamespace(macos_diagnostics=lambda: _diagnostics_payload())
+    monkeypatch.setattr(sandbox_mod, "_service", fake_service, raising=True)
+
+    app = _build_app_with_overrides(_make_principal(is_admin=True))
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/sandbox/admin/macos-diagnostics")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body.keys()) == {"host", "helper", "templates", "runtimes"}
+    assert body["host"]["supported"] is True
+    assert body["runtimes"]["vz_linux"]["execution_mode"] == "none"
