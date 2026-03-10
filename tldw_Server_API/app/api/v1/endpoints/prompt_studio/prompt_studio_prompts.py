@@ -152,8 +152,14 @@ def _validate_message_lengths(
         )
 
 
-def _placeholder_variables(definition: PromptDefinition) -> dict[str, str]:
-    return {variable.name: "" for variable in definition.variables}
+def _validation_variables(definition: PromptDefinition) -> dict[str, Any]:
+    variables: dict[str, Any] = {}
+    for variable in definition.variables:
+        # Preserve stored defaults during save-time validation so oversized
+        # default content is measured consistently with preview/execution.
+        if variable.default_value is None:
+            variables[variable.name] = ""
+    return variables
 
 
 def _validate_prompt_content(
@@ -164,7 +170,7 @@ def _validate_prompt_content(
 ) -> None:
     assembly = assemble_prompt_definition(
         definition,
-        _placeholder_variables(definition),
+        _validation_variables(definition),
         extras=extras,
     )
     _validate_prompt_lengths(

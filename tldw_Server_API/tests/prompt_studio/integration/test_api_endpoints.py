@@ -62,6 +62,12 @@ def _make_structured_prompt_definition_payload() -> dict:
         },
     }
 
+
+def _make_structured_prompt_definition_with_default(*, default_value: str) -> dict:
+    definition = _make_structured_prompt_definition_payload()
+    definition["variables"][0]["default_value"] = default_value
+    return definition
+
 @pytest.fixture
 def client(mock_user, test_db):
     """Create a test client for the FastAPI app with mocked authentication."""
@@ -550,6 +556,94 @@ class TestPromptEndpoints:
 
             assert response.status_code == 400, response.text
             assert "exceeds maximum length" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_security_config, None)
+
+    def test_create_prompt_rejects_oversized_variable_default_value(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        app.dependency_overrides[get_security_config] = lambda: SecurityConfig(
+            max_prompt_length=100,
+            allowed_models=[],
+            blocked_patterns=[],
+            rate_limits={},
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/prompt-studio/prompts",
+                json={
+                    "project_id": project_id,
+                    "name": "Oversized Structured Default Prompt",
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": _make_structured_prompt_definition_with_default(
+                        default_value="x" * 140
+                    ),
+                    "change_description": "Initial version",
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == 400, response.text
+            assert "exceeds maximum length" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_security_config, None)
+
+    def test_update_prompt_rejects_oversized_variable_default_value(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        app.dependency_overrides[get_security_config] = lambda: SecurityConfig(
+            max_prompt_length=100,
+            allowed_models=[],
+            blocked_patterns=[],
+            rate_limits={},
+        )
+
+        try:
+            create_response = client.post(
+                "/api/v1/prompt-studio/prompts",
+                json={
+                    "project_id": project_id,
+                    "name": "Structured Prompt For Update",
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": _make_structured_prompt_definition_payload(),
+                    "change_description": "Initial version",
+                },
+                headers=auth_headers,
+            )
+
+            assert create_response.status_code in [200, 201], create_response.text
+            prompt_id = create_response.json()["id"]
+
+            update_response = client.put(
+                f"/api/v1/prompt-studio/prompts/update/{prompt_id}",
+                json={
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": _make_structured_prompt_definition_with_default(
+                        default_value="x" * 140
+                    ),
+                    "change_description": "Introduce oversized default",
+                },
+                headers=auth_headers,
+            )
+
+            assert update_response.status_code == 400, update_response.text
+            assert "exceeds maximum length" in update_response.json()["detail"]
         finally:
             app.dependency_overrides.pop(get_security_config, None)
 
