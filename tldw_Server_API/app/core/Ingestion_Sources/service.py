@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -10,6 +11,8 @@ from tldw_Server_API.app.core.Ingestion_Sources.models import (
     SOURCE_TYPES,
 )
 from tldw_Server_API.app.core.exceptions import IngestionSourceValidationError
+
+_SQLITE_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _utc_now_text() -> str:
@@ -167,6 +170,13 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     return dict(row)
 
 
+def _validate_sqlite_identifier(identifier: str) -> str:
+    normalized = str(identifier or "").strip()
+    if not _SQLITE_IDENTIFIER_PATTERN.fullmatch(normalized):
+        raise IngestionSourceValidationError(f"Received unsafe SQL identifier: {identifier!r}")
+    return normalized
+
+
 async def _ensure_sqlite_column(
     db,
     *,
@@ -174,15 +184,17 @@ async def _ensure_sqlite_column(
     column_name: str,
     column_sql: str,
 ) -> None:
+    validated_table_name = _validate_sqlite_identifier(table_name)
+    validated_column_name = _validate_sqlite_identifier(column_name)
     try:
-        pragma_cur = await db.execute(f"PRAGMA table_info({table_name})")
+        pragma_cur = await db.execute(f"PRAGMA table_info({validated_table_name})")
         columns = {row["name"] for row in await pragma_cur.fetchall()}
     except (AttributeError, LookupError, OSError, RuntimeError, TypeError, ValueError):
         return
-    if column_name in columns:
+    if validated_column_name in columns:
         return
     await db.execute(
-        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}"
+        f"ALTER TABLE {validated_table_name} ADD COLUMN {validated_column_name} {column_sql}"
     )
 
 

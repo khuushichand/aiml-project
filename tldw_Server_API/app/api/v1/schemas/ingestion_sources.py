@@ -1,3 +1,5 @@
+"""Pydantic request and response models for ingestion source endpoints."""
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -6,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class IngestionSourceCreateRequest(BaseModel):
+    """Payload used to create a new ingestion source."""
+
     source_type: Literal["local_directory", "archive_snapshot"]
     sink_type: Literal["media", "notes"]
     policy: Literal["canonical", "import_only"] = "canonical"
@@ -16,6 +20,8 @@ class IngestionSourceCreateRequest(BaseModel):
 
 
 class IngestionSourcePatchRequest(BaseModel):
+    """Mutable fields that can be updated for an existing ingestion source."""
+
     model_config = ConfigDict(extra="forbid")
 
     source_type: Literal["local_directory", "archive_snapshot"] | None = None
@@ -28,6 +34,8 @@ class IngestionSourcePatchRequest(BaseModel):
 
 
 class IngestionSourceResponse(BaseModel):
+    """Serialized ingestion source state returned by list and detail endpoints."""
+
     model_config = ConfigDict(extra="ignore")
 
     id: int
@@ -51,6 +59,8 @@ class IngestionSourceResponse(BaseModel):
 
 
 class IngestionSourceItemResponse(BaseModel):
+    """Serialized tracked-item state for a single ingestion source item."""
+
     model_config = ConfigDict(extra="ignore")
 
     id: int
@@ -65,6 +75,8 @@ class IngestionSourceItemResponse(BaseModel):
 
 
 class IngestionSourceSyncTriggerResponse(BaseModel):
+    """Acknowledgement returned when a sync-related job is queued."""
+
     status: str
     source_id: int
     job_id: int | str | None = None

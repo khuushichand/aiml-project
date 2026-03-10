@@ -1,3 +1,5 @@
+"""API endpoints for user-managed ingestion sources and sync operations."""
+
 from __future__ import annotations
 
 import asyncio
@@ -17,6 +19,7 @@ from tldw_Server_API.app.api.v1.schemas.ingestion_sources import (
     IngestionSourceResponse,
     IngestionSourceSyncTriggerResponse,
 )
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
@@ -48,6 +51,7 @@ _DEFAULT_ARCHIVE_UPLOAD_MAX_BYTES = 250 * 1024 * 1024
 
 
 def _archive_upload_max_bytes() -> int:
+    """Return the configured maximum accepted archive upload size in bytes."""
     raw = os.getenv("INGESTION_SOURCES_ARCHIVE_UPLOAD_MAX_BYTES")
     if raw is None or str(raw).strip() == "":
         return _DEFAULT_ARCHIVE_UPLOAD_MAX_BYTES
@@ -62,6 +66,7 @@ async def _stream_archive_upload_to_temp_file(
     *,
     filename: str,
 ) -> dict[str, Any]:
+    """Stream an uploaded archive into a temporary file with size accounting."""
     max_bytes = _archive_upload_max_bytes()
     suffix = "".join(Path(filename).suffixes) or ".archive"
     hasher = hashlib.sha256()
@@ -106,6 +111,7 @@ async def _stream_archive_upload_to_temp_file(
 
 
 def _prepare_create_payload(payload: IngestionSourceCreateRequest) -> dict[str, Any]:
+    """Normalize create payloads and validate local directory sources eagerly."""
     result = payload.model_dump()
     config = dict(result.get("config") or {})
     if payload.source_type == "local_directory":
@@ -126,6 +132,7 @@ async def create_ingestion_source(
     payload: IngestionSourceCreateRequest,
     current_user: User = Depends(get_request_user),
 ):
+    """Create a new ingestion source for the authenticated user."""
     try:
         prepared_payload = _prepare_create_payload(payload)
     except IngestionSourceValidationError as exc:
@@ -139,6 +146,7 @@ async def create_ingestion_source(
 
 @router.get("/", response_model=list[IngestionSourceResponse])
 async def list_ingestion_sources(current_user: User = Depends(get_request_user)):
+    """List ingestion sources owned by the authenticated user."""
     db_pool = await get_db_pool()
     async with db_pool.transaction() as db:
         await ensure_ingestion_sources_schema(db)
@@ -148,6 +156,7 @@ async def list_ingestion_sources(current_user: User = Depends(get_request_user))
 
 @router.get("/{source_id}", response_model=IngestionSourceResponse)
 async def get_ingestion_source(source_id: int, current_user: User = Depends(get_request_user)):
+    """Fetch a single ingestion source by identifier for the authenticated user."""
     db_pool = await get_db_pool()
     async with db_pool.transaction() as db:
         await ensure_ingestion_sources_schema(db)
@@ -163,6 +172,7 @@ async def patch_ingestion_source(
     payload: IngestionSourcePatchRequest,
     current_user: User = Depends(get_request_user),
 ):
+    """Update mutable ingestion source settings while enforcing identity immutability."""
     db_pool = await get_db_pool()
     patch = payload.model_dump(exclude_unset=True)
     async with db_pool.transaction() as db:
@@ -189,6 +199,7 @@ async def patch_ingestion_source(
 
 @router.get("/{source_id}/items", response_model=list[IngestionSourceItemResponse])
 async def list_ingestion_source_items(source_id: int, current_user: User = Depends(get_request_user)):
+    """List tracked items currently bound to an ingestion source."""
     db_pool = await get_db_pool()
     async with db_pool.transaction() as db:
         await ensure_ingestion_sources_schema(db)
@@ -203,8 +214,10 @@ async def list_ingestion_source_items(source_id: int, current_user: User = Depen
     "/{source_id}/sync",
     response_model=IngestionSourceSyncTriggerResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def trigger_ingestion_source_sync(source_id: int, current_user: User = Depends(get_request_user)):
+    """Enqueue a manual sync job for an ingestion source."""
     db_pool = await get_db_pool()
     async with db_pool.transaction() as db:
         await ensure_ingestion_sources_schema(db)
@@ -228,12 +241,14 @@ async def trigger_ingestion_source_sync(source_id: int, current_user: User = Dep
     "/{source_id}/archive",
     response_model=IngestionSourceSyncTriggerResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def upload_ingestion_source_archive(
     source_id: int,
     archive: UploadFile = File(...),
     current_user: User = Depends(get_request_user),
 ):
+    """Stage a new archive payload for an archive-backed ingestion source."""
     try:
         filename = validate_archive_upload_filename(archive.filename or "")
     except ValueError as exc:
@@ -341,6 +356,7 @@ async def reattach_ingestion_source_item(
     item_id: int,
     current_user: User = Depends(get_request_user),
 ):
+    """Reattach a detached notes-backed source item to resume managed sync updates."""
     db_pool = await get_db_pool()
     async with db_pool.transaction() as db:
         await ensure_ingestion_sources_schema(db)

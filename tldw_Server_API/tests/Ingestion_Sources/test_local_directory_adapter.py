@@ -1,8 +1,23 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import pytest
+
+
+@pytest.mark.unit
+def test_local_directory_wrapper_functions_have_type_hints():
+    import tldw_Server_API.app.core.Ingestion_Sources.local_directory as local_directory
+
+    pdf_signature = inspect.signature(local_directory.process_pdf)
+    epub_signature = inspect.signature(local_directory.process_epub)
+
+    assert pdf_signature.parameters["file_input"].annotation is not inspect.Signature.empty
+    assert pdf_signature.parameters["filename"].annotation is not inspect.Signature.empty
+    assert pdf_signature.return_annotation is not inspect.Signature.empty
+    assert epub_signature.parameters["file_path"].annotation is not inspect.Signature.empty
+    assert epub_signature.return_annotation is not inspect.Signature.empty
 
 
 @pytest.mark.unit

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import os
@@ -30,6 +31,50 @@ def ingestion_sources_client():
     headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
     client = TestClient(app)
     return client, headers
+
+
+@pytest.mark.unit
+def test_mutating_ingestion_source_routes_apply_rate_limit_dependency(ingestion_sources_client):
+    del ingestion_sources_client
+
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+    from tldw_Server_API.app.main import app
+
+    expected_paths = {
+        "/api/v1/ingestion-sources/{source_id}/sync",
+        "/api/v1/ingestion-sources/{source_id}/archive",
+    }
+    route_dependencies = {
+        route.path: {dependency.call for dependency in route.dependant.dependencies}
+        for route in app.routes
+        if getattr(route, "path", None) in expected_paths
+    }
+
+    assert set(route_dependencies) == expected_paths
+    for dependencies in route_dependencies.values():
+        assert check_rate_limit in dependencies
+
+
+@pytest.mark.unit
+def test_ingestion_source_endpoint_functions_have_docstrings():
+    import tldw_Server_API.app.api.v1.endpoints.ingestion_sources as ep
+
+    missing = [
+        func.__name__
+        for func in (
+            ep.create_ingestion_source,
+            ep.list_ingestion_sources,
+            ep.get_ingestion_source,
+            ep.patch_ingestion_source,
+            ep.list_ingestion_source_items,
+            ep.trigger_ingestion_source_sync,
+            ep.upload_ingestion_source_archive,
+            ep.reattach_ingestion_source_item,
+        )
+        if not inspect.getdoc(func)
+    ]
+
+    assert missing == []
 
 
 @pytest.mark.integration

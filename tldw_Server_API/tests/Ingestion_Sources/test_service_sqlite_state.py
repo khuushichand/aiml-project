@@ -43,3 +43,20 @@ async def test_create_source_persists_state_row(tmp_path):
         assert state_row["source_id"] == row["id"]
         assert state_row["active_job_id"] is None
         assert state_row["last_successful_snapshot_id"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_ensure_sqlite_column_rejects_unsafe_identifiers(tmp_path):
+    from tldw_Server_API.app.core.Ingestion_Sources.service import _ensure_sqlite_column
+    from tldw_Server_API.app.core.exceptions import IngestionSourceValidationError
+
+    db_path = tmp_path / "ingestion_sources.sqlite3"
+    async with aiosqlite.connect(str(db_path)) as db:
+        with pytest.raises(IngestionSourceValidationError, match="unsafe SQL identifier"):
+            await _ensure_sqlite_column(
+                db,
+                table_name="ingestion_source_items; DROP TABLE users;--",
+                column_name="present_in_source",
+                column_sql="INTEGER NOT NULL DEFAULT 1",
+            )

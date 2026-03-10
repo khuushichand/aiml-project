@@ -30,7 +30,13 @@ MEDIA_SUPPORTED_SUFFIXES: frozenset[str] = frozenset(
 )
 
 
-def process_pdf(file_input, *, filename: str, **kwargs):
+def process_pdf(
+    file_input: str | bytes | Path,
+    *,
+    filename: str,
+    **kwargs: Any,
+) -> dict[str, Any] | None:
+    """Delegate PDF extraction to the shared PDF ingestion library."""
     from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import (
         process_pdf as _process_pdf,
     )
@@ -38,7 +44,8 @@ def process_pdf(file_input, *, filename: str, **kwargs):
     return _process_pdf(file_input, filename=filename, **kwargs)
 
 
-def process_epub(file_path, **kwargs):
+def process_epub(file_path: str, **kwargs: Any) -> dict[str, Any]:
+    """Delegate EPUB extraction to the shared book ingestion library."""
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import (
         process_epub as _process_epub,
     )
