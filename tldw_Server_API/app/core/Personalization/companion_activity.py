@@ -338,6 +338,110 @@ def record_reading_highlight_deleted(
     )
 
 
+def _value(payload: Any, key: str, default: Any = None) -> Any:
+    if isinstance(payload, dict):
+        return payload.get(key, default)
+    return getattr(payload, key, default)
+
+
+def _content_preview(value: Any, *, max_chars: int = 240) -> str | None:
+    text = " ".join(str(value or "").strip().split())
+    if not text:
+        return None
+    safe_limit = max(8, int(max_chars))
+    if len(text) <= safe_limit:
+        return text
+    suffix = "... [truncated]"
+    if safe_limit <= len(suffix):
+        return text[:safe_limit]
+    return f"{text[: safe_limit - len(suffix)]}{suffix}"
+
+
+def _note_tags(note: Any) -> list[str] | None:
+    keywords = _value(note, "keywords")
+    if not isinstance(keywords, list):
+        return None
+    tags: list[str] = []
+    for keyword in keywords:
+        if isinstance(keyword, dict):
+            raw_value = keyword.get("keyword")
+        else:
+            raw_value = getattr(keyword, "keyword", None)
+        normalized = str(raw_value or "").strip()
+        if normalized and normalized not in tags:
+            tags.append(normalized)
+    return tags or None
+
+
+def _note_metadata(note: Any) -> dict[str, Any]:
+    return {
+        "title": _value(note, "title"),
+        "content_preview": _content_preview(_value(note, "content")),
+        "version": _value(note, "version"),
+        "conversation_id": _value(note, "conversation_id"),
+        "message_id": _value(note, "message_id"),
+    }
+
+
+def _note_timestamp(note: Any, *, prefer_created: bool = False) -> str | None:
+    if prefer_created:
+        return _value(note, "created_at") or _value(note, "last_modified") or _value(note, "updated_at")
+    return _value(note, "last_modified") or _value(note, "updated_at") or _value(note, "created_at")
+
+
+def record_note_created(*, user_id: str | int | None, note: Any) -> str | None:
+    note_id = str(_value(note, "id"))
+    source_timestamp = _note_timestamp(note, prefer_created=True)
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="note_created",
+        source_type="note",
+        source_id=note_id,
+        surface="api.notes",
+        dedupe_key=f"notes.create:{note_id}",
+        tags=_note_tags(note),
+        provenance=_explicit_provenance(
+            route="/api/v1/notes/",
+            action="create",
+            source_timestamp=source_timestamp,
+        ),
+        metadata=_note_metadata(note),
+    )
+
+
+def record_note_updated(
+    *,
+    user_id: str | int | None,
+    note: Any,
+    route: str,
+    action: str,
+    patch: dict[str, Any] | None = None,
+) -> str | None:
+    note_id = str(_value(note, "id"))
+    source_timestamp = _note_timestamp(note)
+    version = _value(note, "version")
+    fingerprint = _payload_fingerprint(patch)
+    changed_fields = sorted(str(key) for key in dict(patch or {}).keys())
+    return record_companion_activity(
+        user_id=user_id,
+        event_type="note_updated",
+        source_type="note",
+        source_id=note_id,
+        surface="api.notes",
+        dedupe_key=f"notes.update:{note_id}:{version or source_timestamp or 'na'}:{fingerprint}",
+        tags=_note_tags(note),
+        provenance=_explicit_provenance(
+            route=route,
+            action=action,
+            source_timestamp=source_timestamp,
+        ),
+        metadata={
+            **_note_metadata(note),
+            "changed_fields": changed_fields,
+        },
+    )
+
+
 def record_persona_session_started(
     *,
     user_id: str | int | None,

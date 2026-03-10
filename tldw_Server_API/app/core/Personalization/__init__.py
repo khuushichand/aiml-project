@@ -2,6 +2,8 @@
 
 from tldw_Server_API.app.core.Personalization.companion_activity import (
     record_companion_activity,
+    record_note_created,
+    record_note_updated,
     record_persona_session_started,
     record_reading_highlight_created,
     record_reading_highlight_deleted,
@@ -22,6 +24,8 @@ __all__ = [
     "record_companion_activity",
     "load_companion_context",
     "derive_companion_knowledge_cards",
+    "record_note_created",
+    "record_note_updated",
     "record_persona_session_started",
     "record_reading_highlight_created",
     "record_reading_highlight_deleted",

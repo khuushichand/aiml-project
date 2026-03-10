@@ -97,6 +97,10 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (  # Corrected
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.Personalization import (
+    record_note_created,
+    record_note_updated,
+)
 from tldw_Server_API.app.core.Writing.note_title import TitleGenOptions, generate_note_title
 
 #
@@ -1176,6 +1180,7 @@ async def create_note(
                 "failed_keywords": list(keyword_sync_summary.get("failed_keywords", [])),
             }
 
+        record_note_created(user_id=current_user.id, note=created_note_data)
         logger.info(f"Note '{note_id}' created successfully for user (DB client_id: {db.client_id}).")
         return created_note_data  # Pydantic will convert dict to NoteResponse (including keywords)
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:
@@ -3108,6 +3113,13 @@ async def update_note(
                 "failed_count": int(keyword_sync_summary.get("failed_count", 0)),
                 "failed_keywords": list(keyword_sync_summary.get("failed_keywords", [])),
             }
+        record_note_updated(
+            user_id=current_user.id,
+            note=updated_note_data,
+            route=f"/api/v1/notes/{note_id}",
+            action="update",
+            patch=raw_data,
+        )
         logger.info(
             f"Note '{note_id}' updated successfully for user (DB client_id: {db.client_id}) to version {updated_note_data['version']}.")
         return updated_note_data
@@ -3238,6 +3250,13 @@ async def patch_note(
                 "failed_count": int(keyword_sync_summary.get("failed_count", 0)),
                 "failed_keywords": list(keyword_sync_summary.get("failed_keywords", [])),
             }
+        record_note_updated(
+            user_id=current_user.id,
+            note=updated_note_data,
+            route=f"/api/v1/notes/{note_id}",
+            action="patch",
+            patch=raw_data,
+        )
         return updated_note_data
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "note")
