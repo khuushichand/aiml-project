@@ -68,6 +68,23 @@ class _FakePolicyService:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         ]
+        self.approval_policies = [
+            {
+                "id": 17,
+                "name": "Outside Profile",
+                "description": None,
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "mode": "ask_outside_profile",
+                "rules": {"duration_options": ["once", "session"]},
+                "is_active": True,
+                "created_by": 7,
+                "updated_by": 7,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+        self.approval_decisions = []
 
     async def list_permission_profiles(self, **_kwargs):
         return list(self.permission_profiles)
@@ -155,6 +172,64 @@ class _FakePolicyService:
 
     async def delete_policy_assignment(self, assignment_id: int, *, actor_id: int | None):
         return assignment_id == 11 and actor_id == 7
+
+    async def list_approval_policies(self, **_kwargs):
+        return list(self.approval_policies)
+
+    async def create_approval_policy(self, **kwargs):
+        policy = {
+            "id": 17,
+            "name": kwargs["name"],
+            "description": kwargs.get("description"),
+            "owner_scope_type": kwargs["owner_scope_type"],
+            "owner_scope_id": kwargs.get("owner_scope_id"),
+            "mode": kwargs["mode"],
+            "rules": kwargs["rules"],
+            "is_active": kwargs.get("is_active", True),
+            "created_by": kwargs.get("actor_id"),
+            "updated_by": kwargs.get("actor_id"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.approval_policies = [policy]
+        return policy
+
+    async def update_approval_policy(self, approval_policy_id: int, **kwargs):
+        if approval_policy_id != 17:
+            return None
+        policy = dict(self.approval_policies[0])
+        if kwargs.get("name") is not None:
+            policy["name"] = kwargs["name"]
+        if kwargs.get("description") is not None:
+            policy["description"] = kwargs["description"]
+        if kwargs.get("mode") is not None:
+            policy["mode"] = kwargs["mode"]
+        if kwargs.get("rules") is not None:
+            policy["rules"] = kwargs["rules"]
+        if kwargs.get("is_active") is not None:
+            policy["is_active"] = kwargs["is_active"]
+        policy["updated_by"] = kwargs.get("actor_id")
+        self.approval_policies = [policy]
+        return policy
+
+    async def delete_approval_policy(self, approval_policy_id: int, *, actor_id: int | None):
+        return approval_policy_id == 17 and actor_id == 7
+
+    async def record_approval_decision(self, **kwargs):
+        decision = {
+            "id": 23,
+            "approval_policy_id": kwargs.get("approval_policy_id"),
+            "context_key": kwargs["context_key"],
+            "conversation_id": kwargs.get("conversation_id"),
+            "tool_name": kwargs["tool_name"],
+            "scope_key": kwargs["scope_key"],
+            "decision": kwargs["decision"],
+            "expires_at": kwargs.get("expires_at"),
+            "created_by": kwargs.get("actor_id"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.approval_decisions = [decision]
+        return decision
 
 
 def _build_app(principal: AuthPrincipal, service: _FakePolicyService | None = None) -> FastAPI:
@@ -250,6 +325,86 @@ def test_create_policy_assignment_returns_created_payload() -> None:
     assert payload["target_type"] == "persona"
     assert payload["target_id"] == "researcher"
     assert payload["inline_policy_document"]["capabilities"] == ["process.execute"]
+
+
+def test_create_approval_policy_returns_created_payload() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/approval-policies",
+            json={
+                "name": "Outside Profile",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "mode": "ask_outside_profile",
+                "rules": {"duration_options": ["once", "session"]},
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    assert payload["name"] == "Outside Profile"
+    assert payload["mode"] == "ask_outside_profile"
+    assert payload["rules"]["duration_options"] == ["once", "session"]
+
+
+def test_record_approval_decision_returns_created_payload() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/approval-decisions",
+            json={
+                "approval_policy_id": 17,
+                "context_key": "user:7|group:|persona:researcher",
+                "conversation_id": "sess-1",
+                "tool_name": "Bash",
+                "scope_key": "tool:Bash|command:abc123",
+                "decision": "approved",
+            },
+        )
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    assert payload["approval_policy_id"] == 17
+    assert payload["context_key"] == "user:7|group:|persona:researcher"
+    assert payload["decision"] == "approved"
+
+
+def test_record_approval_decision_rejects_foreign_context_key() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/approval-decisions",
+            json={
+                "approval_policy_id": 17,
+                "context_key": "user:9|group:|persona:researcher",
+                "conversation_id": "sess-1",
+                "tool_name": "Bash",
+                "scope_key": "tool:Bash|command:abc123",
+                "decision": "approved",
+            },
+        )
+
+    assert resp.status_code == 403
 
 
 def test_list_permission_profiles_returns_visible_rows() -> None:

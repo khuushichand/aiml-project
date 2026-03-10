@@ -2506,6 +2506,8 @@ async def persona_stream(
             if not server.initialized:
                 await server.initialize()
             audit_metadata = {
+                "mcp_policy_context_enabled": True,
+                "persona_id": runtime_persona_id,
                 "session_id": session_id,
                 "persona_audit": {
                     "source": "persona_ws",

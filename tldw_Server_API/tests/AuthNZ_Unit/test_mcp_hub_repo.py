@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -240,3 +241,80 @@ async def test_repo_update_policy_assignment_can_clear_nullable_fields(tmp_path,
     assert updated is not None
     assert updated["profile_id"] is None
     assert updated["approval_policy_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_repo_can_crud_approval_policy_and_match_active_decision(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    policy = await repo.create_approval_policy(
+        name="Outside Profile",
+        description="Require approval for tools outside the active profile",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        mode="ask_outside_profile",
+        rules={"duration_options": ["once", "session"]},
+        actor_id=7,
+        is_active=True,
+    )
+    assert policy["name"] == "Outside Profile"
+    assert policy["mode"] == "ask_outside_profile"
+    assert policy["rules"]["duration_options"] == ["once", "session"]
+
+    listed = await repo.list_approval_policies(owner_scope_type="user", owner_scope_id=7)
+    assert len(listed) == 1
+    assert listed[0]["name"] == "Outside Profile"
+
+    updated = await repo.update_approval_policy(
+        int(policy["id"]),
+        mode="temporary_elevation_allowed",
+        rules={"duration_options": ["session"]},
+        actor_id=8,
+    )
+    assert updated is not None
+    assert updated["mode"] == "temporary_elevation_allowed"
+    assert updated["rules"]["duration_options"] == ["session"]
+
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    decision = await repo.create_approval_decision(
+        approval_policy_id=int(policy["id"]),
+        context_key="user:7|persona:researcher",
+        conversation_id="sess-1",
+        tool_name="Bash",
+        scope_key="tool:Bash|command:git-status",
+        decision="approved",
+        expires_at=expires_at,
+        actor_id=7,
+    )
+    assert decision["decision"] == "approved"
+
+    matched = await repo.find_active_approval_decision(
+        approval_policy_id=int(policy["id"]),
+        context_key="user:7|persona:researcher",
+        conversation_id="sess-1",
+        tool_name="Bash",
+        scope_key="tool:Bash|command:git-status",
+        now=datetime.now(timezone.utc),
+    )
+    assert matched is not None
+    assert matched["decision"] == "approved"
+    assert matched["tool_name"] == "Bash"
+
+    deleted = await repo.delete_approval_policy(int(policy["id"]))
+    assert deleted is True

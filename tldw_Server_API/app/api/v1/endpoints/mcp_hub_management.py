@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +12,11 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     ACPProfileCreateRequest,
     ACPProfileResponse,
     ACPProfileUpdateRequest,
+    ApprovalDecisionCreateRequest,
+    ApprovalDecisionResponse,
+    ApprovalPolicyCreateRequest,
+    ApprovalPolicyResponse,
+    ApprovalPolicyUpdateRequest,
     ExternalSecretSetRequest,
     ExternalSecretSetResponse,
     ExternalServerCreateRequest,
@@ -299,6 +305,48 @@ def _policy_assignment_row_to_response(row: dict[str, Any]) -> PolicyAssignmentR
     )
 
 
+def _approval_policy_row_to_response(row: dict[str, Any]) -> ApprovalPolicyResponse:
+    return ApprovalPolicyResponse(
+        id=int(row.get("id")),
+        name=str(row.get("name") or ""),
+        description=row.get("description"),
+        owner_scope_type=str(row.get("owner_scope_type") or "global"),
+        owner_scope_id=row.get("owner_scope_id"),
+        mode=str(row.get("mode") or "allow_silently"),
+        rules=_load_json_object(row.get("rules")),
+        is_active=bool(row.get("is_active")),
+        created_by=row.get("created_by"),
+        updated_by=row.get("updated_by"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+def _approval_decision_row_to_response(row: dict[str, Any]) -> ApprovalDecisionResponse:
+    return ApprovalDecisionResponse(
+        id=int(row.get("id")),
+        approval_policy_id=row.get("approval_policy_id"),
+        context_key=str(row.get("context_key") or ""),
+        conversation_id=row.get("conversation_id"),
+        tool_name=str(row.get("tool_name") or ""),
+        scope_key=str(row.get("scope_key") or ""),
+        decision=str(row.get("decision") or "denied"),
+        expires_at=row.get("expires_at"),
+        created_by=row.get("created_by"),
+        created_at=row.get("created_at"),
+    )
+
+
+def _extract_context_key_user_id(context_key: str) -> int | None:
+    match = re.search(r"(?:^|\|)user:(\d+)(?:\||$)", str(context_key))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
 @router.post("/permission-profiles", response_model=PermissionProfileResponse, status_code=201)
 async def create_permission_profile(
     payload: PermissionProfileCreateRequest,
@@ -468,6 +516,114 @@ async def delete_policy_assignment(
     if not deleted:
         raise HTTPException(status_code=404, detail="Policy assignment not found")
     return MCPHubDeleteResponse(ok=True)
+
+
+@router.post("/approval-policies", response_model=ApprovalPolicyResponse, status_code=201)
+async def create_approval_policy(
+    payload: ApprovalPolicyCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ApprovalPolicyResponse:
+    """Create a new runtime approval policy within the provided owner scope."""
+    _require_mutation_permission(principal)
+    row = await svc.create_approval_policy(
+        name=payload.name,
+        description=payload.description,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+        mode=payload.mode,
+        rules=payload.rules,
+        is_active=payload.is_active,
+        actor_id=principal.user_id,
+    )
+    return _approval_policy_row_to_response(row)
+
+
+@router.get("/approval-policies", response_model=list[ApprovalPolicyResponse])
+async def list_approval_policies(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[ApprovalPolicyResponse]:
+    """List approval policies visible to the current principal with scope-constrained filtering."""
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_approval_policies(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    return [_approval_policy_row_to_response(row) for row in rows]
+
+
+@router.put("/approval-policies/{approval_policy_id}", response_model=ApprovalPolicyResponse)
+async def update_approval_policy(
+    approval_policy_id: int,
+    payload: ApprovalPolicyUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ApprovalPolicyResponse:
+    """Update an approval policy by id."""
+    _require_mutation_permission(principal)
+    row = await svc.update_approval_policy(
+        approval_policy_id,
+        actor_id=principal.user_id,
+        **payload.model_dump(exclude_unset=True),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Approval policy not found")
+    return _approval_policy_row_to_response(row)
+
+
+@router.delete("/approval-policies/{approval_policy_id}", response_model=MCPHubDeleteResponse)
+async def delete_approval_policy(
+    approval_policy_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete an approval policy by id."""
+    _require_mutation_permission(principal)
+    deleted = await svc.delete_approval_policy(approval_policy_id, actor_id=principal.user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Approval policy not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.post("/approval-decisions", response_model=ApprovalDecisionResponse, status_code=201)
+async def create_approval_decision(
+    payload: ApprovalDecisionCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ApprovalDecisionResponse:
+    """Persist a user approval or denial decision for a pending MCP Hub runtime approval."""
+    actor_id = int(principal.user_id) if principal.user_id is not None else None
+    context_user_id = _extract_context_key_user_id(payload.context_key)
+    if actor_id is None:
+        raise HTTPException(status_code=403, detail="Authenticated user required")
+    if context_user_id is None:
+        raise HTTPException(status_code=422, detail="context_key must include a numeric user id")
+    if context_user_id != actor_id and not _is_mutation_allowed(principal):
+        raise HTTPException(status_code=403, detail="Forbidden approval context")
+
+    row = await svc.record_approval_decision(
+        approval_policy_id=payload.approval_policy_id,
+        context_key=payload.context_key,
+        conversation_id=payload.conversation_id,
+        tool_name=payload.tool_name,
+        scope_key=payload.scope_key,
+        decision=payload.decision,
+        expires_at=payload.expires_at,
+        actor_id=actor_id,
+    )
+    return _approval_decision_row_to_response(row)
 
 
 @router.get("/acp-profiles", response_model=list[ACPProfileResponse])

@@ -13,14 +13,14 @@
 ## Stage 3: Effective Policy Resolver
 **Goal**: Resolve effective MCP tool policy from default, group, persona, and override inputs.
 **Success Criteria**: A resolver returns deterministic effective policy and denial/approval metadata from stored MCP Hub state without depending on ACP as the source of truth.
-**Tests**: Resolver unit tests for merge order, scope handling, broadening checks, and deny precedence.
-**Status**: Not Started
+**Tests**: `python -m pytest tldw_Server_API/app/core/MCP_unified/tests/test_protocol_*.py tldw_Server_API/app/core/MCP_unified/tests/test_scope_and_fallbacks.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_policy_resolver.py -v`
+**Status**: Complete
 
 ## Stage 4: Runtime Approval Models
 **Goal**: Add approval policy storage and runtime elevation handling for MCP tool execution.
 **Success Criteria**: Approval modes and temporary elevations can be persisted, resolved, and enforced at execution time with audit logging.
-**Tests**: Integration tests for silent allow, approval-required flows, approval expiry, and denial behavior.
-**Status**: Not Started
+**Tests**: `python -m pytest tldw_Server_API/tests/AuthNZ_Unit/test_mcp_hub_repo.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_policy_api.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_approval_service.py tldw_Server_API/tests/MCP_unified/test_mcp_hub_policy_resolver.py tldw_Server_API/app/core/MCP_unified/tests/test_protocol_*.py tldw_Server_API/app/core/MCP_unified/tests/test_scope_and_fallbacks.py -v`
+**Status**: Complete
 
 ## Stage 5: UI Integration
 **Goal**: Rebuild MCP Hub into the primary tool-governance editor and expose effective summaries in persona surfaces.

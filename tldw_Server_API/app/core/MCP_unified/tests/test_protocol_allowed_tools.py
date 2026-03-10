@@ -179,3 +179,240 @@ async def test_protocol_tools_call_blocks_command_pattern_mismatch(monkeypatch):
 
     with pytest.raises(PermissionError):
         await proto._handle_tools_call({"name": "Bash", "arguments": {"command": "npm test"}}, ctx)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_protocol_tools_call_blocks_tool_denied_by_effective_policy(monkeypatch):
+    os.environ["TEST_MODE"] = "true"
+
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, RequestContext
+
+    class _ModuleStub:
+        name = "Shell"
+
+        async def get_tools(self):
+            return [{"name": "Bash", "description": "", "inputSchema": {"type": "object"}}]
+
+        async def execute_tool(self, tool_name, arguments, context=None):
+            return {"ok": True}
+
+        async def execute_with_circuit_breaker(self, func, *args, **kwargs):
+            return await func(*args, **kwargs)
+
+        def sanitize_input(self, args):
+            return args
+
+        def validate_tool_arguments(self, tool_name, tool_args):
+            return None
+
+        def is_write_tool_def(self, tool_def):
+            return False
+
+    class _RegistryStub:
+        async def find_module_for_tool(self, tool_name):
+            return _ModuleStub() if tool_name == "Bash" else None
+
+        def get_module_id_for_tool(self, tool_name):
+            return "shell"
+
+    proto = MCPProtocol()
+    proto.module_registry = _RegistryStub()
+
+    async def _allow_mod(ctx, mid):
+        return True
+
+    async def _allow_tool(ctx, name, **_kwargs):
+        return True
+
+    async def _resolve_policy(_ctx):
+        return {
+            "enabled": True,
+            "allowed_tools": ["notes.search"],
+            "denied_tools": [],
+            "capabilities": [],
+            "sources": [],
+        }
+
+    proto._has_module_permission = _allow_mod  # type: ignore
+    proto._has_tool_permission = _allow_tool  # type: ignore
+    proto._resolve_effective_tool_policy = _resolve_policy  # type: ignore[attr-defined]
+
+    ctx = RequestContext(
+        request_id="mcp-hub-policy-deny",
+        user_id="1",
+        client_id="unit",
+        session_id=None,
+        metadata={"mcp_policy_context_enabled": True},
+    )
+
+    with pytest.raises(PermissionError, match="MCP Hub policy"):
+        await proto._handle_tools_call({"name": "Bash", "arguments": {"command": "git status"}}, ctx)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_protocol_tools_call_allows_tool_matching_effective_policy_pattern(monkeypatch):
+    os.environ["TEST_MODE"] = "true"
+
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, RequestContext
+
+    class _ModuleStub:
+        name = "Shell"
+
+        async def get_tools(self):
+            return [{"name": "Bash", "description": "", "inputSchema": {"type": "object"}}]
+
+        async def execute_tool(self, tool_name, arguments, context=None):
+            return {"ok": True}
+
+        async def execute_with_circuit_breaker(self, func, *args, **kwargs):
+            return await func(*args, **kwargs)
+
+        def sanitize_input(self, args):
+            return args
+
+        def validate_tool_arguments(self, tool_name, tool_args):
+            return None
+
+        def is_write_tool_def(self, tool_def):
+            return False
+
+    class _RegistryStub:
+        async def find_module_for_tool(self, tool_name):
+            return _ModuleStub() if tool_name == "Bash" else None
+
+        def get_module_id_for_tool(self, tool_name):
+            return "shell"
+
+    proto = MCPProtocol()
+    proto.module_registry = _RegistryStub()
+
+    async def _allow_mod(ctx, mid):
+        return True
+
+    async def _allow_tool(ctx, name, **_kwargs):
+        return True
+
+    async def _resolve_policy(_ctx):
+        return {
+            "enabled": True,
+            "allowed_tools": ["Bash(git *)"],
+            "denied_tools": [],
+            "capabilities": [],
+            "sources": [],
+        }
+
+    proto._has_module_permission = _allow_mod  # type: ignore
+    proto._has_tool_permission = _allow_tool  # type: ignore
+    proto._resolve_effective_tool_policy = _resolve_policy  # type: ignore[attr-defined]
+
+    ctx = RequestContext(
+        request_id="mcp-hub-policy-allow",
+        user_id="1",
+        client_id="unit",
+        session_id=None,
+        metadata={"mcp_policy_context_enabled": True},
+    )
+
+    result = await proto._handle_tools_call({"name": "Bash", "arguments": {"command": "git status"}}, ctx)
+    assert isinstance(result, dict)
+    assert result.get("tool") == "Bash"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_protocol_process_request_returns_approval_required_payload(monkeypatch):
+    os.environ["TEST_MODE"] = "true"
+
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, MCPRequest, RequestContext
+
+    class _AllowAllRBAC:
+        async def check_permission(self, *_args, **_kwargs):
+            return True
+
+    class _ModuleStub:
+        name = "Shell"
+
+        async def get_tools(self):
+            return [{"name": "Bash", "description": "", "inputSchema": {"type": "object"}}]
+
+        async def execute_tool(self, tool_name, arguments, context=None):
+            return {"ok": True}
+
+        async def execute_with_circuit_breaker(self, func, *args, **kwargs):
+            return await func(*args, **kwargs)
+
+        def sanitize_input(self, args):
+            return args
+
+        def validate_tool_arguments(self, tool_name, tool_args):
+            return None
+
+        def is_write_tool_def(self, tool_def):
+            return False
+
+    class _RegistryStub:
+        async def find_module_for_tool(self, tool_name):
+            return _ModuleStub() if tool_name == "Bash" else None
+
+        def get_module_id_for_tool(self, tool_name):
+            return "shell"
+
+    proto = MCPProtocol()
+    proto.module_registry = _RegistryStub()
+    proto.rbac_policy = _AllowAllRBAC()
+
+    async def _allow_mod(ctx, mid):
+        return True
+
+    async def _allow_tool(ctx, name, **_kwargs):
+        return True
+
+    async def _resolve_policy(_ctx):
+        return {
+            "enabled": True,
+            "allowed_tools": ["notes.search"],
+            "denied_tools": [],
+            "capabilities": [],
+            "approval_policy_id": 17,
+            "approval_mode": "ask_outside_profile",
+            "sources": [],
+        }
+
+    async def _require_approval(*_args, **_kwargs):
+        return {
+            "status": "approval_required",
+            "approval": {
+                "approval_policy_id": 17,
+                "tool_name": "Bash",
+                "context_key": "user:1|persona:researcher",
+                "conversation_id": "sess-1",
+                "scope_key": "tool:Bash",
+                "reason": "outside_profile",
+                "duration_options": ["once", "session"],
+            },
+        }
+
+    proto._has_module_permission = _allow_mod  # type: ignore
+    proto._has_tool_permission = _allow_tool  # type: ignore
+    proto._resolve_effective_tool_policy = _resolve_policy  # type: ignore[attr-defined]
+    proto._evaluate_runtime_approval = _require_approval  # type: ignore[attr-defined]
+
+    ctx = RequestContext(
+        request_id="mcp-hub-policy-approval",
+        user_id="1",
+        client_id="unit",
+        session_id="sess-1",
+        metadata={"mcp_policy_context_enabled": True, "persona_id": "researcher"},
+    )
+    request = MCPRequest(
+        method="tools/call",
+        params={"name": "Bash", "arguments": {"command": "git status"}},
+        id="approval-1",
+    )
+
+    response = await proto.process_request(request, ctx)
+    assert response.error is not None
+    assert response.error.code == -32001
+    assert response.error.data["approval"]["reason"] == "outside_profile"

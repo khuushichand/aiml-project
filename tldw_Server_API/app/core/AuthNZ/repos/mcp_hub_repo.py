@@ -12,6 +12,13 @@ from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 _VALID_SCOPE_TYPES = {"global", "org", "team", "user"}
 _VALID_TARGET_TYPES = {"default", "group", "persona"}
 _VALID_PROFILE_MODES = {"preset", "custom"}
+_VALID_APPROVAL_MODES = {
+    "allow_silently",
+    "ask_every_time",
+    "ask_outside_profile",
+    "ask_on_sensitive_actions",
+    "temporary_elevation_allowed",
+}
 _UNSET = object()
 
 
@@ -48,6 +55,13 @@ def _normalize_profile_mode(mode: str | None) -> str:
     value = str(mode or "").strip().lower()
     if value not in _VALID_PROFILE_MODES:
         raise ValueError(f"Invalid profile mode: {mode}")
+    return value
+
+
+def _normalize_approval_mode(mode: str | None) -> str:
+    value = str(mode or "").strip().lower()
+    if value not in _VALID_APPROVAL_MODES:
+        raise ValueError(f"Invalid approval mode: {mode}")
     return value
 
 
@@ -164,6 +178,21 @@ class McpHubRepo:
         out["is_active"] = _to_bool(out.get("is_active"))
         out["inline_policy_document"] = _load_json_dict(out.pop("inline_policy_document_json", None))
         return out
+
+    @staticmethod
+    def _normalize_approval_policy_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        out = dict(row)
+        out["is_active"] = _to_bool(out.get("is_active"))
+        out["rules"] = _load_json_dict(out.pop("rules_json", None))
+        return out
+
+    @staticmethod
+    def _normalize_approval_decision_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        return dict(row)
 
     async def create_acp_profile(
         self,
@@ -731,6 +760,304 @@ class McpHubRepo:
         )
         rowcount = getattr(cursor, "rowcount", 0)
         return bool(rowcount and rowcount > 0)
+
+    async def create_approval_policy(
+        self,
+        *,
+        name: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        mode: str,
+        rules: dict[str, Any],
+        actor_id: int | None,
+        description: str | None = None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        scope_type = _normalize_scope_type(owner_scope_type)
+        approval_mode = _normalize_approval_mode(mode)
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = is_active if getattr(self.db_pool, "pool", None) is not None else int(is_active)
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_approval_policies (
+                name, description, owner_scope_type, owner_scope_id, mode, rules_json, is_active,
+                created_by, updated_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name.strip(),
+                description,
+                scope_type,
+                owner_scope_id,
+                approval_mode,
+                json.dumps(rules or {}),
+                active_value,
+                actor_id,
+                actor_id,
+                ts,
+                ts,
+            ),
+        )
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id
+            FROM mcp_approval_policies
+            WHERE name = ?
+              AND owner_scope_type = ?
+              AND (
+                (owner_scope_id IS NULL AND ? IS NULL)
+                OR owner_scope_id = ?
+              )
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (name.strip(), scope_type, owner_scope_id, owner_scope_id),
+        )
+        if not row:
+            return {}
+        created = await self.get_approval_policy(int(row["id"]))
+        return created or {}
+
+    async def get_approval_policy(self, approval_policy_id: int) -> dict[str, Any] | None:
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, name, description, owner_scope_type, owner_scope_id, mode, rules_json, is_active,
+                   created_by, updated_by, created_at, updated_at
+            FROM mcp_approval_policies
+            WHERE id = ?
+            """,
+            (int(approval_policy_id),),
+        )
+        return self._normalize_approval_policy_row(self._row_to_dict(row) if row else None)
+
+    async def list_approval_policies(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_scope_type = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not None
+            else None
+        )
+        normalized_scope_id = int(owner_scope_id) if owner_scope_id is not None else None
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, name, description, owner_scope_type, owner_scope_id, mode, rules_json, is_active,
+                   created_by, updated_by, created_at, updated_at
+            FROM mcp_approval_policies
+            WHERE (? IS NULL OR owner_scope_type = ?)
+              AND (? IS NULL OR owner_scope_id = ?)
+            ORDER BY name, id
+            """,
+            (
+                normalized_scope_type,
+                normalized_scope_type,
+                normalized_scope_id,
+                normalized_scope_id,
+            ),
+        )
+        return [
+            self._normalize_approval_policy_row(self._row_to_dict(row)) or {}
+            for row in rows
+        ]
+
+    async def update_approval_policy(
+        self,
+        approval_policy_id: int,
+        *,
+        name: str | object = _UNSET,
+        description: str | None | object = _UNSET,
+        owner_scope_type: str | object = _UNSET,
+        owner_scope_id: int | None | object = _UNSET,
+        mode: str | object = _UNSET,
+        rules: dict[str, Any] | None | object = _UNSET,
+        is_active: bool | object = _UNSET,
+        actor_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_approval_policy(approval_policy_id)
+        if not existing:
+            return None
+
+        next_name = str(existing["name"]) if name is _UNSET else str(name).strip()
+        next_description = existing.get("description") if description is _UNSET else description
+        next_scope = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not _UNSET
+            else str(existing["owner_scope_type"])
+        )
+        next_scope_id = existing.get("owner_scope_id") if owner_scope_id is _UNSET else owner_scope_id
+        next_mode = (
+            _normalize_approval_mode(mode)
+            if mode is not _UNSET
+            else str(existing["mode"])
+        )
+        next_rules = (
+            dict(existing.get("rules") or {})
+            if rules is _UNSET
+            else dict(rules or {})
+        )
+        next_active = _to_bool(existing.get("is_active")) if is_active is _UNSET else _to_bool(is_active)
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = next_active if getattr(self.db_pool, "pool", None) is not None else int(next_active)
+
+        await self.db_pool.execute(
+            """
+            UPDATE mcp_approval_policies
+            SET name = ?,
+                description = ?,
+                owner_scope_type = ?,
+                owner_scope_id = ?,
+                mode = ?,
+                rules_json = ?,
+                is_active = ?,
+                updated_by = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                next_name,
+                next_description,
+                next_scope,
+                next_scope_id,
+                next_mode,
+                json.dumps(next_rules or {}),
+                active_value,
+                actor_id,
+                ts,
+                int(approval_policy_id),
+            ),
+        )
+        return await self.get_approval_policy(approval_policy_id)
+
+    async def delete_approval_policy(self, approval_policy_id: int) -> bool:
+        cursor = await self.db_pool.execute(
+            "DELETE FROM mcp_approval_policies WHERE id = ?",
+            (int(approval_policy_id),),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        return bool(rowcount and rowcount > 0)
+
+    async def create_approval_decision(
+        self,
+        *,
+        approval_policy_id: int | None,
+        context_key: str,
+        conversation_id: str | None,
+        tool_name: str,
+        scope_key: str,
+        decision: str,
+        expires_at: datetime | str | None,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        normalized_decision = str(decision or "").strip().lower()
+        if normalized_decision not in {"approved", "denied"}:
+            raise ValueError(f"Invalid approval decision: {decision}")
+        normalized_expires_at = expires_at
+        if isinstance(expires_at, datetime) and getattr(self.db_pool, "pool", None) is None:
+            normalized_expires_at = expires_at.isoformat()
+        now = datetime.now(timezone.utc)
+        created_at = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_approval_decisions (
+                approval_policy_id, context_key, conversation_id, tool_name, scope_key,
+                decision, expires_at, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                approval_policy_id,
+                str(context_key).strip(),
+                str(conversation_id).strip() if conversation_id is not None else None,
+                str(tool_name).strip(),
+                str(scope_key).strip(),
+                normalized_decision,
+                normalized_expires_at,
+                actor_id,
+                created_at,
+            ),
+        )
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, approval_policy_id, context_key, conversation_id, tool_name, scope_key,
+                   decision, expires_at, created_by, created_at
+            FROM mcp_approval_decisions
+            WHERE context_key = ?
+              AND (
+                (conversation_id IS NULL AND ? IS NULL)
+                OR conversation_id = ?
+              )
+              AND tool_name = ?
+              AND scope_key = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (
+                str(context_key).strip(),
+                str(conversation_id).strip() if conversation_id is not None else None,
+                str(conversation_id).strip() if conversation_id is not None else None,
+                str(tool_name).strip(),
+                str(scope_key).strip(),
+            ),
+        )
+        return self._normalize_approval_decision_row(self._row_to_dict(row) if row else None) or {}
+
+    async def find_active_approval_decision(
+        self,
+        *,
+        approval_policy_id: int | None,
+        context_key: str,
+        conversation_id: str | None,
+        tool_name: str,
+        scope_key: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, approval_policy_id, context_key, conversation_id, tool_name, scope_key,
+                   decision, expires_at, created_by, created_at
+            FROM mcp_approval_decisions
+            WHERE (? IS NULL OR approval_policy_id = ?)
+              AND context_key = ?
+              AND (
+                (? IS NULL AND conversation_id IS NULL)
+                OR conversation_id = ?
+                OR conversation_id IS NULL
+              )
+              AND tool_name = ?
+              AND scope_key = ?
+            ORDER BY id DESC
+            """,
+            (
+                approval_policy_id,
+                approval_policy_id,
+                str(context_key).strip(),
+                str(conversation_id).strip() if conversation_id is not None else None,
+                str(conversation_id).strip() if conversation_id is not None else None,
+                str(tool_name).strip(),
+                str(scope_key).strip(),
+            ),
+        )
+        current = now or datetime.now(timezone.utc)
+        for row in rows:
+            normalized = self._normalize_approval_decision_row(self._row_to_dict(row)) or {}
+            expires_at = normalized.get("expires_at")
+            if expires_at:
+                try:
+                    expiry_dt = (
+                        expires_at
+                        if isinstance(expires_at, datetime)
+                        else datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+                    )
+                    if expiry_dt <= current:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            return normalized
+        return None
 
     async def upsert_external_server(
         self,

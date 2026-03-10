@@ -754,6 +754,7 @@ async def mcp_request(
         if auth.user.permissions:
             metadata.setdefault("permissions", auth.user.permissions)
 
+    metadata["mcp_policy_context_enabled"] = True
     if mcp_session_id:
         metadata["session_id"] = mcp_session_id
     if safe_config:
@@ -848,6 +849,7 @@ async def mcp_request_batch(
             metadata.setdefault("roles", auth.user.roles)
         if auth.user.permissions:
             metadata.setdefault("permissions", auth.user.permissions)
+    metadata["mcp_policy_context_enabled"] = True
     if mcp_session_id:
         metadata["session_id"] = mcp_session_id
     if safe_config:

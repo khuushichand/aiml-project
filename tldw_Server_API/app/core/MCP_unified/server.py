@@ -1057,6 +1057,7 @@ class MCPServer:
             # Create request context
             context_metadata = dict(connection.metadata)
             try:
+                context_metadata["mcp_policy_context_enabled"] = True
                 if sess and sess.safe_config:
                     context_metadata["safe_config"] = dict(sess.safe_config)
                 if sess:

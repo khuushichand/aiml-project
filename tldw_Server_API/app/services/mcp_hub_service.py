@@ -249,6 +249,125 @@ class McpHubService:
             )
         return deleted
 
+    async def create_approval_policy(
+        self,
+        *,
+        name: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        mode: str,
+        rules: dict[str, Any],
+        actor_id: int | None,
+        description: str | None = None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        row = await self.repo.create_approval_policy(
+            name=name,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            mode=mode,
+            rules=rules,
+            actor_id=actor_id,
+            description=description,
+            is_active=is_active,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.approval_policy.create",
+                actor_id=actor_id,
+                resource_type="mcp_approval_policy",
+                resource_id=str(row.get("id") or ""),
+                metadata={"name": row.get("name"), "mode": row.get("mode")},
+            )
+        )
+        return row
+
+    async def list_approval_policies(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self.repo.list_approval_policies(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+
+    async def update_approval_policy(
+        self,
+        approval_policy_id: int,
+        *,
+        actor_id: int | None = None,
+        **update_fields: Any,
+    ) -> dict[str, Any] | None:
+        row = await self.repo.update_approval_policy(
+            approval_policy_id,
+            actor_id=actor_id,
+            **update_fields,
+        )
+        if row:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.approval_policy.update",
+                    actor_id=actor_id,
+                    resource_type="mcp_approval_policy",
+                    resource_id=str(row.get("id") or approval_policy_id),
+                    metadata={"name": row.get("name"), "mode": row.get("mode")},
+                )
+            )
+        return row
+
+    async def delete_approval_policy(self, approval_policy_id: int, *, actor_id: int | None) -> bool:
+        deleted = await self.repo.delete_approval_policy(approval_policy_id)
+        if deleted:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.approval_policy.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_approval_policy",
+                    resource_id=str(approval_policy_id),
+                    metadata=None,
+                )
+            )
+        return deleted
+
+    async def record_approval_decision(
+        self,
+        *,
+        approval_policy_id: int | None,
+        context_key: str,
+        conversation_id: str | None,
+        tool_name: str,
+        scope_key: str,
+        decision: str,
+        expires_at: Any,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        row = await self.repo.create_approval_decision(
+            approval_policy_id=approval_policy_id,
+            context_key=context_key,
+            conversation_id=conversation_id,
+            tool_name=tool_name,
+            scope_key=scope_key,
+            decision=decision,
+            expires_at=expires_at,
+            actor_id=actor_id,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.approval_decision.create",
+                actor_id=actor_id,
+                resource_type="mcp_approval_decision",
+                resource_id=str(row.get("id") or ""),
+                metadata={
+                    "approval_policy_id": approval_policy_id,
+                    "tool_name": tool_name,
+                    "decision": decision,
+                },
+            )
+        )
+        return row
+
     async def create_acp_profile(
         self,
         *,
