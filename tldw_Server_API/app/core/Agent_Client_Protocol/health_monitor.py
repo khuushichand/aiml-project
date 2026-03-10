@@ -6,7 +6,7 @@ health status with consecutive failure counting.
 from __future__ import annotations
 
 import asyncio
-import time
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -35,10 +35,12 @@ class AgentHealthMonitor:
     def __init__(
         self,
         registry: Any = None,
+        db: Any = None,
         check_interval: float = 60.0,
         failure_threshold: int = 3,
     ) -> None:
         self._registry = registry
+        self._db = db
         self._check_interval = check_interval
         self._failure_threshold = failure_threshold
         self._statuses: dict[str, AgentHealthStatus] = {}
@@ -79,6 +81,19 @@ class AgentHealthMonitor:
                 else:
                     status.health = "degraded"
 
+            # Persist to DB if available
+            if self._db is not None:
+                try:
+                    self._db.record_health_check(
+                        agent_type=entry.type,
+                        health=status.health,
+                        consecutive_failures=status.consecutive_failures,
+                        details=json.dumps(avail),
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to persist health check for '{}': {}",
+                                   entry.type, exc)
+
         return self._statuses
 
     def get_status(self, agent_type: str) -> AgentHealthStatus | None:
@@ -115,9 +130,10 @@ class AgentHealthMonitor:
 
     async def _check_loop(self) -> None:
         """Background loop that periodically checks all agents."""
+        loop = asyncio.get_running_loop()
         while self._running:
             try:
-                self.check_all()
+                await loop.run_in_executor(None, self.check_all)
             except Exception as exc:
                 logger.error("Health check failed: {}", exc)
             await asyncio.sleep(self._check_interval)
@@ -137,4 +153,14 @@ def get_health_monitor() -> AgentHealthMonitor:
     global _monitor
     if _monitor is None:
         _monitor = AgentHealthMonitor()
+    return _monitor
+
+
+def configure_health_monitor(registry: Any = None, db: Any = None) -> AgentHealthMonitor:
+    """Configure the singleton health monitor with registry and DB.
+
+    Call this once at application startup after dependencies are available.
+    """
+    global _monitor
+    _monitor = AgentHealthMonitor(registry=registry, db=db)
     return _monitor
