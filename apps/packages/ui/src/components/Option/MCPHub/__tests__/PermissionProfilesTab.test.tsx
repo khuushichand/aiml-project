@@ -61,6 +61,7 @@ describe("PermissionProfilesTab", () => {
           uses_credentials: false,
           supports_arguments_preview: true,
           path_boundable: false,
+          path_argument_hints: [],
           metadata_source: "explicit",
           metadata_warnings: []
         }

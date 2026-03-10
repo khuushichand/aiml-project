@@ -24,6 +24,7 @@ const TOOL_REGISTRY: McpHubToolRegistryEntry[] = [
     uses_credentials: false,
     supports_arguments_preview: true,
     path_boundable: false,
+    path_argument_hints: ["path"],
     metadata_source: "explicit",
     metadata_warnings: []
   },
@@ -41,6 +42,7 @@ const TOOL_REGISTRY: McpHubToolRegistryEntry[] = [
     uses_credentials: false,
     supports_arguments_preview: true,
     path_boundable: false,
+    path_argument_hints: [],
     metadata_source: "heuristic",
     metadata_warnings: []
   },
@@ -58,6 +60,7 @@ const TOOL_REGISTRY: McpHubToolRegistryEntry[] = [
     uses_credentials: true,
     supports_arguments_preview: true,
     path_boundable: false,
+    path_argument_hints: [],
     metadata_source: "heuristic",
     metadata_warnings: []
   }
@@ -70,7 +73,9 @@ describe("policyHelpers", () => {
         allowed_tools: ["notes.search", "Bash(git *)"],
         denied_tools: ["sandbox.run"],
         capabilities: ["filesystem.read", "mcp.server.connect"],
-        approval_mode: "ask_every_time"
+        approval_mode: "ask_every_time",
+        path_scope_mode: "workspace_root",
+        path_scope_enforcement: "approval_required_when_unenforceable"
       },
       selectedTools: ["notes.search", "remote.fetch"],
       deniedTools: ["sandbox.run"],
@@ -81,6 +86,8 @@ describe("policyHelpers", () => {
     expect(next.denied_tools).toEqual(["sandbox.run"])
     expect(next.capabilities).toEqual(["filesystem.read", "mcp.server.connect", "network.external"])
     expect(next.approval_mode).toEqual("ask_every_time")
+    expect(next.path_scope_mode).toEqual("workspace_root")
+    expect(next.path_scope_enforcement).toEqual("approval_required_when_unenforceable")
   })
 
   it("derives read-only presets from registry metadata and preserves pattern separation", () => {

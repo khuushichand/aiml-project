@@ -340,7 +340,9 @@ class _FakePolicyResolver:
             "policy_document": {
                 "allowed_tools": ["Bash(git *)"],
                 "denied_tools": ["Bash(rm *)"],
-                "capabilities": ["process.execute"]
+                "capabilities": ["process.execute"],
+                "path_scope_mode": "workspace_root",
+                "path_scope_enforcement": "approval_required_when_unenforceable",
             },
             "sources": [
                 {
@@ -393,6 +395,7 @@ class _FakeToolRegistryService:
                 "uses_credentials": False,
                 "supports_arguments_preview": True,
                 "path_boundable": False,
+                "path_argument_hints": ["path"],
                 "metadata_source": "explicit",
                 "metadata_warnings": [],
             },
@@ -410,6 +413,7 @@ class _FakeToolRegistryService:
                 "uses_credentials": False,
                 "supports_arguments_preview": True,
                 "path_boundable": False,
+                "path_argument_hints": [],
                 "metadata_source": "heuristic",
                 "metadata_warnings": ["Derived from tool category"],
             },
@@ -812,6 +816,8 @@ def test_get_effective_policy_returns_resolved_payload() -> None:
     assert payload["enabled"] is True
     assert payload["allowed_tools"] == ["Bash(git *)"]
     assert payload["approval_mode"] == "ask_outside_profile"
+    assert payload["policy_document"]["path_scope_mode"] == "workspace_root"
+    assert payload["policy_document"]["path_scope_enforcement"] == "approval_required_when_unenforceable"
     assert payload["sources"][0]["target_id"] == "researcher"
     assert payload["provenance"][1]["source_kind"] == "assignment_override"
 
@@ -924,7 +930,9 @@ def test_list_tool_registry_returns_normalized_entries() -> None:
     assert len(payload) == 2
     assert payload[0]["tool_name"] == "notes.search"
     assert payload[0]["risk_class"] == "low"
+    assert payload[0]["path_argument_hints"] == ["path"]
     assert payload[1]["tool_name"] == "sandbox.run"
+    assert payload[1]["path_argument_hints"] == []
     assert payload[1]["metadata_warnings"] == ["Derived from tool category"]
 
 

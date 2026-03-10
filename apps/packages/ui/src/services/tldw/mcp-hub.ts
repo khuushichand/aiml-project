@@ -14,6 +14,8 @@ export type McpHubApprovalDecision = "approved" | "denied"
 export type McpHubApprovalDuration = "once" | "session" | "conversation"
 export type McpHubToolRiskClass = "low" | "medium" | "high" | "unclassified"
 export type McpHubToolMetadataSource = "explicit" | "heuristic" | "fallback"
+export type McpHubPathScopeMode = "none" | "workspace_root" | "cwd_descendants"
+export type McpHubPathScopeEnforcement = "approval_required_when_unenforceable"
 
 export type McpHubProfile = {
   id: number
@@ -54,6 +56,8 @@ export type McpHubPermissionPolicyDocument = {
   tool_names?: string[]
   tool_patterns?: string[]
   approval_mode?: McpHubApprovalMode | null
+  path_scope_mode?: McpHubPathScopeMode | null
+  path_scope_enforcement?: McpHubPathScopeEnforcement | null
 }
 
 export type McpHubPermissionProfile = {
@@ -256,6 +260,7 @@ export type McpHubToolRegistryEntry = {
   uses_credentials: boolean
   supports_arguments_preview: boolean
   path_boundable: boolean
+  path_argument_hints: string[]
   metadata_source: McpHubToolMetadataSource
   metadata_warnings: string[]
 }

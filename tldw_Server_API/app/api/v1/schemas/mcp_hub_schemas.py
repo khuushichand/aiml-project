@@ -21,6 +21,8 @@ ApprovalDecision = Literal["approved", "denied"]
 ApprovalDuration = Literal["once", "session", "conversation"]
 ToolRiskClass = Literal["low", "medium", "high", "unclassified"]
 ToolMetadataSource = Literal["explicit", "heuristic", "fallback"]
+PathScopeMode = Literal["none", "workspace_root", "cwd_descendants"]
+PathScopeEnforcement = Literal["approval_required_when_unenforceable"]
 
 
 class ACPProfileCreateRequest(BaseModel):
@@ -255,6 +257,7 @@ class ToolRegistryEntryResponse(BaseModel):
     uses_credentials: bool = False
     supports_arguments_preview: bool = False
     path_boundable: bool = False
+    path_argument_hints: list[str] = Field(default_factory=list)
     metadata_source: ToolMetadataSource
     metadata_warnings: list[str] = Field(default_factory=list)
 

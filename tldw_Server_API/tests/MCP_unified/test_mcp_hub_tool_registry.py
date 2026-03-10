@@ -29,6 +29,7 @@ class _RegistryProbeModule(BaseModule):
                     "category": "search",
                     "risk_class": "low",
                     "capabilities": ["filesystem.read"],
+                    "path_argument_hints": ["path"],
                     "readOnlyHint": True,
                 },
             ),
@@ -69,12 +70,14 @@ async def test_tool_registry_normalizes_explicit_and_fallback_metadata() -> None
     assert explicit["category"] == "search"
     assert explicit["risk_class"] == "low"
     assert explicit["capabilities"] == ["filesystem.read"]
+    assert explicit["path_argument_hints"] == ["path"]
     assert explicit["metadata_source"] == "explicit"
     assert explicit["metadata_warnings"] == []
 
     unknown = by_name["probe.unknown"]
     assert unknown["module"] == "probe"
     assert unknown["risk_class"] == "unclassified"
+    assert unknown["path_argument_hints"] == []
     assert unknown["metadata_source"] in {"heuristic", "fallback"}
     assert unknown["metadata_warnings"]
 
@@ -98,4 +101,3 @@ async def test_tool_registry_derives_execution_risk_and_groups_modules() -> None
     assert groups[0]["module"] == "probe"
     assert groups[0]["tool_count"] == 3
     assert groups[0]["risk_summary"]["high"] == 1
-
