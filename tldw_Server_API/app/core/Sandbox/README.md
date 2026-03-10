@@ -24,7 +24,7 @@
 - `lima`: strict macOS-host VM path with explicit deny-all readiness checks.
 - `vz_linux`: Apple `Virtualization.framework` Linux guest scaffold on Apple silicon macOS hosts.
 - `vz_macos`: Apple `Virtualization.framework` macOS guest scaffold on Apple silicon macOS hosts.
-- `seatbelt`: host-local process isolation scaffold for conservative macOS trusted workflows.
+- `seatbelt`: host-local process isolation runtime for conservative trusted macOS workflows, compatibility-gated by deprecated `sandbox-exec`.
 
 Trust-level rules:
 
@@ -41,7 +41,8 @@ Trust-level rules:
 - macOS scaffolding currently includes:
   - fake-backed helper contract in `macos_virtualization/`
   - manifest/image-store contract in `image_store.py`
-  - fake-backed runners for `vz_linux`, `vz_macos`, and `seatbelt`
+  - fake-backed runners for `vz_linux` and `vz_macos`
+  - a real trusted-only `seatbelt` runner that stages a run-local workspace and launches through `sandbox-exec`
 
 Current limitations:
 
@@ -49,6 +50,8 @@ Current limitations:
 - `vz_linux` and `vz_macos` require helper/template readiness plus `*_FAKE_EXEC=1`; otherwise discovery reports `real_execution_not_implemented`.
 - Strict allowlist networking is not implemented for `vz_linux`, `vz_macos`, or `seatbelt`.
 - `seatbelt` discovery may be `available=True` while `strict_deny_all_supported=False`; deny-all is a best-effort host policy claim, not a VM-grade guarantee.
+- `seatbelt` control files and isolated `HOME`/temp dirs live outside the writable workspace and are removed after each run.
+- `seatbelt` real execution still depends on deprecated `sandbox-exec` and may be blocked by an enclosing sandbox even on macOS hosts.
 - Warm session VM reuse is not implemented yet.
 - `seatbelt` is intentionally conservative and should not be treated as equivalent to a VM boundary.
 

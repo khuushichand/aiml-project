@@ -5,7 +5,7 @@ import fnmatch
 import os
 import shutil
 import signal
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tempfile
 import threading
@@ -308,7 +308,8 @@ class SeatbeltRunner:
             profile_path = os.path.join(control, "seatbelt.sb")
             Path(profile_path).write_text(profile_text, encoding="utf-8")
 
-            proc = subprocess.Popen(
+            # The launcher is fixed to sandbox-exec and the command argv is resolved without a shell.
+            proc = subprocess.Popen(  # nosec B603
                 [_SANDBOX_EXEC_PATH, "-f", profile_path, *command_argv],
                 cwd=workspace,
                 env=env,

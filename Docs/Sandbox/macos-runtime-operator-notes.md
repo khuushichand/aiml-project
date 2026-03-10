@@ -9,6 +9,7 @@ These notes cover the current macOS runtime scaffolding for the sandbox subsyste
 - `seatbelt`
 
 This is not a guide for shipping real guest execution yet. The current implementation exposes runtime identities, policy admission, discovery metadata, helper/image-store contracts, and fake-backed runner paths.
+The exception is `seatbelt`, which now has a real trusted-workflow subprocess path on compatible macOS hosts.
 
 ## Host Assumptions
 
@@ -99,8 +100,10 @@ ACP sandbox session creation now performs runtime preflight validation before ca
 ## Current Limits
 
 - No real `vz_linux` or `vz_macos` guest command execution yet
-- `seatbelt` fake execution uses `TLDW_SANDBOX_SEATBELT_FAKE_EXEC=1`; real seatbelt execution is still absent
+- `seatbelt` real execution is available for trusted workflows when `sandbox-exec` is present and not blocked by an enclosing sandbox
+- `sandbox-exec` is deprecated and should be treated as a compatibility-gated bridge, not the long-term macOS isolation foundation
 - `seatbelt` availability depends on `sandbox-exec` existing on the host, but its summarized discovery payload still keeps `strict_deny_all_supported=false`
+- `seatbelt` runner-owned control files plus isolated `HOME` and temp directories are created outside the writable workspace and removed after each run
 - No APFS clone execution path yet
 - No allowlist networking for the new macOS runtimes
 - No warm-session VM reuse yet
