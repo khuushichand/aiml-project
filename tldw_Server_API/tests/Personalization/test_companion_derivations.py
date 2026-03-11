@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -20,11 +21,12 @@ def _insert_event(
     source_id: str,
     tags: list[str],
     title: str,
+    source_type: str = "reading_item",
 ) -> None:
     db.insert_companion_activity_event(
         user_id=user_id,
         event_type=event_type,
-        source_type="reading_item",
+        source_type=source_type,
         source_id=source_id,
         surface="api.reading",
         dedupe_key=f"{event_type}:{source_id}",
@@ -32,6 +34,33 @@ def _insert_event(
         provenance={"capture_mode": "explicit"},
         metadata={"title": title},
     )
+
+
+def _set_event_created_at(
+    db: PersonalizationDB,
+    *,
+    user_id: str,
+    source_id: str,
+    created_at: datetime,
+) -> None:
+    with db._lock:
+        conn = db._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE companion_activity_events
+                SET created_at = ?
+                WHERE user_id = ? AND source_id = ?
+                """,
+                (
+                    created_at.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+                    str(user_id),
+                    str(source_id),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
 
 @pytest.fixture()
@@ -85,8 +114,10 @@ def test_derive_companion_knowledge_cards_builds_project_focus_card(companion_de
 
     cards = derive_companion_knowledge_cards(db, user_id=user_id)
 
-    assert len(cards) == 1
-    card = cards[0]
+    card_types = {card["card_type"] for card in cards}
+    assert "project_focus" in card_types
+    assert "source_focus" in card_types
+    card = next(card for card in cards if card["card_type"] == "project_focus")
     assert card["card_type"] == "project_focus"
     assert card["title"] == "Current focus"
     assert "project-alpha" in card["summary"]
@@ -118,6 +149,82 @@ def test_consolidation_upserts_companion_knowledge_cards(companion_derivations_e
     service._consolidate_user(user_id)
 
     cards = db.list_companion_knowledge_cards(user_id)
-    assert len(cards) == 1
-    assert cards[0]["card_type"] == "project_focus"
-    assert "security" in cards[0]["summary"]
+    card_types = {card["card_type"] for card in cards}
+    assert "project_focus" in card_types
+    assert "source_focus" in card_types
+    project_card = next(card for card in cards if card["card_type"] == "project_focus")
+    assert "security" in project_card["summary"]
+
+
+def test_derive_companion_knowledge_cards_emits_multiple_card_families(companion_derivations_env):
+    user_id = "1"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+
+    _insert_event(
+        db,
+        user_id=user_id,
+        event_type="reading_item_saved",
+        source_id="301",
+        tags=["project-alpha", "research"],
+        title="Alpha research brief",
+    )
+    _insert_event(
+        db,
+        user_id=user_id,
+        event_type="reading_item_updated",
+        source_id="302",
+        tags=["project-alpha", "research"],
+        title="Alpha research updates",
+    )
+    _insert_event(
+        db,
+        user_id=user_id,
+        event_type="reading_item_saved",
+        source_id="303",
+        tags=["project-alpha", "planning"],
+        title="Alpha planning note",
+        source_type="watchlist_item",
+    )
+    _set_event_created_at(
+        db,
+        user_id=user_id,
+        source_id="301",
+        created_at=datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    _set_event_created_at(
+        db,
+        user_id=user_id,
+        source_id="302",
+        created_at=datetime(2026, 3, 1, 13, 0, tzinfo=timezone.utc),
+    )
+    _set_event_created_at(
+        db,
+        user_id=user_id,
+        source_id="303",
+        created_at=datetime(2026, 3, 1, 14, 0, tzinfo=timezone.utc),
+    )
+    db.create_companion_goal(
+        user_id=user_id,
+        title="Resume alpha review",
+        description="Review the alpha backlog and open questions.",
+        goal_type="manual",
+        config={},
+        progress={"percent": 25},
+        origin_kind="manual",
+        progress_mode="computed",
+        evidence=[{"source_id": "301"}],
+        status="active",
+    )
+
+    cards = derive_companion_knowledge_cards(
+        db,
+        user_id=user_id,
+        now=datetime(2026, 3, 10, 15, 0, tzinfo=timezone.utc),
+    )
+    card_types = {card["card_type"] for card in cards}
+
+    assert "project_focus" in card_types
+    assert "topic_focus" in card_types
+    assert "stale_followup" in card_types
+    assert "source_focus" in card_types
+    assert "active_goal_signal" in card_types

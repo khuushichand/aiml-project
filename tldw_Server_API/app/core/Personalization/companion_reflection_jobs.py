@@ -114,14 +114,24 @@ def _build_reflection_payload(
     *,
     cadence: str,
     cards: list[dict[str, Any]],
+    goals: list[dict[str, Any]],
     activity_rows: list[dict[str, Any]],
     now: datetime,
 ) -> tuple[str, dict[str, Any], dict[str, Any], list[str]]:
     focus_tags = _collect_focus_tags(activity_rows)
     lead_card = cards[0] if cards else None
+    lead_goal = next((goal for goal in goals if str(goal.get("status") or "").lower() == "active"), None)
+    stale_card = next((card for card in cards if card.get("card_type") == "stale_followup"), None)
     title = f"{cadence.capitalize()} reflection"
+    summary_parts: list[str] = []
     if lead_card is not None:
-        summary = f"{lead_card['summary']} {len(activity_rows)} recent explicit actions support this reflection."
+        summary_parts.append(str(lead_card["summary"]))
+    if lead_goal is not None:
+        summary_parts.append(f"Active goal: {lead_goal['title']}.")
+    if stale_card is not None and stale_card is not lead_card:
+        summary_parts.append(str(stale_card["summary"]))
+    if summary_parts:
+        summary = " ".join(summary_parts[:2]) + f" {len(activity_rows)} recent explicit actions support this reflection."
     elif focus_tags:
         summary = (
             f"Recent explicit activity clusters around '{focus_tags[0]}', with {len(activity_rows)} supporting actions."
@@ -131,15 +141,33 @@ def _build_reflection_payload(
 
     evidence: list[dict[str, Any]] = []
     knowledge_card_ids: list[str] = []
+    goal_ids: list[str] = []
     for card in cards[:3]:
         knowledge_card_ids.append(str(card["id"]))
         evidence.append(
             {
                 "kind": "knowledge_card",
                 "card_id": str(card["id"]),
+                "card_type": card.get("card_type"),
+                "title": card.get("title"),
+                "summary": card.get("summary"),
                 "captured_at": card.get("updated_at"),
                 "why_selected": "high scoring derived companion knowledge",
                 "signal_count": len(card.get("evidence") or []),
+            }
+        )
+    for goal in goals[:2]:
+        goal_ids.append(str(goal["id"]))
+        evidence.append(
+            {
+                "kind": "goal",
+                "goal_id": str(goal["id"]),
+                "title": goal.get("title"),
+                "status": goal.get("status"),
+                "progress_mode": goal.get("progress_mode"),
+                "captured_at": goal.get("updated_at"),
+                "why_selected": "active companion goal",
+                "signal_count": max(1, len(goal.get("evidence") or [])),
             }
         )
     for row in activity_rows[:5]:
@@ -158,8 +186,9 @@ def _build_reflection_payload(
     provenance = {
         "source_event_ids": [row["id"] for row in activity_rows[:5]],
         "knowledge_card_ids": knowledge_card_ids,
+        "goal_ids": goal_ids,
         "generated_at": now.replace(microsecond=0).isoformat(),
-        "signal_count": len(activity_rows[:5]) + len(knowledge_card_ids),
+        "signal_count": len(activity_rows[:5]) + len(knowledge_card_ids) + len(goal_ids),
     }
     metadata = {
         "title": title,
@@ -168,6 +197,8 @@ def _build_reflection_payload(
         "evidence": evidence,
         "generated_at": now.replace(microsecond=0).isoformat(),
         "knowledge_card_ids": knowledge_card_ids,
+        "goal_ids": goal_ids,
+        "goal_count": len(goals),
         "activity_count": len(activity_rows),
     }
     return title, metadata, provenance, focus_tags[:3]
@@ -216,9 +247,15 @@ def run_companion_reflection_job(
         return {"status": "skipped", "reason": "no_activity"}
 
     cards = db.list_companion_knowledge_cards(normalized_user_id, status="active")
+    goals = [
+        goal
+        for goal in db.list_companion_goals(normalized_user_id)
+        if str(goal.get("status") or "").lower() in {"active", "paused"}
+    ]
     title, metadata, provenance, tags = _build_reflection_payload(
         cadence=cadence,
         cards=cards,
+        goals=goals,
         activity_rows=activity_rows,
         now=current_time,
     )
