@@ -2,11 +2,41 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Status:** Completed on 2026-03-10
+
 **Goal:** Improve companion relevance, derivation quality, provenance inspection, and scoped trust controls without expanding beyond the explicit local-first model.
 
 **Architecture:** Extend the personalization-domain companion model with per-user reflection settings, goal provenance, bounded query-aware ranking, dedicated provenance detail endpoints, and Jobs-backed rebuild flows. Keep the workspace summary lightweight and move destructive/rebuild work into scoped backend services with durable status.
 
 **Tech Stack:** FastAPI, Pydantic, SQLite/WAL (`PersonalizationDB`), existing Jobs/APScheduler services, React/Next.js shared UI, Zustand, Vitest, Playwright, pytest.
+
+## Execution Outcome
+
+All seven tasks in this plan are complete.
+
+Completed areas:
+
+- companion profile reflection flags and goal provenance fields
+- scoped purge and Jobs-backed rebuild flows
+- bounded companion relevance ranking for persona/companion context
+- expanded deterministic derivations and richer reflection inputs
+- dedicated provenance detail endpoints
+- workspace settings, provenance drawers, and scoped lifecycle controls
+- milestone-level verification and doc finalization
+
+Verification captured during execution:
+
+- backend milestone suite: `38 passed`
+- frontend milestone suite: `56 passed`
+- extension companion Playwright suite: `3 passed`
+- Bandit on `companion.py` plus `app/core/Personalization`: `0 findings`
+- `git diff --check`: clean
+
+Execution notes:
+
+- the extension Playwright suite required running Chromium outside the filesystem sandbox because the sandboxed browser could not access its Crashpad path under `~/Library/Application Support`
+- rebuild remains Jobs-backed and scoped to derived state
+- full companion activity-ledger deletion is still intentionally out of scope for this milestone
 
 ---
 

@@ -1,5 +1,5 @@
 Date: 2026-03-10
-Status: Approved
+Status: Implemented
 
 # Companion Quality And Trust Controls Design
 
@@ -18,6 +18,27 @@ The foundation is now broad enough to support real user workflows:
 - consent gating
 
 The next gap is quality and trust, not breadth. The companion needs to become more relevant per query, more inspectable, and safer to manage when users want to review provenance or remove derived state.
+
+## Implementation Notes
+
+This design is now implemented on `codex/companion-explicit-capture-foundation`.
+
+Delivered in this milestone:
+
+- per-user companion reflection settings on the personalization profile
+- explicit goal provenance and progress-mode fields
+- bounded lexical-first companion context ranking with safe fallback behavior
+- deterministic multi-family knowledge derivation
+- richer reflection synthesis grounded in cards, goals, and stale follow-up signals
+- dedicated provenance detail endpoints for activity, knowledge, and reflections
+- workspace settings, provenance drill-down, and scoped purge/rebuild controls
+
+Intentional limits that remain deferred:
+
+- ranking is lexical-first and bounded, not semantic retrieval
+- lifecycle controls only purge or rebuild derived state; explicit activity remains preserved
+- reflection settings are limited to supported daily/weekly enable flags plus existing proactive and quiet-hours behavior
+- destructive lifecycle controls remain option-surface only, not sidepanel actions
 
 ## Goal
 
