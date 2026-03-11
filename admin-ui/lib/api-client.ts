@@ -474,6 +474,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  listDataSubjectRequests: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/data-subject-requests${queryParams ? `?${queryParams}` : ''}`);
+  },
   createDataSubjectRequest: (data: Record<string, unknown>) =>
     requestJson('/admin/data-subject-requests', {
       method: 'POST',
