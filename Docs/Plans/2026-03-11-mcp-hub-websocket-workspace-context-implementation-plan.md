@@ -12,12 +12,12 @@
 
 ## Status
 
-- Task 1: Not started
-- Task 2: Not started
-- Task 3: Not started
-- Task 4: Not started
-- Task 5: Not started
-- Task 6: Not started
+- Task 1: Complete
+- Task 2: Complete
+- Task 3: Complete
+- Task 4: Complete
+- Task 5: Complete
+- Task 6: Complete
 
 ### Task 1: Add failing WebSocket ingress and mismatch tests
 

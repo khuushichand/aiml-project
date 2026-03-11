@@ -74,6 +74,11 @@ router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
 security = HTTPBearer(auto_error=False)
 
 
+def _normalize_optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
 # Request/Response models
 class ServerStatusResponse(BaseModel):
     """Server status response"""
@@ -674,7 +679,10 @@ async def websocket_endpoint(
     websocket: WebSocket,
     client_id: Optional[str] = Query(None, description="Client identifier"),
     token: Optional[str] = Query(None, description="Authentication token"),
-    api_key: Optional[str] = Query(None, description="API key for authentication")
+    api_key: Optional[str] = Query(None, description="API key for authentication"),
+    mcp_session_id: Optional[str] = Query(None, description="Stable MCP session identifier"),
+    workspace_id: Optional[str] = Query(None, description="Trusted workspace identifier"),
+    cwd: Optional[str] = Query(None, description="Current working directory within the workspace"),
 ):
     """
     WebSocket endpoint for MCP protocol.
@@ -711,7 +719,15 @@ async def websocket_endpoint(
         await server.initialize()
 
     # Handle WebSocket connection
-    await server.handle_websocket(websocket, client_id=client_id, auth_token=token, api_key=api_key)
+    await server.handle_websocket(
+        websocket,
+        client_id=_normalize_optional_text(client_id),
+        auth_token=_normalize_optional_text(token),
+        api_key=_normalize_optional_text(api_key),
+        mcp_session_id=_normalize_optional_text(mcp_session_id),
+        workspace_id=_normalize_optional_text(workspace_id),
+        cwd=_normalize_optional_text(cwd),
+    )
 
 
 # HTTP endpoints

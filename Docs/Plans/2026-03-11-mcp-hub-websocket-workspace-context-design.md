@@ -1,6 +1,6 @@
 # MCP Hub WebSocket Workspace Context Design
 
-Status: Reviewed for planning
+Status: Implemented
 
 ## Goal
 
