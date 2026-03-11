@@ -83,8 +83,11 @@ _CREDENTIAL_PRIVILEGE_RANK = {"read": 0, "write": 1, "admin": 2}
 _DEFAULT_CREDENTIAL_SLOT_NAMES = frozenset({"bearer_token", "api_key"})
 _TOOL_GRANT_KEYS = ("allowed_tools", "tool_patterns", "tool_names")
 _UNION_POLICY_KEYS = frozenset({"allowed_tools", "denied_tools", "tool_names", "tool_patterns", "capabilities"})
+_FILESYSTEM_GRANT_CAPABILITIES = frozenset({"filesystem.read", "filesystem.write", "filesystem.delete"})
 _SUPPORTED_APPROVAL_DURATIONS = frozenset({"once", "session", "conversation"})
 _DEFAULT_SCOPED_APPROVAL_TTL_MINUTES = 480
+_PATH_SCOPE_BREADTH_RANK = {"cwd_descendants": 0, "workspace_root": 1, "none": 2}
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 async def get_mcp_hub_service() -> McpHubService:
@@ -223,6 +226,97 @@ def _unique(items: list[str]) -> list[str]:
     return out
 
 
+def _normalize_path_scope_mode(value: Any) -> str:
+    """Normalize a path scope mode, defaulting missing values to `none`."""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in _PATH_SCOPE_BREADTH_RANK else "none"
+
+
+def _normalize_path_allowlist_prefixes(
+    value: Any,
+    *,
+    reject_invalid: bool,
+) -> list[str]:
+    """Normalize workspace-relative path allowlist prefixes."""
+    raw_entries = _as_str_list(value)
+    normalized_entries: list[str] = []
+    seen: set[str] = set()
+    for raw_entry in raw_entries:
+        candidate = str(raw_entry or "").strip().replace("\\", "/")
+        while candidate.startswith("./"):
+            candidate = candidate[2:]
+        candidate = re.sub(r"/+", "/", candidate)
+        if candidate.startswith("/") or _WINDOWS_ABSOLUTE_PATH_RE.match(candidate):
+            if reject_invalid:
+                raise HTTPException(status_code=400, detail="path_allowlist_prefixes must be workspace-relative")
+            continue
+        parts: list[str] = []
+        invalid = False
+        for part in candidate.split("/"):
+            cleaned = str(part or "").strip()
+            if not cleaned or cleaned == ".":
+                continue
+            if cleaned == "..":
+                invalid = True
+                break
+            parts.append(cleaned)
+        if invalid or not parts:
+            if reject_invalid:
+                raise HTTPException(
+                    status_code=400,
+                    detail="path_allowlist_prefixes cannot contain traversal or empty entries",
+                )
+            continue
+        normalized = "/".join(parts)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_entries.append(normalized)
+    return sorted(normalized_entries)
+
+
+def _normalized_path_allowlist_for_comparison(policy_document: dict[str, Any]) -> set[str]:
+    """Return a permissively normalized allowlist set for broadened-access comparisons."""
+    return set(
+        _normalize_path_allowlist_prefixes(
+            policy_document.get("path_allowlist_prefixes"),
+            reject_invalid=False,
+        )
+    )
+
+
+def _normalize_policy_document_for_storage(
+    policy_document: dict[str, Any],
+    *,
+    allow_inherited_scope: bool,
+) -> dict[str, Any]:
+    """Normalize path policy fields before persisting MCP Hub documents."""
+    normalized = deepcopy(policy_document)
+    if "path_allowlist_prefixes" not in normalized:
+        return normalized
+
+    allowlist = _normalize_path_allowlist_prefixes(
+        normalized.get("path_allowlist_prefixes"),
+        reject_invalid=True,
+    )
+    path_scope_mode = _normalize_path_scope_mode(normalized.get("path_scope_mode"))
+    if path_scope_mode == "none" and not allow_inherited_scope:
+        raise HTTPException(
+            status_code=400,
+            detail="path_allowlist_prefixes requires path_scope_mode to be workspace_root or cwd_descendants",
+        )
+    if "path_scope_mode" in normalized and path_scope_mode == "none":
+        raise HTTPException(
+            status_code=400,
+            detail="path_allowlist_prefixes cannot be combined with path_scope_mode='none'",
+        )
+    if not allowlist:
+        normalized.pop("path_allowlist_prefixes", None)
+    else:
+        normalized["path_allowlist_prefixes"] = allowlist
+    return normalized
+
+
 def _merge_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     """Merge overlay policy fields into a base document using union semantics for allowlists."""
     merged = deepcopy(base)
@@ -263,6 +357,29 @@ def _grant_authority_delta(base_policy_document: dict[str, Any], merged_policy_d
     extra_tools = sorted(merged_tools - base_tools)
     if extra_tools:
         next_document["allowed_tools"] = extra_tools
+
+    base_scope_rank = _PATH_SCOPE_BREADTH_RANK[_normalize_path_scope_mode(base_policy_document.get("path_scope_mode"))]
+    merged_scope_rank = _PATH_SCOPE_BREADTH_RANK[_normalize_path_scope_mode(merged_policy_document.get("path_scope_mode"))]
+    base_allowlist = _normalized_path_allowlist_for_comparison(base_policy_document)
+    merged_allowlist = _normalized_path_allowlist_for_comparison(merged_policy_document)
+    broadened_path_scope = merged_scope_rank > base_scope_rank
+    broadened_allowlist = (
+        (bool(base_allowlist) and not merged_allowlist)
+        or bool(merged_allowlist - base_allowlist)
+    )
+    if broadened_path_scope or broadened_allowlist:
+        existing_caps = {
+            entry.lower()
+            for entry in _as_str_list(next_document.get("capabilities"))
+            if str(entry).strip()
+        }
+        filesystem_caps = {
+            capability
+            for capability in merged_capabilities
+            if capability in _FILESYSTEM_GRANT_CAPABILITIES
+        }
+        existing_caps.update(filesystem_caps or {"filesystem.read"})
+        next_document["capabilities"] = sorted(existing_caps)
 
     return next_document
 
@@ -813,14 +930,18 @@ async def create_permission_profile(
 ) -> PermissionProfileResponse:
     """Create a new permission profile within the provided owner scope."""
     _require_mutation_permission(principal)
-    _require_grant_authority(principal, payload.policy_document)
+    policy_document = _normalize_policy_document_for_storage(
+        payload.policy_document,
+        allow_inherited_scope=False,
+    )
+    _require_grant_authority(principal, policy_document)
     row = await svc.create_permission_profile(
         name=payload.name,
         description=payload.description,
         owner_scope_type=payload.owner_scope_type,
         owner_scope_id=payload.owner_scope_id,
         mode=payload.mode,
-        policy_document=payload.policy_document,
+        policy_document=policy_document,
         is_active=payload.is_active,
         actor_id=principal.user_id,
     )
@@ -863,6 +984,10 @@ async def update_permission_profile(
     _require_mutation_permission(principal)
     update_fields = payload.model_dump(exclude_unset=True)
     if "policy_document" in update_fields:
+        update_fields["policy_document"] = _normalize_policy_document_for_storage(
+            update_fields.get("policy_document") or {},
+            allow_inherited_scope=False,
+        )
         _require_grant_authority(principal, update_fields.get("policy_document") or {})
     try:
         row = await svc.update_permission_profile(
@@ -902,14 +1027,18 @@ async def create_policy_assignment(
 ) -> PolicyAssignmentResponse:
     """Create a new policy assignment for a default, group, or persona target."""
     _require_mutation_permission(principal)
-    _require_grant_authority(principal, payload.inline_policy_document)
+    inline_policy_document = _normalize_policy_document_for_storage(
+        payload.inline_policy_document,
+        allow_inherited_scope=False,
+    )
+    _require_grant_authority(principal, inline_policy_document)
     row = await svc.create_policy_assignment(
         target_type=payload.target_type,
         target_id=payload.target_id,
         owner_scope_type=payload.owner_scope_type,
         owner_scope_id=payload.owner_scope_id,
         profile_id=payload.profile_id,
-        inline_policy_document=payload.inline_policy_document,
+        inline_policy_document=inline_policy_document,
         approval_policy_id=payload.approval_policy_id,
         is_active=payload.is_active,
         actor_id=principal.user_id,
@@ -957,6 +1086,10 @@ async def update_policy_assignment(
     _require_mutation_permission(principal)
     update_fields = payload.model_dump(exclude_unset=True)
     if "inline_policy_document" in update_fields:
+        update_fields["inline_policy_document"] = _normalize_policy_document_for_storage(
+            update_fields.get("inline_policy_document") or {},
+            allow_inherited_scope=False,
+        )
         _require_grant_authority(principal, update_fields.get("inline_policy_document") or {})
     try:
         row = await svc.update_policy_assignment(
@@ -1025,6 +1158,10 @@ async def upsert_policy_assignment_override(
     """Create or replace the single override attached to a policy assignment."""
     _require_mutation_permission(principal)
     try:
+        override_policy_document = _normalize_policy_document_for_storage(
+            payload.override_policy_document,
+            allow_inherited_scope=True,
+        )
         assignment = await _get_visible_policy_assignment_or_404(
             assignment_id=assignment_id,
             principal=principal,
@@ -1034,13 +1171,13 @@ async def upsert_policy_assignment_override(
             svc=svc,
             assignment=assignment,
         )
-        merged_document = _merge_policy_documents(base_document, payload.override_policy_document)
+        merged_document = _merge_policy_documents(base_document, override_policy_document)
         delta_document = _grant_authority_delta(base_document, merged_document)
         if delta_document:
             _require_grant_authority(principal, delta_document)
         row = await svc.upsert_policy_override(
             assignment_id,
-            override_policy_document=payload.override_policy_document,
+            override_policy_document=override_policy_document,
             is_active=payload.is_active,
             broadens_access=bool(delta_document),
             grant_authority_snapshot={

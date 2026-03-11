@@ -28,7 +28,8 @@ describe("PersonaPolicySummary", () => {
       approval_mode: "ask_outside_profile",
       policy_document: {
         path_scope_mode: "workspace_root",
-        path_scope_enforcement: "approval_required_when_unenforceable"
+        path_scope_enforcement: "approval_required_when_unenforceable",
+        path_allowlist_prefixes: ["src", "docs/api"]
       },
       sources: [],
       provenance: [
@@ -112,6 +113,7 @@ describe("PersonaPolicySummary", () => {
     expect(screen.getByText("Bash(rm *)")).toBeTruthy()
     expect(screen.getByText("Override active")).toBeTruthy()
     expect(screen.getByText("Workspace root")).toBeTruthy()
+    expect(screen.getByText("Allowed paths: docs/api, src")).toBeTruthy()
     expect(screen.getByText("Path approval fallback")).toBeTruthy()
     expect(screen.getByText("Docs Managed")).toBeTruthy()
     expect(screen.getByText("Search API")).toBeTruthy()

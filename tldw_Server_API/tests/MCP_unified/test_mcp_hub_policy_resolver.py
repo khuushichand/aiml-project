@@ -14,6 +14,7 @@ class _FakeRepo:
                     "capabilities": ["filesystem.read"],
                     "path_scope_mode": "workspace_root",
                     "path_scope_enforcement": "approval_required_when_unenforceable",
+                    "path_allowlist_prefixes": ["src"],
                 },
             },
             2: {
@@ -162,6 +163,37 @@ async def test_policy_resolver_allows_assignment_override_to_replace_path_scope_
     assert policy["policy_document"]["path_scope_mode"] == "workspace_root"
     assert any(
         entry["field"] == "path_scope_mode"
+        and entry["source_kind"] == "assignment_override"
+        and entry["effect"] == "replaced"
+        for entry in policy["provenance"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_policy_resolver_replaces_path_allowlist_prefixes_in_assignment_override() -> None:
+    from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver
+
+    repo = _FakeRepo()
+    repo.overrides[12] = {
+        "id": 99,
+        "assignment_id": 12,
+        "override_policy_document": {"path_allowlist_prefixes": ["docs/api"]},
+        "is_active": True,
+    }
+    resolver = McpHubPolicyResolver(repo=repo)
+
+    policy = await resolver.resolve_for_context(
+        user_id=7,
+        metadata={
+            "mcp_policy_context_enabled": True,
+            "group_id": "ops",
+            "persona_id": "researcher",
+        },
+    )
+
+    assert policy["policy_document"]["path_allowlist_prefixes"] == ["docs/api"]
+    assert any(
+        entry["field"] == "path_allowlist_prefixes"
         and entry["source_kind"] == "assignment_override"
         and entry["effect"] == "replaced"
         for entry in policy["provenance"]

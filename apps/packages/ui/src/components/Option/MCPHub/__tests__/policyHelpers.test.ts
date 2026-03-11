@@ -6,6 +6,7 @@ import {
   buildSimplePolicyDocument,
   createPresetSelection,
   getDerivedCapabilities,
+  getAdvancedPolicyKeys,
   getExternalBlockedReasonLabel,
   getManagedExternalServers,
   getPolicyAllowedToolSelection
@@ -90,6 +91,20 @@ describe("policyHelpers", () => {
     expect(next.approval_mode).toEqual("ask_every_time")
     expect(next.path_scope_mode).toEqual("workspace_root")
     expect(next.path_scope_enforcement).toEqual("approval_required_when_unenforceable")
+  })
+
+  it("treats path scope and allowlist fields as guided policy fields rather than advanced keys", () => {
+    const advancedKeys = getAdvancedPolicyKeys({
+      allowed_tools: ["notes.search"],
+      capabilities: ["filesystem.read"],
+      path_scope_mode: "workspace_root",
+      path_scope_enforcement: "approval_required_when_unenforceable",
+      path_allowlist_prefixes: ["src"]
+    })
+
+    expect(advancedKeys).not.toContain("path_scope_mode")
+    expect(advancedKeys).not.toContain("path_scope_enforcement")
+    expect(advancedKeys).not.toContain("path_allowlist_prefixes")
   })
 
   it("derives read-only presets from registry metadata and preserves pattern separation", () => {

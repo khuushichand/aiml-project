@@ -1,7 +1,7 @@
 # MCP Hub Path Allowlist Prefixes Design
 
 Date: 2026-03-10
-Status: Approved for planning
+Status: Implemented
 
 ## Summary
 

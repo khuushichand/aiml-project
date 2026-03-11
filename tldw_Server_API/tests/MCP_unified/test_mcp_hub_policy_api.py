@@ -583,6 +583,37 @@ def test_create_permission_profile_returns_created_payload_when_grant_is_present
     assert payload["owner_scope_type"] == "user"
 
 
+def test_create_permission_profile_normalizes_path_allowlist_prefixes() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read"],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/permission-profiles",
+            json={
+                "name": "Workspace Narrow",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "mode": "custom",
+                "policy_document": {
+                    "capabilities": ["filesystem.read"],
+                    "path_scope_mode": "workspace_root",
+                    "path_scope_enforcement": "approval_required_when_unenforceable",
+                    "path_allowlist_prefixes": ["./src/", "docs\\\\api", "src"],
+                },
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    assert payload["policy_document"]["path_allowlist_prefixes"] == ["docs/api", "src"]
+
+
 def test_create_policy_assignment_returns_created_payload() -> None:
     app = _build_app(
         _make_principal(
@@ -897,6 +928,55 @@ def test_put_policy_assignment_override_requires_grant_authority_for_broadened_d
 
     assert resp.status_code == 403
     assert "grant.tool.invoke" in resp.json()["detail"]
+
+
+def test_put_policy_assignment_override_requires_grant_authority_for_wider_path_allowlist() -> None:
+    service = _FakePolicyService()
+    service.policy_assignments = [
+        {
+            "id": 11,
+            "target_type": "persona",
+            "target_id": "researcher",
+            "owner_scope_type": "user",
+            "owner_scope_id": 7,
+            "profile_id": None,
+            "inline_policy_document": {
+                "capabilities": ["filesystem.read"],
+                "path_scope_mode": "workspace_root",
+                "path_scope_enforcement": "approval_required_when_unenforceable",
+                "path_allowlist_prefixes": ["src"],
+            },
+            "approval_policy_id": None,
+            "is_active": True,
+            "has_override": False,
+            "override_id": None,
+            "override_active": False,
+            "override_updated_at": None,
+            "created_by": 7,
+            "updated_by": 7,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ]
+    service.policy_overrides = {}
+    app = _build_app(
+        _make_principal(
+            permissions=[SYSTEM_CONFIGURE],
+        ),
+        service=service,
+    )
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/v1/mcp/hub/policy-assignments/11/override",
+            json={
+                "override_policy_document": {"path_allowlist_prefixes": ["src", "docs"]},
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 403
+    assert "grant.filesystem.read" in resp.json()["detail"]
 
 
 def test_delete_policy_assignment_override_returns_ok() -> None:

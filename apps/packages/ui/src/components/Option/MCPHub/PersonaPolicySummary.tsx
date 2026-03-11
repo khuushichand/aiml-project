@@ -9,7 +9,7 @@ import {
   type McpHubEffectivePolicy
 } from "@/services/tldw/mcp-hub"
 
-import { getPathScopeLabel } from "./policyHelpers"
+import { getPathAllowlistSummary, getPathScopeLabel } from "./policyHelpers"
 import { ExternalAccessSummary } from "./ExternalAccessSummary"
 
 type PersonaPolicySummaryProps = {
@@ -95,6 +95,11 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
               {`Local file scope: ${getPathScopeLabel(policy.policy_document?.path_scope_mode)}`}
             </Typography.Text>
           ) : null}
+          {getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes) ? (
+            <Typography.Text type="secondary">
+              {`Allowed paths: ${getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes)}`}
+            </Typography.Text>
+          ) : null}
           <Space wrap>
             {policy.capabilities.map((capability) => (
               <Tag key={capability}>{capability}</Tag>
@@ -105,6 +110,9 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
             ) : null}
             {policy.policy_document?.path_scope_enforcement ? (
               <Tag color="orange">Path approval fallback</Tag>
+            ) : null}
+            {getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes) ? (
+              <Tag color="blue">{`paths ${getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes)}`}</Tag>
             ) : null}
             {policy.provenance.some((entry) => entry.source_kind === "assignment_override") ? (
               <Tag color="cyan">Override active</Tag>

@@ -124,6 +124,11 @@ def _scope_fingerprint_payload(
             values = [str(entry).strip() for entry in normalized_paths if str(entry).strip()]
             if values:
                 scope_context["normalized_paths"] = values[:_SUMMARY_MAX_ITEMS]
+        path_allowlist_prefixes = scope_payload.get("path_allowlist_prefixes")
+        if isinstance(path_allowlist_prefixes, list):
+            values = [str(entry).strip() for entry in path_allowlist_prefixes if str(entry).strip()]
+            if values:
+                scope_context["path_allowlist_prefixes"] = sorted(values)[:_SUMMARY_MAX_ITEMS]
         for key in ("requested_slots", "bound_slots", "missing_bound_slots", "missing_secret_slots"):
             raw = scope_payload.get(key)
             if isinstance(raw, list):

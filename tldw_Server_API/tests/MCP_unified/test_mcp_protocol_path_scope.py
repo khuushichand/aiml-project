@@ -201,6 +201,102 @@ async def test_handle_tools_call_raises_approval_for_path_scope_violation(monkey
 
 
 @pytest.mark.asyncio
+async def test_handle_tools_call_raises_approval_for_path_allowlist_violation(monkeypatch) -> None:
+    from tldw_Server_API.app.core.MCP_unified.protocol import ApprovalRequiredError
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
+    from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+    from tldw_Server_API.app.services import mcp_hub_approval_service as approval_service_mod
+    from tldw_Server_API.app.services import mcp_hub_path_enforcement_service as path_service_mod
+
+    tool_def = {
+        "name": "files.read",
+        "description": "Read a file",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "metadata": {
+            "category": "retrieval",
+            "uses_filesystem": True,
+            "path_boundable": True,
+            "path_argument_hints": ["path"],
+        },
+    }
+    fake_module = _FakeModule(tool_def)
+    fake_path_service = _FakePathEnforcementService(
+        {
+            "enabled": True,
+            "within_scope": False,
+            "reason": "path_outside_allowlist_scope",
+            "force_approval": True,
+            "normalized_paths": ["/tmp/project/src2/README.md"],
+            "scope_payload": {
+                "path_scope_mode": "workspace_root",
+                "workspace_root": "/tmp/project",
+                "scope_root": "/tmp/project",
+                "normalized_paths": ["/tmp/project/src2/README.md"],
+                "path_allowlist_prefixes": ["src"],
+                "reason": "path_outside_allowlist_scope",
+            },
+        }
+    )
+    fake_approval_service = _FakeApprovalService()
+
+    async def _fake_get_path_service():
+        return fake_path_service
+
+    async def _fake_get_approval_service():
+        return fake_approval_service
+
+    monkeypatch.setattr(path_service_mod, "get_mcp_hub_path_enforcement_service", _fake_get_path_service)
+    monkeypatch.setattr(approval_service_mod, "get_mcp_hub_approval_service", _fake_get_approval_service)
+
+    protocol = MCPProtocol()
+    protocol.module_registry = _FakeRegistry(fake_module)
+
+    async def _resolve_effective_policy(_context):
+        return {
+            "enabled": True,
+            "allowed_tools": ["files.read"],
+            "approval_policy_id": 1,
+            "policy_document": {
+                "path_scope_mode": "workspace_root",
+                "path_scope_enforcement": "approval_required_when_unenforceable",
+                "path_allowlist_prefixes": ["src"],
+            },
+        }
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    protocol._resolve_effective_tool_policy = _resolve_effective_policy  # type: ignore[method-assign]
+    protocol._has_module_permission = _allow  # type: ignore[method-assign]
+    protocol._has_tool_permission = _allow  # type: ignore[method-assign]
+    protocol._is_tool_allowed_by_context = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+
+    context = RequestContext(
+        request_id="req-path-allowlist",
+        user_id="7",
+        client_id="test-client",
+        session_id="sess-1",
+        metadata={"persona_id": "researcher"},
+    )
+
+    with pytest.raises(ApprovalRequiredError) as exc:
+        await protocol._handle_tools_call(
+            {"name": "files.read", "arguments": {"path": "src2/README.md"}},
+            context,
+        )
+
+    approval = exc.value.approval or {}
+    assert approval["reason"] == "path_outside_allowlist_scope"
+    assert approval["scope_context"]["path_allowlist_prefixes"] == ["src"]
+    assert fake_approval_service.calls[0]["approval_reason"] == "path_outside_allowlist_scope"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("blocked_reason", "scope_payload"),
     [

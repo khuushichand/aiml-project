@@ -69,10 +69,45 @@ export const parseCommaList = (value: string): string[] =>
     .map((entry) => entry.trim())
     .filter(Boolean)
 
+export const normalizePathAllowlistPrefixes = (values: string[]): string[] => {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of values) {
+    let normalized = String(value || "").trim().replaceAll("\\", "/")
+    while (normalized.startsWith("./")) {
+      normalized = normalized.slice(2)
+    }
+    normalized = normalized.replace(/\/+/g, "/")
+    if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:[\\/]/.test(normalized)) {
+      continue
+    }
+    const parts = normalized
+      .split("/")
+      .map((part) => part.trim())
+      .filter((part) => part && part !== ".")
+    if (parts.length === 0 || parts.some((part) => part === "..")) {
+      continue
+    }
+    normalized = parts.join("/")
+    if (seen.has(normalized)) {
+      continue
+    }
+    seen.add(normalized)
+    out.push(normalized)
+  }
+  return out.sort()
+}
+
 export const joinList = (values: string[] | undefined | null, separator = "\n"): string =>
   Array.isArray(values) ? values.filter(Boolean).join(separator) : ""
 
 const SIMPLE_POLICY_KEYS = new Set(["allowed_tools", "denied_tools", "capabilities"])
+const GUIDED_POLICY_KEYS = new Set([
+  ...SIMPLE_POLICY_KEYS,
+  "path_scope_mode",
+  "path_scope_enforcement",
+  "path_allowlist_prefixes"
+])
 
 const unique = (values: string[]): string[] => Array.from(new Set(values.filter(Boolean)))
 
@@ -114,7 +149,7 @@ export const getPolicyAllowedToolSelection = (
 }
 
 export const getAdvancedPolicyKeys = (policy: McpHubPermissionPolicyDocument): string[] =>
-  Object.keys(policy || {}).filter((key) => !SIMPLE_POLICY_KEYS.has(key))
+  Object.keys(policy || {}).filter((key) => !GUIDED_POLICY_KEYS.has(key))
 
 export const getDerivedCapabilities = (
   selectedTools: string[],
@@ -194,6 +229,14 @@ export const getPathScopeLabel = (value: McpHubPathScopeMode | string | null | u
     return null
   }
   return MCP_HUB_PATH_SCOPE_OPTIONS.find((option) => option.value === normalized)?.label || normalized
+}
+
+export const getPathAllowlistSummary = (values: string[] | undefined | null): string | null => {
+  const normalized = normalizePathAllowlistPrefixes(Array.isArray(values) ? values : [])
+  if (normalized.length === 0) {
+    return null
+  }
+  return normalized.join(", ")
 }
 
 export const getManagedExternalServers = (

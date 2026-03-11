@@ -61,6 +61,7 @@ export type McpHubPermissionPolicyDocument = {
   approval_mode?: McpHubApprovalMode | null
   path_scope_mode?: McpHubPathScopeMode | null
   path_scope_enforcement?: McpHubPathScopeEnforcement | null
+  path_allowlist_prefixes?: string[]
 }
 
 export type McpHubPermissionProfile = {

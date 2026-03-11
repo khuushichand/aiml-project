@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from pathlib import Path
+import re
 from typing import Any
 
 from tldw_Server_API.app.services.mcp_hub_path_scope_service import McpHubPathScopeService
@@ -10,6 +11,7 @@ _FILESYSTEM_CAPABILITIES = frozenset({"filesystem.read", "filesystem.write", "fi
 _SUPPORTED_PATH_ARGUMENT_HINTS = frozenset(
     {"path", "file_path", "target_path", "cwd", "paths", "file_paths", "files[].path"}
 )
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def _as_bool(value: Any) -> bool | None:
@@ -74,6 +76,43 @@ def _scope_root_from_scope(scope: dict[str, Any]) -> Path | None:
             return None
         return Path(cwd).expanduser().resolve(strict=False)
     return Path(workspace_root).expanduser().resolve(strict=False)
+
+
+def _normalize_allowlist_prefix(raw_value: Any) -> str | None:
+    value = str(raw_value or "").strip().replace("\\", "/")
+    while value.startswith("./"):
+        value = value[2:]
+    value = re.sub(r"/+", "/", value)
+    if not value or value.startswith("/") or _WINDOWS_ABSOLUTE_PATH_RE.match(value):
+        return None
+    parts: list[str] = []
+    for part in value.split("/"):
+        cleaned = str(part or "").strip()
+        if not cleaned or cleaned == ".":
+            continue
+        if cleaned == "..":
+            return None
+        parts.append(cleaned)
+    if not parts:
+        return None
+    return "/".join(parts)
+
+
+def _policy_allowlist_prefixes(effective_policy: dict[str, Any] | None) -> list[str]:
+    policy_document = _as_dict((effective_policy or {}).get("policy_document"))
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw_entry in _as_str_list(policy_document.get("path_allowlist_prefixes")):
+        normalized = _normalize_allowlist_prefix(raw_entry)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return sorted(out)
+
+
+def _allowlist_roots(*, workspace_root: Path, allowlist_prefixes: list[str]) -> list[Path]:
+    return [(workspace_root / prefix).resolve(strict=False) for prefix in allowlist_prefixes]
 
 
 def _tool_metadata(tool_def: dict[str, Any] | None) -> dict[str, Any]:
@@ -180,6 +219,11 @@ class McpHubPathEnforcementService:
             return self._blocked_result(scope=scope, reason="workspace_root_unavailable")
         workspace_root = Path(workspace_root_text).expanduser().resolve(strict=False)
         base_path = Path(str(scope.get("cwd") or workspace_root)).expanduser().resolve(strict=False)
+        path_allowlist_prefixes = _policy_allowlist_prefixes(effective_policy)
+        allowlist_roots = _allowlist_roots(
+            workspace_root=workspace_root,
+            allowlist_prefixes=path_allowlist_prefixes,
+        )
 
         normalized_paths: list[str] = []
         for raw_path in raw_paths:
@@ -196,10 +240,22 @@ class McpHubPathEnforcementService:
                     scope=scope,
                     reason="path_outside_current_folder_scope",
                     normalized_paths=normalized_paths,
+                    path_allowlist_prefixes=path_allowlist_prefixes,
+                )
+            if allowlist_roots and not any(_is_within(root, normalized) for root in allowlist_roots):
+                return self._blocked_result(
+                    scope=scope,
+                    reason="path_outside_allowlist_scope",
+                    normalized_paths=normalized_paths,
+                    path_allowlist_prefixes=path_allowlist_prefixes,
                 )
 
         result["normalized_paths"] = normalized_paths
-        result["scope_payload"] = self._scope_payload(scope=scope, normalized_paths=normalized_paths)
+        result["scope_payload"] = self._scope_payload(
+            scope=scope,
+            normalized_paths=normalized_paths,
+            path_allowlist_prefixes=path_allowlist_prefixes,
+        )
         return result
 
     @staticmethod
@@ -208,6 +264,7 @@ class McpHubPathEnforcementService:
         scope: dict[str, Any],
         normalized_paths: list[str] | None = None,
         reason: str | None = None,
+        path_allowlist_prefixes: list[str] | None = None,
     ) -> dict[str, Any]:
         scope_root = _scope_root_from_scope(scope)
         payload = {
@@ -217,6 +274,8 @@ class McpHubPathEnforcementService:
         }
         if normalized_paths:
             payload["normalized_paths"] = list(normalized_paths)
+        if path_allowlist_prefixes:
+            payload["path_allowlist_prefixes"] = list(path_allowlist_prefixes)
         if reason:
             payload["reason"] = reason
         return {key: value for key, value in payload.items() if value not in (None, "", [])}
@@ -227,6 +286,7 @@ class McpHubPathEnforcementService:
         scope: dict[str, Any],
         reason: str,
         normalized_paths: list[str] | None = None,
+        path_allowlist_prefixes: list[str] | None = None,
     ) -> dict[str, Any]:
         return {
             "enabled": bool(scope.get("enabled")),
@@ -238,6 +298,7 @@ class McpHubPathEnforcementService:
                 scope=scope,
                 normalized_paths=list(normalized_paths or []),
                 reason=reason,
+                path_allowlist_prefixes=path_allowlist_prefixes,
             ),
         }
 

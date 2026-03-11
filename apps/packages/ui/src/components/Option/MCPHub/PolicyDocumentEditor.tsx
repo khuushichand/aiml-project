@@ -13,11 +13,13 @@ import {
   getAdvancedPolicyKeys,
   getDerivedCapabilities,
   getKnownRegistryCapabilities,
+  getPathAllowlistSummary,
   getPathScopeLabel,
   getPolicyAllowedToolSelection,
   getToolEntriesByModule,
   MCP_HUB_PATH_SCOPE_OPTIONS,
   joinList,
+  normalizePathAllowlistPrefixes,
   parseLineList
 } from "./policyHelpers"
 
@@ -73,6 +75,10 @@ export const PolicyDocumentEditor = ({
   const advancedKeys = useMemo(() => getAdvancedPolicyKeys(policy), [policy])
   const deniedToolsText = useMemo(() => joinList(policy.denied_tools), [policy.denied_tools])
   const pathScopeMode = policy.path_scope_mode || "none"
+  const pathAllowlistText = useMemo(
+    () => joinList(normalizePathAllowlistPrefixes(policy.path_allowlist_prefixes || [])),
+    [policy.path_allowlist_prefixes]
+  )
   const localFilesystemTools = useMemo(
     () => selectedRegistryTools.filter((entry) => entry.uses_filesystem),
     [selectedRegistryTools]
@@ -132,6 +138,7 @@ export const PolicyDocumentEditor = ({
       const next = { ...policy }
       delete next.path_scope_mode
       delete next.path_scope_enforcement
+      delete next.path_allowlist_prefixes
       onChange(next)
       return
     }
@@ -140,6 +147,17 @@ export const PolicyDocumentEditor = ({
       path_scope_mode: value,
       path_scope_enforcement: "approval_required_when_unenforceable"
     })
+  }
+
+  const handlePathAllowlistChange = (value: string) => {
+    const next = { ...policy }
+    const normalized = normalizePathAllowlistPrefixes(parseLineList(value))
+    if (normalized.length > 0) {
+      next.path_allowlist_prefixes = normalized
+    } else {
+      delete next.path_allowlist_prefixes
+    }
+    onChange(next)
   }
 
   const handleAdvancedChange = (value: string) => {
@@ -244,6 +262,26 @@ export const PolicyDocumentEditor = ({
                     showIcon
                     message={`${getPathScopeLabel(pathScopeMode)} requires a trusted workspace root at runtime.`}
                   />
+                ) : null}
+                {pathScopeMode !== "none" ? (
+                  <Space orientation="vertical" style={{ width: "100%" }}>
+                    <label htmlFor={`${formId}-path-allowlist-prefixes`}>Allowed workspace paths</label>
+                    <textarea
+                      id={`${formId}-path-allowlist-prefixes`}
+                      aria-label="Allowed workspace paths"
+                      value={pathAllowlistText}
+                      onChange={(event) => handlePathAllowlistChange(event.target.value)}
+                      rows={4}
+                    />
+                    <Typography.Text type="secondary">
+                      Paths are relative to the workspace root and replace inherited allowed paths.
+                    </Typography.Text>
+                    {getPathAllowlistSummary(policy.path_allowlist_prefixes) ? (
+                      <Typography.Text type="secondary">
+                        {`Normalized paths: ${getPathAllowlistSummary(policy.path_allowlist_prefixes)}`}
+                      </Typography.Text>
+                    ) : null}
+                  </Space>
                 ) : null}
                 {approvalFallbackTools.length > 0 && pathScopeMode !== "none" ? (
                   <Alert

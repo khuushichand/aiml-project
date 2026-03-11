@@ -191,6 +191,39 @@ def test_scope_key_for_tool_call_includes_path_scope_context() -> None:
     assert first != second
 
 
+def test_scope_key_for_tool_call_includes_allowlist_context() -> None:
+    from tldw_Server_API.app.services.mcp_hub_approval_service import _scope_key_for_tool_call
+
+    first = _scope_key_for_tool_call(
+        "files.read",
+        {"path": "src/README.md"},
+        scope_payload={
+            "path_scope_mode": "workspace_root",
+            "workspace_root": "/tmp/project",
+            "scope_root": "/tmp/project",
+            "normalized_paths": ["/tmp/project/src/README.md"],
+            "path_allowlist_prefixes": ["src"],
+            "reason": "path_outside_allowlist_scope",
+        },
+    )
+    second = _scope_key_for_tool_call(
+        "files.read",
+        {"path": "src/README.md"},
+        scope_payload={
+            "path_scope_mode": "workspace_root",
+            "workspace_root": "/tmp/project",
+            "scope_root": "/tmp/project",
+            "normalized_paths": ["/tmp/project/src/README.md"],
+            "path_allowlist_prefixes": ["docs"],
+            "reason": "path_outside_allowlist_scope",
+        },
+    )
+
+    assert first.startswith("tool:files.read|args:")
+    assert second.startswith("tool:files.read|args:")
+    assert first != second
+
+
 def test_arguments_summary_redacts_sensitive_tool_args() -> None:
     from tldw_Server_API.app.services.mcp_hub_approval_service import _arguments_summary
 

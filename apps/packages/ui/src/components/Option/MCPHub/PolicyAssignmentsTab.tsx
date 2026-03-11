@@ -35,6 +35,7 @@ import {
   getCredentialBindingKey,
   getManagedExternalServers,
   getManagedExternalServerSlots,
+  getPathAllowlistSummary,
   getPathScopeLabel,
   MCP_HUB_SCOPE_OPTIONS,
   MCP_HUB_TARGET_OPTIONS
@@ -637,6 +638,11 @@ export const PolicyAssignmentsTab = () => {
               {effectivePolicy.policy_document?.path_scope_enforcement ? (
                 <Tag color="orange">Path approval fallback</Tag>
               ) : null}
+              {getPathAllowlistSummary(effectivePolicy.policy_document?.path_allowlist_prefixes) ? (
+                <Tag color="blue">
+                  {`paths ${getPathAllowlistSummary(effectivePolicy.policy_document?.path_allowlist_prefixes)}`}
+                </Tag>
+              ) : null}
             </Space>
             {effectivePolicy.provenance.length > 0 ? (
               <Space orientation="vertical" size={4} style={{ width: "100%" }}>
@@ -694,6 +700,11 @@ export const PolicyAssignmentsTab = () => {
                 ))}
                 {getPathScopeLabel(assignment.inline_policy_document.path_scope_mode) ? (
                   <Tag color="cyan">{getPathScopeLabel(assignment.inline_policy_document.path_scope_mode)}</Tag>
+                ) : null}
+                {getPathAllowlistSummary(assignment.inline_policy_document.path_allowlist_prefixes) ? (
+                  <Tag color="blue">
+                    {`paths ${getPathAllowlistSummary(assignment.inline_policy_document.path_allowlist_prefixes)}`}
+                  </Tag>
                 ) : null}
               </Space>
             </Space>
