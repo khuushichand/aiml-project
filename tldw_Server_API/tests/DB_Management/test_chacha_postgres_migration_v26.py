@@ -117,3 +117,20 @@ def test_postgres_statement_conversion_includes_persona_session_surface_migratio
     assert "ALTER TABLE persona_sessions" in full
     assert "activity_surface TEXT NOT NULL DEFAULT 'api.persona'" in full
     assert re.search(r"SET\s+version\s*=\s*31", full, flags=re.IGNORECASE)
+
+
+def test_postgres_statement_conversion_includes_persona_session_preferences_migration(
+    char_rag_db: CharactersRAGDB,
+) -> None:
+    """Verify v32 conversion output includes persona session preferences persistence."""
+
+    sql = char_rag_db._MIGRATION_SQL_V31_TO_V32
+    assert isinstance(sql, str) and "persona_sessions" in sql
+
+    stmts = char_rag_db._convert_sqlite_schema_to_postgres_statements(sql)
+    assert isinstance(stmts, list) and len(stmts) > 0
+
+    full = "\n".join(stmts)
+    assert "ALTER TABLE persona_sessions" in full
+    assert "preferences_json TEXT NOT NULL DEFAULT '{}'" in full
+    assert re.search(r"SET\s+version\s*=\s*32", full, flags=re.IGNORECASE)

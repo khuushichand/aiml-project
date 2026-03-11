@@ -72,6 +72,7 @@ def test_migration_v25_to_latest_creates_persona_tables(db_path: Path):
     assert "session_id" in memory_columns
     session_columns = {row["name"] for row in conn.execute("PRAGMA table_info('persona_sessions')").fetchall()}
     assert "activity_surface" in session_columns
+    assert "preferences_json" in session_columns
     memory_indexes = {row["name"] for row in conn.execute("PRAGMA index_list('persona_memory_entries')").fetchall()}
     assert "idx_persona_memory_scope" in memory_indexes
     assert "idx_persona_memory_session" in memory_indexes
@@ -155,6 +156,11 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
             "reuse_allowed": True,
             "status": "active",
             "scope_snapshot_json": {"conversations": ["conv-a"], "media_tags": ["physics"]},
+            "preferences_json": {
+                "use_memory_context": True,
+                "use_companion_context": False,
+                "memory_top_k": 4,
+            },
         }
     )
     session = db_instance.get_persona_session(session_id, user_id="user-1")
@@ -163,18 +169,32 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
     assert session["reuse_allowed"] is True
     assert session["scope_snapshot"]["conversations"] == ["conv-a"]
     assert session["activity_surface"] == "api.persona"
+    assert session["preferences"]["use_memory_context"] is True
+    assert session["preferences"]["use_companion_context"] is False
+    assert session["preferences"]["memory_top_k"] == 4
     session_version = int(session["version"])
 
     assert db_instance.update_persona_session(
         session_id=session_id,
         user_id="user-1",
-        update_data={"status": "paused", "activity_surface": "companion.conversation"},
+        update_data={
+            "status": "paused",
+            "activity_surface": "companion.conversation",
+            "preferences_json": {
+                "use_memory_context": False,
+                "use_companion_context": True,
+                "memory_top_k": 7,
+            },
+        },
         expected_version=session_version,
     )
     paused_session = db_instance.get_persona_session(session_id, user_id="user-1")
     assert paused_session is not None
     assert paused_session["status"] == "paused"
     assert paused_session["activity_surface"] == "companion.conversation"
+    assert paused_session["preferences"]["use_memory_context"] is False
+    assert paused_session["preferences"]["use_companion_context"] is True
+    assert paused_session["preferences"]["memory_top_k"] == 7
 
     memory_id = db_instance.add_persona_memory_entry(
         {

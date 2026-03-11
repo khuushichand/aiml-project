@@ -359,6 +359,51 @@ def _session_policy_rules_from_preferences(preferences: dict[str, Any] | None) -
     return _default_session_policy_rules()
 
 
+def _normalize_persisted_persona_session_preferences(preferences: Any) -> dict[str, Any]:
+    if not isinstance(preferences, dict):
+        return {}
+    normalized: dict[str, Any] = {}
+    if "use_memory_context" in preferences:
+        normalized["use_memory_context"] = _coerce_bool(preferences.get("use_memory_context"), default=True)
+    if "use_companion_context" in preferences:
+        normalized["use_companion_context"] = _coerce_bool(preferences.get("use_companion_context"), default=True)
+    if "use_persona_state_context" in preferences:
+        normalized["use_persona_state_context"] = _coerce_bool(
+            preferences.get("use_persona_state_context"),
+            default=True,
+        )
+    if "memory_top_k" in preferences:
+        try:
+            normalized_top_k = int(preferences.get("memory_top_k"))
+        except (TypeError, ValueError):
+            normalized_top_k = _get_persona_memory_top_k()
+        normalized["memory_top_k"] = max(1, normalized_top_k)
+    if "session_policy_rules" in preferences:
+        normalized["session_policy_rules"] = normalize_policy_rules(preferences.get("session_policy_rules"))
+    return normalized
+
+
+def _merge_persisted_persona_session_preferences(*payloads: Any) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for payload in payloads:
+        merged.update(_normalize_persisted_persona_session_preferences(payload))
+    return merged
+
+
+def _default_persisted_persona_session_preferences(profile: dict[str, Any] | None) -> dict[str, Any]:
+    return _merge_persisted_persona_session_preferences(
+        {
+            "use_memory_context": True,
+            "use_companion_context": True,
+            "use_persona_state_context": _coerce_bool(
+                (profile or {}).get("use_persona_state_context_default"),
+                default=True,
+            ),
+            "memory_top_k": _get_persona_memory_top_k(),
+        }
+    )
+
+
 def _resolve_step_action_name(
     *,
     step_type: str,
@@ -384,6 +429,7 @@ def _load_persona_policy_rules_for_session(
         "scope_snapshot_id": None,
         "policy_rules": normalize_policy_rules(_DEFAULT_PERSONA_POLICY_RULES),
         "persona_state_context_default": True,
+        "preferences": {},
         "activity_surface": normalize_persona_activity_surface(None),
         "session_exists": False,
     }
@@ -414,6 +460,7 @@ def _load_persona_policy_rules_for_session(
             "scope_snapshot_id": scope_snapshot_id,
             "policy_rules": normalize_policy_rules(policy_rules),
             "persona_state_context_default": persona_state_context_default,
+            "preferences": _normalize_persisted_persona_session_preferences(session_row.get("preferences")),
             "activity_surface": normalize_persona_activity_surface(session_row.get("activity_surface")),
             "session_exists": True,
         }
@@ -431,25 +478,70 @@ def _get_session_preferences_with_activity_surface(
     session_manager: Any,
     session_id: str,
     user_id: str,
+    persisted_preferences: Any = None,
     persisted_activity_surface: Any = None,
 ) -> tuple[dict[str, Any], str]:
-    preferences = session_manager.get_preferences(
-        session_id=session_id,
-        user_id=user_id,
+    runtime_preferences = dict(
+        session_manager.get_preferences(
+            session_id=session_id,
+            user_id=user_id,
+        )
     )
-    if "companion_activity_surface" in preferences:
-        return preferences, normalize_persona_activity_surface(preferences.get("companion_activity_surface"))
+    merged_preferences = dict(runtime_preferences)
+    merged_preferences.update(
+        _normalize_persisted_persona_session_preferences(persisted_preferences)
+    )
+    activity_surface = normalize_persona_activity_surface(
+        runtime_preferences.get("companion_activity_surface", persisted_activity_surface)
+    )
+    merged_preferences["companion_activity_surface"] = activity_surface
+    if merged_preferences == runtime_preferences:
+        return merged_preferences, activity_surface
 
-    activity_surface = normalize_persona_activity_surface(persisted_activity_surface)
-    updated_preferences = dict(preferences)
-    updated_preferences["companion_activity_surface"] = activity_surface
+    updated_preferences = merged_preferences
     with contextlib.suppress(Exception):
         updated_preferences = session_manager.update_preferences(
             session_id=session_id,
             user_id=user_id,
-            preferences={"companion_activity_surface": activity_surface},
+            preferences=merged_preferences,
         )
     return dict(updated_preferences), activity_surface
+
+
+def _persist_persona_session_preferences(
+    db: CharactersRAGDB | None,
+    *,
+    session_id: str,
+    user_id: str,
+    base_preferences: Any = None,
+    patch_preferences: Any = None,
+) -> dict[str, Any]:
+    merged_preferences = _merge_persisted_persona_session_preferences(
+        base_preferences,
+        patch_preferences,
+    )
+    sid = str(session_id or "").strip()
+    uid = str(user_id or "").strip()
+    if db is None or not sid or not uid:
+        return merged_preferences
+
+    current_preferences = _normalize_persisted_persona_session_preferences(base_preferences)
+    if current_preferences == merged_preferences:
+        return merged_preferences
+
+    try:
+        _ = db.update_persona_session(
+            session_id=session_id,
+            user_id=user_id,
+            update_data={"preferences_json": merged_preferences},
+        )
+    except (OSError, RuntimeError, ValueError, CharactersRAGDBError) as exc:
+        logger.debug(
+            "persona session preference persistence skipped for session_hash {}: {}",
+            _redacted_id_for_logs(sid),
+            exc,
+        )
+    return merged_preferences
 
 
 def _skill_policy_rules_for_step(
@@ -1203,6 +1295,10 @@ def _persona_session_summary_from_db(
     manager_row: dict[str, Any] | None = None,
 ) -> PersonaSessionSummary:
     scope_snapshot = row.get("scope_snapshot") or {}
+    preferences = dict(row.get("preferences") or {})
+    runtime_preferences = (manager_row or {}).get("preferences")
+    if isinstance(runtime_preferences, dict):
+        preferences.update(runtime_preferences)
     return PersonaSessionSummary(
         session_id=str(row.get("id") or ""),
         persona_id=str(row.get("persona_id") or ""),
@@ -1210,7 +1306,7 @@ def _persona_session_summary_from_db(
         updated_at=str(row.get("last_modified") or row.get("created_at") or _utc_now_iso()),
         turn_count=int((manager_row or {}).get("turn_count") or 0),
         pending_plan_count=int((manager_row or {}).get("pending_plan_count") or 0),
-        preferences=dict((manager_row or {}).get("preferences") or {}),
+        preferences=preferences,
         runtime_mode=str(row.get("mode") or "session_scoped"),
         status=str(row.get("status") or "active"),
         reuse_allowed=bool(row.get("reuse_allowed", False)),
@@ -1227,6 +1323,10 @@ def _persona_session_detail_from_db(
     scope_snapshot = row.get("scope_snapshot") or {}
     turns = list((manager_snapshot or {}).get("turns") or [])
     turn_count = int((manager_snapshot or {}).get("turn_count") or len(turns))
+    preferences = dict(row.get("preferences") or {})
+    runtime_preferences = (manager_snapshot or {}).get("preferences")
+    if isinstance(runtime_preferences, dict):
+        preferences.update(runtime_preferences)
     return PersonaSessionDetail(
         session_id=str(row.get("id") or ""),
         persona_id=str(row.get("persona_id") or ""),
@@ -1234,7 +1334,7 @@ def _persona_session_detail_from_db(
         updated_at=str(row.get("last_modified") or row.get("created_at") or _utc_now_iso()),
         turn_count=turn_count,
         pending_plan_count=int((manager_snapshot or {}).get("pending_plan_count") or 0),
-        preferences=dict((manager_snapshot or {}).get("preferences") or {}),
+        preferences=preferences,
         runtime_mode=str(row.get("mode") or "session_scoped"),
         status=str(row.get("status") or "active"),
         reuse_allowed=bool(row.get("reuse_allowed", False)),
@@ -2068,6 +2168,7 @@ async def persona_session(
                 "conversation_id": req.project_id,
                 "mode": str(profile.get("mode") or "session_scoped"),
                 "scope_snapshot_json": scope_snapshot,
+                "preferences_json": _default_persisted_persona_session_preferences(profile),
                 "activity_surface": requested_activity_surface,
             }
             if req.resume_session_id:
@@ -2117,6 +2218,7 @@ async def persona_session(
             session_manager=session_manager,
             session_id=session_id,
             user_id=user_id,
+            persisted_preferences=session_row.get("preferences"),
             persisted_activity_surface=session_row.get("activity_surface"),
         )
 
@@ -2918,6 +3020,7 @@ async def persona_stream(
                     session_manager=session_manager,
                     session_id=session_id,
                     user_id=connection_user_id,
+                    persisted_preferences=runtime_context.get("preferences"),
                     persisted_activity_surface=runtime_context.get("activity_surface"),
                 )
                 configured_top_k = _get_persona_memory_top_k()
@@ -2991,6 +3094,13 @@ async def persona_stream(
                         user_id=connection_user_id,
                         preferences=preferences_patch,
                     )
+                _ = _persist_persona_session_preferences(
+                    persona_scope_db,
+                    session_id=session_id,
+                    user_id=authenticated_user_id,
+                    base_preferences=runtime_context.get("preferences"),
+                    patch_preferences=preferences_patch,
+                )
                 await _record_turn(
                     session_id=session_id,
                     role="user",
@@ -3434,6 +3544,7 @@ async def persona_stream(
                     session_manager=session_manager,
                     session_id=session_id,
                     user_id=connection_user_id,
+                    persisted_preferences=runtime_context.get("preferences"),
                     persisted_activity_surface=runtime_context.get("activity_surface"),
                 )
                 if "session_policy_rules" in msg:
@@ -3444,6 +3555,13 @@ async def persona_stream(
                             user_id=connection_user_id,
                             preferences={"session_policy_rules": session_policy_rules},
                         )
+                    _ = _persist_persona_session_preferences(
+                        persona_scope_db,
+                        session_id=session_id,
+                        user_id=authenticated_user_id,
+                        base_preferences=runtime_context.get("preferences"),
+                        patch_preferences={"session_policy_rules": session_policy_rules},
+                    )
                 else:
                     session_policy_rules = _session_policy_rules_from_preferences(current_preferences)
 
