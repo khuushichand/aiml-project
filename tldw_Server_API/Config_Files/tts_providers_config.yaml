@@ -248,6 +248,7 @@ providers:
   # Qwen3-TTS Configuration
   qwen3_tts:
     enabled: false  # Disabled by default (requires model download)
+    runtime: "auto"
     model: "auto"
     model_path: null
     tokenizer_model: "Qwen/Qwen3-TTS-Tokenizer-12Hz"

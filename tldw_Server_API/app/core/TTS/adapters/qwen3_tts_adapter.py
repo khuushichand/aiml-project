@@ -9,6 +9,7 @@ import base64
 import contextlib
 import importlib
 import inspect
+import platform
 import tempfile
 from collections.abc import AsyncGenerator, Iterable
 from pathlib import Path
@@ -158,6 +159,7 @@ class Qwen3TTSAdapter(TTSAdapter):
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config=config)
         cfg = config or {}
+        self.runtime = (cfg.get("runtime") or "auto").strip().lower()
         self.model = (cfg.get("model") or "auto").strip()
         self.model_path = cfg.get("model_path")
         self.tokenizer_model = cfg.get("tokenizer_model") or "Qwen/Qwen3-TTS-Tokenizer-12Hz"
@@ -181,6 +183,13 @@ class Qwen3TTSAdapter(TTSAdapter):
             self.MODEL_BASE_17B.lower(): self.MODEL_BASE_17B,
             self.MODEL_BASE_06B.lower(): self.MODEL_BASE_06B,
         }
+
+    def _resolve_runtime_name(self) -> str:
+        if self.runtime in {"upstream", "mlx", "remote"}:
+            return self.runtime
+        if platform.system() == "Darwin" and platform.machine().lower() == "arm64":
+            return "mlx"
+        return "upstream"
 
     def _coerce_int(self, value: Any) -> int | None:
         try:

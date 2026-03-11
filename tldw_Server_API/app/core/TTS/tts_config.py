@@ -41,6 +41,7 @@ class ProviderConfig(BaseModel):
     enabled: bool = False
     api_key: Optional[str] = None
     base_url: Optional[str] = None
+    runtime: Optional[str] = None
     model: Optional[str] = None
     model_path: Optional[str] = None
     device: str = "cpu"
