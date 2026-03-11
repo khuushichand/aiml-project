@@ -1,17 +1,20 @@
 Date: 2026-03-10
-Status: Deferred Placeholder
+Status: Activated
 
 # Companion Proactive Polish Placeholder
 
 ## Purpose
 
-Reserve the next companion polish slice focused on proactive delivery quality rather than data capture breadth.
+Reserve and now point to the active companion polish slice focused on proactive delivery quality rather than data capture breadth.
 
-## Why Deferred
+## Activation
 
-Companion now has the primitives for reflections and inbox delivery, but proactive behavior should not expand until the system is both more relevant and more inspectable.
+This placeholder is now activated by:
 
-That means this work follows, not precedes, the quality and trust-controls milestone.
+- `Docs/Plans/2026-03-10-companion-proactive-polish-design.md`
+- `Docs/Plans/2026-03-10-companion-proactive-polish-implementation-plan.md`
+
+The proactive polish milestone now follows the completed quality and trust-controls milestone.
 
 ## Intended Scope
 
@@ -23,15 +26,6 @@ Potential future work:
 - conversation-driven follow-up and goal coaching loops
 - inbox/companion coordination polish
 
-## Preconditions
+## Next Step
 
-This placeholder should not move forward until:
-
-- per-user reflection settings are real
-- provenance drill-down exists
-- purge/rebuild semantics are stable
-- the bounded relevance/ranking layer is in production
-
-## Deliverable Expectation
-
-When activated, this should become a formal design and implementation plan pair with explicit user-trust review before adding stronger proactive behavior.
+Execute the implementation plan instead of treating this placeholder as backlog-only.
