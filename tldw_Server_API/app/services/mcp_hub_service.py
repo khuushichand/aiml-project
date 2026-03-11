@@ -31,6 +31,9 @@ from tldw_Server_API.app.services.mcp_hub_external_legacy_inventory import (
 from tldw_Server_API.app.services.mcp_hub_external_access_resolver import (
     McpHubExternalAccessResolver,
 )
+from tldw_Server_API.app.services.mcp_hub_external_auth_service import (
+    ManagedExternalAuthBridge,
+)
 
 
 async def _await_if_needed(value: Any) -> Any:
@@ -205,15 +208,11 @@ class McpHubService:
 
         config = dict(row.get("config") or {})
         auth = dict(config.get("auth") or {})
-        mode = str(auth.get("mode") or "").strip().lower()
-        raw_mappings = auth.get("mappings")
-        if mode != "template" or raw_mappings is None:
+        template_mappings = ManagedExternalAuthBridge._extract_template_mappings(auth)
+        if not template_mappings:
             return result
 
         result["auth_template_present"] = True
-        if not isinstance(raw_mappings, list) or not raw_mappings:
-            result["auth_template_blocked_reason"] = "auth_template_invalid"
-            return result
 
         expected_target = self._supported_auth_template_target_for_transport(str(row.get("transport") or ""))
         if expected_target is None:
@@ -227,10 +226,7 @@ class McpHubService:
         }
         seen_targets: set[tuple[str, str]] = set()
 
-        for raw_mapping in raw_mappings:
-            if not isinstance(raw_mapping, dict):
-                result["auth_template_blocked_reason"] = "auth_template_invalid"
-                return result
+        for raw_mapping in template_mappings:
             slot_name = str(raw_mapping.get("slot_name") or "").strip().lower()
             target_type = str(raw_mapping.get("target_type") or "").strip().lower()
             target_name = str(raw_mapping.get("target_name") or "").strip()

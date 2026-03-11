@@ -71,11 +71,7 @@ class McpHubExternalRegistryService:
 
         if mode not in {"", "none"}:
             server_id = str(row.get("id") or "")
-            required_slots = [
-                str(slot).strip().lower()
-                for slot in (auth.get("required_slots") or [])
-                if str(slot or "").strip()
-            ]
+            required_slots = self.auth_bridge.get_required_slot_names(server_config=row)
             if required_slots:
                 slot_payloads: dict[str, str] = {}
                 default_slot = await self.repo.get_external_server_default_slot(server_id=server_id)
@@ -110,6 +106,7 @@ class McpHubExternalRegistryService:
                 secret_payload=secret_payload,
             )
             headers = dict(runtime_auth.get("headers") or {})
+            env = dict(runtime_auth.get("env") or {})
             if headers:
                 if str(row.get("transport") or "").strip().lower() != "websocket":
                     raise ValueError("managed header auth is currently supported only for websocket transport")
@@ -118,6 +115,14 @@ class McpHubExternalRegistryService:
                 merged_headers.update(headers)
                 websocket_cfg["headers"] = merged_headers
                 config["websocket"] = websocket_cfg
+            if env:
+                if str(row.get("transport") or "").strip().lower() != "stdio":
+                    raise ValueError("managed env auth is currently supported only for stdio transport")
+                stdio_cfg = dict(config.get("stdio") or {})
+                merged_env = dict(stdio_cfg.get("env") or {})
+                merged_env.update(env)
+                stdio_cfg["env"] = merged_env
+                config["stdio"] = stdio_cfg
             config["auth"] = {"mode": "none"}
 
         payload = {

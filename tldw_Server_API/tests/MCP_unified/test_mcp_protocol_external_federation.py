@@ -313,4 +313,4 @@ async def test_managed_external_registry_service_hydrates_template_env_for_stdio
     assert [server.id for server in servers] == ["docs-stdio"]
     assert servers[0].stdio is not None
     assert servers[0].stdio.env["DOCS_TOKEN"] == "super-secret-token"
-    assert str(servers[0].auth.mode) == "none"
+    assert str(getattr(servers[0].auth.mode, "value", servers[0].auth.mode)) == "none"
