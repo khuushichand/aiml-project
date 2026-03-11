@@ -13,6 +13,9 @@ from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDat
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Personalization.companion_lifecycle import rebuild_companion_scope
+from tldw_Server_API.app.core.Personalization.companion_proactive import (
+    classify_companion_reflection_delivery,
+)
 
 
 COMPANION_REFLECTION_DOMAIN = "companion"
@@ -314,6 +317,30 @@ def _build_reflection_payload(
     return title, metadata, provenance, focus_tags[:3]
 
 
+def _recent_reflection_summaries(
+    *,
+    rows: list[dict[str, Any]],
+    current_slot_key: str,
+) -> list[dict[str, Any]]:
+    recent: list[dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("source_type") or "").strip() != "companion_reflection":
+            continue
+        if str(row.get("source_id") or "").strip() == current_slot_key:
+            continue
+        metadata = dict(row.get("metadata") or {})
+        recent.append(
+            {
+                "id": str(row.get("id") or ""),
+                "cadence": metadata.get("cadence"),
+                "theme_key": metadata.get("theme_key"),
+                "signal_strength": metadata.get("signal_strength"),
+                "delivery_decision": metadata.get("delivery_decision"),
+            }
+        )
+    return recent
+
+
 def _lookup_existing_reflection_id(
     *,
     db: PersonalizationDB,
@@ -351,8 +378,11 @@ def run_companion_reflection_job(
     if _quiet_hours_active(profile, current_time):
         return {"status": "skipped", "reason": "quiet_hours"}
 
-    activity_rows, _total = db.list_companion_activity_events(normalized_user_id, limit=100, offset=0)
-    activity_rows = [row for row in activity_rows if row["source_type"] != "companion_reflection"]
+    slot_key = _reflection_slot_key(cadence, current_time)
+    dedupe_key = f"companion.reflection:{cadence}:{slot_key}"
+    recent_rows, _total = db.list_companion_activity_events(normalized_user_id, limit=100, offset=0)
+    recent_reflections = _recent_reflection_summaries(rows=recent_rows, current_slot_key=slot_key)
+    activity_rows = [row for row in recent_rows if row["source_type"] != "companion_reflection"]
     if not activity_rows:
         return {"status": "skipped", "reason": "no_activity"}
 
@@ -369,8 +399,15 @@ def run_companion_reflection_job(
         activity_rows=activity_rows,
         now=current_time,
     )
-    slot_key = _reflection_slot_key(cadence, current_time)
-    dedupe_key = f"companion.reflection:{cadence}:{slot_key}"
+    delivery = classify_companion_reflection_delivery(
+        cadence=cadence,
+        activity_count=len(activity_rows),
+        theme_key=str(metadata.get("theme_key") or ""),
+        signal_strength=float(metadata.get("signal_strength") or 0.0),
+        recent_reflections=recent_reflections,
+    )
+    metadata["delivery_decision"] = delivery["delivery_decision"]
+    metadata["delivery_reason"] = delivery["delivery_reason"]
 
     try:
         reflection_id = db.insert_companion_activity_event(
@@ -393,22 +430,24 @@ def run_companion_reflection_job(
         if reflection_id is None:
             raise
 
-    notification = cdb.create_user_notification(
-        kind="companion_reflection",
-        title=title,
-        message=metadata["summary"],
-        severity="info",
-        source_job_id=None if job_id is None else str(job_id),
-        source_domain=COMPANION_REFLECTION_DOMAIN,
-        source_job_type=COMPANION_REFLECTION_JOB_TYPE,
-        link_type="companion_reflection",
-        link_id=reflection_id,
-        dedupe_key=f"companion_reflection:{cadence}:{slot_key}",
-    )
+    notification = None
+    if metadata.get("delivery_decision") != "suppressed":
+        notification = cdb.create_user_notification(
+            kind="companion_reflection",
+            title=title,
+            message=metadata["summary"],
+            severity="info",
+            source_job_id=None if job_id is None else str(job_id),
+            source_domain=COMPANION_REFLECTION_DOMAIN,
+            source_job_type=COMPANION_REFLECTION_JOB_TYPE,
+            link_type="companion_reflection",
+            link_id=reflection_id,
+            dedupe_key=f"companion_reflection:{cadence}:{slot_key}",
+        )
     return {
         "status": "completed",
         "reflection_id": reflection_id,
-        "notification_id": notification.id,
+        "notification_id": None if notification is None else notification.id,
         "delivery_decision": metadata.get("delivery_decision"),
     }
 
