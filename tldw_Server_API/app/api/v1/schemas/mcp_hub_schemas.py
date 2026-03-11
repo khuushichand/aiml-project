@@ -23,6 +23,7 @@ ToolRiskClass = Literal["low", "medium", "high", "unclassified"]
 ToolMetadataSource = Literal["explicit", "heuristic", "fallback"]
 PathScopeMode = Literal["none", "workspace_root", "cwd_descendants"]
 PathScopeEnforcement = Literal["approval_required_when_unenforceable"]
+ExternalAuthTemplateTargetType = Literal["header", "env"]
 
 
 class ACPProfileCreateRequest(BaseModel):
@@ -323,6 +324,34 @@ class ExternalServerCredentialSlotResponse(BaseModel):
     updated_at: datetime | str | None = None
 
 
+class ExternalServerAuthTemplateMappingRequest(BaseModel):
+    slot_name: str = Field(..., min_length=1, max_length=128)
+    target_type: ExternalAuthTemplateTargetType
+    target_name: str = Field(..., min_length=1, max_length=256)
+    prefix: str = Field(default="", max_length=512)
+    suffix: str = Field(default="", max_length=512)
+    required: bool = True
+
+
+class ExternalServerAuthTemplateMappingResponse(BaseModel):
+    slot_name: str
+    target_type: ExternalAuthTemplateTargetType
+    target_name: str
+    prefix: str = ""
+    suffix: str = ""
+    required: bool = True
+
+
+class ExternalServerAuthTemplateUpdateRequest(BaseModel):
+    mode: Literal["template"] = "template"
+    mappings: list[ExternalServerAuthTemplateMappingRequest] = Field(default_factory=list)
+
+
+class ExternalServerAuthTemplateResponse(BaseModel):
+    mode: Literal["template"] = "template"
+    mappings: list[ExternalServerAuthTemplateMappingResponse] = Field(default_factory=list)
+
+
 class ExternalServerResponse(BaseModel):
     id: str
     name: str
@@ -338,6 +367,9 @@ class ExternalServerResponse(BaseModel):
     superseded_by_server_id: str | None = None
     binding_count: int = 0
     runtime_executable: bool = True
+    auth_template_present: bool = False
+    auth_template_valid: bool = False
+    auth_template_blocked_reason: str | None = None
     credential_slots: list[ExternalServerCredentialSlotResponse] = Field(default_factory=list)
     created_by: int | None = None
     updated_by: int | None = None

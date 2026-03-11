@@ -106,6 +106,157 @@ class McpHubService:
         target = str(server_id or "").strip()
         return next((item for item in inventory if str(item.get("id") or "") == target), None)
 
+    @staticmethod
+    def _supported_auth_template_target_for_transport(transport: str) -> str | None:
+        normalized = str(transport or "").strip().lower()
+        if normalized == "websocket":
+            return "header"
+        if normalized == "stdio":
+            return "env"
+        return None
+
+    async def _validate_managed_external_auth_template_config(
+        self,
+        *,
+        server_id: str,
+        transport: str,
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        out = dict(config or {})
+        auth = dict(out.get("auth") or {})
+        mode = str(auth.get("mode") or "").strip().lower()
+        raw_mappings = auth.get("mappings")
+
+        if raw_mappings is None:
+            return out
+        if mode not in {"template"}:
+            raise BadRequestError("Managed auth templates require auth.mode='template'")
+        if not isinstance(raw_mappings, list) or not raw_mappings:
+            raise BadRequestError("Managed auth template requires at least one mapping")
+
+        expected_target = self._supported_auth_template_target_for_transport(transport)
+        if expected_target is None:
+            raise BadRequestError("Managed auth templates are supported only for websocket and stdio transports")
+
+        slot_rows = await self.repo.list_external_server_credential_slots(server_id=server_id)
+        valid_slots = {
+            str(row.get("slot_name") or "").strip().lower()
+            for row in slot_rows
+            if str(row.get("slot_name") or "").strip()
+        }
+        seen_targets: set[tuple[str, str]] = set()
+        normalized_mappings: list[dict[str, Any]] = []
+
+        for raw_mapping in raw_mappings:
+            if not isinstance(raw_mapping, dict):
+                raise BadRequestError("Managed auth template mappings must be objects")
+
+            slot_name = str(raw_mapping.get("slot_name") or "").strip().lower()
+            if not slot_name:
+                raise BadRequestError("Managed auth template mapping requires slot_name")
+            if slot_name not in valid_slots:
+                raise BadRequestError(f"Managed auth template references unknown slot: {slot_name}")
+
+            target_type = str(raw_mapping.get("target_type") or "").strip().lower()
+            if target_type not in {"header", "env"}:
+                raise BadRequestError(f"Unsupported auth template target_type: {target_type or 'missing'}")
+            if target_type != expected_target:
+                raise BadRequestError("Managed auth template target_type is invalid for the server transport")
+
+            target_name = str(raw_mapping.get("target_name") or "").strip()
+            if not target_name:
+                raise BadRequestError("Managed auth template mapping requires target_name")
+            target_key = (target_type, target_name.lower())
+            if target_key in seen_targets:
+                raise BadRequestError("Managed auth template contains duplicate target mappings")
+            seen_targets.add(target_key)
+
+            normalized_mappings.append(
+                {
+                    "slot_name": slot_name,
+                    "target_type": target_type,
+                    "target_name": target_name,
+                    "prefix": str(raw_mapping.get("prefix") or ""),
+                    "suffix": str(raw_mapping.get("suffix") or ""),
+                    "required": bool(raw_mapping.get("required", True)),
+                }
+            )
+
+        auth["mode"] = "template"
+        auth["mappings"] = normalized_mappings
+        auth.pop("required_slots", None)
+        auth.pop("slot_bindings", None)
+        out["auth"] = auth
+        return out
+
+    async def _build_auth_template_status(
+        self,
+        *,
+        row: dict[str, Any],
+        slots: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        result = {
+            "auth_template_present": False,
+            "auth_template_valid": False,
+            "auth_template_blocked_reason": "no_auth_template",
+        }
+        if str(row.get("server_source") or "managed") != "managed":
+            return result
+
+        config = dict(row.get("config") or {})
+        auth = dict(config.get("auth") or {})
+        mode = str(auth.get("mode") or "").strip().lower()
+        raw_mappings = auth.get("mappings")
+        if mode != "template" or raw_mappings is None:
+            return result
+
+        result["auth_template_present"] = True
+        if not isinstance(raw_mappings, list) or not raw_mappings:
+            result["auth_template_blocked_reason"] = "auth_template_invalid"
+            return result
+
+        expected_target = self._supported_auth_template_target_for_transport(str(row.get("transport") or ""))
+        if expected_target is None:
+            result["auth_template_blocked_reason"] = "unsupported_template_transport_target"
+            return result
+
+        slot_lookup = {
+            str(slot.get("slot_name") or "").strip().lower(): dict(slot)
+            for slot in slots
+            if str(slot.get("slot_name") or "").strip()
+        }
+        seen_targets: set[tuple[str, str]] = set()
+
+        for raw_mapping in raw_mappings:
+            if not isinstance(raw_mapping, dict):
+                result["auth_template_blocked_reason"] = "auth_template_invalid"
+                return result
+            slot_name = str(raw_mapping.get("slot_name") or "").strip().lower()
+            target_type = str(raw_mapping.get("target_type") or "").strip().lower()
+            target_name = str(raw_mapping.get("target_name") or "").strip()
+            if not slot_name or slot_name not in slot_lookup or not target_name:
+                result["auth_template_blocked_reason"] = "auth_template_invalid"
+                return result
+            if target_type not in {"header", "env"}:
+                result["auth_template_blocked_reason"] = "auth_template_invalid"
+                return result
+            if target_type != expected_target:
+                result["auth_template_blocked_reason"] = "unsupported_template_transport_target"
+                return result
+            target_key = (target_type, target_name.lower())
+            if target_key in seen_targets:
+                result["auth_template_blocked_reason"] = "auth_template_invalid"
+                return result
+            seen_targets.add(target_key)
+
+            if bool(raw_mapping.get("required", True)) and not bool(slot_lookup[slot_name].get("secret_configured")):
+                result["auth_template_blocked_reason"] = "required_slot_secret_missing"
+                return result
+
+        result["auth_template_valid"] = True
+        result["auth_template_blocked_reason"] = None
+        return result
+
     async def _resolve_binding_target(
         self,
         *,
@@ -166,6 +317,12 @@ class McpHubService:
             )
         else:
             out["credential_slots"] = []
+        out.update(
+            await self._build_auth_template_status(
+                row=out,
+                slots=list(out.get("credential_slots") or []),
+            )
+        )
         return out
 
     async def create_permission_profile(
@@ -643,11 +800,16 @@ class McpHubService:
         previous = await self.repo.get_external_server(server_id)
         if previous is not None and not allow_existing:
             raise McpHubConflictError(f"External server already exists: {server_id}")
+        normalized_config = await self._validate_managed_external_auth_template_config(
+            server_id=server_id,
+            transport=transport,
+            config=dict(config or {}),
+        )
         row = await self.repo.upsert_external_server(
             server_id=server_id,
             name=name,
             transport=transport,
-            config_json=json.dumps(config or {}),
+            config_json=json.dumps(normalized_config),
             owner_scope_type=owner_scope_type,
             owner_scope_id=owner_scope_id,
             enabled=enabled,
@@ -701,11 +863,17 @@ class McpHubService:
                     existing_config = parsed
             except (TypeError, ValueError):
                 existing_config = {}
+        next_transport = transport if transport is not None else str(existing.get("transport") or "")
+        next_config = await self._validate_managed_external_auth_template_config(
+            server_id=server_id,
+            transport=next_transport,
+            config=dict(config if config is not None else existing_config),
+        )
         row = await self.repo.update_external_server(
             server_id,
             name=name if name is not None else str(existing.get("name") or ""),
-            transport=transport if transport is not None else str(existing.get("transport") or ""),
-            config_json=json.dumps(config if config is not None else existing_config),
+            transport=next_transport,
+            config_json=json.dumps(next_config),
             owner_scope_type=(
                 owner_scope_type
                 if owner_scope_type is not None
@@ -763,6 +931,9 @@ class McpHubService:
                 "superseded_by_server_id": item.get("superseded_by_server_id"),
                 "binding_count": 0,
                 "runtime_executable": False,
+                "auth_template_present": False,
+                "auth_template_valid": False,
+                "auth_template_blocked_reason": "no_auth_template",
                 "credential_slots": [],
                 "created_by": None,
                 "updated_by": None,

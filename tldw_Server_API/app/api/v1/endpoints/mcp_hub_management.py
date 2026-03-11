@@ -423,6 +423,9 @@ def _external_row_to_response(row: dict[str, Any]) -> ExternalServerResponse:
             if row.get("runtime_executable") is not None
             else True
         ),
+        auth_template_present=bool(row.get("auth_template_present")),
+        auth_template_valid=bool(row.get("auth_template_valid")),
+        auth_template_blocked_reason=row.get("auth_template_blocked_reason"),
         credential_slots=slots,
         created_by=row.get("created_by"),
         updated_by=row.get("updated_by"),

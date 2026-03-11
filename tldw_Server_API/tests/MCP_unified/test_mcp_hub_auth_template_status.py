@@ -66,6 +66,23 @@ async def test_list_external_servers_reports_missing_required_slot_secret_status
         server_id="docs",
         name="Docs",
         transport="websocket",
+        config={"websocket": {"url": "wss://docs.example/ws"}},
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        actor_id=1,
+    )
+    await repo.create_external_server_credential_slot(
+        server_id="docs",
+        slot_name="token_readonly",
+        display_name="Read-only token",
+        secret_kind="bearer_token",
+        privilege_class="read",
+        is_required=True,
+        actor_id=1,
+    )
+    await svc.update_external_server(
+        "docs",
         config={
             "websocket": {"url": "wss://docs.example/ws"},
             "auth": {
@@ -82,18 +99,6 @@ async def test_list_external_servers_reports_missing_required_slot_secret_status
                 ],
             },
         },
-        owner_scope_type="global",
-        owner_scope_id=None,
-        enabled=True,
-        actor_id=1,
-    )
-    await repo.create_external_server_credential_slot(
-        server_id="docs",
-        slot_name="token_readonly",
-        display_name="Read-only token",
-        secret_kind="bearer_token",
-        privilege_class="read",
-        is_required=True,
         actor_id=1,
     )
 
