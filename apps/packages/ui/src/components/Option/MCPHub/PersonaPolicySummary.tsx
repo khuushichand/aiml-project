@@ -105,6 +105,11 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
               {`Allowed workspaces: ${policy.selected_assignment_workspace_ids.join(", ")}`}
             </Typography.Text>
           ) : null}
+          {policy.selected_workspace_source_mode === "named" && policy.selected_workspace_set_object_name ? (
+            <Typography.Text type="secondary">
+              {`Workspace set: ${policy.selected_workspace_set_object_name}`}
+            </Typography.Text>
+          ) : null}
           <Space wrap>
             {policy.capabilities.map((capability) => (
               <Tag key={capability}>{capability}</Tag>
@@ -124,6 +129,9 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
             ) : null}
             {policy.provenance.some((entry) => entry.source_kind === "assignment_path_scope_object") ? (
               <Tag color="purple">Named path scope</Tag>
+            ) : null}
+            {policy.selected_workspace_source_mode === "named" && policy.selected_workspace_set_object_name ? (
+              <Tag color="geekblue">{`workspace set ${policy.selected_workspace_set_object_name}`}</Tag>
             ) : null}
           </Space>
           <Space wrap>

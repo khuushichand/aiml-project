@@ -38,6 +38,8 @@ async def test_mcp_hub_tables_exist_after_authnz_migrations_sqlite(tmp_path, mon
     assert "mcp_approval_decisions" in names
     assert "mcp_credential_bindings" in names
     assert "mcp_policy_audit_history" in names
+    assert "mcp_workspace_set_objects" in names
+    assert "mcp_workspace_set_object_members" in names
 
     columns = await pool.fetchall("PRAGMA table_info(mcp_approval_decisions)")
     column_names = {str(row["name"]) for row in columns}
@@ -47,6 +49,22 @@ async def test_mcp_hub_tables_exist_after_authnz_migrations_sqlite(tmp_path, mon
     override_columns = await pool.fetchall("PRAGMA table_info(mcp_policy_overrides)")
     override_column_names = {str(row["name"]) for row in override_columns}
     assert "is_active" in override_column_names
+
+    assignment_columns = await pool.fetchall("PRAGMA table_info(mcp_policy_assignments)")
+    assignment_column_names = {str(row["name"]) for row in assignment_columns}
+    assert "workspace_source_mode" in assignment_column_names
+    assert "workspace_set_object_id" in assignment_column_names
+
+    workspace_set_columns = await pool.fetchall("PRAGMA table_info(mcp_workspace_set_objects)")
+    workspace_set_column_names = {str(row["name"]) for row in workspace_set_columns}
+    assert "name" in workspace_set_column_names
+    assert "owner_scope_type" in workspace_set_column_names
+    assert "owner_scope_id" in workspace_set_column_names
+
+    workspace_member_columns = await pool.fetchall("PRAGMA table_info(mcp_workspace_set_object_members)")
+    workspace_member_column_names = {str(row["name"]) for row in workspace_member_columns}
+    assert "workspace_set_object_id" in workspace_member_column_names
+    assert "workspace_id" in workspace_member_column_names
 
     external_columns = await pool.fetchall("PRAGMA table_info(mcp_external_servers)")
     external_column_names = {str(row["name"]) for row in external_columns}
@@ -88,3 +106,15 @@ async def test_mcp_hub_tables_exist_after_authnz_migrations_sqlite(tmp_path, mon
         if int(row["unique"]) == 1
     }
     assert "uq_mcp_external_server_slots_server_slot" in unique_slot_indexes
+
+    workspace_member_indexes = await pool.fetchall("PRAGMA index_list(mcp_workspace_set_object_members)")
+    unique_workspace_member_indexes = {
+        str(row["name"])
+        for row in workspace_member_indexes
+        if int(row["unique"]) == 1
+    }
+    assert any(
+        name == "uq_mcp_workspace_set_members_object_workspace"
+        or name.startswith("sqlite_autoindex_mcp_workspace_set_object_members_")
+        for name in unique_workspace_member_indexes
+    )

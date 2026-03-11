@@ -1,6 +1,6 @@
 # MCP Hub Reusable Workspace Sets Design
 
-Status: Approved for planning
+Status: Implemented
 
 ## Goal
 

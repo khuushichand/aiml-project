@@ -34,6 +34,9 @@ from tldw_Server_API.app.services.mcp_hub_external_access_resolver import (
 from tldw_Server_API.app.services.mcp_hub_external_auth_service import (
     ManagedExternalAuthBridge,
 )
+from tldw_Server_API.app.services.mcp_hub_workspace_root_resolver import (
+    McpHubWorkspaceRootResolver,
+)
 
 
 async def _await_if_needed(value: Any) -> Any:
@@ -100,9 +103,11 @@ class McpHubService:
         repo: McpHubRepo,
         *,
         legacy_inventory_service: McpHubExternalLegacyInventoryService | None = None,
+        workspace_root_resolver: McpHubWorkspaceRootResolver | None = None,
     ):
         self.repo = repo
         self.legacy_inventory_service = legacy_inventory_service
+        self.workspace_root_resolver = workspace_root_resolver or McpHubWorkspaceRootResolver()
 
     @staticmethod
     def _normalize_credential_slot_privilege_class(value: str) -> str:
@@ -141,6 +146,41 @@ class McpHubService:
             if object_scope_id != target_scope_id:
                 raise BadRequestError("Cannot reference a path scope object from a different owner scope")
         return row
+
+    async def validate_workspace_set_object_reference(
+        self,
+        *,
+        workspace_set_object_id: int | None,
+        target_scope_type: str,
+        target_scope_id: int | None,
+    ) -> dict[str, Any] | None:
+        if workspace_set_object_id is None:
+            return None
+        row = await self.repo.get_workspace_set_object(int(workspace_set_object_id))
+        if not row:
+            raise ResourceNotFoundError("mcp_workspace_set_object", identifier=str(workspace_set_object_id))
+        if not bool(row.get("is_active", True)):
+            raise BadRequestError("Referenced workspace set object is inactive")
+        if str(row.get("owner_scope_type") or "") != "user":
+            raise BadRequestError("Workspace set objects must be user scoped")
+        if str(target_scope_type or "") != "user":
+            raise BadRequestError("Only user-scoped assignments may reference workspace set objects")
+        if row.get("owner_scope_id") != target_scope_id:
+            raise BadRequestError("Cannot reference a workspace set object from a different owner scope")
+        return row
+
+    async def _validate_workspace_id_for_user(self, *, owner_scope_id: int | None, workspace_id: str) -> None:
+        if owner_scope_id is None:
+            raise BadRequestError("Workspace set objects require owner_scope_id")
+        result = await self.workspace_root_resolver.resolve_for_context(
+            session_id=None,
+            user_id=str(owner_scope_id),
+            workspace_id=str(workspace_id or "").strip(),
+        )
+        if not result.get("workspace_root"):
+            raise BadRequestError(
+                f"Workspace id '{workspace_id}' is not a trusted workspace for user {owner_scope_id}"
+            )
 
     @classmethod
     def _credential_slot_required_permission(cls, privilege_class: str) -> str:
@@ -477,6 +517,151 @@ class McpHubService:
         )
         return row
 
+    async def create_workspace_set_object(
+        self,
+        *,
+        name: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        actor_id: int | None,
+        description: str | None = None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        if str(owner_scope_type or "") != "user":
+            raise BadRequestError("Workspace set objects must use owner_scope_type='user'")
+        if owner_scope_id is None:
+            raise BadRequestError("Workspace set objects require owner_scope_id")
+        row = await self.repo.create_workspace_set_object(
+            name=name,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            actor_id=actor_id,
+            description=description,
+            is_active=is_active,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.workspace_set_object.create",
+                actor_id=actor_id,
+                resource_type="mcp_workspace_set_object",
+                resource_id=str(row.get("id") or ""),
+                metadata={"name": row.get("name"), "owner_scope_type": row.get("owner_scope_type")},
+            )
+        )
+        return row
+
+    async def list_workspace_set_objects(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self.repo.list_workspace_set_objects(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+
+    async def get_workspace_set_object(self, workspace_set_object_id: int) -> dict[str, Any] | None:
+        return await self.repo.get_workspace_set_object(workspace_set_object_id)
+
+    async def update_workspace_set_object(
+        self,
+        workspace_set_object_id: int,
+        *,
+        actor_id: int | None = None,
+        **update_fields: Any,
+    ) -> dict[str, Any] | None:
+        if "owner_scope_type" in update_fields and str(update_fields.get("owner_scope_type") or "") != "user":
+            raise BadRequestError("Workspace set objects must use owner_scope_type='user'")
+        row = await self.repo.update_workspace_set_object(
+            workspace_set_object_id,
+            actor_id=actor_id,
+            **update_fields,
+        )
+        if row:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.workspace_set_object.update",
+                    actor_id=actor_id,
+                    resource_type="mcp_workspace_set_object",
+                    resource_id=str(row.get("id") or workspace_set_object_id),
+                    metadata={"name": row.get("name"), "owner_scope_type": row.get("owner_scope_type")},
+                )
+            )
+        return row
+
+    async def delete_workspace_set_object(self, workspace_set_object_id: int, *, actor_id: int | None) -> bool:
+        row = await self.repo.get_workspace_set_object(workspace_set_object_id)
+        if not row:
+            return False
+        assignments = await self.repo.list_policy_assignments()
+        if any(int(assignment.get("workspace_set_object_id") or 0) == int(workspace_set_object_id) for assignment in assignments):
+            raise BadRequestError("Cannot delete a workspace set object while it is still referenced")
+        deleted = await self.repo.delete_workspace_set_object(workspace_set_object_id)
+        if deleted:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.workspace_set_object.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_workspace_set_object",
+                    resource_id=str(workspace_set_object_id),
+                )
+            )
+        return deleted
+
+    async def list_workspace_set_members(self, workspace_set_object_id: int) -> list[dict[str, Any]]:
+        return await self.repo.list_workspace_set_members(workspace_set_object_id)
+
+    async def add_workspace_set_member(
+        self,
+        workspace_set_object_id: int,
+        *,
+        workspace_id: str,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        owner = await self.repo.get_workspace_set_object(workspace_set_object_id)
+        if not owner:
+            raise ResourceNotFoundError("mcp_workspace_set_object", identifier=str(workspace_set_object_id))
+        await self._validate_workspace_id_for_user(
+            owner_scope_id=owner.get("owner_scope_id"),
+            workspace_id=str(workspace_id or "").strip(),
+        )
+        row = await self.repo.add_workspace_set_member(
+            workspace_set_object_id,
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.workspace_set_object.member.add",
+                actor_id=actor_id,
+                resource_type="mcp_workspace_set_object",
+                resource_id=str(workspace_set_object_id),
+                metadata={"workspace_id": workspace_id},
+            )
+        )
+        return row
+
+    async def delete_workspace_set_member(
+        self,
+        workspace_set_object_id: int,
+        workspace_id: str,
+        *,
+        actor_id: int | None,
+    ) -> bool:
+        deleted = await self.repo.delete_workspace_set_member(workspace_set_object_id, workspace_id)
+        if deleted:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.workspace_set_object.member.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_workspace_set_object",
+                    resource_id=str(workspace_set_object_id),
+                    metadata={"workspace_id": workspace_id},
+                )
+            )
+        return deleted
+
     async def list_path_scope_objects(
         self,
         *,
@@ -590,6 +775,8 @@ class McpHubService:
         owner_scope_id: int | None,
         profile_id: int | None,
         path_scope_object_id: int | None,
+        workspace_source_mode: str | None,
+        workspace_set_object_id: int | None,
         inline_policy_document: dict[str, Any],
         approval_policy_id: int | None,
         actor_id: int | None,
@@ -602,6 +789,8 @@ class McpHubService:
             owner_scope_id=owner_scope_id,
             profile_id=profile_id,
             path_scope_object_id=path_scope_object_id,
+            workspace_source_mode=workspace_source_mode,
+            workspace_set_object_id=workspace_set_object_id,
             inline_policy_document=inline_policy_document,
             approval_policy_id=approval_policy_id,
             actor_id=actor_id,

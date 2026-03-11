@@ -18,6 +18,7 @@ export type McpHubPathScopeMode = "none" | "workspace_root" | "cwd_descendants"
 export type McpHubPathScopeEnforcement = "approval_required_when_unenforceable"
 export type McpHubExternalServerSource = "managed" | "legacy"
 export type McpHubCredentialBindingMode = "grant" | "disable"
+export type McpHubWorkspaceSourceMode = "inline" | "named"
 export type McpHubCredentialSlotPrivilegeClass = "read" | "write" | "admin" | "custom" | string
 
 export type McpHubProfile = {
@@ -134,6 +135,42 @@ export type McpHubPathScopeObjectUpdateInput = {
   is_active?: boolean
 }
 
+export type McpHubWorkspaceSetObject = {
+  id: number
+  name: string
+  description?: string | null
+  owner_scope_type: "user"
+  owner_scope_id?: number | null
+  is_active: boolean
+  created_by?: number | null
+  updated_by?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type McpHubWorkspaceSetObjectCreateInput = {
+  name: string
+  description?: string | null
+  owner_scope_type?: "user"
+  owner_scope_id?: number | null
+  is_active?: boolean
+}
+
+export type McpHubWorkspaceSetObjectUpdateInput = {
+  name?: string
+  description?: string | null
+  owner_scope_type?: "user"
+  owner_scope_id?: number | null
+  is_active?: boolean
+}
+
+export type McpHubWorkspaceSetObjectMember = {
+  workspace_set_object_id: number
+  workspace_id: string
+  created_by?: number | null
+  created_at?: string | null
+}
+
 export type McpHubPolicyAssignment = {
   id: number
   target_type: McpHubAssignmentTargetType
@@ -142,6 +179,8 @@ export type McpHubPolicyAssignment = {
   owner_scope_id?: number | null
   profile_id?: number | null
   path_scope_object_id?: number | null
+  workspace_source_mode?: McpHubWorkspaceSourceMode | null
+  workspace_set_object_id?: number | null
   inline_policy_document: McpHubPermissionPolicyDocument
   approval_policy_id?: number | null
   is_active: boolean
@@ -162,6 +201,8 @@ export type McpHubPolicyAssignmentCreateInput = {
   owner_scope_id?: number | null
   profile_id?: number | null
   path_scope_object_id?: number | null
+  workspace_source_mode?: McpHubWorkspaceSourceMode | null
+  workspace_set_object_id?: number | null
   inline_policy_document?: McpHubPermissionPolicyDocument
   approval_policy_id?: number | null
   is_active?: boolean
@@ -174,6 +215,8 @@ export type McpHubPolicyAssignmentUpdateInput = {
   owner_scope_id?: number | null
   profile_id?: number | null
   path_scope_object_id?: number | null
+  workspace_source_mode?: McpHubWorkspaceSourceMode | null
+  workspace_set_object_id?: number | null
   inline_policy_document?: McpHubPermissionPolicyDocument
   approval_policy_id?: number | null
   is_active?: boolean
@@ -296,6 +339,9 @@ export type McpHubEffectivePolicy = {
   approval_mode?: McpHubApprovalMode | null
   policy_document: Record<string, unknown>
   selected_assignment_id?: number | null
+  selected_workspace_source_mode?: McpHubWorkspaceSourceMode | null
+  selected_workspace_set_object_id?: number | null
+  selected_workspace_set_object_name?: string | null
   selected_assignment_workspace_ids?: string[]
   sources: McpHubEffectivePolicySource[]
   provenance: McpHubEffectivePolicyProvenance[]
@@ -784,6 +830,79 @@ export const listPathScopeObjects = async (params: {
       owner_scope_id: params.owner_scope_id
     }),
     method: "GET"
+  })
+}
+
+export const listWorkspaceSetObjects = async (params: {
+  owner_scope_type?: "user"
+  owner_scope_id?: number | null
+} = {}): Promise<McpHubWorkspaceSetObject[]> => {
+  return await bgRequestClient<McpHubWorkspaceSetObject[]>({
+    path: withQuery("/api/v1/mcp/hub/workspace-set-objects", {
+      owner_scope_type: params.owner_scope_type,
+      owner_scope_id: params.owner_scope_id
+    }),
+    method: "GET"
+  })
+}
+
+export const createWorkspaceSetObject = async (
+  payload: McpHubWorkspaceSetObjectCreateInput
+): Promise<McpHubWorkspaceSetObject> => {
+  return await bgRequestClient<McpHubWorkspaceSetObject>({
+    path: "/api/v1/mcp/hub/workspace-set-objects",
+    method: "POST",
+    body: payload
+  })
+}
+
+export const updateWorkspaceSetObject = async (
+  workspaceSetObjectId: number,
+  payload: McpHubWorkspaceSetObjectUpdateInput
+): Promise<McpHubWorkspaceSetObject> => {
+  return await bgRequestClient<McpHubWorkspaceSetObject>({
+    path: `/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}`,
+    method: "PUT",
+    body: payload
+  })
+}
+
+export const deleteWorkspaceSetObject = async (
+  workspaceSetObjectId: number
+): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}`,
+    method: "DELETE"
+  })
+}
+
+export const listWorkspaceSetMembers = async (
+  workspaceSetObjectId: number
+): Promise<McpHubWorkspaceSetObjectMember[]> => {
+  return await bgRequestClient<McpHubWorkspaceSetObjectMember[]>({
+    path: `/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}/members`,
+    method: "GET"
+  })
+}
+
+export const addWorkspaceSetMember = async (
+  workspaceSetObjectId: number,
+  workspaceId: string
+): Promise<McpHubWorkspaceSetObjectMember> => {
+  return await bgRequestClient<McpHubWorkspaceSetObjectMember>({
+    path: `/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}/members`,
+    method: "POST",
+    body: { workspace_id: workspaceId }
+  })
+}
+
+export const deleteWorkspaceSetMember = async (
+  workspaceSetObjectId: number,
+  workspaceId: string
+): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}/members/${encodeURIComponent(workspaceId)}`,
+    method: "DELETE"
   })
 }
 

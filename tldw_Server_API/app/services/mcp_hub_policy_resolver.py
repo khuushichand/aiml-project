@@ -170,7 +170,11 @@ class McpHubPolicyResolver:
         provenance: list[dict[str, Any]] = []
         selected_assignment_id: int | None = None
         selected_assignment_workspace_ids: list[str] = []
+        selected_workspace_source_mode: str | None = None
+        selected_workspace_set_object_id: int | None = None
+        selected_workspace_set_object_name: str | None = None
         path_scope_object_cache: dict[int, dict[str, Any] | None] = {}
+        workspace_set_object_cache: dict[int, dict[str, Any] | None] = {}
 
         for assignment in assignments:
             assignment_document: dict[str, Any] = {}
@@ -289,14 +293,39 @@ class McpHubPolicyResolver:
             if approval_policy_id is not None:
                 resolved_approval_policy_id = int(approval_policy_id)
             selected_assignment_id = assignment_id
-            selected_assignment_workspace_ids = _unique(
-                _as_str_list(
-                    [
-                        row.get("workspace_id")
-                        for row in await self.repo.list_policy_assignment_workspaces(assignment_id)
-                    ]
-                )
+            selected_workspace_source_mode = (
+                str(assignment.get("workspace_source_mode") or "").strip().lower() or "inline"
             )
+            selected_workspace_set_object_id = None
+            selected_workspace_set_object_name = None
+            if selected_workspace_source_mode == "named" and assignment.get("workspace_set_object_id") is not None:
+                selected_workspace_set_object_id = int(assignment.get("workspace_set_object_id"))
+                if selected_workspace_set_object_id not in workspace_set_object_cache:
+                    workspace_set_object_cache[selected_workspace_set_object_id] = await self.repo.get_workspace_set_object(
+                        selected_workspace_set_object_id
+                    )
+                workspace_set_object_row = workspace_set_object_cache.get(selected_workspace_set_object_id) or {}
+                if bool(workspace_set_object_row.get("is_active", True)):
+                    selected_workspace_set_object_name = str(workspace_set_object_row.get("name") or "").strip() or None
+                    selected_assignment_workspace_ids = _unique(
+                        _as_str_list(
+                            [
+                                row.get("workspace_id")
+                                for row in await self.repo.list_workspace_set_members(selected_workspace_set_object_id)
+                            ]
+                        )
+                    )
+                else:
+                    selected_assignment_workspace_ids = []
+            else:
+                selected_assignment_workspace_ids = _unique(
+                    _as_str_list(
+                        [
+                            row.get("workspace_id")
+                            for row in await self.repo.list_policy_assignment_workspaces(assignment_id)
+                        ]
+                    )
+                )
             sources.append(
                 {
                     "assignment_id": assignment_id,
@@ -318,6 +347,9 @@ class McpHubPolicyResolver:
             "approval_mode": str(merged_policy_document.get("approval_mode") or "").strip() or None,
             "policy_document": merged_policy_document,
             "selected_assignment_id": selected_assignment_id,
+            "selected_workspace_source_mode": selected_workspace_source_mode,
+            "selected_workspace_set_object_id": selected_workspace_set_object_id,
+            "selected_workspace_set_object_name": selected_workspace_set_object_name,
             "selected_assignment_workspace_ids": selected_assignment_workspace_ids,
             "sources": sources,
             "provenance": provenance,
@@ -372,6 +404,9 @@ class McpHubPolicyResolver:
             "approval_mode": None,
             "policy_document": {},
             "selected_assignment_id": None,
+            "selected_workspace_source_mode": None,
+            "selected_workspace_set_object_id": None,
+            "selected_workspace_set_object_name": None,
             "selected_assignment_workspace_ids": [],
             "sources": [],
             "provenance": [],

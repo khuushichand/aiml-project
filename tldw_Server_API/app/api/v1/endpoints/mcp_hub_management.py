@@ -51,6 +51,11 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     ToolRegistryEntryResponse,
     ToolRegistryModuleResponse,
     ToolRegistrySummaryResponse,
+    WorkspaceSetObjectCreateRequest,
+    WorkspaceSetObjectMemberCreateRequest,
+    WorkspaceSetObjectMemberResponse,
+    WorkspaceSetObjectResponse,
+    WorkspaceSetObjectUpdateRequest,
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
@@ -692,6 +697,10 @@ def _policy_assignment_row_to_response(row: dict[str, Any]) -> PolicyAssignmentR
         owner_scope_id=row.get("owner_scope_id"),
         profile_id=row.get("profile_id"),
         path_scope_object_id=row.get("path_scope_object_id"),
+        workspace_source_mode=(
+            str(row.get("workspace_source_mode") or "").strip().lower() or None
+        ),
+        workspace_set_object_id=row.get("workspace_set_object_id"),
         inline_policy_document=_load_json_object(row.get("inline_policy_document")),
         approval_policy_id=row.get("approval_policy_id"),
         is_active=bool(row.get("is_active")),
@@ -719,6 +728,32 @@ def _path_scope_object_row_to_response(row: dict[str, Any]) -> PathScopeObjectRe
         updated_by=row.get("updated_by"),
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
+    )
+
+
+def _workspace_set_object_row_to_response(row: dict[str, Any]) -> WorkspaceSetObjectResponse:
+    return WorkspaceSetObjectResponse(
+        id=int(row.get("id")),
+        name=str(row.get("name") or ""),
+        description=row.get("description"),
+        owner_scope_type=str(row.get("owner_scope_type") or "user"),
+        owner_scope_id=row.get("owner_scope_id"),
+        is_active=bool(row.get("is_active")),
+        created_by=row.get("created_by"),
+        updated_by=row.get("updated_by"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+def _workspace_set_member_row_to_response(
+    row: dict[str, Any],
+) -> WorkspaceSetObjectMemberResponse:
+    return WorkspaceSetObjectMemberResponse(
+        workspace_set_object_id=int(row.get("workspace_set_object_id")),
+        workspace_id=str(row.get("workspace_id") or ""),
+        created_by=row.get("created_by"),
+        created_at=row.get("created_at"),
     )
 
 
@@ -893,6 +928,56 @@ async def _get_visible_permission_profile_or_404(
     return profile
 
 
+async def _get_visible_workspace_set_object_or_404(
+    *,
+    workspace_set_object_id: int,
+    principal: AuthPrincipal,
+    svc: McpHubService,
+) -> dict[str, Any]:
+    """Fetch a workspace-set object and ensure the principal can access its owner scope."""
+    row = await svc.get_workspace_set_object(workspace_set_object_id)
+    if row is None:
+        raise ResourceNotFoundError("mcp_workspace_set_object", identifier=str(workspace_set_object_id))
+    _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=str(row.get("owner_scope_type") or "user"),
+        owner_scope_id=row.get("owner_scope_id"),
+    )
+    return row
+
+
+async def _validate_assignment_workspace_source(
+    *,
+    svc: McpHubService,
+    workspace_source_mode: str | None,
+    workspace_set_object_id: int | None,
+    owner_scope_type: str,
+    owner_scope_id: int | None,
+) -> None:
+    """Validate named-vs-inline workspace source selection for an assignment."""
+    normalized_mode = str(workspace_source_mode or "").strip().lower()
+    if not normalized_mode:
+        return
+    if normalized_mode not in {"inline", "named"}:
+        raise HTTPException(status_code=422, detail="workspace_source_mode must be one of: inline, named")
+    if normalized_mode == "named":
+        if workspace_set_object_id is None:
+            raise HTTPException(status_code=422, detail="workspace_set_object_id is required when workspace_source_mode is named")
+        try:
+            await svc.validate_workspace_set_object_reference(
+                workspace_set_object_id=workspace_set_object_id,
+                target_scope_type=owner_scope_type,
+                target_scope_id=owner_scope_id,
+            )
+        except ResourceNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except BadRequestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return
+    if workspace_set_object_id is not None:
+        raise HTTPException(status_code=422, detail="workspace_set_object_id may only be set when workspace_source_mode is named")
+
+
 async def _assignment_base_policy_document(
     *,
     svc: McpHubService,
@@ -1048,6 +1133,8 @@ async def update_permission_profile(
     try:
         if (
             "path_scope_object_id" in update_fields
+            or "workspace_source_mode" in update_fields
+            or "workspace_set_object_id" in update_fields
             or "owner_scope_type" in update_fields
             or "owner_scope_id" in update_fields
         ):
@@ -1178,6 +1265,184 @@ async def delete_path_scope_object(
     return MCPHubDeleteResponse(ok=True)
 
 
+@router.post("/workspace-set-objects", response_model=WorkspaceSetObjectResponse, status_code=201)
+async def create_workspace_set_object(
+    payload: WorkspaceSetObjectCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> WorkspaceSetObjectResponse:
+    _require_mutation_permission(principal)
+    try:
+        row = await svc.create_workspace_set_object(
+            name=payload.name,
+            description=payload.description,
+            owner_scope_type=payload.owner_scope_type,
+            owner_scope_id=payload.owner_scope_id
+            if payload.owner_scope_id is not None
+            else principal.user_id,
+            is_active=payload.is_active,
+            actor_id=principal.user_id,
+        )
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _workspace_set_object_row_to_response(row)
+
+
+@router.get("/workspace-set-objects", response_model=list[WorkspaceSetObjectResponse])
+async def list_workspace_set_objects(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[WorkspaceSetObjectResponse]:
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_workspace_set_objects(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    return [_workspace_set_object_row_to_response(row) for row in rows]
+
+
+@router.put("/workspace-set-objects/{workspace_set_object_id}", response_model=WorkspaceSetObjectResponse)
+async def update_workspace_set_object(
+    workspace_set_object_id: int,
+    payload: WorkspaceSetObjectUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> WorkspaceSetObjectResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_workspace_set_object_or_404(
+            workspace_set_object_id=workspace_set_object_id,
+            principal=principal,
+            svc=svc,
+        )
+        row = await svc.update_workspace_set_object(
+            workspace_set_object_id,
+            actor_id=principal.user_id,
+            **payload.model_dump(exclude_unset=True),
+        )
+        if not row:
+            raise ResourceNotFoundError("mcp_workspace_set_object", identifier=str(workspace_set_object_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _workspace_set_object_row_to_response(row)
+
+
+@router.delete("/workspace-set-objects/{workspace_set_object_id}", response_model=MCPHubDeleteResponse)
+async def delete_workspace_set_object(
+    workspace_set_object_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_workspace_set_object_or_404(
+            workspace_set_object_id=workspace_set_object_id,
+            principal=principal,
+            svc=svc,
+        )
+        deleted = await svc.delete_workspace_set_object(workspace_set_object_id, actor_id=principal.user_id)
+        if not deleted:
+            raise ResourceNotFoundError("mcp_workspace_set_object", identifier=str(workspace_set_object_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.get(
+    "/workspace-set-objects/{workspace_set_object_id}/members",
+    response_model=list[WorkspaceSetObjectMemberResponse],
+)
+async def list_workspace_set_members(
+    workspace_set_object_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[WorkspaceSetObjectMemberResponse]:
+    await _get_visible_workspace_set_object_or_404(
+        workspace_set_object_id=workspace_set_object_id,
+        principal=principal,
+        svc=svc,
+    )
+    rows = await svc.list_workspace_set_members(workspace_set_object_id)
+    return [_workspace_set_member_row_to_response(row) for row in rows]
+
+
+@router.post(
+    "/workspace-set-objects/{workspace_set_object_id}/members",
+    response_model=WorkspaceSetObjectMemberResponse,
+    status_code=201,
+)
+async def add_workspace_set_member(
+    workspace_set_object_id: int,
+    payload: WorkspaceSetObjectMemberCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> WorkspaceSetObjectMemberResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_workspace_set_object_or_404(
+            workspace_set_object_id=workspace_set_object_id,
+            principal=principal,
+            svc=svc,
+        )
+        row = await svc.add_workspace_set_member(
+            workspace_set_object_id,
+            workspace_id=payload.workspace_id,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (BadRequestError, McpHubConflictError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _workspace_set_member_row_to_response(row)
+
+
+@router.delete(
+    "/workspace-set-objects/{workspace_set_object_id}/members/{workspace_id}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_workspace_set_member(
+    workspace_set_object_id: int,
+    workspace_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_workspace_set_object_or_404(
+            workspace_set_object_id=workspace_set_object_id,
+            principal=principal,
+            svc=svc,
+        )
+        deleted = await svc.delete_workspace_set_member(
+            workspace_set_object_id,
+            workspace_id,
+            actor_id=principal.user_id,
+        )
+        if not deleted:
+            raise ResourceNotFoundError(
+                "mcp_workspace_set_object_member",
+                identifier=f"{workspace_set_object_id}:{workspace_id}",
+            )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MCPHubDeleteResponse(ok=True)
+
+
 @router.post("/policy-assignments", response_model=PolicyAssignmentResponse, status_code=201)
 async def create_policy_assignment(
     payload: PolicyAssignmentCreateRequest,
@@ -1197,6 +1462,13 @@ async def create_policy_assignment(
             target_scope_type=payload.owner_scope_type,
             target_scope_id=payload.owner_scope_id,
         )
+        await _validate_assignment_workspace_source(
+            svc=svc,
+            workspace_source_mode=payload.workspace_source_mode,
+            workspace_set_object_id=payload.workspace_set_object_id,
+            owner_scope_type=payload.owner_scope_type,
+            owner_scope_id=payload.owner_scope_id,
+        )
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except BadRequestError as exc:
@@ -1208,6 +1480,8 @@ async def create_policy_assignment(
         owner_scope_id=payload.owner_scope_id,
         profile_id=payload.profile_id,
         path_scope_object_id=payload.path_scope_object_id,
+        workspace_source_mode=payload.workspace_source_mode,
+        workspace_set_object_id=payload.workspace_set_object_id,
         inline_policy_document=inline_policy_document,
         approval_policy_id=payload.approval_policy_id,
         is_active=payload.is_active,
@@ -1277,6 +1551,19 @@ async def update_policy_assignment(
                 ),
                 target_scope_type=str(update_fields.get("owner_scope_type") or existing.get("owner_scope_type") or "global"),
                 target_scope_id=update_fields.get("owner_scope_id", existing.get("owner_scope_id")),
+            )
+            await _validate_assignment_workspace_source(
+                svc=svc,
+                workspace_source_mode=update_fields.get(
+                    "workspace_source_mode",
+                    existing.get("workspace_source_mode"),
+                ),
+                workspace_set_object_id=update_fields.get(
+                    "workspace_set_object_id",
+                    existing.get("workspace_set_object_id"),
+                ),
+                owner_scope_type=str(update_fields.get("owner_scope_type") or existing.get("owner_scope_type") or "global"),
+                owner_scope_id=update_fields.get("owner_scope_id", existing.get("owner_scope_id")),
             )
         row = await svc.update_policy_assignment(
             assignment_id,

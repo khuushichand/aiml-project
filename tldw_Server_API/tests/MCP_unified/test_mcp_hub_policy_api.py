@@ -94,6 +94,30 @@ class _FakePolicyService:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         ]
+        self.workspace_set_objects = [
+            {
+                "id": 51,
+                "name": "Primary Workspace Set",
+                "description": None,
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "is_active": True,
+                "created_by": 7,
+                "updated_by": 7,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+        self.workspace_set_members: dict[int, list[dict]] = {
+            51: [
+                {
+                    "workspace_set_object_id": 51,
+                    "workspace_id": "workspace-alpha",
+                    "created_by": 7,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ]
+        }
         self.assignment_workspaces: dict[int, list[dict]] = {
             11: [
                 {
@@ -205,6 +229,8 @@ class _FakePolicyService:
             "owner_scope_id": kwargs.get("owner_scope_id"),
             "profile_id": kwargs.get("profile_id"),
             "path_scope_object_id": kwargs.get("path_scope_object_id"),
+            "workspace_source_mode": kwargs.get("workspace_source_mode"),
+            "workspace_set_object_id": kwargs.get("workspace_set_object_id"),
             "inline_policy_document": kwargs["inline_policy_document"],
             "approval_policy_id": kwargs.get("approval_policy_id"),
             "is_active": kwargs.get("is_active", True),
@@ -234,6 +260,10 @@ class _FakePolicyService:
             assignment["profile_id"] = kwargs["profile_id"]
         if "path_scope_object_id" in kwargs:
             assignment["path_scope_object_id"] = kwargs.get("path_scope_object_id")
+        if "workspace_source_mode" in kwargs:
+            assignment["workspace_source_mode"] = kwargs.get("workspace_source_mode")
+        if "workspace_set_object_id" in kwargs:
+            assignment["workspace_set_object_id"] = kwargs.get("workspace_set_object_id")
         if kwargs.get("approval_policy_id") is not None:
             assignment["approval_policy_id"] = kwargs["approval_policy_id"]
         if kwargs.get("is_active") is not None:
@@ -423,6 +453,101 @@ class _FakePolicyService:
 
     async def delete_path_scope_object(self, path_scope_object_id: int, *, actor_id: int | None):
         return path_scope_object_id == 41 and actor_id == 7
+
+    async def list_workspace_set_objects(self, **_kwargs):
+        return list(self.workspace_set_objects)
+
+    async def get_workspace_set_object(self, workspace_set_object_id: int):
+        for row in self.workspace_set_objects:
+            if int(row.get("id") or 0) == int(workspace_set_object_id):
+                return dict(row)
+        return None
+
+    async def validate_workspace_set_object_reference(
+        self,
+        *,
+        workspace_set_object_id: int | None,
+        target_scope_type: str,
+        target_scope_id: int | None,
+    ):
+        if workspace_set_object_id is None:
+            return None
+        row = await self.get_workspace_set_object(workspace_set_object_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="mcp_workspace_set_object not found")
+        if str(target_scope_type or "") != "user" or row.get("owner_scope_id") != target_scope_id:
+            raise HTTPException(status_code=400, detail="invalid workspace set scope")
+        return row
+
+    async def create_workspace_set_object(self, **kwargs):
+        row = {
+            "id": 51,
+            "name": kwargs["name"],
+            "description": kwargs.get("description"),
+            "owner_scope_type": kwargs["owner_scope_type"],
+            "owner_scope_id": kwargs.get("owner_scope_id"),
+            "is_active": kwargs.get("is_active", True),
+            "created_by": kwargs.get("actor_id"),
+            "updated_by": kwargs.get("actor_id"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.workspace_set_objects = [row]
+        return row
+
+    async def update_workspace_set_object(self, workspace_set_object_id: int, **kwargs):
+        if workspace_set_object_id != 51:
+            return None
+        row = dict(self.workspace_set_objects[0])
+        if kwargs.get("name") is not None:
+            row["name"] = kwargs["name"]
+        if kwargs.get("description") is not None:
+            row["description"] = kwargs["description"]
+        if kwargs.get("is_active") is not None:
+            row["is_active"] = kwargs["is_active"]
+        row["updated_by"] = kwargs.get("actor_id")
+        self.workspace_set_objects = [row]
+        return row
+
+    async def delete_workspace_set_object(self, workspace_set_object_id: int, *, actor_id: int | None):
+        return workspace_set_object_id == 51 and actor_id == 7
+
+    async def list_workspace_set_members(self, workspace_set_object_id: int):
+        return [dict(row) for row in self.workspace_set_members.get(workspace_set_object_id, [])]
+
+    async def add_workspace_set_member(
+        self,
+        workspace_set_object_id: int,
+        *,
+        workspace_id: str,
+        actor_id: int | None,
+    ):
+        rows = self.workspace_set_members.setdefault(workspace_set_object_id, [])
+        if any(str(row.get("workspace_id")) == workspace_id for row in rows):
+            raise McpHubConflictError("Workspace already attached to workspace set")
+        row = {
+            "workspace_set_object_id": workspace_set_object_id,
+            "workspace_id": workspace_id,
+            "created_by": actor_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        rows.append(row)
+        return dict(row)
+
+    async def delete_workspace_set_member(
+        self,
+        workspace_set_object_id: int,
+        workspace_id: str,
+        *,
+        actor_id: int | None,
+    ):
+        if actor_id != 7:
+            return False
+        rows = self.workspace_set_members.get(workspace_set_object_id, [])
+        next_rows = [row for row in rows if str(row.get("workspace_id")) != workspace_id]
+        deleted = len(next_rows) != len(rows)
+        self.workspace_set_members[workspace_set_object_id] = next_rows
+        return deleted
 
     async def list_policy_assignment_workspaces(self, assignment_id: int):
         return [dict(row) for row in self.assignment_workspaces.get(assignment_id, [])]
@@ -808,6 +933,62 @@ def test_add_assignment_workspace_rejects_duplicate_workspace_id() -> None:
 
     assert first.status_code == 201
     assert second.status_code == 409
+
+
+def test_create_workspace_set_object_returns_created_payload() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/workspace-set-objects",
+            json={
+                "name": "Primary Workspace Set",
+                "owner_scope_type": "user",
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    assert payload["name"] == "Primary Workspace Set"
+    assert payload["owner_scope_type"] == "user"
+    assert payload["owner_scope_id"] == 7
+
+
+def test_create_policy_assignment_accepts_named_workspace_source_reference() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/policy-assignments",
+            json={
+                "target_type": "persona",
+                "target_id": "researcher",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "profile_id": None,
+                "workspace_source_mode": "named",
+                "workspace_set_object_id": 51,
+                "inline_policy_document": {},
+                "approval_policy_id": None,
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    assert payload["workspace_source_mode"] == "named"
+    assert payload["workspace_set_object_id"] == 51
 
 
 def test_create_policy_assignment_accepts_parent_scope_path_scope_object_reference() -> None:

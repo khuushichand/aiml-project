@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   createPolicyAssignment: vi.fn(),
   updatePolicyAssignment: vi.fn(),
   listPathScopeObjects: vi.fn(),
+  listWorkspaceSetObjects: vi.fn(),
   listPolicyAssignmentWorkspaces: vi.fn(),
   addPolicyAssignmentWorkspace: vi.fn(),
   deletePolicyAssignmentWorkspace: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock("@/services/tldw/mcp-hub", () => ({
   createPolicyAssignment: (...args: unknown[]) => mocks.createPolicyAssignment(...args),
   updatePolicyAssignment: (...args: unknown[]) => mocks.updatePolicyAssignment(...args),
   listPathScopeObjects: (...args: unknown[]) => mocks.listPathScopeObjects(...args),
+  listWorkspaceSetObjects: (...args: unknown[]) => mocks.listWorkspaceSetObjects(...args),
   listPolicyAssignmentWorkspaces: (...args: unknown[]) => mocks.listPolicyAssignmentWorkspaces(...args),
   addPolicyAssignmentWorkspace: (...args: unknown[]) => mocks.addPolicyAssignmentWorkspace(...args),
   deletePolicyAssignmentWorkspace: (...args: unknown[]) => mocks.deletePolicyAssignmentWorkspace(...args),
@@ -61,6 +63,8 @@ describe("PolicyAssignmentsTab", () => {
         owner_scope_id: 7,
         profile_id: 5,
         path_scope_object_id: 41,
+        workspace_source_mode: "named",
+        workspace_set_object_id: 51,
         inline_policy_document: {
           capabilities: ["network.external"]
         },
@@ -80,6 +84,8 @@ describe("PolicyAssignmentsTab", () => {
       owner_scope_id: null,
       profile_id: 5,
       path_scope_object_id: null,
+      workspace_source_mode: "inline",
+      workspace_set_object_id: null,
       inline_policy_document: {},
       approval_policy_id: null,
       is_active: true
@@ -92,6 +98,8 @@ describe("PolicyAssignmentsTab", () => {
       owner_scope_id: 7,
       profile_id: 5,
       path_scope_object_id: 41,
+      workspace_source_mode: "named",
+      workspace_set_object_id: 51,
       inline_policy_document: {
         capabilities: ["network.external"]
       },
@@ -153,6 +161,15 @@ describe("PolicyAssignmentsTab", () => {
         is_active: true
       }
     ])
+    mocks.listWorkspaceSetObjects.mockResolvedValue([
+      {
+        id: 51,
+        name: "Primary Workspace Set",
+        owner_scope_type: "user",
+        owner_scope_id: 7,
+        is_active: true
+      }
+    ])
     mocks.getEffectivePolicy.mockResolvedValue({
       enabled: true,
       allowed_tools: ["Bash(git *)"],
@@ -165,6 +182,9 @@ describe("PolicyAssignmentsTab", () => {
         path_scope_enforcement: "approval_required_when_unenforceable"
       },
       selected_assignment_id: 11,
+      selected_workspace_source_mode: "named",
+      selected_workspace_set_object_id: 51,
+      selected_workspace_set_object_name: "Primary Workspace Set",
       selected_assignment_workspace_ids: ["workspace-alpha"],
       sources: [],
       provenance: [
@@ -358,6 +378,7 @@ describe("PolicyAssignmentsTab", () => {
     expect(screen.getByText("Bash(git *)")).toBeTruthy()
     expect(screen.getByText("override active")).toBeTruthy()
     expect(screen.getByText(/workspaces workspace-alpha/i)).toBeTruthy()
+    expect(screen.getAllByText(/workspace set primary workspace set/i).length).toBeGreaterThan(0)
     expect(screen.getByText("Why This Applies")).toBeTruthy()
     expect(screen.getByText(/allowed_tools/i)).toBeTruthy()
     expect(screen.getByText(/assignment override/i)).toBeTruthy()
@@ -420,5 +441,34 @@ describe("PolicyAssignmentsTab", () => {
       { binding_mode: "grant" },
       "token_write"
     )
+  })
+
+  it("saves named workspace source without syncing inline assignment workspaces", async () => {
+    const user = userEvent.setup()
+    render(<PolicyAssignmentsTab />)
+
+    await screen.findByText("researcher")
+    await user.click(screen.getByRole("button", { name: /new assignment/i }))
+
+    await user.selectOptions(screen.getByLabelText(/target type/i), "persona")
+    await user.type(screen.getByLabelText(/target id/i), "analyst")
+    await user.click(screen.getByRole("radio", { name: /use named workspace set/i }))
+    await user.selectOptions(screen.getByLabelText(/assignment named workspace set/i), "51")
+    await user.click(screen.getByRole("button", { name: /save assignment/i }))
+
+    expect(mocks.createPolicyAssignment).toHaveBeenCalledWith({
+      target_type: "persona",
+      target_id: "analyst",
+      owner_scope_type: "user",
+      profile_id: null,
+      path_scope_object_id: null,
+      workspace_source_mode: "named",
+      workspace_set_object_id: 51,
+      approval_policy_id: null,
+      inline_policy_document: {},
+      is_active: true
+    })
+    expect(mocks.addPolicyAssignmentWorkspace).not.toHaveBeenCalled()
+    expect(mocks.deletePolicyAssignmentWorkspace).not.toHaveBeenCalled()
   })
 })

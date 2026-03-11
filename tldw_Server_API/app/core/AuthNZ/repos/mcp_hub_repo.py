@@ -145,6 +145,8 @@ class McpHubRepo:
                 "mcp_policy_assignments",
                 "mcp_policy_audit_history",
                 "mcp_policy_assignment_workspaces",
+                "mcp_workspace_set_object_members",
+                "mcp_workspace_set_objects",
                 "mcp_policy_overrides",
             }
             rows = await self.db_pool.fetchall(
@@ -248,6 +250,7 @@ class McpHubRepo:
             return None
         out = dict(row)
         out["is_active"] = _to_bool(out.get("is_active"))
+        out["workspace_source_mode"] = str(out.get("workspace_source_mode") or "").strip().lower() or None
         out["inline_policy_document"] = _load_json_dict(out.pop("inline_policy_document_json", None))
         out["has_override"] = _to_bool(out.get("has_override"))
         out["override_active"] = _to_bool(out.get("override_active"))
@@ -257,6 +260,20 @@ class McpHubRepo:
 
     @staticmethod
     def _normalize_policy_assignment_workspace_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        return dict(row)
+
+    @staticmethod
+    def _normalize_workspace_set_object_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        out = dict(row)
+        out["is_active"] = _to_bool(out.get("is_active"))
+        return out
+
+    @staticmethod
+    def _normalize_workspace_set_member_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
         if row is None:
             return None
         return dict(row)
@@ -837,6 +854,221 @@ class McpHubRepo:
         rowcount = getattr(cursor, "rowcount", 0)
         return bool(rowcount and rowcount > 0)
 
+    async def create_workspace_set_object(
+        self,
+        *,
+        name: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        actor_id: int | None,
+        description: str | None = None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        scope_type = _normalize_scope_type(owner_scope_type)
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = is_active if getattr(self.db_pool, "pool", None) is not None else int(is_active)
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_workspace_set_objects (
+                name, description, owner_scope_type, owner_scope_id, is_active,
+                created_by, updated_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name.strip(),
+                description,
+                scope_type,
+                owner_scope_id,
+                active_value,
+                actor_id,
+                actor_id,
+                ts,
+                ts,
+            ),
+        )
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id
+            FROM mcp_workspace_set_objects
+            WHERE name = ?
+              AND owner_scope_type = ?
+              AND (
+                (owner_scope_id IS NULL AND ? IS NULL)
+                OR owner_scope_id = ?
+              )
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (name.strip(), scope_type, owner_scope_id, owner_scope_id),
+        )
+        if not row:
+            return {}
+        created = await self.get_workspace_set_object(int(row["id"]))
+        return created or {}
+
+    async def get_workspace_set_object(self, workspace_set_object_id: int) -> dict[str, Any] | None:
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, name, description, owner_scope_type, owner_scope_id, is_active,
+                   created_by, updated_by, created_at, updated_at
+            FROM mcp_workspace_set_objects
+            WHERE id = ?
+            """,
+            (int(workspace_set_object_id),),
+        )
+        return self._normalize_workspace_set_object_row(self._row_to_dict(row) if row else None)
+
+    async def list_workspace_set_objects(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_scope_type = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not None
+            else None
+        )
+        normalized_scope_id = int(owner_scope_id) if owner_scope_id is not None else None
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, name, description, owner_scope_type, owner_scope_id, is_active,
+                   created_by, updated_by, created_at, updated_at
+            FROM mcp_workspace_set_objects
+            WHERE (? IS NULL OR owner_scope_type = ?)
+              AND (? IS NULL OR owner_scope_id = ?)
+            ORDER BY name, id
+            """,
+            (
+                normalized_scope_type,
+                normalized_scope_type,
+                normalized_scope_id,
+                normalized_scope_id,
+            ),
+        )
+        return [
+            self._normalize_workspace_set_object_row(self._row_to_dict(row)) or {}
+            for row in rows
+        ]
+
+    async def update_workspace_set_object(
+        self,
+        workspace_set_object_id: int,
+        *,
+        name: str | object = _UNSET,
+        description: str | None | object = _UNSET,
+        owner_scope_type: str | object = _UNSET,
+        owner_scope_id: int | None | object = _UNSET,
+        is_active: bool | object = _UNSET,
+        actor_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_workspace_set_object(workspace_set_object_id)
+        if not existing:
+            return None
+
+        next_name = str(existing["name"]) if name is _UNSET else str(name).strip()
+        next_description = existing.get("description") if description is _UNSET else description
+        next_scope = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not _UNSET
+            else str(existing["owner_scope_type"])
+        )
+        next_scope_id = existing.get("owner_scope_id") if owner_scope_id is _UNSET else owner_scope_id
+        next_active = _to_bool(existing.get("is_active")) if is_active is _UNSET else _to_bool(is_active)
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = next_active if getattr(self.db_pool, "pool", None) is not None else int(next_active)
+
+        await self.db_pool.execute(
+            """
+            UPDATE mcp_workspace_set_objects
+            SET name = ?,
+                description = ?,
+                owner_scope_type = ?,
+                owner_scope_id = ?,
+                is_active = ?,
+                updated_by = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                next_name,
+                next_description,
+                next_scope,
+                next_scope_id,
+                active_value,
+                actor_id,
+                ts,
+                int(workspace_set_object_id),
+            ),
+        )
+        return await self.get_workspace_set_object(workspace_set_object_id)
+
+    async def delete_workspace_set_object(self, workspace_set_object_id: int) -> bool:
+        cursor = await self.db_pool.execute(
+            "DELETE FROM mcp_workspace_set_objects WHERE id = ?",
+            (int(workspace_set_object_id),),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        return bool(rowcount and rowcount > 0)
+
+    async def list_workspace_set_members(self, workspace_set_object_id: int) -> list[dict[str, Any]]:
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT workspace_set_object_id, workspace_id, created_by, created_at
+            FROM mcp_workspace_set_object_members
+            WHERE workspace_set_object_id = ?
+            ORDER BY workspace_id
+            """,
+            (int(workspace_set_object_id),),
+        )
+        return [
+            self._normalize_workspace_set_member_row(self._row_to_dict(row)) or {}
+            for row in rows
+        ]
+
+    async def add_workspace_set_member(
+        self,
+        workspace_set_object_id: int,
+        *,
+        workspace_id: str,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        workspace_value = str(workspace_id or "").strip()
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_workspace_set_object_members (
+                workspace_set_object_id, workspace_id, created_by, created_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (int(workspace_set_object_id), workspace_value, actor_id, ts),
+        )
+        row = await self.db_pool.fetchone(
+            """
+            SELECT workspace_set_object_id, workspace_id, created_by, created_at
+            FROM mcp_workspace_set_object_members
+            WHERE workspace_set_object_id = ?
+              AND workspace_id = ?
+            """,
+            (int(workspace_set_object_id), workspace_value),
+        )
+        return self._normalize_workspace_set_member_row(self._row_to_dict(row) if row else None) or {}
+
+    async def delete_workspace_set_member(self, workspace_set_object_id: int, workspace_id: str) -> bool:
+        cursor = await self.db_pool.execute(
+            """
+            DELETE FROM mcp_workspace_set_object_members
+            WHERE workspace_set_object_id = ?
+              AND workspace_id = ?
+            """,
+            (int(workspace_set_object_id), str(workspace_id or "").strip()),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        return bool(rowcount and rowcount > 0)
+
     async def create_policy_assignment(
         self,
         *,
@@ -846,6 +1078,8 @@ class McpHubRepo:
         owner_scope_id: int | None,
         profile_id: int | None,
         path_scope_object_id: int | None = None,
+        workspace_source_mode: str | None = None,
+        workspace_set_object_id: int | None = None,
         inline_policy_document: dict[str, Any],
         approval_policy_id: int | None,
         actor_id: int | None,
@@ -861,9 +1095,10 @@ class McpHubRepo:
             """
             INSERT INTO mcp_policy_assignments (
                 target_type, target_id, owner_scope_type, owner_scope_id, profile_id,
-                path_scope_object_id, inline_policy_document_json, approval_policy_id, is_active,
+                path_scope_object_id, workspace_source_mode, workspace_set_object_id,
+                inline_policy_document_json, approval_policy_id, is_active,
                 created_by, updated_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 normalized_target_type,
@@ -872,6 +1107,8 @@ class McpHubRepo:
                 owner_scope_id,
                 profile_id,
                 path_scope_object_id,
+                str(workspace_source_mode or "").strip().lower() or None,
+                workspace_set_object_id,
                 json.dumps(inline_policy_document or {}),
                 approval_policy_id,
                 active_value,
@@ -916,7 +1153,7 @@ class McpHubRepo:
         row = await self.db_pool.fetchone(
             """
             SELECT a.id, a.target_type, a.target_id, a.owner_scope_type, a.owner_scope_id, a.profile_id,
-                   a.path_scope_object_id,
+                   a.path_scope_object_id, a.workspace_source_mode, a.workspace_set_object_id,
                    a.inline_policy_document_json, a.approval_policy_id, a.is_active,
                    a.created_by, a.updated_by, a.created_at, a.updated_at,
                    o.id AS override_id,
@@ -954,7 +1191,7 @@ class McpHubRepo:
         rows = await self.db_pool.fetchall(
             """
             SELECT a.id, a.target_type, a.target_id, a.owner_scope_type, a.owner_scope_id, a.profile_id,
-                   a.path_scope_object_id,
+                   a.path_scope_object_id, a.workspace_source_mode, a.workspace_set_object_id,
                    a.inline_policy_document_json, a.approval_policy_id, a.is_active,
                    a.created_by, a.updated_by, a.created_at, a.updated_at,
                    o.id AS override_id,
@@ -995,6 +1232,8 @@ class McpHubRepo:
         owner_scope_id: int | None | object = _UNSET,
         profile_id: int | None | object = _UNSET,
         path_scope_object_id: int | None | object = _UNSET,
+        workspace_source_mode: str | None | object = _UNSET,
+        workspace_set_object_id: int | None | object = _UNSET,
         inline_policy_document: dict[str, Any] | None | object = _UNSET,
         approval_policy_id: int | None | object = _UNSET,
         is_active: bool | object = _UNSET,
@@ -1027,6 +1266,16 @@ class McpHubRepo:
             if path_scope_object_id is _UNSET
             else path_scope_object_id
         )
+        next_workspace_source_mode = (
+            existing.get("workspace_source_mode")
+            if workspace_source_mode is _UNSET
+            else (str(workspace_source_mode or "").strip().lower() or None)
+        )
+        next_workspace_set_object_id = (
+            existing.get("workspace_set_object_id")
+            if workspace_set_object_id is _UNSET
+            else workspace_set_object_id
+        )
         next_inline_policy_document = (
             dict(existing.get("inline_policy_document") or {})
             if inline_policy_document is _UNSET
@@ -1051,6 +1300,8 @@ class McpHubRepo:
                 owner_scope_id = ?,
                 profile_id = ?,
                 path_scope_object_id = ?,
+                workspace_source_mode = ?,
+                workspace_set_object_id = ?,
                 inline_policy_document_json = ?,
                 approval_policy_id = ?,
                 is_active = ?,
@@ -1065,6 +1316,8 @@ class McpHubRepo:
                 next_scope_id,
                 next_profile_id,
                 next_path_scope_object_id,
+                next_workspace_source_mode,
+                next_workspace_set_object_id,
                 json.dumps(next_inline_policy_document or {}),
                 next_approval_policy_id,
                 active_value,

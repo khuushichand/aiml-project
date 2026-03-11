@@ -7,6 +7,7 @@ import { PermissionProfilesTab } from "./PermissionProfilesTab"
 import { PolicyAssignmentsTab } from "./PolicyAssignmentsTab"
 import { ToolCatalogsTab } from "./ToolCatalogsTab"
 import { ExternalServersTab } from "./ExternalServersTab"
+import { WorkspaceSetsTab } from "./WorkspaceSetsTab"
 
 export const McpHubPage = () => {
   const [activeTab, setActiveTab] = useState("profiles")
@@ -34,6 +35,11 @@ export const McpHubPage = () => {
             key: "path-scopes",
             label: "Path Scopes",
             children: <PathScopesTab />
+          },
+          {
+            key: "workspace-sets",
+            label: "Workspace Sets",
+            children: <WorkspaceSetsTab />
           },
           {
             key: "approvals",

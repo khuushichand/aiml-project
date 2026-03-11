@@ -317,6 +317,61 @@ _CREATE_MCP_HUB_TABLES = [
     ),
     (
         """
+        CREATE TABLE IF NOT EXISTS mcp_workspace_set_objects (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_workspace_set_objects_scope UNIQUE (name, owner_scope_type, owner_scope_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_workspace_set_objects_scope "
+        "ON mcp_workspace_set_objects(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_workspace_set_object_members (
+            workspace_set_object_id INTEGER NOT NULL REFERENCES mcp_workspace_set_objects(id) ON DELETE CASCADE,
+            workspace_id TEXT NOT NULL,
+            created_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_workspace_set_object_members UNIQUE (workspace_set_object_id, workspace_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_workspace_set_object_members_object "
+        "ON mcp_workspace_set_object_members(workspace_set_object_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_assignments "
+        "ADD COLUMN IF NOT EXISTS workspace_source_mode TEXT",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_assignments "
+        "ADD COLUMN IF NOT EXISTS workspace_set_object_id INTEGER",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_workspace_set_object "
+        "ON mcp_policy_assignments(workspace_set_object_id)",
+        (),
+    ),
+    (
+        """
         CREATE TABLE IF NOT EXISTS mcp_policy_overrides (
             id SERIAL PRIMARY KEY,
             assignment_id INTEGER NOT NULL UNIQUE REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE,

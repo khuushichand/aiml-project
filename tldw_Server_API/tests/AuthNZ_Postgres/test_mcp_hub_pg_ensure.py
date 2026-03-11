@@ -28,7 +28,9 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
             'mcp_permission_profiles',
             'mcp_policy_assignments',
             'mcp_policy_audit_history',
-            'mcp_policy_overrides'
+            'mcp_policy_overrides',
+            'mcp_workspace_set_objects',
+            'mcp_workspace_set_object_members'
           )
         """
     )
@@ -46,6 +48,8 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     assert "mcp_policy_assignments" in names
     assert "mcp_policy_audit_history" in names
     assert "mcp_policy_overrides" in names
+    assert "mcp_workspace_set_objects" in names
+    assert "mcp_workspace_set_object_members" in names
 
     column_rows = await test_db_pool.fetch(
         """
@@ -71,6 +75,46 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     )
     override_column_names = {str(row["column_name"]) for row in override_column_rows}
     assert "is_active" in override_column_names
+
+    assignment_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_policy_assignments'
+          AND column_name IN ('workspace_source_mode', 'workspace_set_object_id')
+        """
+    )
+    assignment_column_names = {str(row["column_name"]) for row in assignment_column_rows}
+    assert "workspace_source_mode" in assignment_column_names
+    assert "workspace_set_object_id" in assignment_column_names
+
+    workspace_set_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_workspace_set_objects'
+          AND column_name IN ('name', 'owner_scope_type', 'owner_scope_id')
+        """
+    )
+    workspace_set_column_names = {str(row["column_name"]) for row in workspace_set_column_rows}
+    assert "name" in workspace_set_column_names
+    assert "owner_scope_type" in workspace_set_column_names
+    assert "owner_scope_id" in workspace_set_column_names
+
+    workspace_member_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_workspace_set_object_members'
+          AND column_name IN ('workspace_set_object_id', 'workspace_id')
+        """
+    )
+    workspace_member_column_names = {str(row["column_name"]) for row in workspace_member_column_rows}
+    assert "workspace_set_object_id" in workspace_member_column_names
+    assert "workspace_id" in workspace_member_column_names
 
     external_column_rows = await test_db_pool.fetch(
         """
@@ -152,3 +196,15 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     )
     slot_index_names = {str(row["indexname"]) for row in slot_index_rows}
     assert "uq_mcp_external_server_slots_server_slot" in slot_index_names
+
+    workspace_member_index_rows = await test_db_pool.fetch(
+        """
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND tablename = 'mcp_workspace_set_object_members'
+          AND indexname = 'uq_mcp_workspace_set_members_object_workspace'
+        """
+    )
+    workspace_member_index_names = {str(row["indexname"]) for row in workspace_member_index_rows}
+    assert "uq_mcp_workspace_set_members_object_workspace" in workspace_member_index_names

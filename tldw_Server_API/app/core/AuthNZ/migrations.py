@@ -1900,6 +1900,67 @@ def migration_061_add_mcp_path_scope_objects_and_assignment_workspaces(conn: sql
     logger.info("Migration 061: Added MCP path scope object schema")
 
 
+def migration_062_add_mcp_workspace_set_objects(conn: sqlite3.Connection) -> None:
+    """Add reusable workspace-set objects and assignment workspace source fields."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_workspace_set_objects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_workspace_set_objects_scope "
+        "ON mcp_workspace_set_objects(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_workspace_set_objects_scope "
+        "ON mcp_workspace_set_objects(name, owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_workspace_set_object_members (
+            workspace_set_object_id INTEGER NOT NULL,
+            workspace_id TEXT NOT NULL,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (workspace_set_object_id, workspace_id),
+            FOREIGN KEY (workspace_set_object_id) REFERENCES mcp_workspace_set_objects(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_workspace_set_object_members_object "
+        "ON mcp_workspace_set_object_members(workspace_set_object_id)"
+    )
+
+    assignment_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_policy_assignments)").fetchall()
+    }
+    if "workspace_source_mode" not in assignment_columns:
+        conn.execute("ALTER TABLE mcp_policy_assignments ADD COLUMN workspace_source_mode TEXT")
+    if "workspace_set_object_id" not in assignment_columns:
+        conn.execute("ALTER TABLE mcp_policy_assignments ADD COLUMN workspace_set_object_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_workspace_set_object "
+        "ON mcp_policy_assignments(workspace_set_object_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 062: Added MCP workspace set object schema")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
@@ -3362,6 +3423,11 @@ def get_authnz_migrations() -> list[Migration]:
             61,
             "Add MCP path scope objects and assignment workspaces",
             migration_061_add_mcp_path_scope_objects_and_assignment_workspaces,
+        ),
+        Migration(
+            62,
+            "Add MCP workspace set objects",
+            migration_062_add_mcp_workspace_set_objects,
         ),
     ]
 

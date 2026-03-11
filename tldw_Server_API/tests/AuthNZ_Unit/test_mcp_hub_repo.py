@@ -244,6 +244,85 @@ async def test_repo_update_policy_assignment_can_clear_nullable_fields(tmp_path,
 
 
 @pytest.mark.asyncio
+async def test_repo_can_crud_workspace_set_objects_and_named_assignment_source(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    workspace_set = await repo.create_workspace_set_object(
+        name="Primary Research Roots",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+        description="Reusable workspace set",
+        is_active=True,
+    )
+    assert workspace_set["name"] == "Primary Research Roots"
+    assert workspace_set["owner_scope_type"] == "user"
+    assert int(workspace_set["owner_scope_id"]) == 7
+
+    member = await repo.add_workspace_set_member(
+        int(workspace_set["id"]),
+        workspace_id="workspace-alpha",
+        actor_id=7,
+    )
+    assert member["workspace_id"] == "workspace-alpha"
+
+    listed_members = await repo.list_workspace_set_members(int(workspace_set["id"]))
+    assert [row["workspace_id"] for row in listed_members] == ["workspace-alpha"]
+
+    assignment = await repo.create_policy_assignment(
+        target_type="persona",
+        target_id="researcher",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        profile_id=None,
+        path_scope_object_id=None,
+        workspace_source_mode="named",
+        workspace_set_object_id=int(workspace_set["id"]),
+        inline_policy_document={"approval_mode": "ask_outside_profile"},
+        approval_policy_id=None,
+        actor_id=7,
+        is_active=True,
+    )
+    assert assignment["workspace_source_mode"] == "named"
+    assert int(assignment["workspace_set_object_id"]) == int(workspace_set["id"])
+
+    updated_assignment = await repo.update_policy_assignment(
+        int(assignment["id"]),
+        workspace_source_mode="inline",
+        workspace_set_object_id=None,
+        actor_id=8,
+    )
+    assert updated_assignment is not None
+    assert updated_assignment["workspace_source_mode"] == "inline"
+    assert updated_assignment["workspace_set_object_id"] is None
+
+    deleted_member = await repo.delete_workspace_set_member(
+        int(workspace_set["id"]),
+        "workspace-alpha",
+    )
+    assert deleted_member is True
+
+    deleted_workspace_set = await repo.delete_workspace_set_object(int(workspace_set["id"]))
+    assert deleted_workspace_set is True
+
+
+@pytest.mark.asyncio
 async def test_repo_can_crud_approval_policy_and_match_active_decision(tmp_path, monkeypatch) -> None:
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables

@@ -13,6 +13,7 @@ import {
   getEffectivePolicy,
   getPolicyAssignmentOverride,
   listPathScopeObjects,
+  listWorkspaceSetObjects,
   listPolicyAssignmentWorkspaces,
   listAssignmentCredentialBindings,
   listApprovalPolicies,
@@ -34,7 +35,9 @@ import {
   type McpHubPolicyAssignmentWorkspace,
   type McpHubPolicyOverride,
   type McpHubToolRegistryEntry,
-  type McpHubToolRegistryModule
+  type McpHubToolRegistryModule,
+  type McpHubWorkspaceSetObject,
+  type McpHubWorkspaceSourceMode
 } from "@/services/tldw/mcp-hub"
 
 import {
@@ -74,6 +77,8 @@ export const PolicyAssignmentsTab = () => {
   const [profileId, setProfileId] = useState<string>("")
   const [pathScopeSource, setPathScopeSource] = useState<"inline" | "named">("inline")
   const [pathScopeObjectId, setPathScopeObjectId] = useState("")
+  const [workspaceSourceMode, setWorkspaceSourceMode] = useState<McpHubWorkspaceSourceMode>("inline")
+  const [workspaceSetObjectId, setWorkspaceSetObjectId] = useState("")
   const [workspaceIdsText, setWorkspaceIdsText] = useState("")
   const [approvalPolicyId, setApprovalPolicyId] = useState<string>("")
   const [policyDocument, setPolicyDocument] = useState<McpHubPermissionPolicyDocument>({})
@@ -89,6 +94,7 @@ export const PolicyAssignmentsTab = () => {
   const [registryModules, setRegistryModules] = useState<McpHubToolRegistryModule[]>([])
   const [externalServers, setExternalServers] = useState<McpHubExternalServer[]>([])
   const [pathScopeObjects, setPathScopeObjects] = useState<McpHubPathScopeObject[]>([])
+  const [workspaceSetObjects, setWorkspaceSetObjects] = useState<McpHubWorkspaceSetObject[]>([])
   const [assignmentWorkspaces, setAssignmentWorkspaces] = useState<McpHubPolicyAssignmentWorkspace[]>([])
   const [assignmentBindings, setAssignmentBindings] = useState<McpHubCredentialBinding[]>([])
   const [externalAccess, setExternalAccess] = useState<McpHubEffectiveExternalAccess | null>(null)
@@ -157,16 +163,18 @@ export const PolicyAssignmentsTab = () => {
     let cancelled = false
     const loadRegistryAndServers = async () => {
       try {
-        const [summary, serverRows, pathScopeRows] = await Promise.all([
+        const [summary, serverRows, pathScopeRows, workspaceSetRows] = await Promise.all([
           getToolRegistrySummary(),
           listExternalServers(),
-          listPathScopeObjects()
+          listPathScopeObjects(),
+          listWorkspaceSetObjects()
         ])
         if (!cancelled) {
           setRegistryEntries(Array.isArray(summary?.entries) ? summary.entries : [])
           setRegistryModules(Array.isArray(summary?.modules) ? summary.modules : [])
           setExternalServers(Array.isArray(serverRows) ? serverRows : [])
           setPathScopeObjects(Array.isArray(pathScopeRows) ? pathScopeRows : [])
+          setWorkspaceSetObjects(Array.isArray(workspaceSetRows) ? workspaceSetRows : [])
         }
       } catch {
         if (!cancelled) {
@@ -174,6 +182,7 @@ export const PolicyAssignmentsTab = () => {
           setRegistryModules([])
           setExternalServers([])
           setPathScopeObjects([])
+          setWorkspaceSetObjects([])
         }
       }
     }
@@ -192,6 +201,8 @@ export const PolicyAssignmentsTab = () => {
     setProfileId("")
     setPathScopeSource("inline")
     setPathScopeObjectId("")
+    setWorkspaceSourceMode("inline")
+    setWorkspaceSetObjectId("")
     setWorkspaceIdsText("")
     setApprovalPolicyId("")
     setPolicyDocument({})
@@ -267,6 +278,10 @@ export const PolicyAssignmentsTab = () => {
     setProfileId(assignment.profile_id ? String(assignment.profile_id) : "")
     setPathScopeSource(assignment.path_scope_object_id ? "named" : "inline")
     setPathScopeObjectId(assignment.path_scope_object_id ? String(assignment.path_scope_object_id) : "")
+    setWorkspaceSourceMode(assignment.workspace_source_mode || "inline")
+    setWorkspaceSetObjectId(
+      assignment.workspace_set_object_id ? String(assignment.workspace_set_object_id) : ""
+    )
     setApprovalPolicyId(assignment.approval_policy_id ? String(assignment.approval_policy_id) : "")
     setPolicyDocument(assignment.inline_policy_document || {})
     setIsActive(assignment.is_active)
@@ -281,6 +296,9 @@ export const PolicyAssignmentsTab = () => {
   }
 
   const syncAssignmentWorkspaces = async (assignmentId: number) => {
+    if (workspaceSourceMode !== "inline") {
+      return
+    }
     const desiredWorkspaceIds = Array.from(new Set(parseLineList(workspaceIdsText)))
     const currentWorkspaceIds = assignmentWorkspaces.map((row) => row.workspace_id)
     const toAdd = desiredWorkspaceIds.filter((workspaceId) => !currentWorkspaceIds.includes(workspaceId))
@@ -309,6 +327,9 @@ export const PolicyAssignmentsTab = () => {
         profile_id: profileId ? Number(profileId) : null,
         path_scope_object_id:
           pathScopeSource === "named" && pathScopeObjectId ? Number(pathScopeObjectId) : null,
+        workspace_source_mode: workspaceSourceMode,
+        workspace_set_object_id:
+          workspaceSourceMode === "named" && workspaceSetObjectId ? Number(workspaceSetObjectId) : null,
         approval_policy_id: approvalPolicyId ? Number(approvalPolicyId) : null,
         inline_policy_document: policyDocument,
         is_active: isActive
@@ -558,18 +579,66 @@ export const PolicyAssignmentsTab = () => {
             </Card>
 
             <Card size="small" title="Workspace Access">
-              <Space orientation="vertical" style={{ width: "100%" }}>
-                <label htmlFor="mcp-assignment-workspace-ids">Allowed workspace ids</label>
-                <textarea
-                  id="mcp-assignment-workspace-ids"
-                  aria-label="Allowed workspace ids"
-                  value={workspaceIdsText}
-                  onChange={(event) => setWorkspaceIdsText(event.target.value)}
-                  rows={4}
-                />
+              <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
                 <Typography.Text type="secondary">
-                  One workspace id per line. If this list is empty, current behavior stays unchanged.
+                  Select one workspace source. Inline rows stay preserved even when a named workspace set is
+                  active, but runtime uses only the selected source.
                 </Typography.Text>
+                <Space wrap>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mcp-assignment-workspace-source"
+                      checked={workspaceSourceMode === "inline"}
+                      onChange={() => setWorkspaceSourceMode("inline")}
+                    />
+                    <span style={{ marginLeft: 8 }}>Use inline workspace list</span>
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mcp-assignment-workspace-source"
+                      checked={workspaceSourceMode === "named"}
+                      onChange={() => setWorkspaceSourceMode("named")}
+                    />
+                    <span style={{ marginLeft: 8 }}>Use named workspace set</span>
+                  </label>
+                </Space>
+                {workspaceSourceMode === "named" ? (
+                  <Space orientation="vertical" style={{ width: "100%" }}>
+                    <label htmlFor="mcp-assignment-workspace-set-object">Assignment named workspace set</label>
+                    <select
+                      id="mcp-assignment-workspace-set-object"
+                      aria-label="Assignment named workspace set"
+                      value={workspaceSetObjectId}
+                      onChange={(event) => setWorkspaceSetObjectId(event.target.value)}
+                    >
+                      <option value="">Select a workspace set</option>
+                      {workspaceSetObjects.map((workspaceSet) => (
+                        <option key={workspaceSet.id} value={workspaceSet.id}>
+                          {workspaceSet.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Typography.Text type="secondary">
+                      Preserved inline workspace rows remain stored but inactive while a named workspace set is selected.
+                    </Typography.Text>
+                  </Space>
+                ) : (
+                  <Space orientation="vertical" style={{ width: "100%" }}>
+                    <label htmlFor="mcp-assignment-workspace-ids">Allowed workspace ids</label>
+                    <textarea
+                      id="mcp-assignment-workspace-ids"
+                      aria-label="Allowed workspace ids"
+                      value={workspaceIdsText}
+                      onChange={(event) => setWorkspaceIdsText(event.target.value)}
+                      rows={4}
+                    />
+                    <Typography.Text type="secondary">
+                      One workspace id per line. If this list is empty, current behavior stays unchanged.
+                    </Typography.Text>
+                  </Space>
+                )}
               </Space>
             </Card>
 
@@ -772,6 +841,11 @@ export const PolicyAssignmentsTab = () => {
                   {`workspaces ${effectivePolicy.selected_assignment_workspace_ids.join(", ")}`}
                 </Tag>
               ) : null}
+              {effectivePolicy.selected_workspace_set_object_name ? (
+                <Tag color="geekblue">
+                  {`workspace set ${effectivePolicy.selected_workspace_set_object_name}`}
+                </Tag>
+              ) : null}
             </Space>
             {effectivePolicy.provenance.length > 0 ? (
               <Space orientation="vertical" size={4} style={{ width: "100%" }}>
@@ -807,6 +881,14 @@ export const PolicyAssignmentsTab = () => {
                     {`path scope ${
                       pathScopeObjects.find((row) => row.id === assignment.path_scope_object_id)?.name ||
                       assignment.path_scope_object_id
+                    }`}
+                  </Tag>
+                ) : null}
+                {assignment.workspace_source_mode === "named" && assignment.workspace_set_object_id ? (
+                  <Tag color="geekblue">
+                    {`workspace set ${
+                      workspaceSetObjects.find((row) => row.id === assignment.workspace_set_object_id)?.name ||
+                      assignment.workspace_set_object_id
                     }`}
                   </Tag>
                 ) : null}
