@@ -14,7 +14,7 @@ import {
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { LogOut, Menu, Search, X } from 'lucide-react';
-import { logout } from '@/lib/auth';
+import { isSingleUserMode, logout } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -106,6 +106,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     if (item.billingOnly && !isBillingEnabled()) return false;
     if (!item.permission && !item.role) return true;
     if (permLoading) return false;
+    if (item.href === '/debug' && isSingleUserMode() && hasRole('admin')) return true;
     if (item.permission && hasPermission(item.permission)) return true;
     if (item.role && hasRole(item.role)) return true;
     return false;

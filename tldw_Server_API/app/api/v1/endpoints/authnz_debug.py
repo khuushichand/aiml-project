@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import (
@@ -16,6 +16,35 @@ from tldw_Server_API.app.core.AuthNZ.virtual_keys import (
 )
 
 router = APIRouter()
+
+_DEBUG_ALLOWED_ROLES = {"super_admin", "owner"}
+
+
+async def require_debug_roles(
+    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
+) -> AuthPrincipal:
+    """
+    Authorize access to AuthNZ debug endpoints.
+
+    Single-user compatibility principals are allowed so the default self-hosted
+    admin can continue using the debug tools. In multi-user mode, the caller
+    must hold either the ``super_admin`` or ``owner`` role. Raises ``HTTP 403``
+    when the principal does not satisfy either policy.
+    """
+    if getattr(principal, "subject", None) == "single_user":
+        return principal
+
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if roles & _DEBUG_ALLOWED_ROLES:
+        return principal
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied. Required role(s): super_admin, owner",
+    )
 
 
 async def _resolve_api_key_id(request: Request, x_api_key: str | None) -> dict[str, Any]:
@@ -79,7 +108,7 @@ async def _resolve_api_key_id(request: Request, x_api_key: str | None) -> dict[s
 async def debug_api_key_id(
     request: Request,
     X_API_KEY: str | None = Header(None, alias="X-API-KEY"),
-    _: AuthPrincipal = Depends(require_roles("admin")),
+    _: AuthPrincipal = Depends(require_debug_roles),
 ):
     """
     Resolve the provided API key and return its associated api_key_id and user_id.
@@ -97,7 +126,7 @@ async def debug_api_key_id(
 async def debug_budget_summary(
     request: Request,
     X_API_KEY: str | None = Header(None, alias="X-API-KEY"),
-    _: AuthPrincipal = Depends(require_roles("admin")),
+    _: AuthPrincipal = Depends(require_debug_roles),
 ):
     """
     Provide limits, daily and monthly usage summaries, and an over-budget evaluation for the resolved API key.

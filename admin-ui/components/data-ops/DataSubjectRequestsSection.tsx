@@ -12,6 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
+import { isUnsafeLocalToolsEnabled } from '@/lib/admin-ui-flags';
 import { ShieldAlert } from 'lucide-react';
 import { Field } from '@/components/data-ops/Field';
 
@@ -152,6 +153,7 @@ const downloadExportArchive = (requester: string, categories: DataCategoryCount[
 
 export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequestsSectionProps) => {
   const { success, error: showError } = useToast();
+  const unsafeLocalToolsEnabled = isUnsafeLocalToolsEnabled();
 
   const [requesterIdentifier, setRequesterIdentifier] = useState('');
   const [requestType, setRequestType] = useState<DataSubjectRequestType>('access');
@@ -178,6 +180,10 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
   }, [refreshSignal]);
 
   useEffect(() => {
+    if (!unsafeLocalToolsEnabled) {
+      setRequestLog([]);
+      return;
+    }
     if (typeof window === 'undefined') return;
     try {
       const raw = window.localStorage.getItem(REQUEST_LOG_STORAGE_KEY);
@@ -188,9 +194,10 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
       console.warn('Failed to read data subject request log storage:', error);
       setRequestLog([]);
     }
-  }, []);
+  }, [unsafeLocalToolsEnabled]);
 
   const persistRequestLog = (nextLog: DataSubjectRequestLogItem[]) => {
+    if (!unsafeLocalToolsEnabled) return;
     setRequestLog(nextLog);
     if (typeof window === 'undefined') return;
     try {
@@ -223,6 +230,7 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
   };
 
   const handlePreviewErasure = async () => {
+    if (!unsafeLocalToolsEnabled) return;
     const normalizedRequester = requesterIdentifier.trim();
     if (!normalizedRequester) {
       setFormError('User identifier (email or user ID) is required.');
@@ -245,6 +253,7 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
   };
 
   const handleSubmitRequest = async () => {
+    if (!unsafeLocalToolsEnabled) return;
     const normalizedRequester = requesterIdentifier.trim();
     if (!normalizedRequester) {
       setFormError('User identifier (email or user ID) is required.');
@@ -335,6 +344,20 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
         <CardDescription>Handle GDPR-style export, erasure, and access requests.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {!unsafeLocalToolsEnabled ? (
+          <Alert>
+            <AlertDescription>
+              Data subject request workflows are unavailable until server-backed APIs are available.
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <Alert>
+            <AlertDescription>
+              Local-only mode is enabled for development. Results shown here are not persisted server-side.
+            </AlertDescription>
+          </Alert>
+        )}
+
         <div className="grid gap-3 md:grid-cols-3">
           <Field id="dsr-requester" label="User identifier (email or user ID)">
             <Input
@@ -342,12 +365,14 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
               value={requesterIdentifier}
               onChange={(event) => setRequesterIdentifier(event.target.value)}
               placeholder="user@example.com or 42"
+              disabled={!unsafeLocalToolsEnabled}
             />
           </Field>
           <Field id="dsr-request-type" label="Request type">
             <Select
               id="dsr-request-type"
               value={requestType}
+              disabled={!unsafeLocalToolsEnabled}
               onChange={(event) => {
                 setRequestType(event.target.value as DataSubjectRequestType);
                 setFormError('');
@@ -371,14 +396,19 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
               <Button
                 variant="outline"
                 onClick={() => { void handlePreviewErasure(); }}
-                disabled={previewLoading}
+                disabled={previewLoading || !unsafeLocalToolsEnabled}
                 loading={previewLoading}
                 loadingText="Previewing..."
               >
                 Preview user data
               </Button>
             )}
-            <Button onClick={() => { void handleSubmitRequest(); }} disabled={submitting} loading={submitting} loadingText="Submitting...">
+            <Button
+              onClick={() => { void handleSubmitRequest(); }}
+              disabled={submitting || !unsafeLocalToolsEnabled}
+              loading={submitting}
+              loadingText="Submitting..."
+            >
               Submit request
             </Button>
           </div>

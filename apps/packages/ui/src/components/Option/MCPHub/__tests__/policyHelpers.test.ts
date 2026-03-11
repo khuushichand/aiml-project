@@ -6,7 +6,8 @@ import {
   buildSimplePolicyDocument,
   createPresetSelection,
   getDerivedCapabilities,
-  getPolicyAllowedToolSelection
+  getPolicyAllowedToolSelection,
+  toggleStringValue
 } from "../policyHelpers"
 
 const TOOL_REGISTRY: McpHubToolRegistryEntry[] = [
@@ -92,5 +93,11 @@ describe("policyHelpers", () => {
     expect(selection.selectedTools).toEqual(["notes.search"])
     expect(selection.preservedPatterns).toEqual(["Bash(git *)"])
     expect(capabilities).toEqual(["filesystem.read"])
+  })
+
+  it("toggles string selections without duplicating enabled entries", () => {
+    expect(toggleStringValue(["session"], "once", true)).toEqual(["session", "once"])
+    expect(toggleStringValue(["session", "once"], "once", true)).toEqual(["session", "once"])
+    expect(toggleStringValue(["session", "once"], "once", false)).toEqual(["session"])
   })
 })

@@ -51,6 +51,7 @@ describe('MonitoringManagementPanels', () => {
   it('renders all management panels and supporting copy', () => {
     render(
       <MonitoringManagementPanels
+        unsafeLocalToolsEnabled={false}
         alertRulesPanelProps={{
           rules: [{ id: 'rule-1' } as never],
           draft: {
@@ -62,6 +63,7 @@ describe('MonitoringManagementPanels', () => {
           },
           errors: {},
           saving: false,
+          mutationsEnabled: false,
           onDraftChange: vi.fn(),
           onCreateRule: vi.fn(),
           onDeleteRule: vi.fn(),
@@ -78,6 +80,7 @@ describe('MonitoringManagementPanels', () => {
           onAssign: vi.fn(),
           onSnooze: vi.fn(),
           onEscalate: vi.fn(),
+          localActionsEnabled: false,
         }}
         watchlistsPanelProps={{
           watchlists: [{ id: 'watchlist-1' } as never],
@@ -117,7 +120,10 @@ describe('MonitoringManagementPanels', () => {
     expect(screen.getByTestId('notifications-panel').textContent).toBe('notifications:1');
     expect(screen.getByTestId('system-status-panel').textContent).toBe('status:1');
     expect(
-      screen.getByText('Alert rules are stored locally until a backend alert-rules endpoint is available.')
+      screen.getByText('Alert rule editing is unavailable until a backend alert-rules endpoint is available.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Alert assignment, snoozing, and escalation are unavailable until backend alert mutation endpoints are available.')
     ).toBeInTheDocument();
   });
 });

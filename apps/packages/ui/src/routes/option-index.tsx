@@ -15,7 +15,7 @@ import { LandingHub } from "~/components/Option/LandingHub"
 
 const OptionIndex = () => {
   const { phase } = useConnectionState()
-  const { uxState, hasCompletedFirstRun } = useConnectionUxState()
+  const { hasCompletedFirstRun } = useConnectionUxState()
   const { checkOnce, beginOnboarding, markFirstRunComplete } = useConnectionActions()
   const { mode, toggleDarkMode } = useDarkMode()
   const onboardingInitiated = React.useRef(false)
@@ -44,11 +44,13 @@ const OptionIndex = () => {
 
   React.useEffect(() => {
     if (!didHydrate) return
-    if (!hasCompletedFirstRun && !onboardingInitiated.current) {
-      onboardingInitiated.current = true
-      void beginOnboarding()
-    }
-  }, [hasCompletedFirstRun, beginOnboarding, didHydrate])
+    if (hasCompletedFirstRun) return
+    if (onboardingInitiated.current) return
+    if (phase !== ConnectionPhase.UNCONFIGURED) return
+
+    onboardingInitiated.current = true
+    void beginOnboarding()
+  }, [beginOnboarding, didHydrate, hasCompletedFirstRun, phase])
 
   useFocusComposerOnConnect(phase ?? null)
 

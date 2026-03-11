@@ -1338,6 +1338,89 @@ const SidepanelPersona = () => {
     </div>
   ) : null
 
+  const runtimeApprovalCard = pendingApprovals.length ? (
+    <div className="rounded-lg border border-warning/40 bg-warning/5 p-3">
+      <Typography.Text strong>
+        {t("sidepanel:persona.runtimeApproval", "Runtime approval required")}
+      </Typography.Text>
+      <div className="mt-2 space-y-3">
+        {pendingApprovals.map((approval) => {
+          const isSubmitting = submittingApprovalKey === approval.key
+          return (
+            <div
+              key={approval.key}
+              className="rounded-md border border-warning/30 bg-surface p-3"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <Tag color="gold">{approval.tool_name}</Tag>
+                {approval.mode ? <Tag color="blue">{approval.mode}</Tag> : null}
+                {approval.reason ? <Tag color="red">{approval.reason}</Tag> : null}
+              </div>
+              {Object.keys(approval.arguments_summary).length ? (
+                <pre className="mt-2 overflow-auto rounded bg-bg p-2 text-[11px] text-text">
+                  {JSON.stringify(approval.arguments_summary, null, 2)}
+                </pre>
+              ) : null}
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-text-muted">
+                <label htmlFor={`persona-approval-duration-${approval.key}`}>
+                  {t("sidepanel:persona.approvalDuration", "Approval duration")}
+                </label>
+                <select
+                  id={`persona-approval-duration-${approval.key}`}
+                  className="rounded border border-border bg-bg px-2 py-1 text-xs text-text"
+                  value={approval.selected_duration}
+                  disabled={isSubmitting}
+                  onChange={(event) =>
+                    updateApprovalDuration(
+                      approval.key,
+                      event.target.value as PersonaRuntimeApprovalDuration
+                    )
+                  }
+                >
+                  {approval.duration_options.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <Button
+                  size="small"
+                  type="primary"
+                  loading={isSubmitting}
+                  onClick={() => {
+                    void submitApprovalDecision(approval, "approved")
+                  }}
+                >
+                  {t("sidepanel:persona.approveAndRetry", "Approve and retry")}
+                </Button>
+                <Button
+                  size="small"
+                  danger
+                  disabled={isSubmitting}
+                  onClick={() => {
+                    void submitApprovalDecision(approval, "denied")
+                  }}
+                >
+                  {t("sidepanel:persona.denyApproval", "Deny")}
+                </Button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  ) : null
+
+  const liveSessionStatusPanels = (
+    <>
+      {errorBanner}
+      <PersonaPolicySummary personaId={selectedPersonaId || null} />
+      {runtimeApprovalCard}
+    </>
+  )
+
   const pendingPlanCard = pendingPlan ? (
     <div className="rounded-lg border border-border bg-surface p-3">
       <Typography.Text strong>
@@ -1673,7 +1756,7 @@ const SidepanelPersona = () => {
       content: (
         <LiveSessionPanel
           controls={liveSessionControls}
-          error={errorBanner}
+          error={liveSessionStatusPanels}
           pendingPlan={pendingPlanCard}
           transcript={transcriptPanel}
           composer={composerPanel}
@@ -1778,7 +1861,8 @@ const SidepanelPersona = () => {
         <SidepanelHeaderSimple activeTitle={t("sidepanel:persona.title", "Persona Garden")} />
       </div>
 
-      <div className="flex flex-1 flex-col gap-3 p-3">
+      {false && (
+        <div className="flex flex-1 flex-col gap-3 p-3">
         <div className="flex flex-wrap items-center gap-2">
           <Select
             size="small"
@@ -2229,53 +2313,16 @@ const SidepanelPersona = () => {
             </>
           ) : null}
         </div>
-
-        <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-surface p-3">
-          <div className="space-y-2">
-            {logs.length === 0 ? (
-              <Typography.Text type="secondary" className="text-xs">
-                {t(
-                  "sidepanel:persona.empty",
-                  "Connect to persona and send a message to start."
-                )}
-              </Typography.Text>
-            ) : (
-              logs.map((entry) => (
-                <div
-                  key={entry.id}
-                  className="rounded border border-border bg-surface2 px-2 py-1.5 text-xs"
-                >
-                  <div className="mb-1 uppercase tracking-wide text-[10px] text-text-muted">
-                    {entry.kind}
-                  </div>
-                  <div className="whitespace-pre-wrap text-text">{entry.text}</div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-end gap-2">
-          <Input.TextArea
-            value={input}
-            autoSize={{ minRows: 2, maxRows: 4 }}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder={t("sidepanel:persona.inputPlaceholder", "Ask Persona...")}
-            onPressEnter={(event) => {
-              if (event.shiftKey) return
-              event.preventDefault()
-              sendUserMessage()
-            }}
+        <div className="flex flex-1 flex-col p-3">
+          <PersonaGardenTabs
+            activeKey={activeTab}
+            onChange={(key) => setActiveTab(key as PersonaGardenTabKey)}
+            items={tabItems}
           />
-          <Button
-            type="primary"
-            icon={<Send className="h-4 w-4" />}
-            disabled={!canSend}
-            onClick={sendUserMessage}
-          >
-            {t("common:send", "Send")}
-          </Button>
         </div>
+      </div>
+      )}
+
       <div className="flex flex-1 flex-col p-3">
         <PersonaGardenTabs
           activeKey={activeTab}
