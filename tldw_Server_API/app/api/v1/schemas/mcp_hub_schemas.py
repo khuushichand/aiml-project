@@ -30,6 +30,7 @@ ToolMetadataSource = Literal["explicit", "heuristic", "fallback"]
 PathScopeMode = Literal["none", "workspace_root", "cwd_descendants"]
 PathScopeEnforcement = Literal["approval_required_when_unenforceable"]
 WorkspaceSourceMode = Literal["inline", "named"]
+WorkspaceTrustSource = Literal["user_local", "shared_registry"]
 ExternalAuthTemplateTargetType = Literal["header", "env"]
 CredentialSlotPrivilegeClass = Literal["read", "write", "admin"]
 
@@ -238,6 +239,38 @@ class WorkspaceSetObjectMemberResponse(BaseModel):
     created_at: datetime | str | None = None
 
 
+class SharedWorkspaceCreateRequest(BaseModel):
+    workspace_id: str = Field(..., min_length=1, max_length=255)
+    display_name: str = Field(..., min_length=1, max_length=200)
+    absolute_root: str = Field(..., min_length=1, max_length=1024)
+    owner_scope_type: ScopeType = Field(default="team")
+    owner_scope_id: int | None = None
+    is_active: bool = True
+
+
+class SharedWorkspaceUpdateRequest(BaseModel):
+    workspace_id: str | None = Field(default=None, min_length=1, max_length=255)
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    absolute_root: str | None = Field(default=None, min_length=1, max_length=1024)
+    owner_scope_type: ScopeType | None = None
+    owner_scope_id: int | None = None
+    is_active: bool | None = None
+
+
+class SharedWorkspaceResponse(BaseModel):
+    id: int
+    workspace_id: str
+    display_name: str
+    absolute_root: str
+    owner_scope_type: Literal["global", "org", "team"]
+    owner_scope_id: int | None = None
+    is_active: bool
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
 class PolicyOverrideUpsertRequest(BaseModel):
     override_policy_document: dict[str, Any] = Field(default_factory=dict)
     is_active: bool = True
@@ -346,6 +379,9 @@ class EffectivePolicyResponse(BaseModel):
     selected_workspace_source_mode: WorkspaceSourceMode | None = None
     selected_workspace_set_object_id: int | None = None
     selected_workspace_set_object_name: str | None = None
+    selected_workspace_trust_source: WorkspaceTrustSource | None = None
+    selected_workspace_scope_type: ScopeType | None = None
+    selected_workspace_scope_id: int | None = None
     selected_assignment_workspace_ids: list[str] = Field(default_factory=list)
     sources: list[EffectivePolicySourceResponse] = Field(default_factory=list)
     provenance: list[EffectivePolicyProvenanceResponse] = Field(default_factory=list)

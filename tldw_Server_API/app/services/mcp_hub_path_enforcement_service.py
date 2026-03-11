@@ -5,7 +5,10 @@ from pathlib import Path
 import re
 from typing import Any
 
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
 from tldw_Server_API.app.services.mcp_hub_path_scope_service import McpHubPathScopeService
+from tldw_Server_API.app.services.mcp_hub_workspace_root_resolver import McpHubWorkspaceRootResolver
 
 _FILESYSTEM_CAPABILITIES = frozenset({"filesystem.read", "filesystem.write", "filesystem.delete"})
 _SUPPORTED_PATH_ARGUMENT_HINTS = frozenset(
@@ -284,6 +287,7 @@ class McpHubPathEnforcementService:
             "path_scope_mode": str(scope.get("path_scope_mode") or "none").strip() or "none",
             "workspace_root": str(scope.get("workspace_root") or "").strip() or None,
             "workspace_id": str(scope.get("workspace_id") or "").strip() or None,
+            "selected_workspace_trust_source": str(scope.get("selected_workspace_trust_source") or "").strip() or None,
             "scope_root": str(scope_root) if scope_root is not None else None,
         }
         if normalized_paths:
@@ -324,4 +328,11 @@ class McpHubPathEnforcementService:
 
 async def get_mcp_hub_path_enforcement_service() -> McpHubPathEnforcementService:
     """Create a path enforcement service backed by the current sandbox scope resolver."""
-    return McpHubPathEnforcementService()
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    return McpHubPathEnforcementService(
+        path_scope_service=McpHubPathScopeService(
+            workspace_root_resolver=McpHubWorkspaceRootResolver(repo=repo),
+        )
+    )

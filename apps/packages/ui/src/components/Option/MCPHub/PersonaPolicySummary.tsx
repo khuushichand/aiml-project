@@ -110,6 +110,15 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
               {`Workspace set: ${policy.selected_workspace_set_object_name}`}
             </Typography.Text>
           ) : null}
+          {policy.selected_workspace_trust_source ? (
+            <Typography.Text type="secondary">
+              {`Workspace trust source: ${
+                policy.selected_workspace_trust_source === "shared_registry"
+                  ? "shared registry"
+                  : "user-local"
+              }`}
+            </Typography.Text>
+          ) : null}
           <Space wrap>
             {policy.capabilities.map((capability) => (
               <Tag key={capability}>{capability}</Tag>
@@ -132,6 +141,13 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
             ) : null}
             {policy.selected_workspace_source_mode === "named" && policy.selected_workspace_set_object_name ? (
               <Tag color="geekblue">{`workspace set ${policy.selected_workspace_set_object_name}`}</Tag>
+            ) : null}
+            {policy.selected_workspace_trust_source ? (
+              <Tag color={policy.selected_workspace_trust_source === "shared_registry" ? "magenta" : "purple"}>
+                {policy.selected_workspace_trust_source === "shared_registry"
+                  ? "shared registry"
+                  : "user-local"}
+              </Tag>
             ) : null}
           </Space>
           <Space wrap>

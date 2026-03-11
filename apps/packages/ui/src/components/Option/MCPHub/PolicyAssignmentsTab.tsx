@@ -846,6 +846,13 @@ export const PolicyAssignmentsTab = () => {
                   {`workspace set ${effectivePolicy.selected_workspace_set_object_name}`}
                 </Tag>
               ) : null}
+              {effectivePolicy.selected_workspace_trust_source ? (
+                <Tag color={effectivePolicy.selected_workspace_trust_source === "shared_registry" ? "magenta" : "purple"}>
+                  {effectivePolicy.selected_workspace_trust_source === "shared_registry"
+                    ? "shared registry"
+                    : "user-local"}
+                </Tag>
+              ) : null}
             </Space>
             {effectivePolicy.provenance.length > 0 ? (
               <Space orientation="vertical" size={4} style={{ width: "100%" }}>

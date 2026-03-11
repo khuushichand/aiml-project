@@ -19,6 +19,7 @@ export type McpHubPathScopeEnforcement = "approval_required_when_unenforceable"
 export type McpHubExternalServerSource = "managed" | "legacy"
 export type McpHubCredentialBindingMode = "grant" | "disable"
 export type McpHubWorkspaceSourceMode = "inline" | "named"
+export type McpHubWorkspaceTrustSource = "user_local" | "shared_registry"
 export type McpHubCredentialSlotPrivilegeClass = "read" | "write" | "admin" | "custom" | string
 
 export type McpHubProfile = {
@@ -139,7 +140,7 @@ export type McpHubWorkspaceSetObject = {
   id: number
   name: string
   description?: string | null
-  owner_scope_type: "user"
+  owner_scope_type: McpHubScopeType
   owner_scope_id?: number | null
   is_active: boolean
   created_by?: number | null
@@ -151,7 +152,7 @@ export type McpHubWorkspaceSetObject = {
 export type McpHubWorkspaceSetObjectCreateInput = {
   name: string
   description?: string | null
-  owner_scope_type?: "user"
+  owner_scope_type?: McpHubScopeType
   owner_scope_id?: number | null
   is_active?: boolean
 }
@@ -159,7 +160,7 @@ export type McpHubWorkspaceSetObjectCreateInput = {
 export type McpHubWorkspaceSetObjectUpdateInput = {
   name?: string
   description?: string | null
-  owner_scope_type?: "user"
+  owner_scope_type?: McpHubScopeType
   owner_scope_id?: number | null
   is_active?: boolean
 }
@@ -169,6 +170,38 @@ export type McpHubWorkspaceSetObjectMember = {
   workspace_id: string
   created_by?: number | null
   created_at?: string | null
+}
+
+export type McpHubSharedWorkspace = {
+  id: number
+  workspace_id: string
+  display_name: string
+  absolute_root: string
+  owner_scope_type: "global" | "org" | "team"
+  owner_scope_id?: number | null
+  is_active: boolean
+  created_by?: number | null
+  updated_by?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type McpHubSharedWorkspaceCreateInput = {
+  workspace_id: string
+  display_name: string
+  absolute_root: string
+  owner_scope_type?: "global" | "org" | "team"
+  owner_scope_id?: number | null
+  is_active?: boolean
+}
+
+export type McpHubSharedWorkspaceUpdateInput = {
+  workspace_id?: string
+  display_name?: string
+  absolute_root?: string
+  owner_scope_type?: "global" | "org" | "team"
+  owner_scope_id?: number | null
+  is_active?: boolean
 }
 
 export type McpHubPolicyAssignment = {
@@ -342,6 +375,9 @@ export type McpHubEffectivePolicy = {
   selected_workspace_source_mode?: McpHubWorkspaceSourceMode | null
   selected_workspace_set_object_id?: number | null
   selected_workspace_set_object_name?: string | null
+  selected_workspace_trust_source?: McpHubWorkspaceTrustSource | null
+  selected_workspace_scope_type?: McpHubScopeType | null
+  selected_workspace_scope_id?: number | null
   selected_assignment_workspace_ids?: string[]
   sources: McpHubEffectivePolicySource[]
   provenance: McpHubEffectivePolicyProvenance[]
@@ -834,7 +870,7 @@ export const listPathScopeObjects = async (params: {
 }
 
 export const listWorkspaceSetObjects = async (params: {
-  owner_scope_type?: "user"
+  owner_scope_type?: McpHubScopeType
   owner_scope_id?: number | null
 } = {}): Promise<McpHubWorkspaceSetObject[]> => {
   return await bgRequestClient<McpHubWorkspaceSetObject[]>({
@@ -843,6 +879,49 @@ export const listWorkspaceSetObjects = async (params: {
       owner_scope_id: params.owner_scope_id
     }),
     method: "GET"
+  })
+}
+
+export const listSharedWorkspaces = async (params: {
+  owner_scope_type?: "global" | "org" | "team"
+  owner_scope_id?: number | null
+} = {}): Promise<McpHubSharedWorkspace[]> => {
+  return await bgRequestClient<McpHubSharedWorkspace[]>({
+    path: withQuery("/api/v1/mcp/hub/shared-workspaces", {
+      owner_scope_type: params.owner_scope_type,
+      owner_scope_id: params.owner_scope_id
+    }),
+    method: "GET"
+  })
+}
+
+export const createSharedWorkspace = async (
+  payload: McpHubSharedWorkspaceCreateInput
+): Promise<McpHubSharedWorkspace> => {
+  return await bgRequestClient<McpHubSharedWorkspace>({
+    path: "/api/v1/mcp/hub/shared-workspaces",
+    method: "POST",
+    body: payload
+  })
+}
+
+export const updateSharedWorkspace = async (
+  sharedWorkspaceId: number,
+  payload: McpHubSharedWorkspaceUpdateInput
+): Promise<McpHubSharedWorkspace> => {
+  return await bgRequestClient<McpHubSharedWorkspace>({
+    path: `/api/v1/mcp/hub/shared-workspaces/${sharedWorkspaceId}`,
+    method: "PUT",
+    body: payload
+  })
+}
+
+export const deleteSharedWorkspace = async (
+  sharedWorkspaceId: number
+): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/shared-workspaces/${sharedWorkspaceId}`,
+    method: "DELETE"
   })
 }
 

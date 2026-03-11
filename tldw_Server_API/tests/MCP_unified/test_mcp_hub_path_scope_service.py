@@ -184,3 +184,46 @@ async def test_path_scope_service_fails_closed_for_ambiguous_workspace_id() -> N
     assert result["workspace_root"] is None
     assert result["cwd"] is None
     assert result["reason"] == "workspace_root_ambiguous"
+
+
+@pytest.mark.asyncio
+async def test_path_scope_service_forwards_shared_registry_trust_context() -> None:
+    from tldw_Server_API.app.services.mcp_hub_path_scope_service import McpHubPathScopeService
+
+    resolver = _FakeWorkspaceRootResolver(
+        {
+            "workspace_root": "/srv/shared/docs",
+            "workspace_id": "shared-docs",
+            "source": "shared_registry",
+            "reason": None,
+        }
+    )
+    svc = McpHubPathScopeService(
+        sandbox_service=_FakeSandboxService({}),
+        workspace_root_resolver=resolver,
+    )
+    context = SimpleNamespace(
+        session_id=None,
+        user_id="7",
+        metadata={"workspace_id": "shared-docs", "cwd": "docs/api"},
+    )
+
+    result = await svc.resolve_for_context(
+        effective_policy={
+            "enabled": True,
+            "selected_workspace_trust_source": "shared_registry",
+            "selected_workspace_scope_type": "team",
+            "selected_workspace_scope_id": 21,
+            "policy_document": {
+                "path_scope_mode": "workspace_root",
+                "path_scope_enforcement": "approval_required_when_unenforceable",
+            },
+        },
+        context=context,
+    )
+
+    assert result["workspace_root"] == str(Path("/srv/shared/docs").resolve())
+    assert result["selected_workspace_trust_source"] == "shared_registry"
+    assert resolver.calls[0]["workspace_trust_source"] == "shared_registry"
+    assert resolver.calls[0]["owner_scope_type"] == "team"
+    assert resolver.calls[0]["owner_scope_id"] == 21

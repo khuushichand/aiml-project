@@ -145,6 +145,7 @@ class McpHubRepo:
                 "mcp_policy_assignments",
                 "mcp_policy_audit_history",
                 "mcp_policy_assignment_workspaces",
+                "mcp_shared_workspaces",
                 "mcp_workspace_set_object_members",
                 "mcp_workspace_set_objects",
                 "mcp_policy_overrides",
@@ -277,6 +278,18 @@ class McpHubRepo:
         if row is None:
             return None
         return dict(row)
+
+    @staticmethod
+    def _normalize_shared_workspace_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        out = dict(row)
+        out["is_active"] = _to_bool(out.get("is_active"))
+        out["workspace_id"] = str(out.get("workspace_id") or "").strip()
+        out["display_name"] = str(out.get("display_name") or "").strip()
+        out["absolute_root"] = str(out.get("absolute_root") or "").strip()
+        out["owner_scope_type"] = _normalize_scope_type(out.get("owner_scope_type"))
+        return out
 
     @staticmethod
     def _normalize_policy_override_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1009,6 +1022,191 @@ class McpHubRepo:
         cursor = await self.db_pool.execute(
             "DELETE FROM mcp_workspace_set_objects WHERE id = ?",
             (int(workspace_set_object_id),),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        return bool(rowcount and rowcount > 0)
+
+    async def create_shared_workspace_entry(
+        self,
+        *,
+        workspace_id: str,
+        display_name: str,
+        absolute_root: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        actor_id: int | None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        scope_type = _normalize_scope_type(owner_scope_type)
+        workspace_value = str(workspace_id or "").strip()
+        display_value = str(display_name or "").strip()
+        root_value = str(absolute_root or "").strip()
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = is_active if getattr(self.db_pool, "pool", None) is not None else int(is_active)
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_shared_workspaces (
+                workspace_id, display_name, absolute_root, owner_scope_type, owner_scope_id, is_active,
+                created_by, updated_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                workspace_value,
+                display_value,
+                root_value,
+                scope_type,
+                owner_scope_id,
+                active_value,
+                actor_id,
+                actor_id,
+                ts,
+                ts,
+            ),
+        )
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id
+            FROM mcp_shared_workspaces
+            WHERE workspace_id = ?
+              AND owner_scope_type = ?
+              AND (
+                (owner_scope_id IS NULL AND ? IS NULL)
+                OR owner_scope_id = ?
+              )
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (workspace_value, scope_type, owner_scope_id, owner_scope_id),
+        )
+        if not row:
+            return {}
+        created = await self.get_shared_workspace_entry(int(row["id"]))
+        return created or {}
+
+    async def get_shared_workspace_entry(self, shared_workspace_id: int) -> dict[str, Any] | None:
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, workspace_id, display_name, absolute_root, owner_scope_type, owner_scope_id, is_active,
+                   created_by, updated_by, created_at, updated_at
+            FROM mcp_shared_workspaces
+            WHERE id = ?
+            """,
+            (int(shared_workspace_id),),
+        )
+        return self._normalize_shared_workspace_row(self._row_to_dict(row) if row else None)
+
+    async def list_shared_workspace_entries(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+        workspace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_scope_type = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not None
+            else None
+        )
+        normalized_scope_id = int(owner_scope_id) if owner_scope_id is not None else None
+        normalized_workspace_id = str(workspace_id or "").strip() or None
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, workspace_id, display_name, absolute_root, owner_scope_type, owner_scope_id, is_active,
+                   created_by, updated_by, created_at, updated_at
+            FROM mcp_shared_workspaces
+            WHERE (? IS NULL OR owner_scope_type = ?)
+              AND (? IS NULL OR owner_scope_id = ?)
+              AND (? IS NULL OR workspace_id = ?)
+            ORDER BY owner_scope_type, owner_scope_id, workspace_id, id
+            """,
+            (
+                normalized_scope_type,
+                normalized_scope_type,
+                normalized_scope_id,
+                normalized_scope_id,
+                normalized_workspace_id,
+                normalized_workspace_id,
+            ),
+        )
+        return [
+            self._normalize_shared_workspace_row(self._row_to_dict(row)) or {}
+            for row in rows
+        ]
+
+    async def update_shared_workspace_entry(
+        self,
+        shared_workspace_id: int,
+        *,
+        workspace_id: str | object = _UNSET,
+        display_name: str | object = _UNSET,
+        absolute_root: str | object = _UNSET,
+        owner_scope_type: str | object = _UNSET,
+        owner_scope_id: int | None | object = _UNSET,
+        is_active: bool | object = _UNSET,
+        actor_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_shared_workspace_entry(shared_workspace_id)
+        if not existing:
+            return None
+
+        next_workspace_id = (
+            str(existing.get("workspace_id") or "")
+            if workspace_id is _UNSET
+            else str(workspace_id or "").strip()
+        )
+        next_display_name = (
+            str(existing.get("display_name") or "")
+            if display_name is _UNSET
+            else str(display_name or "").strip()
+        )
+        next_absolute_root = (
+            str(existing.get("absolute_root") or "")
+            if absolute_root is _UNSET
+            else str(absolute_root or "").strip()
+        )
+        next_scope = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not _UNSET
+            else str(existing.get("owner_scope_type") or "global")
+        )
+        next_scope_id = existing.get("owner_scope_id") if owner_scope_id is _UNSET else owner_scope_id
+        next_active = _to_bool(existing.get("is_active")) if is_active is _UNSET else _to_bool(is_active)
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = next_active if getattr(self.db_pool, "pool", None) is not None else int(next_active)
+
+        await self.db_pool.execute(
+            """
+            UPDATE mcp_shared_workspaces
+            SET workspace_id = ?,
+                display_name = ?,
+                absolute_root = ?,
+                owner_scope_type = ?,
+                owner_scope_id = ?,
+                is_active = ?,
+                updated_by = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                next_workspace_id,
+                next_display_name,
+                next_absolute_root,
+                next_scope,
+                next_scope_id,
+                active_value,
+                actor_id,
+                ts,
+                int(shared_workspace_id),
+            ),
+        )
+        return await self.get_shared_workspace_entry(shared_workspace_id)
+
+    async def delete_shared_workspace_entry(self, shared_workspace_id: int) -> bool:
+        cursor = await self.db_pool.execute(
+            "DELETE FROM mcp_shared_workspaces WHERE id = ?",
+            (int(shared_workspace_id),),
         )
         rowcount = getattr(cursor, "rowcount", 0)
         return bool(rowcount and rowcount > 0)

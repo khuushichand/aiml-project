@@ -173,6 +173,9 @@ class McpHubPolicyResolver:
         selected_workspace_source_mode: str | None = None
         selected_workspace_set_object_id: int | None = None
         selected_workspace_set_object_name: str | None = None
+        selected_workspace_trust_source: str | None = None
+        selected_workspace_scope_type: str | None = None
+        selected_workspace_scope_id: int | None = None
         path_scope_object_cache: dict[int, dict[str, Any] | None] = {}
         workspace_set_object_cache: dict[int, dict[str, Any] | None] = {}
 
@@ -293,11 +296,14 @@ class McpHubPolicyResolver:
             if approval_policy_id is not None:
                 resolved_approval_policy_id = int(approval_policy_id)
             selected_assignment_id = assignment_id
+            selected_workspace_scope_type = str(assignment.get("owner_scope_type") or "global")
+            selected_workspace_scope_id = assignment.get("owner_scope_id")
             selected_workspace_source_mode = (
                 str(assignment.get("workspace_source_mode") or "").strip().lower() or "inline"
             )
             selected_workspace_set_object_id = None
             selected_workspace_set_object_name = None
+            selected_workspace_trust_source = "user_local"
             if selected_workspace_source_mode == "named" and assignment.get("workspace_set_object_id") is not None:
                 selected_workspace_set_object_id = int(assignment.get("workspace_set_object_id"))
                 if selected_workspace_set_object_id not in workspace_set_object_cache:
@@ -307,6 +313,11 @@ class McpHubPolicyResolver:
                 workspace_set_object_row = workspace_set_object_cache.get(selected_workspace_set_object_id) or {}
                 if bool(workspace_set_object_row.get("is_active", True)):
                     selected_workspace_set_object_name = str(workspace_set_object_row.get("name") or "").strip() or None
+                    selected_workspace_trust_source = (
+                        "shared_registry"
+                        if str(workspace_set_object_row.get("owner_scope_type") or "").strip().lower() != "user"
+                        else "user_local"
+                    )
                     selected_assignment_workspace_ids = _unique(
                         _as_str_list(
                             [
@@ -350,6 +361,9 @@ class McpHubPolicyResolver:
             "selected_workspace_source_mode": selected_workspace_source_mode,
             "selected_workspace_set_object_id": selected_workspace_set_object_id,
             "selected_workspace_set_object_name": selected_workspace_set_object_name,
+            "selected_workspace_trust_source": selected_workspace_trust_source,
+            "selected_workspace_scope_type": selected_workspace_scope_type,
+            "selected_workspace_scope_id": selected_workspace_scope_id,
             "selected_assignment_workspace_ids": selected_assignment_workspace_ids,
             "sources": sources,
             "provenance": provenance,
@@ -407,6 +421,9 @@ class McpHubPolicyResolver:
             "selected_workspace_source_mode": None,
             "selected_workspace_set_object_id": None,
             "selected_workspace_set_object_name": None,
+            "selected_workspace_trust_source": None,
+            "selected_workspace_scope_type": None,
+            "selected_workspace_scope_id": None,
             "selected_assignment_workspace_ids": [],
             "sources": [],
             "provenance": [],

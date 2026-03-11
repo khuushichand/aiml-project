@@ -12,13 +12,13 @@
 
 ## Status
 
-- Task 1: Not Started
-- Task 2: Not Started
-- Task 3: Not Started
-- Task 4: Not Started
-- Task 5: Not Started
-- Task 6: Not Started
-- Task 7: Not Started
+- Task 1: Complete
+- Task 2: Complete
+- Task 3: Complete
+- Task 4: Complete
+- Task 5: Complete
+- Task 6: Complete
+- Task 7: Complete
 
 ### Task 1: Add failing tests for the shared workspace registry and shared-scope workspace sets
 

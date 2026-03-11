@@ -48,6 +48,9 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     PolicyAssignmentUpdateRequest,
     PolicyOverrideResponse,
     PolicyOverrideUpsertRequest,
+    SharedWorkspaceCreateRequest,
+    SharedWorkspaceResponse,
+    SharedWorkspaceUpdateRequest,
     ToolRegistryEntryResponse,
     ToolRegistryModuleResponse,
     ToolRegistrySummaryResponse,
@@ -757,6 +760,22 @@ def _workspace_set_member_row_to_response(
     )
 
 
+def _shared_workspace_row_to_response(row: dict[str, Any]) -> SharedWorkspaceResponse:
+    return SharedWorkspaceResponse(
+        id=int(row.get("id")),
+        workspace_id=str(row.get("workspace_id") or ""),
+        display_name=str(row.get("display_name") or ""),
+        absolute_root=str(row.get("absolute_root") or ""),
+        owner_scope_type=str(row.get("owner_scope_type") or "team"),
+        owner_scope_id=row.get("owner_scope_id"),
+        is_active=bool(row.get("is_active")),
+        created_by=row.get("created_by"),
+        updated_by=row.get("updated_by"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
 def _policy_assignment_workspace_row_to_response(
     row: dict[str, Any],
 ) -> PolicyAssignmentWorkspaceResponse:
@@ -941,6 +960,24 @@ async def _get_visible_workspace_set_object_or_404(
     _resolve_visible_scope_filters(
         principal=principal,
         owner_scope_type=str(row.get("owner_scope_type") or "user"),
+        owner_scope_id=row.get("owner_scope_id"),
+    )
+    return row
+
+
+async def _get_visible_shared_workspace_or_404(
+    *,
+    shared_workspace_id: int,
+    principal: AuthPrincipal,
+    svc: McpHubService,
+) -> dict[str, Any]:
+    """Fetch a shared-workspace entry and ensure the principal can access its owner scope."""
+    row = await svc.get_shared_workspace_entry(shared_workspace_id)
+    if row is None:
+        raise ResourceNotFoundError("mcp_shared_workspace", identifier=str(shared_workspace_id))
+    _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=str(row.get("owner_scope_type") or "team"),
         owner_scope_id=row.get("owner_scope_id"),
     )
     return row
@@ -1440,6 +1477,109 @@ async def delete_workspace_set_member(
             )
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.post("/shared-workspaces", response_model=SharedWorkspaceResponse, status_code=201)
+async def create_shared_workspace(
+    payload: SharedWorkspaceCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> SharedWorkspaceResponse:
+    _require_mutation_permission(principal)
+    if str(payload.owner_scope_type or "").strip().lower() == "user":
+        raise HTTPException(status_code=400, detail="Shared workspaces must use owner_scope_type of: global, org, team")
+    try:
+        row = await svc.create_shared_workspace_entry(
+            workspace_id=payload.workspace_id,
+            display_name=payload.display_name,
+            absolute_root=payload.absolute_root,
+            owner_scope_type=payload.owner_scope_type,
+            owner_scope_id=payload.owner_scope_id,
+            actor_id=principal.user_id,
+            is_active=payload.is_active,
+        )
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _shared_workspace_row_to_response(row)
+
+
+@router.get("/shared-workspaces", response_model=list[SharedWorkspaceResponse])
+async def list_shared_workspaces(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[SharedWorkspaceResponse]:
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        if scope_type == "user":
+            continue
+        rows.extend(
+            await svc.list_shared_workspace_entries(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    return [_shared_workspace_row_to_response(row) for row in rows]
+
+
+@router.put("/shared-workspaces/{shared_workspace_id}", response_model=SharedWorkspaceResponse)
+async def update_shared_workspace(
+    shared_workspace_id: int,
+    payload: SharedWorkspaceUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> SharedWorkspaceResponse:
+    _require_mutation_permission(principal)
+    if "owner_scope_type" in payload.model_fields_set and str(payload.owner_scope_type or "").strip().lower() == "user":
+        raise HTTPException(status_code=400, detail="Shared workspaces must use owner_scope_type of: global, org, team")
+    try:
+        await _get_visible_shared_workspace_or_404(
+            shared_workspace_id=shared_workspace_id,
+            principal=principal,
+            svc=svc,
+        )
+        row = await svc.update_shared_workspace_entry(
+            shared_workspace_id,
+            actor_id=principal.user_id,
+            **payload.model_dump(exclude_unset=True),
+        )
+        if not row:
+            raise ResourceNotFoundError("mcp_shared_workspace", identifier=str(shared_workspace_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _shared_workspace_row_to_response(row)
+
+
+@router.delete("/shared-workspaces/{shared_workspace_id}", response_model=MCPHubDeleteResponse)
+async def delete_shared_workspace(
+    shared_workspace_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_shared_workspace_or_404(
+            shared_workspace_id=shared_workspace_id,
+            principal=principal,
+            svc=svc,
+        )
+        deleted = await svc.delete_shared_workspace_entry(shared_workspace_id, actor_id=principal.user_id)
+        if not deleted:
+            raise ResourceNotFoundError("mcp_shared_workspace", identifier=str(shared_workspace_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return MCPHubDeleteResponse(ok=True)
 
 

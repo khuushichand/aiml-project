@@ -340,6 +340,30 @@ _CREATE_MCP_HUB_TABLES = [
     ),
     (
         """
+        CREATE TABLE IF NOT EXISTS mcp_shared_workspaces (
+            id SERIAL PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            absolute_root TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'team',
+            owner_scope_id INTEGER NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_shared_workspaces_scope_workspace UNIQUE (owner_scope_type, owner_scope_id, workspace_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_shared_workspaces_scope "
+        "ON mcp_shared_workspaces(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
         CREATE TABLE IF NOT EXISTS mcp_workspace_set_object_members (
             workspace_set_object_id INTEGER NOT NULL REFERENCES mcp_workspace_set_objects(id) ON DELETE CASCADE,
             workspace_id TEXT NOT NULL,

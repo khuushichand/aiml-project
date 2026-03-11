@@ -1961,6 +1961,39 @@ def migration_062_add_mcp_workspace_set_objects(conn: sqlite3.Connection) -> Non
     logger.info("Migration 062: Added MCP workspace set object schema")
 
 
+def migration_063_add_mcp_shared_workspaces(conn: sqlite3.Connection) -> None:
+    """Add shared workspace registry entries for shared-scope path governance."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_shared_workspaces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            absolute_root TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'team',
+            owner_scope_id INTEGER,
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_shared_workspaces_scope "
+        "ON mcp_shared_workspaces(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_shared_workspaces_scope_workspace "
+        "ON mcp_shared_workspaces(owner_scope_type, owner_scope_id, workspace_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 063: Added MCP shared workspace registry schema")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
@@ -3428,6 +3461,11 @@ def get_authnz_migrations() -> list[Migration]:
             62,
             "Add MCP workspace set objects",
             migration_062_add_mcp_workspace_set_objects,
+        ),
+        Migration(
+            63,
+            "Add MCP shared workspace registry",
+            migration_063_add_mcp_shared_workspaces,
         ),
     ]
 

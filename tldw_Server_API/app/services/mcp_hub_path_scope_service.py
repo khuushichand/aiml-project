@@ -72,6 +72,7 @@ class McpHubPathScopeService:
             _first_nonempty(policy_document.get("path_scope_enforcement"))
             or _DEFAULT_PATH_SCOPE_ENFORCEMENT
         )
+        workspace_trust_source = _first_nonempty(policy.get("selected_workspace_trust_source")) or "user_local"
 
         result = {
             "enabled": bool(policy.get("enabled")) and path_scope_mode != "none",
@@ -79,6 +80,9 @@ class McpHubPathScopeService:
             "path_scope_enforcement": path_scope_enforcement,
             "session_id": session_id,
             "workspace_id": workspace_id,
+            "selected_workspace_trust_source": workspace_trust_source,
+            "selected_workspace_scope_type": _first_nonempty(policy.get("selected_workspace_scope_type")),
+            "selected_workspace_scope_id": policy.get("selected_workspace_scope_id"),
             "workspace_root": None,
             "cwd": None,
             "reason": None,
@@ -90,6 +94,9 @@ class McpHubPathScopeService:
             session_id=session_id,
             user_id=user_id,
             workspace_id=workspace_id,
+            workspace_trust_source=workspace_trust_source,
+            owner_scope_type=_first_nonempty(policy.get("selected_workspace_scope_type")),
+            owner_scope_id=policy.get("selected_workspace_scope_id"),
         )
         workspace_root = workspace_resolution.get("workspace_root")
         if workspace_resolution.get("workspace_id") and not result["workspace_id"]:

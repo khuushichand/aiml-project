@@ -323,6 +323,59 @@ async def test_repo_can_crud_workspace_set_objects_and_named_assignment_source(t
 
 
 @pytest.mark.asyncio
+async def test_repo_can_crud_shared_workspaces(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    created = await repo.create_shared_workspace_entry(
+        workspace_id="shared-docs",
+        display_name="Shared Docs",
+        absolute_root="/srv/shared/docs",
+        owner_scope_type="team",
+        owner_scope_id=21,
+        actor_id=9,
+        is_active=True,
+    )
+    assert created["workspace_id"] == "shared-docs"
+    assert created["display_name"] == "Shared Docs"
+    assert created["absolute_root"] == "/srv/shared/docs"
+    assert created["owner_scope_type"] == "team"
+    assert int(created["owner_scope_id"]) == 21
+
+    listed = await repo.list_shared_workspace_entries(owner_scope_type="team", owner_scope_id=21)
+    assert len(listed) == 1
+    assert listed[0]["workspace_id"] == "shared-docs"
+
+    updated = await repo.update_shared_workspace_entry(
+        int(created["id"]),
+        display_name="Shared Docs Root",
+        is_active=False,
+        actor_id=10,
+    )
+    assert updated is not None
+    assert updated["display_name"] == "Shared Docs Root"
+    assert updated["is_active"] is False
+
+    deleted = await repo.delete_shared_workspace_entry(int(created["id"]))
+    assert deleted is True
+
+
+@pytest.mark.asyncio
 async def test_repo_can_crud_approval_policy_and_match_active_decision(tmp_path, monkeypatch) -> None:
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables

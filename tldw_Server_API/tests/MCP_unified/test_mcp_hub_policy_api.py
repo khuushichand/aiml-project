@@ -108,6 +108,21 @@ class _FakePolicyService:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         ]
+        self.shared_workspace_entries = [
+            {
+                "id": 71,
+                "workspace_id": "shared-docs",
+                "display_name": "Shared Docs",
+                "absolute_root": "/srv/shared/docs",
+                "owner_scope_type": "team",
+                "owner_scope_id": 21,
+                "is_active": True,
+                "created_by": 7,
+                "updated_by": 7,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
         self.workspace_set_members: dict[int, list[dict]] = {
             51: [
                 {
@@ -549,6 +564,46 @@ class _FakePolicyService:
         self.workspace_set_members[workspace_set_object_id] = next_rows
         return deleted
 
+    async def list_shared_workspace_entries(self, **_kwargs):
+        return list(self.shared_workspace_entries)
+
+    async def get_shared_workspace_entry(self, shared_workspace_id: int):
+        for row in self.shared_workspace_entries:
+            if int(row.get("id") or 0) == int(shared_workspace_id):
+                return dict(row)
+        return None
+
+    async def create_shared_workspace_entry(self, **kwargs):
+        row = {
+            "id": 71,
+            "workspace_id": kwargs["workspace_id"],
+            "display_name": kwargs.get("display_name"),
+            "absolute_root": kwargs["absolute_root"],
+            "owner_scope_type": kwargs["owner_scope_type"],
+            "owner_scope_id": kwargs.get("owner_scope_id"),
+            "is_active": kwargs.get("is_active", True),
+            "created_by": kwargs.get("actor_id"),
+            "updated_by": kwargs.get("actor_id"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.shared_workspace_entries = [row]
+        return row
+
+    async def update_shared_workspace_entry(self, shared_workspace_id: int, **kwargs):
+        if shared_workspace_id != 71:
+            return None
+        row = dict(self.shared_workspace_entries[0])
+        for key in ("workspace_id", "display_name", "absolute_root", "owner_scope_type", "owner_scope_id", "is_active"):
+            if key in kwargs and kwargs.get(key) is not None:
+                row[key] = kwargs[key]
+        row["updated_by"] = kwargs.get("actor_id")
+        self.shared_workspace_entries = [row]
+        return row
+
+    async def delete_shared_workspace_entry(self, shared_workspace_id: int, *, actor_id: int | None):
+        return shared_workspace_id == 71 and actor_id == 7
+
     async def list_policy_assignment_workspaces(self, assignment_id: int):
         return [dict(row) for row in self.assignment_workspaces.get(assignment_id, [])]
 
@@ -958,6 +1013,58 @@ def test_create_workspace_set_object_returns_created_payload() -> None:
     assert payload["name"] == "Primary Workspace Set"
     assert payload["owner_scope_type"] == "user"
     assert payload["owner_scope_id"] == 7
+
+
+def test_create_shared_workspace_entry_returns_created_payload() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/shared-workspaces",
+            json={
+                "workspace_id": "shared-docs",
+                "display_name": "Shared Docs",
+                "absolute_root": "/srv/shared/docs",
+                "owner_scope_type": "team",
+                "owner_scope_id": 21,
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    assert payload["workspace_id"] == "shared-docs"
+    assert payload["owner_scope_type"] == "team"
+    assert payload["owner_scope_id"] == 21
+
+
+def test_create_shared_workspace_entry_rejects_user_scope() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/shared-workspaces",
+            json={
+                "workspace_id": "local-docs",
+                "display_name": "Local Docs",
+                "absolute_root": "/srv/shared/docs",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 400
 
 
 def test_create_policy_assignment_accepts_named_workspace_source_reference() -> None:

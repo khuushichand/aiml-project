@@ -40,6 +40,7 @@ async def test_mcp_hub_tables_exist_after_authnz_migrations_sqlite(tmp_path, mon
     assert "mcp_policy_audit_history" in names
     assert "mcp_workspace_set_objects" in names
     assert "mcp_workspace_set_object_members" in names
+    assert "mcp_shared_workspaces" in names
 
     columns = await pool.fetchall("PRAGMA table_info(mcp_approval_decisions)")
     column_names = {str(row["name"]) for row in columns}
@@ -65,6 +66,14 @@ async def test_mcp_hub_tables_exist_after_authnz_migrations_sqlite(tmp_path, mon
     workspace_member_column_names = {str(row["name"]) for row in workspace_member_columns}
     assert "workspace_set_object_id" in workspace_member_column_names
     assert "workspace_id" in workspace_member_column_names
+
+    shared_workspace_columns = await pool.fetchall("PRAGMA table_info(mcp_shared_workspaces)")
+    shared_workspace_column_names = {str(row["name"]) for row in shared_workspace_columns}
+    assert "workspace_id" in shared_workspace_column_names
+    assert "display_name" in shared_workspace_column_names
+    assert "absolute_root" in shared_workspace_column_names
+    assert "owner_scope_type" in shared_workspace_column_names
+    assert "owner_scope_id" in shared_workspace_column_names
 
     external_columns = await pool.fetchall("PRAGMA table_info(mcp_external_servers)")
     external_column_names = {str(row["name"]) for row in external_columns}
@@ -117,4 +126,16 @@ async def test_mcp_hub_tables_exist_after_authnz_migrations_sqlite(tmp_path, mon
         name == "uq_mcp_workspace_set_members_object_workspace"
         or name.startswith("sqlite_autoindex_mcp_workspace_set_object_members_")
         for name in unique_workspace_member_indexes
+    )
+
+    shared_workspace_indexes = await pool.fetchall("PRAGMA index_list(mcp_shared_workspaces)")
+    unique_shared_workspace_indexes = {
+        str(row["name"])
+        for row in shared_workspace_indexes
+        if int(row["unique"]) == 1
+    }
+    assert any(
+        name == "uq_mcp_shared_workspaces_scope_workspace"
+        or name.startswith("sqlite_autoindex_mcp_shared_workspaces_")
+        for name in unique_shared_workspace_indexes
     )

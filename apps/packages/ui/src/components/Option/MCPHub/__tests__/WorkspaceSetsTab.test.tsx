@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   createWorkspaceSetObject: vi.fn(),
   updateWorkspaceSetObject: vi.fn(),
   deleteWorkspaceSetObject: vi.fn(),
+  listSharedWorkspaces: vi.fn(),
   listWorkspaceSetMembers: vi.fn(),
   addWorkspaceSetMember: vi.fn(),
   deleteWorkspaceSetMember: vi.fn()
@@ -18,6 +19,7 @@ vi.mock("@/services/tldw/mcp-hub", () => ({
   createWorkspaceSetObject: (...args: unknown[]) => mocks.createWorkspaceSetObject(...args),
   updateWorkspaceSetObject: (...args: unknown[]) => mocks.updateWorkspaceSetObject(...args),
   deleteWorkspaceSetObject: (...args: unknown[]) => mocks.deleteWorkspaceSetObject(...args),
+  listSharedWorkspaces: (...args: unknown[]) => mocks.listSharedWorkspaces(...args),
   listWorkspaceSetMembers: (...args: unknown[]) => mocks.listWorkspaceSetMembers(...args),
   addWorkspaceSetMember: (...args: unknown[]) => mocks.addWorkspaceSetMember(...args),
   deleteWorkspaceSetMember: (...args: unknown[]) => mocks.deleteWorkspaceSetMember(...args)
@@ -38,6 +40,7 @@ describe("WorkspaceSetsTab", () => {
         is_active: true
       }
     ])
+    mocks.listSharedWorkspaces.mockResolvedValue([])
     mocks.listWorkspaceSetMembers.mockResolvedValue([
       {
         workspace_set_object_id: 51,
@@ -74,6 +77,7 @@ describe("WorkspaceSetsTab", () => {
       name: "Docs Workspaces",
       description: null,
       owner_scope_type: "user",
+      owner_scope_id: null,
       is_active: true
     })
     expect(mocks.addWorkspaceSetMember).toHaveBeenCalledWith(52, "workspace-docs")

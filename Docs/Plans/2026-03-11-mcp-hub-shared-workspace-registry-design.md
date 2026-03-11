@@ -1,6 +1,6 @@
 # MCP Hub Shared Workspace Registry Design
 
-Status: Approved for planning
+Status: Implemented
 
 ## Goal
 

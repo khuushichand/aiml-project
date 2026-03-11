@@ -6,9 +6,11 @@ import {
   createWorkspaceSetObject,
   deleteWorkspaceSetMember,
   deleteWorkspaceSetObject,
+  listSharedWorkspaces,
   listWorkspaceSetMembers,
   listWorkspaceSetObjects,
   updateWorkspaceSetObject,
+  type McpHubSharedWorkspace,
   type McpHubWorkspaceSetObject,
   type McpHubWorkspaceSetObjectMember
 } from "@/services/tldw/mcp-hub"
@@ -18,6 +20,7 @@ import { parseLineList } from "./policyHelpers"
 export const WorkspaceSetsTab = () => {
   const [objects, setObjects] = useState<McpHubWorkspaceSetObject[]>([])
   const [membersByObjectId, setMembersByObjectId] = useState<Record<number, McpHubWorkspaceSetObjectMember[]>>({})
+  const [sharedEntries, setSharedEntries] = useState<McpHubSharedWorkspace[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
@@ -25,16 +28,23 @@ export const WorkspaceSetsTab = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
+  const [ownerScopeType, setOwnerScopeType] = useState<"user" | "team" | "org" | "global">("user")
+  const [ownerScopeId, setOwnerScopeId] = useState("")
   const [workspaceIdsText, setWorkspaceIdsText] = useState("")
+  const [selectedSharedWorkspaceIds, setSelectedSharedWorkspaceIds] = useState<string[]>([])
   const [isActive, setIsActive] = useState(true)
 
   const loadObjects = async () => {
     setLoading(true)
     setErrorMessage(null)
     try {
-      const rows = await listWorkspaceSetObjects()
+      const [rows, sharedWorkspaceRows] = await Promise.all([
+        listWorkspaceSetObjects(),
+        listSharedWorkspaces()
+      ])
       const nextObjects = Array.isArray(rows) ? rows : []
       setObjects(nextObjects)
+      setSharedEntries(Array.isArray(sharedWorkspaceRows) ? sharedWorkspaceRows : [])
       const memberEntries = await Promise.all(
         nextObjects.map(async (workspaceSet) => [
           workspaceSet.id,
@@ -52,6 +62,7 @@ export const WorkspaceSetsTab = () => {
     } catch {
       setObjects([])
       setMembersByObjectId({})
+      setSharedEntries([])
       setErrorMessage("Failed to load workspace sets.")
     } finally {
       setLoading(false)
@@ -67,7 +78,10 @@ export const WorkspaceSetsTab = () => {
     setEditingId(null)
     setName("")
     setDescription("")
+    setOwnerScopeType("user")
+    setOwnerScopeId("")
     setWorkspaceIdsText("")
+    setSelectedSharedWorkspaceIds([])
     setIsActive(true)
   }
 
@@ -76,14 +90,25 @@ export const WorkspaceSetsTab = () => {
     setEditingId(workspaceSet.id)
     setName(workspaceSet.name)
     setDescription(String(workspaceSet.description || ""))
+    setOwnerScopeType(
+      (workspaceSet.owner_scope_type as "user" | "team" | "org" | "global") || "user"
+    )
+    setOwnerScopeId(workspaceSet.owner_scope_id ? String(workspaceSet.owner_scope_id) : "")
     setWorkspaceIdsText(
       (membersByObjectId[workspaceSet.id] || []).map((member) => member.workspace_id).join("\n")
+    )
+    setSelectedSharedWorkspaceIds(
+      (membersByObjectId[workspaceSet.id] || []).map((member) => member.workspace_id)
     )
     setIsActive(workspaceSet.is_active)
   }
 
   const syncMembers = async (workspaceSetObjectId: number) => {
-    const desiredWorkspaceIds = Array.from(new Set(parseLineList(workspaceIdsText)))
+    const desiredWorkspaceIds = Array.from(
+      new Set(
+        ownerScopeType === "user" ? parseLineList(workspaceIdsText) : selectedSharedWorkspaceIds
+      )
+    )
     const currentWorkspaceIds = (membersByObjectId[workspaceSetObjectId] || []).map(
       (member) => member.workspace_id
     )
@@ -104,7 +129,8 @@ export const WorkspaceSetsTab = () => {
       const payload = {
         name: name.trim(),
         description: description.trim() || null,
-        owner_scope_type: "user" as const,
+        owner_scope_type: ownerScopeType,
+        owner_scope_id: ownerScopeType === "global" ? null : Number(ownerScopeId || 0) || null,
         is_active: isActive
       }
       let workspaceSetObjectId = editingId
@@ -175,20 +201,77 @@ export const WorkspaceSetsTab = () => {
                 placeholder="Reusable trusted workspace membership for research personas"
               />
             </Space>
-            <Space orientation="vertical" style={{ width: "100%" }}>
-              <label htmlFor="mcp-workspace-set-workspace-ids">Workspace ids</label>
-              <textarea
-                id="mcp-workspace-set-workspace-ids"
-                aria-label="Workspace ids"
-                value={workspaceIdsText}
-                onChange={(event) => setWorkspaceIdsText(event.target.value)}
-                rows={4}
-              />
-              <Typography.Text type="secondary">
-                One trusted workspace id per line. Only server-known workspaces for the current user are
-                accepted.
-              </Typography.Text>
+            <Space>
+              <Space orientation="vertical">
+                <label htmlFor="mcp-workspace-set-scope-type">Owner Scope</label>
+                <select
+                  id="mcp-workspace-set-scope-type"
+                  aria-label="Workspace Set Owner Scope"
+                  value={ownerScopeType}
+                  onChange={(event) =>
+                    setOwnerScopeType(event.target.value as "user" | "team" | "org" | "global")
+                  }
+                >
+                  <option value="user">user</option>
+                  <option value="team">team</option>
+                  <option value="org">org</option>
+                  <option value="global">global</option>
+                </select>
+              </Space>
+              {ownerScopeType !== "global" ? (
+                <Space orientation="vertical">
+                  <label htmlFor="mcp-workspace-set-scope-id">Owner Scope Id</label>
+                  <input
+                    id="mcp-workspace-set-scope-id"
+                    aria-label="Workspace Set Owner Scope Id"
+                    value={ownerScopeId}
+                    onChange={(event) => setOwnerScopeId(event.target.value)}
+                    placeholder={ownerScopeType === "user" ? "7" : ownerScopeType === "team" ? "21" : "9"}
+                  />
+                </Space>
+              ) : null}
             </Space>
+            {ownerScopeType === "user" ? (
+              <Space orientation="vertical" style={{ width: "100%" }}>
+                <label htmlFor="mcp-workspace-set-workspace-ids">Workspace ids</label>
+                <textarea
+                  id="mcp-workspace-set-workspace-ids"
+                  aria-label="Workspace ids"
+                  value={workspaceIdsText}
+                  onChange={(event) => setWorkspaceIdsText(event.target.value)}
+                  rows={4}
+                />
+                <Typography.Text type="secondary">
+                  One trusted workspace id per line. Only server-known workspaces for the current user are
+                  accepted.
+                </Typography.Text>
+              </Space>
+            ) : (
+              <Space orientation="vertical" style={{ width: "100%" }}>
+                <label htmlFor="mcp-workspace-set-shared-workspaces">Shared workspace ids</label>
+                <select
+                  id="mcp-workspace-set-shared-workspaces"
+                  aria-label="Shared workspace ids"
+                  multiple
+                  value={selectedSharedWorkspaceIds}
+                  onChange={(event) =>
+                    setSelectedSharedWorkspaceIds(
+                      Array.from(event.currentTarget.selectedOptions).map((option) => option.value)
+                    )
+                  }
+                  size={Math.max(4, Math.min(sharedEntries.length, 8))}
+                >
+                  {sharedEntries.map((entry) => (
+                    <option key={entry.id} value={entry.workspace_id}>
+                      {`${entry.display_name} (${entry.workspace_id})`}
+                    </option>
+                  ))}
+                </select>
+                <Typography.Text type="secondary">
+                  Shared-scope workspace sets select from the admin-managed shared registry.
+                </Typography.Text>
+              </Space>
+            )}
             <label>
               <input
                 type="checkbox"
@@ -218,6 +301,7 @@ export const WorkspaceSetsTab = () => {
               <Space wrap>
                 <Typography.Text strong>{workspaceSet.name}</Typography.Text>
                 <Tag>{workspaceSet.owner_scope_type}</Tag>
+                {workspaceSet.owner_scope_id ? <Tag>{`scope ${workspaceSet.owner_scope_id}`}</Tag> : null}
                 {workspaceSet.is_active ? <Tag color="green">active</Tag> : <Tag>inactive</Tag>}
                 <Button size="small" onClick={() => openForEdit(workspaceSet)}>
                   Edit

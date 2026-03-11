@@ -29,6 +29,7 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
             'mcp_policy_assignments',
             'mcp_policy_audit_history',
             'mcp_policy_overrides',
+            'mcp_shared_workspaces',
             'mcp_workspace_set_objects',
             'mcp_workspace_set_object_members'
           )
@@ -48,6 +49,7 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     assert "mcp_policy_assignments" in names
     assert "mcp_policy_audit_history" in names
     assert "mcp_policy_overrides" in names
+    assert "mcp_shared_workspaces" in names
     assert "mcp_workspace_set_objects" in names
     assert "mcp_workspace_set_object_members" in names
 
@@ -115,6 +117,22 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     workspace_member_column_names = {str(row["column_name"]) for row in workspace_member_column_rows}
     assert "workspace_set_object_id" in workspace_member_column_names
     assert "workspace_id" in workspace_member_column_names
+
+    shared_workspace_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_shared_workspaces'
+          AND column_name IN ('workspace_id', 'display_name', 'absolute_root', 'owner_scope_type', 'owner_scope_id')
+        """
+    )
+    shared_workspace_column_names = {str(row["column_name"]) for row in shared_workspace_column_rows}
+    assert "workspace_id" in shared_workspace_column_names
+    assert "display_name" in shared_workspace_column_names
+    assert "absolute_root" in shared_workspace_column_names
+    assert "owner_scope_type" in shared_workspace_column_names
+    assert "owner_scope_id" in shared_workspace_column_names
 
     external_column_rows = await test_db_pool.fetch(
         """
@@ -208,3 +226,15 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     )
     workspace_member_index_names = {str(row["indexname"]) for row in workspace_member_index_rows}
     assert "uq_mcp_workspace_set_members_object_workspace" in workspace_member_index_names
+
+    shared_workspace_index_rows = await test_db_pool.fetch(
+        """
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND tablename = 'mcp_shared_workspaces'
+          AND indexname = 'uq_mcp_shared_workspaces_scope_workspace'
+        """
+    )
+    shared_workspace_index_names = {str(row["indexname"]) for row in shared_workspace_index_rows}
+    assert "uq_mcp_shared_workspaces_scope_workspace" in shared_workspace_index_names

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -93,6 +94,7 @@ _CREDENTIAL_SLOT_REQUIRED_PERMISSIONS = {
     "write": "grant.credentials.write",
     "admin": "grant.credentials.admin",
 }
+_SHARED_WORKSPACE_SCOPE_TYPES = {"global", "org", "team"}
 
 
 class McpHubService:
@@ -107,7 +109,7 @@ class McpHubService:
     ):
         self.repo = repo
         self.legacy_inventory_service = legacy_inventory_service
-        self.workspace_root_resolver = workspace_root_resolver or McpHubWorkspaceRootResolver()
+        self.workspace_root_resolver = workspace_root_resolver or McpHubWorkspaceRootResolver(repo=repo)
 
     @staticmethod
     def _normalize_credential_slot_privilege_class(value: str) -> str:
@@ -117,6 +119,66 @@ class McpHubService:
                 "Credential slot privilege_class must be one of: read, write, admin"
             )
         return normalized
+
+    @staticmethod
+    def _normalize_shared_workspace_scope(
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+    ) -> tuple[str, int | None]:
+        scope_type = str(owner_scope_type or "").strip().lower()
+        if scope_type not in _SHARED_WORKSPACE_SCOPE_TYPES:
+            raise BadRequestError("Shared workspaces must use owner_scope_type of: global, org, team")
+        if scope_type == "global":
+            return scope_type, None
+        if owner_scope_id is None:
+            raise BadRequestError(f"{scope_type} shared workspaces require owner_scope_id")
+        return scope_type, int(owner_scope_id)
+
+    @staticmethod
+    def _normalize_shared_workspace_root(absolute_root: str) -> str:
+        candidate = Path(str(absolute_root or "").strip()).expanduser()
+        if not str(candidate):
+            raise BadRequestError("absolute_root is required")
+        if not candidate.is_absolute():
+            raise BadRequestError("absolute_root must be an absolute path")
+        return str(candidate.resolve(strict=False))
+
+    @staticmethod
+    def _scope_reference_allowed(
+        *,
+        object_scope_type: str,
+        object_scope_id: int | None,
+        target_scope_type: str,
+        target_scope_id: int | None,
+        resource_name: str,
+    ) -> None:
+        object_rank = _SCOPE_RANK.get(object_scope_type, -1)
+        target_rank = _SCOPE_RANK.get(target_scope_type, -1)
+        if object_rank < 0 or target_rank < 0:
+            raise BadRequestError("Invalid MCP Hub owner scope")
+        if object_rank > target_rank:
+            raise BadRequestError(
+                f"Cannot reference a narrower-scope {resource_name} from a broader target"
+            )
+        if object_rank == target_rank and object_scope_type != "global":
+            if object_scope_id != target_scope_id:
+                raise BadRequestError(
+                    f"Cannot reference a {resource_name} from a different owner scope"
+                )
+
+    @staticmethod
+    def _shared_workspace_scope_compatible(
+        *,
+        target_scope_type: str,
+        target_scope_id: int | None,
+        entry_scope_type: str,
+        entry_scope_id: int | None,
+    ) -> bool:
+        target_scope = str(target_scope_type or "").strip().lower()
+        entry_scope = str(entry_scope_type or "").strip().lower()
+        if entry_scope == "global":
+            return True
+        return entry_scope == target_scope and entry_scope_id == target_scope_id
 
     async def validate_path_scope_object_reference(
         self,
@@ -133,18 +195,13 @@ class McpHubService:
         if not bool(row.get("is_active", True)):
             raise BadRequestError("Referenced path scope object is inactive")
 
-        object_scope_type = str(row.get("owner_scope_type") or "global")
-        object_scope_id = row.get("owner_scope_id")
-        target_scope = str(target_scope_type or "global")
-        object_rank = _SCOPE_RANK.get(object_scope_type, -1)
-        target_rank = _SCOPE_RANK.get(target_scope, -1)
-        if object_rank < 0 or target_rank < 0:
-            raise BadRequestError("Invalid MCP Hub owner scope")
-        if object_rank > target_rank:
-            raise BadRequestError("Cannot reference a narrower-scope path scope object from a broader target")
-        if object_rank == target_rank and object_scope_type != "global":
-            if object_scope_id != target_scope_id:
-                raise BadRequestError("Cannot reference a path scope object from a different owner scope")
+        self._scope_reference_allowed(
+            object_scope_type=str(row.get("owner_scope_type") or "global"),
+            object_scope_id=row.get("owner_scope_id"),
+            target_scope_type=str(target_scope_type or "global"),
+            target_scope_id=target_scope_id,
+            resource_name="path scope object",
+        )
         return row
 
     async def validate_workspace_set_object_reference(
@@ -161,12 +218,13 @@ class McpHubService:
             raise ResourceNotFoundError("mcp_workspace_set_object", identifier=str(workspace_set_object_id))
         if not bool(row.get("is_active", True)):
             raise BadRequestError("Referenced workspace set object is inactive")
-        if str(row.get("owner_scope_type") or "") != "user":
-            raise BadRequestError("Workspace set objects must be user scoped")
-        if str(target_scope_type or "") != "user":
-            raise BadRequestError("Only user-scoped assignments may reference workspace set objects")
-        if row.get("owner_scope_id") != target_scope_id:
-            raise BadRequestError("Cannot reference a workspace set object from a different owner scope")
+        self._scope_reference_allowed(
+            object_scope_type=str(row.get("owner_scope_type") or "global"),
+            object_scope_id=row.get("owner_scope_id"),
+            target_scope_type=str(target_scope_type or "global"),
+            target_scope_id=target_scope_id,
+            resource_name="workspace set object",
+        )
         return row
 
     async def _validate_workspace_id_for_user(self, *, owner_scope_id: int | None, workspace_id: str) -> None:
@@ -181,6 +239,52 @@ class McpHubService:
             raise BadRequestError(
                 f"Workspace id '{workspace_id}' is not a trusted workspace for user {owner_scope_id}"
             )
+
+    async def _validate_shared_workspace_id(
+        self,
+        *,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        workspace_id: str,
+    ) -> None:
+        entries = await self.repo.list_shared_workspace_entries(workspace_id=str(workspace_id or "").strip())
+        compatible = [
+            row
+            for row in entries
+            if bool(row.get("is_active", True))
+            and self._shared_workspace_scope_compatible(
+                target_scope_type=owner_scope_type,
+                target_scope_id=owner_scope_id,
+                entry_scope_type=str(row.get("owner_scope_type") or "global"),
+                entry_scope_id=row.get("owner_scope_id"),
+            )
+        ]
+        if not compatible:
+            raise BadRequestError(
+                f"Workspace id '{workspace_id}' is not a trusted shared workspace for scope "
+                f"{owner_scope_type}:{owner_scope_id}"
+            )
+
+    async def _shared_workspace_is_referenced(self, row: dict[str, Any]) -> bool:
+        workspace_id = str(row.get("workspace_id") or "").strip()
+        if not workspace_id:
+            return False
+        workspace_sets = await self.repo.list_workspace_set_objects()
+        for workspace_set in workspace_sets:
+            scope_type = str(workspace_set.get("owner_scope_type") or "").strip().lower()
+            if scope_type == "user":
+                continue
+            if not self._shared_workspace_scope_compatible(
+                target_scope_type=scope_type,
+                target_scope_id=workspace_set.get("owner_scope_id"),
+                entry_scope_type=str(row.get("owner_scope_type") or "global"),
+                entry_scope_id=row.get("owner_scope_id"),
+            ):
+                continue
+            members = await self.repo.list_workspace_set_members(int(workspace_set.get("id") or 0))
+            if any(str(member.get("workspace_id") or "").strip() == workspace_id for member in members):
+                return True
+        return False
 
     @classmethod
     def _credential_slot_required_permission(cls, privilege_class: str) -> str:
@@ -527,13 +631,16 @@ class McpHubService:
         description: str | None = None,
         is_active: bool = True,
     ) -> dict[str, Any]:
-        if str(owner_scope_type or "") != "user":
-            raise BadRequestError("Workspace set objects must use owner_scope_type='user'")
-        if owner_scope_id is None:
+        scope_type = str(owner_scope_type or "").strip().lower()
+        if scope_type == "user" and owner_scope_id is None:
             raise BadRequestError("Workspace set objects require owner_scope_id")
+        if scope_type in {"org", "team"} and owner_scope_id is None:
+            raise BadRequestError(f"{scope_type} workspace set objects require owner_scope_id")
+        if scope_type not in _SCOPE_RANK:
+            raise BadRequestError("Invalid workspace set object owner_scope_type")
         row = await self.repo.create_workspace_set_object(
             name=name,
-            owner_scope_type=owner_scope_type,
+            owner_scope_type=scope_type,
             owner_scope_id=owner_scope_id,
             actor_id=actor_id,
             description=description,
@@ -571,8 +678,17 @@ class McpHubService:
         actor_id: int | None = None,
         **update_fields: Any,
     ) -> dict[str, Any] | None:
-        if "owner_scope_type" in update_fields and str(update_fields.get("owner_scope_type") or "") != "user":
-            raise BadRequestError("Workspace set objects must use owner_scope_type='user'")
+        next_scope_type = update_fields.get("owner_scope_type")
+        next_scope_id = update_fields.get("owner_scope_id")
+        if next_scope_type is not None:
+            normalized_scope = str(next_scope_type or "").strip().lower()
+            if normalized_scope not in _SCOPE_RANK:
+                raise BadRequestError("Invalid workspace set object owner_scope_type")
+            if normalized_scope == "user" and next_scope_id is None:
+                raise BadRequestError("Workspace set objects require owner_scope_id")
+            if normalized_scope in {"org", "team"} and next_scope_id is None:
+                raise BadRequestError(f"{normalized_scope} workspace set objects require owner_scope_id")
+            update_fields["owner_scope_type"] = normalized_scope
         row = await self.repo.update_workspace_set_object(
             workspace_set_object_id,
             actor_id=actor_id,
@@ -622,10 +738,19 @@ class McpHubService:
         owner = await self.repo.get_workspace_set_object(workspace_set_object_id)
         if not owner:
             raise ResourceNotFoundError("mcp_workspace_set_object", identifier=str(workspace_set_object_id))
-        await self._validate_workspace_id_for_user(
-            owner_scope_id=owner.get("owner_scope_id"),
-            workspace_id=str(workspace_id or "").strip(),
-        )
+        owner_scope_type = str(owner.get("owner_scope_type") or "user")
+        owner_scope_id = owner.get("owner_scope_id")
+        if owner_scope_type == "user":
+            await self._validate_workspace_id_for_user(
+                owner_scope_id=owner_scope_id,
+                workspace_id=str(workspace_id or "").strip(),
+            )
+        else:
+            await self._validate_shared_workspace_id(
+                owner_scope_type=owner_scope_type,
+                owner_scope_id=owner_scope_id,
+                workspace_id=str(workspace_id or "").strip(),
+            )
         row = await self.repo.add_workspace_set_member(
             workspace_set_object_id,
             workspace_id=workspace_id,
@@ -658,6 +783,117 @@ class McpHubService:
                     resource_type="mcp_workspace_set_object",
                     resource_id=str(workspace_set_object_id),
                     metadata={"workspace_id": workspace_id},
+                )
+            )
+        return deleted
+
+    async def create_shared_workspace_entry(
+        self,
+        *,
+        workspace_id: str,
+        display_name: str,
+        absolute_root: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        actor_id: int | None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        scope_type, scope_id = self._normalize_shared_workspace_scope(owner_scope_type, owner_scope_id)
+        row = await self.repo.create_shared_workspace_entry(
+            workspace_id=str(workspace_id or "").strip(),
+            display_name=str(display_name or "").strip(),
+            absolute_root=self._normalize_shared_workspace_root(absolute_root),
+            owner_scope_type=scope_type,
+            owner_scope_id=scope_id,
+            actor_id=actor_id,
+            is_active=is_active,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.shared_workspace.create",
+                actor_id=actor_id,
+                resource_type="mcp_shared_workspace",
+                resource_id=str(row.get("id") or ""),
+                metadata={"workspace_id": row.get("workspace_id"), "owner_scope_type": row.get("owner_scope_type")},
+            )
+        )
+        return row
+
+    async def list_shared_workspace_entries(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+        workspace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self.repo.list_shared_workspace_entries(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            workspace_id=workspace_id,
+        )
+
+    async def get_shared_workspace_entry(self, shared_workspace_id: int) -> dict[str, Any] | None:
+        return await self.repo.get_shared_workspace_entry(shared_workspace_id)
+
+    async def update_shared_workspace_entry(
+        self,
+        shared_workspace_id: int,
+        *,
+        actor_id: int | None = None,
+        **update_fields: Any,
+    ) -> dict[str, Any] | None:
+        existing = await self.repo.get_shared_workspace_entry(shared_workspace_id)
+        if not existing:
+            return None
+        scope_type = update_fields.get("owner_scope_type", existing.get("owner_scope_type"))
+        scope_id = update_fields.get("owner_scope_id", existing.get("owner_scope_id"))
+        normalized_scope_type, normalized_scope_id = self._normalize_shared_workspace_scope(
+            str(scope_type or ""),
+            scope_id,
+        )
+        update_fields["owner_scope_type"] = normalized_scope_type
+        update_fields["owner_scope_id"] = normalized_scope_id
+        if "absolute_root" in update_fields and update_fields.get("absolute_root") is not None:
+            update_fields["absolute_root"] = self._normalize_shared_workspace_root(
+                str(update_fields.get("absolute_root") or "")
+            )
+        referenced = await self._shared_workspace_is_referenced(existing)
+        if referenced:
+            if "workspace_id" in update_fields and str(update_fields.get("workspace_id") or "").strip() != str(existing.get("workspace_id") or "").strip():
+                raise BadRequestError("Cannot change workspace_id while the shared workspace is still referenced")
+            if normalized_scope_type != str(existing.get("owner_scope_type") or "") or normalized_scope_id != existing.get("owner_scope_id"):
+                raise BadRequestError("Cannot change shared workspace scope while it is still referenced")
+        row = await self.repo.update_shared_workspace_entry(
+            shared_workspace_id,
+            actor_id=actor_id,
+            **update_fields,
+        )
+        if row:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.shared_workspace.update",
+                    actor_id=actor_id,
+                    resource_type="mcp_shared_workspace",
+                    resource_id=str(row.get("id") or shared_workspace_id),
+                    metadata={"workspace_id": row.get("workspace_id"), "owner_scope_type": row.get("owner_scope_type")},
+                )
+            )
+        return row
+
+    async def delete_shared_workspace_entry(self, shared_workspace_id: int, *, actor_id: int | None) -> bool:
+        row = await self.repo.get_shared_workspace_entry(shared_workspace_id)
+        if not row:
+            return False
+        if await self._shared_workspace_is_referenced(row):
+            raise BadRequestError("Cannot delete a shared workspace while it is still referenced")
+        deleted = await self.repo.delete_shared_workspace_entry(shared_workspace_id)
+        if deleted:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.shared_workspace.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_shared_workspace",
+                    resource_id=str(shared_workspace_id),
                 )
             )
         return deleted

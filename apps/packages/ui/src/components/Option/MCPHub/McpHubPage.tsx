@@ -5,6 +5,7 @@ import { ApprovalPoliciesTab } from "./ApprovalPoliciesTab"
 import { PathScopesTab } from "./PathScopesTab"
 import { PermissionProfilesTab } from "./PermissionProfilesTab"
 import { PolicyAssignmentsTab } from "./PolicyAssignmentsTab"
+import { SharedWorkspacesTab } from "./SharedWorkspacesTab"
 import { ToolCatalogsTab } from "./ToolCatalogsTab"
 import { ExternalServersTab } from "./ExternalServersTab"
 import { WorkspaceSetsTab } from "./WorkspaceSetsTab"
@@ -40,6 +41,11 @@ export const McpHubPage = () => {
             key: "workspace-sets",
             label: "Workspace Sets",
             children: <WorkspaceSetsTab />
+          },
+          {
+            key: "shared-workspaces",
+            label: "Shared Workspaces",
+            children: <SharedWorkspacesTab />
           },
           {
             key: "approvals",
