@@ -158,35 +158,401 @@ and this project adheres to Some kind of Versioning
 
 - Docker runner integration test (`test_docker_runner_integration.py`) for full container lifecycle validation (session → upload → run → artifacts → cleanup), skipped without Docker daemon.
 
-## [0.1.26] 2026-03-11
-
-### Added
-
-- Repo2Txt shipped across shared UI, web, and extension surfaces with GitHub and local sources, file-tree filtering, preview/copy/download flows, and better launcher discoverability. (PR #790)
-- Safety and admin surfaces expanded with the Family Guardrails Wizard, per-user moderation phrase lists, and router analytics usage tabs plus aggregate APIs for operators. (PRs #804, #810, #797)
-- Reading and research workflows grew with pinboard-style Collections enhancements, switchable unified RAG profiles, and multi-source quiz generation. (PRs #805, #796, #807)
-- MCP Hub management shipped across AuthNZ storage, API, WebUI, and extension settings for ACP profiles and external server lifecycle management. (PR #806)
-- Workflow capabilities expanded with kanban orchestration primitives, strict structured-output generation, structured QA chat workflows, unified queued-request handling, and connector-backed external file sync orchestration. (PRs #809, #818, #820, #823, #821)
-
 ### Changed
 
-- Audio and ingestion experiences were redesigned: the Speech Playground gained richer TTS and STT comparison workflows, while Quick Ingest became a 5-step wizard with live progress, retry/error classification, and minimize-to-background controls. (PRs #816, #827)
-- Knowledge and watchlists moved to more progressive, task-oriented layouts with clearer defaults, navigation, empty states, and reliability feedback. (PRs #812, #813)
-- Prompt and writing workflows were reorganized with a fuller prompt workspace, stronger filtering/discoverability, and a restructured Writing Playground inspector. (PRs #817, #815)
-- Notes management was overhauled around decomposed editor/sidebar panes, progressive disclosure, and clearer save-status handling. (PR #826)
-- Media compatibility cleanup reduced legacy shim behavior and made deprecation signaling more explicit across ingestion flows. (PR #794)
+- Updated misleading docstrings in `DockerRunner`, `SandboxService`, `LinuxLimaEnforcer`, and `MacOSLimaEnforcer` to accurately reflect implemented functionality.
 
 ### Fixed
 
-- Platform reliability hardened across monitoring, benchmark recovery, shim cleanup, and core runtime paths, including sandbox admission/state handling, monitoring range interactions, and broader cleanup bundles that had previously been scattered across draft entries. (PRs #792, #793, #795, #798)
-- Chat reliability issues were addressed for tool routing parity, OpenRouter freeze cases, selected-chat failure states, and conflict/retry behavior. (PRs #811, #814)
-- ACP and admin surfaces received remediation for control auth, persistence, forks, login/auth proxy paths, privileged actions, and users views. (PRs #825, #829)
-- Repo2Txt was hardened for local source selection, GitHub provider permissions, worker recovery, and deterministic compile behavior. (PR #790)
+- Fixed `PostgresStore._coerce_created_at()` `AttributeError`: moved method from `SQLiteStore` to `SandboxStore` base class so both SQLite and Postgres backends inherit it. Admin list/count endpoints with date filters on Postgres would crash without this fix.
+- Fixed event loop closure causing cascading "Event loop is closed" test failures in `RunStreamHub._schedule_dispatch()`: now clears stale `self._loop` reference and falls through to the threading.Timer fallback. Added `reset_loop()` method for test fixture cleanup.
+- Fixed config cache leaking between sandbox tests: added `_sandbox_clear_config_cache` and `_sandbox_reset_stream_hub` autouse fixtures to sandbox `conftest.py` so environment variable changes and stale event loop references don't bleed across tests.
+- Added debug logging to 8 silent `except ... pass` handlers in `network_policy.py` (`expand_allowlist_to_targets`, `pin_dns_map`, `apply_egress_rules_atomic`, `delete_rules_by_label`) so iptables/DNS failures are observable instead of silently swallowed.
+
+## [0.1.30] 2026-03-06
+- **Document Workspace UX/UI Audit** — Comprehensive improvements across accessibility, keyboard navigation, mobile responsiveness, and user control, based on Nielsen's 10 Usability Heuristics:
+  - **Accessibility (WCAG)**: `aria-label` on all 5 TextSelectionPopover buttons (Copy, Highlight, Translate, Ask AI, Listen), `group-focus-within:opacity-100` on annotation edit/delete actions for keyboard discoverability, `aria-label` on chat textarea
+  - **Keyboard shortcuts**: Cmd+G (go to page), Cmd+[/] (toggle panels), Cmd+/ (focus chat), Cmd+=/- /0 (zoom in/out/reset), F (fullscreen toggle), Escape to dismiss text selection popover
+  - **Mobile bottom navigation bar**: Fixed 48px bottom nav with Sidebar/Document/Chat icons replacing Ant Design top tabs, proper `role="tablist"` and `aria-selected` semantics
+  - **Mobile text selection bottom sheet**: Touch-friendly slide-up sheet with backdrop, safe area inset padding, drag handle, and text preview replacing floating popover on mobile
+  - **Ask AI prompt templates**: Dropdown submenu with Explain, Summarize, Define terms, and Simplify options replacing single hardcoded prompt
+  - **Drag-and-drop document upload**: `onDragOver`/`onDragLeave`/`onDrop` handlers with visual feedback and client-side file type validation (PDF/EPUB only)
+  - **Recent documents in picker**: Last 5 opened documents shown above search results, persisted in localStorage
+  - **Per-tab reading progress bar**: Thin progress indicator under each document tab driven by page/percentage
+  - **Onboarding feature cards**: 4 dismissible cards (Highlight, Chat, Insights, Quiz) in empty viewer state, localStorage-gated
+  - **Chat clear confirmation**: Popconfirm dialog before clearing chat history
+  - **Sync recovery animation**: Pulse animation on sync indicator for 2 seconds after error-to-synced recovery
+  - **Quiz preference persistence**: Question count, type, and difficulty saved to localStorage across sessions
+  - **Expanded server-required guidance**: Setup instructions in server-offline state
+  - **EPUB chapter title in toolbar**: Shows current chapter name on left side of viewer toolbar
+  - **Tablet drawer decoupling**: Toggle buttons always visible on tablet; drawer state independent from desktop pane state
+  - **Responsive drawer width**: `Math.min(360, window.innerWidth * 0.85)` instead of fixed pixel width
+  - **Text2SQL security hardening**:
+    - Added dedicated `sql.read` RBAC permission constant and seeded baseline grants for default `user`/`admin` roles
+    - Added connector ACL enforcement for `POST /api/v1/text2sql/query` with explicit `403 unauthorized_target` response on denied targets
+    - Added security regression tests for RBAC and ACL behavior (`test_text2sql_rbac_and_acl.py`)
+    - Updated API docs for standalone Text2SQL and unified RAG SQL source usage (`sources=["sql"]`, `sql_target_id`)
+
+### Changed
+
+- Default sidebar tab changed from "toc" to "insights" for better first-impression content
+- Tab label font size increased from 10px to 11px for readability
+- "Fit width" button renamed to "Reset zoom" with `RotateCcw` icon for accuracy
+- Keyboard shortcuts modal updated to list only implemented shortcuts
+
+### Fixed
+
+- **Annotation undo ID preservation**: Undo now restores the original annotation object with its server-synced ID via direct `setState`, instead of calling `addAnnotation()` which generated a new ID causing server/client state divergence and duplicates
+- **Removed Cmd+W shortcut**: Conflicted with browser tab close; removed from both handler and shortcuts modal
+- **Stable DOM selectors**: Fullscreen toggle and go-to-page shortcuts now use `data-testid` attributes instead of fragile CSS class substring matching and Ant Design internal class selectors
+- **Quiz preferences render performance**: Moved `localStorage` read + `JSON.parse` into `useState` initializer to avoid re-parsing on every render
+
+
+### Added
+
+- Watchlists UX redesign — progressive disclosure layout (PR #813):
+  - Restructured watchlists from 8 horizontal tabs to 3 primary tabs (Feeds, Articles, Reports) with inline expandable secondary views (Monitors, Activity, Templates).
+  - Added persistent collapsible health bar replacing the Overview tab, with 30s auto-refresh, health cards, and attention badges.
+  - Added settings drawer (gear icon) replacing the Settings tab.
+  - Added Cmd/Ctrl+K command palette with categorized commands (navigate, create, action) and fuzzy search.
+  - Added keyboard shortcuts: 1/2/3 (tab switch), N (new entity), R (refresh), / (focus search), ? (help panel).
+  - Added rich per-entity empty states with contextual descriptions and CTAs for feeds, monitors, activity, articles, reports, and templates.
+  - Added "Show all views" toggle to restore original 8-tab layout for power users (persisted to localStorage).
+  - Added mobile responsive layout: Select dropdown for tabs at <768px, full-width settings drawer on mobile.
+  - Added run failure "common causes" section in RunDetailDrawer, pattern-matched by failure kind (auth, rate limit, timeout, network, TLS).
+  - Added retry button to failed run notification toasts.
+  - Added deep-link backward compatibility: old URL params (`?tab=sources`, `?tab=items`) map to new equivalents (`?tab=feeds`, `?tab=articles`).
+  - Added 89 new i18n locale keys for all new UI elements.
+
+### Changed
+
+- Renamed watchlist tabs in UI to user-task language: Sources→Feeds, Jobs→Monitors, Runs→Activity, Items→Articles, Outputs→Reports.
+- Updated first-run copy contract test to match "monitor health" terminology (was "run health").
+
+### Fixed
+
+- Extracted `InlineSecondarySection` component outside render function to prevent unnecessary React remounts.
+- Stabilized `useWatchlistsCommands` actions object with `useMemo` to prevent command list recomputation on every render.
+- Removed redundant `useEffect` for `writeSecondaryExpanded` (already persisted in toggle callback).
+- Knowledge QA "Adaptive Progressive" UX redesign (Stages 1 & 2):
+  - New `useLayoutMode` hook with Simple/Research mode toggle, localStorage persistence, and auto-promotion toast after 3+ Q&A turns.
+  - New `CompactToolbar` component: condensed pill bar (Sources, Preset, Web toggle, Settings gear) for Simple mode.
+  - New `InlineRecentSessions` component: horizontal scrollable row of recent search session cards for returning users in Simple mode.
+  - New `KnowledgeReadyState` empty state with "Ask Your Library" heading, collapsible "How it works" guide, suggested prompts, and source/session action buttons.
+  - Added "Open workspace" / "Simplify view" toggle button (bottom-right corner) for manual mode switching.
+  - Added "Scope changed" badge in compact toolbar when search context diverges from last run.
+- Added 50 new tests across 3 new test files:
+  - `useLayoutMode.test.ts` (25 tests): mode defaults, persistence, auto-promotion, dismiss persistence.
+  - `CompactToolbar.test.tsx` (12 tests): source summaries, preset labels, web toggle, callbacks, scope badge.
+  - `InlineRecentSessions.test.tsx` (13 tests): rendering, max-5 limit, click-to-restore, relative time formatting.
+
+### Changed
+
+- Renamed "Knowledge QA" heading to "Ask Your Library" with updated subtitle across empty state and tests.
+- Redesigned web search toggle from ambiguous text to visually distinct pill with globe icon, filled/outline states, and proper `aria-label`/`aria-pressed` attributes.
+- `KnowledgeQALayout` now conditionally renders based on layout mode:
+  - Simple mode: single centered column, `CompactToolbar`, no history sidebar.
+  - Research mode: three-column layout with `HistoryPane`, full `KnowledgeContextBar`, `EvidenceRail`.
+  - Mobile always forces Simple mode layout; promotion toast hidden on mobile.
+- `KnowledgeReadyState` guide section auto-collapses for returning users (via `useEffect` on async history load).
+- Evidence rail auto-open now respects user intent via `useRef` tracking — won't reopen after manual close.
+- Settings panel and evidence rail are now mutually exclusive (opening one closes the other).
+- Refactored `Knowledge/index.tsx` settings page status display from nested ternaries to a `STATUS_COPY` map.
+- Updated golden layout tests for new conditional rendering paths and component structure.
+
+### Fixed
+
+- Fixed blank `/settings/knowledge` page (Critical, H1 violation) — added connection-aware error states.
+- Fixed `contextChangedSinceLastRun` always showing "Scope changed" badge due to broken `normalizeIdentifierSet` comparisons against empty string.
+- Removed dead `normalizeIdentifierSet` function and stale `include_media_ids`/`include_note_ids` from `useMemo` dependency array.
+- Fixed `InlineRecentSessions` crash on invalid timestamp strings (added `NaN` guard in `formatRelativeTime`).
+- Fixed `CompactToolbar` source summary using magic number — extracted `ALL_SOURCES_THRESHOLD` constant.
+- Fixed evidence rail auto-open loop where `useEffect` would immediately reopen rail after user closed it.
+- Voice-streaming interruption + overlap protocol additions:
+  - Added additive client `interrupt` and server `interrupted` frame handling for `/api/v1/audio/chat/stream`.
+  - Added active turn identifiers (`turn_id`) for interruption acknowledgements.
+  - Added `interrupt` recovery flow for `/api/v1/audio/stream/tts/realtime` that rotates to a fresh realtime session without closing the socket.
+- Added streaming phrase chunker utility:
+  - `tldw_Server_API/app/core/Streaming/phrase_chunker.py`
+- Added backend regression coverage for voice overlap/cancellation:
+  - `tldw_Server_API/tests/Audio/test_ws_audio_chat_stream.py` now covers idle interrupt safety, overlap ordering (`tts_start`/audio before final `llm_message`), inflight cancellation, and stale-audio suppression after interrupt.
+  - `tldw_Server_API/tests/Audio/test_ws_tts_realtime_endpoint.py` now covers realtime TTS interrupt handling and post-interrupt continuation.
+- Added frontend regression coverage for barge-in interruption behavior:
+  - `apps/packages/ui/src/hooks/__tests__/useVoiceChatStream.interrupt.test.tsx`
+
+### Changed
+
+- `/api/v1/audio/chat/stream` now supports overlapped LLM->TTS streaming by incrementally chunking LLM deltas into phrase commits against realtime TTS sessions.
+- `/api/v1/audio/chat/stream` turn finalization now runs as cancellable per-turn tasks, enabling barge-in interruption and stale-output guards.
+- `/api/v1/audio/stream/tts/realtime` now supports in-session `interrupt` by finishing/cancelling the active synthesis window, reopening a session with the same config, and continuing on the same WebSocket.
+- `apps/packages/ui/src/hooks/useVoiceChatStream.tsx` now sends `interrupt` on barge-in while speaking and transitions back to `listening` on server `interrupted` frames.
+- Updated audio protocol/docs to document new frames and overlap behavior:
+  - `Docs/API/Audio_Chat.md`
+  - `Docs/Audio_Streaming_Protocol.md`
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed stale/cancelled turn output leakage by dropping outdated audio/LLM emissions after interruption.
+- Fixed realtime TTS interruption flow to allow continued text commits without requiring WebSocket reconnect.
+- Fixed voice websocket test stability in local environments by stubbing heavyweight STT dependency imports in targeted WS test modules.
+
+## [0.1.29] 2026-03-05
+
+### Added
+
+- Moderation per-user phrase rule support across schema, runtime, and UX:
+  - Added typed per-user override `rules` model (`id`, `pattern`, `is_regex`, `action`, `phase`) to moderation schemas.
+  - Added runtime compilation of per-user rules with literal/regex handling and safety checks, then merged compiled rules into effective moderation policy resolution.
+  - Added non-advanced Moderation Playground User-scope quick composer for phrase-list management:
+    - `Banlist` entries map to `block`
+    - `Notify list` entries map to `warn`
+    - Optional regex toggle, per-item removal, and list views for `Banned phrases` and `Notify phrases`.
+- Added moderation API and service test coverage for per-user rules:
+  - Added contract coverage for `GET/PUT /api/v1/moderation/users/{user_id}` with `rules` payloads.
+  - Added unit coverage for per-user rule compilation, dangerous-regex rejection, effective-policy merge behavior, and phase-aware action behavior.
+- Added frontend service contract and component coverage for phrase-list workflows:
+  - Added moderation service contract tests to verify rules roundtrip in user override requests/responses.
+  - Added Moderation Playground quick-list tests for rendering, add/remove flows, duplicate and invalid-regex validation, and save-payload assertions.
+
+### Changed
+
+- Enhanced moderation policy snapshots to include per-rule `phase` metadata alongside existing pattern/action/replacement/category fields.
+- Updated Moderation Playground override payload normalization/comparison so `rules` participate in dirty-state detection and save/reset lifecycle.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed user override loading/reset normalization so persisted `rules` are preserved in draft state and correctly re-applied.
+- Fixed Moderation Playground User ID input suffix rendering to remain structurally stable, preventing focus-loss behavior from dynamic suffix mount/unmount.
+
+## [0.1.28] 2026-03-04
+
+### Added
+
+- Quiz critical-path E2E coverage is now split into focused specs with shared strict helpers:
+  - `apps/extension/tests/e2e/quiz-critical-edit.spec.ts`
+  - `apps/extension/tests/e2e/quiz-critical-create.spec.ts`
+  - `apps/extension/tests/e2e/quiz-critical-take-results.spec.ts`
+  - `apps/extension/tests/e2e/utils/quiz-critical-helpers.ts`
+- Added backend regression coverage to ensure the attempts listing route is not shadowed by dynamic quiz routes:
+  - `tldw_Server_API/tests/Quizzes/test_quizzes_endpoint_integration.py`
+
+### Changed
+
+- Hardened quiz endpoint routing by typing dynamic route segments (`{...:int}`) for quiz/question/attempt IDs in:
+  - `tldw_Server_API/app/api/v1/endpoints/quizzes.py`
+- Upgraded strict quiz E2E critical flows to hard assertions for:
+  - edit metadata save + persisted verification (UI + API),
+  - manual create flow persistence verification,
+  - take/submit/results flow with explicit attempts API assertion.
+- MCP Hub management end-to-end surfaces across AuthNZ storage, API, and WebUI/extension:
+  - Added AuthNZ migrations for MCP Hub ACP profile and external server tables in SQLite and PostgreSQL bootstrap paths.
+  - Added `McpHubRepo` and `McpHubService` for ACP profile CRUD and external server lifecycle handling, including encrypted secret storage and masked secret status responses.
+  - Added MCP Hub management API contracts and routes under `/api/v1/mcp/hub` for ACP profiles, external servers, and secret set operations.
+  - Added WebUI + extension MCP Hub page wiring and tabs (`AcpProfilesTab`, `ExternalServersTab`, `ToolCatalogsTab`) with shared route-registry coverage (`/mcp-hub`, `/settings/mcp-hub`).
+  - Added frontend MCP Hub API client module/tests and route parity tests for web/extension settings exposure.
+  - Added docs for architecture and usage:
+    - `Docs/MCP/mcp_hub_management.md`
+    - `Docs/MCP/README.md`
+- Added backend and frontend regression coverage for MCP Hub migrations, repo/service behavior, API authorization boundaries, and tab interactions/error states.
+
+### Changed
+
+- Refined MCP Hub external server update flow to use a dedicated repository-level `update_external_server` path (direct `UPDATE` pattern) for consistency with ACP profile updates and clearer audit semantics.
+- Extended settings/navigation indexing so MCP Hub management is discoverable in both settings and workspace-oriented routes.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed route matching ambiguity where `/api/v1/quizzes/attempts` could be interpreted as `/{quiz_id}`, causing attempts list failures.
+- Fixed strict take/results E2E behavior to fail fast with diagnostic screenshot when the started-quiz question list does not render.
+- Fixed unsaved-create tab navigation handling to accept only the expected unsaved-changes prompt copy.
+- Fixed MCP Hub list endpoint access-control gaps by constraining ACP profile and external server visibility to principal-allowed scopes (`global`, own `user`, member `org/team`) and returning `403` for forbidden explicit filters.
+- Fixed PostgreSQL timestamp persistence in MCP Hub repo by preserving timezone-aware UTC datetimes for `TIMESTAMPTZ` writes.
+- Fixed silent UI failures in MCP Hub tabs by surfacing user-visible Ant Design error alerts for load/create/save-secret failures.
+- Fixed MCP Hub security hardening follow-ups flagged during review and revalidated with targeted tests and Bandit checks for touched backend paths.
+
+## [0.1.27] 2026-03-02
+
+### Added
+
+- Family Guardrails Wizard rollout across WebUI + extension settings surfaces:
+  - Added dedicated settings route `/settings/family-guardrails` with capability-aware gating and navigation metadata.
+  - Added WebUI page wrapper at `apps/tldw-frontend/pages/settings/family-guardrails.tsx`.
+  - Added extension route module and registry wiring parity:
+    - `apps/tldw-frontend/extension/routes/option-family-guardrails-wizard.tsx`
+    - `apps/tldw-frontend/extension/routes/route-registry.tsx`
+- Family wizard backend contract and persistence surface:
+  - Added family wizard request/response schemas in `tldw_Server_API/app/api/v1/schemas/family_wizard_schemas.py`.
+  - Added family wizard draft/snapshot endpoints in `tldw_Server_API/app/api/v1/endpoints/family_wizard.py`.
+  - Added guardian DB draft/member/relationship/plan persistence support in `tldw_Server_API/app/core/DB_Management/Guardian_DB.py`.
+- Guardian moderation orchestration improvements:
+  - Added queued family plan materialization on guardian acceptance.
+  - Added strictest-wins shared-dependent policy conflict resolution path.
+- Coverage and docs for the new workflow:
+  - Added comprehensive Family Guardrails wizard unit/integration coverage across UI services, route parity, DB, schema, endpoint, and materialization flows.
+  - Added Playwright workflow coverage for family setup, guardian mapping, templates, tracker blockers, and draft resume.
+  - Added user guides:
+    - `Docs/User_Guides/WebUI_Extension/Family_Guardian_Setup.md`
+    - `Docs/User_Guides/WebUI_Extension/Family_Guardrails_Wizard_Guide.md`
+
+### Changed
+
+- Family Guardrails wizard UX simplification and resilience:
+  - Household setup now uses preset-driven onboarding (family/caregiver/institutional templates) as the primary mode selector path.
+  - Wizard copy and validation feedback are mode-aware (`guardian` vs `caregiver`) across setup, mapping, review, and tracker steps.
+  - Single-guardian flows skip relationship mapping and preserve back-navigation symmetry from templates/review.
+  - Large-family workflows now support bulk entry/table interactions with keyboard-assisted selection/removal and status-aware tracker guidance.
+  - Wizard continues now enforce stronger inline step validation, duplicate/collision messaging, and deterministic resume-to-latest-draft behavior.
+- Route capability and parity guardrails now enforce consistent Family Guardrails visibility/registration across shared UI, web, and extension route registries.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed web/extension family wizard route wiring parity regressions and added explicit route-parity tests to prevent drift.
+- Fixed family wizard tracker/review action targeting so blocked dependents route guardians back to the correct mapping context.
+- Fixed targeted route-parity test path resolution to be cwd/worktree agnostic during Vitest runs.
+
+
+## [0.1.27] 2026-03-03
+
+### Added
+
+- Pinboard-style Collections enhancements for Reading:
+  - Added saved-search CRUD API surfaces:
+    - `POST /api/v1/reading/saved-searches`
+    - `GET /api/v1/reading/saved-searches`
+    - `PATCH /api/v1/reading/saved-searches/{search_id}`
+    - `DELETE /api/v1/reading/saved-searches/{search_id}`
+  - Added Reading item-note link API surfaces:
+    - `POST /api/v1/reading/items/{item_id}/links/note`
+    - `GET /api/v1/reading/items/{item_id}/links`
+    - `DELETE /api/v1/reading/items/{item_id}/links/note/{note_id}`
+  - Added strict same-user note existence enforcement for link creation while keeping note-content lifecycle under `/api/v1/notes`.
+  - Added archive-mode controls (`use_default|always|never`) and persisted archive metadata fields (`archive_requested`, `has_archive_copy`, `last_fetch_error`) in Reading responses.
+  - Added backend and frontend coverage for saved searches, note links, archive controls, and feature-flag gating.
+- Added changelog coverage for this session’s Collections strict-boundary delivery and review remediation pass.
+
+### Changed
+
+- Updated Product PRD acceptance and test criteria for Reading saved-search and item-note link surfaces, including strict notes-boundary expectations.
+- Improved the Collections implementation plan’s final commit-step readability by consolidating long `git add` instructions into grouped multiline commands.
+- Character import preview UX now shows a dedicated `OK` button after successful upload completion so users can dismiss with explicit confirmation instead of relying on the modal close icon.
+- GitHub Advanced Security triage for PR #753 was completed end-to-end:
+  - Investigated each remaining CodeQL finding by rule/path and separated true issues from false positives.
+  - Closed residual `py/path-injection` findings as false positives only after validating trusted-root containment in MLX tokenizer artifact resolution.
+  - Stepped through failing checks until the PR returned to all-green status.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed archive artifact creation in async paths by offloading blocking filesystem operations (`mkdir`, `write_text`) with `asyncio.to_thread`.
+- Fixed archive metadata update reliability by removing silent suppression and logging/reporting metadata patch failures via `archive_error`.
+- Fixed import-time crash risk from invalid archive env vars by introducing guarded integer parsing with safe defaults.
+- Fixed saved-search input validation gaps:
+  - Reject unsupported query keys and malformed query value types.
+  - Reject whitespace-only search names (create and update).
+  - Normalize and validate `sort`/filter payloads before persistence.
+- Fixed endpoint typing clarity by adding explicit row-type annotations for saved-search and note-link response helpers.
+- Fixed remaining security findings in PR #753:
+  - Hardened MLX tokenizer artifact candidate path normalization and trusted-root enforcement in `tokenizer_resolver.py` to prevent traversal/out-of-root resolution.
+  - Strengthened Notes attachment markdown escaping to include backslashes and newline normalization.
+  - Strengthened Notes export YAML escaping for backslashes and control characters (`\r`, `\n`, `\t`) in frontmatter values.
+  - Removed admin UI API key cleartext persistence in `sessionStorage`; API key auth now remains in-memory only for single-user mode.
+  - Added/updated regression coverage for MLX path handling, notes frontmatter escaping, and admin auth API key storage behavior.
+
+
+## [0.1.26] 2026-03-11
+
+### Consolidated Release Summary (Merged PRs #790-#829)
+
+- Added: Repo2Txt shipped across shared UI, web, and extension surfaces with GitHub and local sources, file-tree filtering, preview/copy/download flows, and better launcher discoverability. (PR #790)
+- Added: Safety and admin surfaces expanded with the Family Guardrails Wizard, per-user moderation phrase lists, and router analytics usage tabs plus aggregate APIs for operators. (PRs #804, #810, #797)
+- Added: Reading and research workflows grew with pinboard-style Collections enhancements, switchable unified RAG profiles, and multi-source quiz generation. (PRs #805, #796, #807)
+- Added: MCP Hub management shipped across AuthNZ storage, API, WebUI, and extension settings for ACP profiles and external server lifecycle management. (PR #806)
+- Added: Workflow capabilities expanded with kanban orchestration primitives, strict structured-output generation, structured QA chat workflows, unified queued-request handling, and connector-backed external file sync orchestration. (PRs #809, #818, #820, #823, #821)
+- Changed: Audio and ingestion experiences were redesigned: the Speech Playground gained richer TTS and STT comparison workflows, while Quick Ingest became a 5-step wizard with live progress, retry/error classification, and minimize-to-background controls. (PRs #816, #827)
+- Changed: Knowledge and watchlists moved to more progressive, task-oriented layouts with clearer defaults, navigation, empty states, and reliability feedback. (PRs #812, #813)
+- Changed: Prompt and writing workflows were reorganized with a fuller prompt workspace, stronger filtering/discoverability, and a restructured Writing Playground inspector. (PRs #817, #815)
+- Changed: Notes management was overhauled around decomposed editor/sidebar panes, progressive disclosure, and clearer save-status handling. (PR #826)
+- Changed: Media compatibility cleanup reduced legacy shim behavior and made deprecation signaling more explicit across ingestion flows. (PR #794)
+- Fixed: Platform reliability hardened across monitoring, benchmark recovery, shim cleanup, and core runtime paths, including sandbox admission/state handling, monitoring range interactions, and broader cleanup bundles that had previously been scattered across draft entries. (PRs #792, #793, #795, #798)
+- Fixed: Chat reliability issues were addressed for tool routing parity, OpenRouter freeze cases, selected-chat failure states, and conflict/retry behavior. (PRs #811, #814)
+- Fixed: ACP and admin surfaces received remediation for control auth, persistence, forks, login/auth proxy paths, privileged actions, and users views. (PRs #825, #829)
+- Fixed: Repo2Txt was hardened for local source selection, GitHub provider permissions, worker recovery, and deterministic compile behavior. (PR #790)
+
+### Added
+
+- repo2txt V1 integration across shared UI, web, and extension options surfaces:
+  - Added shared options route scaffold and route wiring for `/repo2txt`.
+  - Added repo2txt page shell and interaction flow in shared UI.
+  - Added GitHub provider support for repo2txt generation.
+  - Added local file/folder provider support for repo2txt generation.
+  - Added repo2txt file-tree state slice for selection/exclusion behavior.
+  - Added repo2txt formatter and tokenizer worker pipeline.
+  - Added locale keys and parity guard coverage for repo2txt copy.
+  - Added Next.js wrapper route at `apps/tldw-frontend/pages/repo2txt.tsx`.
+  - Added extension E2E coverage for options route loading and sidepanel link-out behavior:
+    - `apps/extension/tests/e2e/repo2txt-options.spec.ts`
+    - `apps/extension/tests/e2e/repo2txt-sidepanel-linkout.spec.ts`
+- Added repo2txt discoverability in the launcher/shortcuts modal.
+- Added docs coverage for repo2txt route behavior in:
+  - `apps/DEVELOPMENT.md`
+  - `apps/tldw-frontend/README.md`
+  - `apps/extension/README.md`
+- Added third-party notice attribution for upstream `repo2txt` (project + MIT license) in:
+  - `THIRD_PARTY_NOTICES.txt`
+- Added extension compile tsconfig and entrypoint module declarations:
+  - `apps/extension/tsconfig.compile.json`
+  - `apps/extension/types/tldw-ui-entries.d.ts`
+
+### Changed
+
+- Extension compile script now targets explicit config:
+  - `apps/extension/package.json` `compile` now uses `tsc --noEmit -p tsconfig.compile.json`.
+- Frontend compile script now uses webpack build path for deterministic completion in this environment:
+  - `apps/tldw-frontend/package.json` `compile` now uses `next build --webpack` before token-sync verification.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed extension compile command failure caused by missing local `tsconfig.json` in `apps/extension`.
+- Fixed frontend compile gate stalling under Turbopack in this environment by switching compile verification to webpack build mode.
+
 
 ## [0.1.25] 2026-02-X
 
 ### Added
 
+- Repo2Txt V1 integration across shared UI, web app, and extension options (PR #790):
+  - Added new shared options route `/repo2txt` with web page wrapper (`apps/tldw-frontend/pages/repo2txt.tsx`) and extension/options route registration.
+  - Added Repo2Txt providers and contracts for GitHub + Local sources, including repository tree/file retrieval and local directory/zip ingestion.
+  - Added Repo2Txt formatter pipeline with worker-backed token counting and structured output generation (directory tree + file contents).
+  - Added Repo2Txt UI surfaces for provider selection, file filtering/selection, output preview, copy, and download flows.
+  - Added Repo2Txt state management slice (Zustand) plus focused route/component/provider/store/formatter test coverage.
+  - Added route/navigation integration in shared options registry and header shortcuts for Repo2Txt discoverability.
+  - Added locale key coverage and synchronized locale mirrors for Repo2Txt copy across supported option locales.
+  - Added extension E2E coverage for Repo2Txt options route rendering and sidepanel link-out behavior.
+  - Added upstream repo2txt attribution updates in `THIRD_PARTY_NOTICES.txt`.
 - Strict LimaVM sandbox provider parity across REST, MCP, and ACP:
   - Added Lima runtime capability/preflight contracts and host enforcement probing (`runtime_capabilities.py`, `runners/lima_enforcer.py`, `runners/lima_runner.py`).
   - Added strict fail-closed Lima admission and execution-time revalidation in sandbox service flows.
@@ -258,8 +624,18 @@ and this project adheres to Some kind of Versioning
   - Added/updated bridge regression coverage to validate abstraction-backed notifications event processing behavior.
 - Reminders/notifications review-remediation coverage:
   - Added API/DB regressions for scheduler-managed PATCH field rejection, dismissed-notification list filtering, reminders scheduler failure logging, and snooze reconciliation behavior.
+- Writing Playground Phase-1 UI and diagnostics experience:
+  - Added modular Writing Playground structure components (`WritingPlaygroundShell`, `WritingPlaygroundLibraryPanel`, `WritingPlaygroundEditorPanel`, `WritingPlaygroundInspectorPanel`) with tabbed inspector routing for Generation, Planning, and Diagnostics.
+  - Added dedicated diagnostics UI components (`WritingPlaygroundDiagnosticsPanel`, `WritingPlaygroundResponseInspectorCard`, `WritingPlaygroundTokenInspectorCard`, `WritingPlaygroundWordcloudCard`) with shared diagnostics prop contracts.
+  - Added utility helpers and coverage for diagnostics state summarization and responsive layout classification.
+  - Added extension E2E coverage for inspector tab keyboard navigation and editor-content persistence across tab switches in `apps/extension/tests/e2e/writing-playground-themes-templates.spec.ts`.
 
 ### Changed
+- Repo2Txt implementation hardening updates after review:
+  - Repo2Txt page state now subscribes to the vanilla Zustand store via `useStore` instead of mirroring store state with local React state copies.
+  - Token counting now uses `gpt-tokenizer` in Repo2Txt tokenizer worker paths (with guarded fallback behavior).
+  - Repo2Txt user-facing strings now resolve through `useTranslation` + `option:repo2txt.*` keys instead of hardcoded English copy.
+  - Repo2Txt output file fetching now uses bounded concurrency with progress status updates instead of unbounded `Promise.all` fanout.
 - CI gate classification now computes `coverage_required` via dedicated coverage globs instead of mirroring `backend_changed`, preserving backend gate behavior while allowing workflow-only exclusions.
 - Media ingestion compatibility reduction (phase 1):
   - Added shared endpoint helpers for compatibility patchpoints and input contracts (`compat_patchpoints.py`, `input_contracts.py`).
@@ -309,12 +685,28 @@ and this project adheres to Some kind of Versioning
   - Frontend UX gates now use a stable Bun-based dependency/install + Playwright invocation flow with a single all-pages smoke gate entrypoint.
   - Watchlists extension strict gate flow now preserves explicit launch/target wait timeout controls and aligns with the stable extension-launch helper contract.
   - All-pages smoke gate behavior now follows the stabilized route traversal baseline used by the current release-gate suite.
+- Writing Playground UI interaction behavior:
+  - Moved template/theme/chat-mode and context controls from the Generation inspector view into Planning for clearer IA separation.
+  - Added compact-mode shell grid overrides plus `data-testid` layout markers to improve narrow-layout behavior and regression observability.
+- Improved inspector keyboard interaction to support Arrow/Home/End traversal with active-tab focus movement.
+- RAG streaming/profile parity hardening (PR #796 follow-up):
+  - Streamed agentic retrieval now resolves strategy and retrieval/generation knobs from profile-aware `effective_payload` defaults instead of raw request-only fields.
+  - Async generation paths now warm RAG prompt templates via event-loop-safe thread offload before generator instantiation.
+  - Two-tier reranker runtime degradation now logs the underlying exception prior to profile degradation fallback (`two_tier` -> `hybrid`).
+  - Added/updated regression coverage for stream parity and prompt-loader warmup behavior, including typed test signatures/docstrings in touched RAG test modules.
 
 ### Removed
 - No removals in this session.
 
 ### Fixed
 
+- Fixed Repo2Txt local source selection reliability:
+  - Replaced ambiguous local multi-file picker with explicit directory (`webkitdirectory`) and zip pickers.
+  - Added local duplicate-filename collision guard when directory context is unavailable.
+  - Reset local file input value after selection to allow repeat-selection workflows.
+- Fixed Repo2Txt extension reliability for GitHub provider by declaring `https://api.github.com/*` in extension `host_permissions`.
+- Fixed Repo2Txt tokenizer worker hang risk by adding worker `onerror`/`onmessageerror` handling, per-request timeouts, pending-request cleanup, and worker recovery re-init.
+- Fixed portability gaps in the Repo2Txt implementation plan by replacing machine-specific absolute paths with `<repo_root>` / `<repo_worktree>` placeholders.
 - Fixed Lima strict-policy contract gaps:
   - Rejected unsupported `allowlist` strict mode until enforcement support exists, removing false-positive strict capability advertisement.
   - Added foreground execution-time preflight failure handling so Lima policy/preflight failures mark runs failed consistently (matching background behavior).
@@ -349,6 +741,9 @@ and this project adheres to Some kind of Versioning
 - Fixed strict watchlists no-skip gate regressions caused by stale/undefined local assertions in E2E specs and aligned those checks to deterministic harness behavior.
 - Fixed extension E2E launch instability in CI by removing unsupported forced Playwright channel behavior and retaining explicit timeout override controls in workflow env.
 - Fixed UX smoke gate branch instability by restoring the stabilized all-pages gate command path and traversal behavior expected by current frontend release gates.
+- Fixed Writing Playground diagnostics prop leakage by removing `enabled` from card-prop spreads before passing props into inspector card components.
+- Fixed monitoring metrics-history range interactions to avoid redundant API loads on manual range selection/apply and to avoid interval resets/reloads while editing draft custom-range inputs.
+- Fixed monitoring custom-range UX by clearing range validation errors when users edit custom range start/end values.
 
 
 ## [0.1.24] 2026-02-22
@@ -948,7 +1343,7 @@ and this project adheres to Some kind of Versioning
 - Soft delete support for notes/character cards
 - Qwen3-STT
 - JSON validation utilities with detailed error positioning (line/column information)
-- [WebUI] Character generation prompt templates for full and single-field generation 
+- [WebUI] Character generation prompt templates for full and single-field generation
 - [WebUI] Flashcard undo functionality with Ctrl/Cmd+Z shortcut
 - [WebUI] Media review selection and focus settings
 - [WebUI] TldwApiClient methods for character export, restore, and bulk world book operations
@@ -983,7 +1378,7 @@ and this project adheres to Some kind of Versioning
 - Moved the tldw_Browser_Assistant project and the tldw-frontent folder into the '/apps/' folder, as moving forward they will share the same base.
   - As a result, new frontend!
 - New monorepo development guide, shared UI package scaffold, ambient typings, and testing guide for extension/web UI.
-- Image creation API via files 
+- Image creation API via files
 
 ### Changed
 
@@ -1071,9 +1466,9 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
-- Added tldw-admin react frontend for admin Mgmt of the server. Very much WIP. 
-- Extended feedback system/schema - Added a unified feedback system (explicit/implicit) across chat and search, integrates message IDs into chat history and streaming, 
-- introduced API key KDF/key_id, 
+- Added tldw-admin react frontend for admin Mgmt of the server. Very much WIP.
+- Extended feedback system/schema - Added a unified feedback system (explicit/implicit) across chat and search, integrates message IDs into chat history and streaming,
+- introduced API key KDF/key_id,
 - added admin effective-config endpoint/UI,
 
 ### Changed
