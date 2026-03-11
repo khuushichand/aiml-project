@@ -19,6 +19,7 @@ _VALID_APPROVAL_MODES = {
     "ask_on_sensitive_actions",
     "temporary_elevation_allowed",
 }
+_VALID_CREDENTIAL_SLOT_PRIVILEGE_CLASSES = {"read", "write", "admin"}
 _VALID_CREDENTIAL_BINDING_TARGET_TYPES = {"profile", "assignment"}
 _VALID_CREDENTIAL_BINDING_MODES = {"grant", "disable"}
 _UNSET = object()
@@ -87,6 +88,13 @@ def _normalize_slot_name(slot_name: str | None, *, allow_blank: bool = False) ->
         if allow_blank:
             return ""
         raise ValueError("slot_name is required")
+    return value
+
+
+def _normalize_credential_slot_privilege_class(privilege_class: str | None) -> str:
+    value = str(privilege_class or "").strip().lower()
+    if value not in _VALID_CREDENTIAL_SLOT_PRIVILEGE_CLASSES:
+        raise ValueError(f"Invalid credential slot privilege_class: {privilege_class}")
     return value
 
 
@@ -1758,7 +1766,7 @@ class McpHubRepo:
                 normalized_slot_name,
                 str(display_name or normalized_slot_name).strip(),
                 str(secret_kind or "secret").strip().lower(),
-                str(privilege_class or "default").strip().lower(),
+                _normalize_credential_slot_privilege_class(privilege_class),
                 required_value,
                 actor_id,
                 actor_id,
@@ -1859,9 +1867,9 @@ class McpHubRepo:
             else str(secret_kind or "secret").strip().lower()
         )
         next_privilege_class = (
-            str(existing.get("privilege_class") or "default")
+            str(existing.get("privilege_class") or "read").strip().lower()
             if privilege_class is _UNSET
-            else str(privilege_class or "default").strip().lower()
+            else _normalize_credential_slot_privilege_class(privilege_class)
         )
         next_required = (
             _to_bool(existing.get("is_required"))

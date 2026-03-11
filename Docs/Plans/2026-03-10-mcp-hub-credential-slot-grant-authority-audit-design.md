@@ -233,6 +233,9 @@ Tighten slot privilege fields to the canonical enum in:
 - slot update request
 - slot response
 
+Reject unknown privilege classes on all public write paths rather than mapping
+or inferring them.
+
 ### Endpoint Helpers
 
 Add small HTTP-layer helpers for:
@@ -243,6 +246,9 @@ Add small HTTP-layer helpers for:
 - principal authority check
 - default-slot resolution for server-level binding routes
 
+These helpers are the canonical enforcement point for v1, because the service
+layer currently receives `actor_id` but not the caller's full permission set.
+
 ### Response Behavior
 
 No response shape change is required for binding APIs in this PR.
@@ -252,6 +258,9 @@ Error behavior:
 - insufficient authority -> `403`
 - detail names the missing required permission
 - unknown or invalid privilege class on slot create/update -> `400`
+
+Server-level readiness and assignment-specific grant state remain separate in
+this slice. This PR does not change effective external-access response shapes.
 
 ## Audit Behavior
 
@@ -311,8 +320,11 @@ Add or extend tests for:
 - assignment `disable` succeeds without credential grant permissions
 - server-level binding route for a compatible default slot requires the slot's
   privilege authority
+- single-slot server-level binding route cannot bypass grant checks by omitting
+  `slot_name`
 - slot create with `admin` privilege fails without `grant.credentials.admin`
 - slot update from `read` to `write` fails without `grant.credentials.write`
+- slot privilege-class update from `read` to `admin` requires `grant.credentials.admin`
 - successful audit metadata includes slot privilege and required permission
 
 ### Frontend Tests

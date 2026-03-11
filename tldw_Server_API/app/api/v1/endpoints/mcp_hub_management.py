@@ -74,6 +74,13 @@ _CAPABILITY_GRANT_PERMISSIONS = {
     "process.execute": "grant.process.execute",
     "tool.invoke": "grant.tool.invoke",
 }
+_CREDENTIAL_GRANT_PERMISSIONS = {
+    "read": "grant.credentials.read",
+    "write": "grant.credentials.write",
+    "admin": "grant.credentials.admin",
+}
+_CREDENTIAL_PRIVILEGE_RANK = {"read": 0, "write": 1, "admin": 2}
+_DEFAULT_CREDENTIAL_SLOT_NAMES = frozenset({"bearer_token", "api_key"})
 _TOOL_GRANT_KEYS = ("allowed_tools", "tool_patterns", "tool_names")
 _UNION_POLICY_KEYS = frozenset({"allowed_tools", "denied_tools", "tool_names", "tool_patterns", "capabilities"})
 _SUPPORTED_APPROVAL_DURATIONS = frozenset({"once", "session", "conversation"})
@@ -285,6 +292,95 @@ def _grant_authority_snapshot(principal: AuthPrincipal, delta_document: dict[str
         "required_permissions": _unique(required_permissions),
         "granted_permissions": granted_permissions,
     }
+
+
+def _normalize_credential_slot_privilege_class(value: Any) -> str:
+    """Normalize a credential slot privilege class or raise an HTTP 400."""
+    normalized = str(value or "").strip().lower()
+    if normalized not in _CREDENTIAL_GRANT_PERMISSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Credential slot privilege_class must be one of: read, write, admin",
+        )
+    return normalized
+
+
+def _credential_required_permission(privilege_class: Any) -> str:
+    """Return the required grant-authority permission for a credential privilege class."""
+    return _CREDENTIAL_GRANT_PERMISSIONS[_normalize_credential_slot_privilege_class(privilege_class)]
+
+
+def _principal_satisfies_credential_grant(principal: AuthPrincipal, privilege_class: Any) -> bool:
+    """Return True when the principal may grant the requested credential privilege class."""
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+
+    granted = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    if "*" in granted:
+        return True
+
+    normalized = _normalize_credential_slot_privilege_class(privilege_class)
+    required_rank = _CREDENTIAL_PRIVILEGE_RANK[normalized]
+    for candidate, candidate_permission in _CREDENTIAL_GRANT_PERMISSIONS.items():
+        if candidate_permission in granted and _CREDENTIAL_PRIVILEGE_RANK[candidate] >= required_rank:
+            return True
+    return False
+
+
+def _require_credential_grant_authority(principal: AuthPrincipal, privilege_class: Any) -> None:
+    """Require the principal to hold the matching credential grant-authority permission."""
+    if _principal_satisfies_credential_grant(principal, privilege_class):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=f"Grant authority required: {_credential_required_permission(privilege_class)}",
+    )
+
+
+def _credential_privilege_broadens(previous_privilege_class: Any, next_privilege_class: Any) -> bool:
+    """Return True when a credential slot privilege class broadens access."""
+    previous = _normalize_credential_slot_privilege_class(previous_privilege_class)
+    next_value = _normalize_credential_slot_privilege_class(next_privilege_class)
+    return _CREDENTIAL_PRIVILEGE_RANK[next_value] > _CREDENTIAL_PRIVILEGE_RANK[previous]
+
+
+async def _resolve_binding_slot_for_grant_authority(
+    *,
+    svc: McpHubService,
+    server_id: str,
+    slot_name: str | None,
+) -> dict[str, Any] | None:
+    """Resolve the effective credential slot used for grant-authority checks."""
+    try:
+        slots = await svc.list_external_server_credential_slots(server_id=server_id)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if slot_name is not None:
+        normalized_slot = str(slot_name or "").strip()
+        return next(
+            (
+                dict(slot)
+                for slot in slots
+                if str(slot.get("slot_name") or "").strip() == normalized_slot
+            ),
+            None,
+        )
+    if len(slots) != 1:
+        return None
+    slot = dict(slots[0])
+    if str(slot.get("slot_name") or "").strip() not in _DEFAULT_CREDENTIAL_SLOT_NAMES:
+        return None
+    return slot
 
 
 def _collect_scope_ids(values: list[int] | None, active_id: int | None) -> list[int]:
@@ -1383,6 +1479,7 @@ async def create_external_server_credential_slot(
 ) -> ExternalServerCredentialSlotResponse:
     """Create a credential slot on a managed external server."""
     _require_mutation_permission(principal)
+    _require_credential_grant_authority(principal, payload.privilege_class)
     try:
         row = await svc.create_external_server_credential_slot(
             server_id=server_id,
@@ -1413,6 +1510,17 @@ async def update_external_server_credential_slot(
 ) -> ExternalServerCredentialSlotResponse:
     """Update credential slot metadata on a managed external server."""
     _require_mutation_permission(principal)
+    if payload.privilege_class is not None:
+        slot_row = await _resolve_binding_slot_for_grant_authority(
+            svc=svc,
+            server_id=server_id,
+            slot_name=slot_name,
+        )
+        if slot_row is not None and _credential_privilege_broadens(
+            slot_row.get("privilege_class"),
+            payload.privilege_class,
+        ):
+            _require_credential_grant_authority(principal, payload.privilege_class)
     try:
         row = await svc.update_external_server_credential_slot(
             server_id=server_id,
@@ -1526,6 +1634,13 @@ async def upsert_profile_credential_binding(
     """Grant a managed external server to a permission profile."""
     _require_mutation_permission(principal)
     await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    slot_row = await _resolve_binding_slot_for_grant_authority(
+        svc=svc,
+        server_id=server_id,
+        slot_name=None,
+    )
+    if slot_row is not None:
+        _require_credential_grant_authority(principal, slot_row.get("privilege_class"))
     try:
         row = await svc.upsert_profile_credential_binding(
             profile_id=profile_id,
@@ -1553,6 +1668,13 @@ async def upsert_profile_slot_credential_binding(
     """Grant a managed external server slot to a permission profile."""
     _require_mutation_permission(principal)
     await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    slot_row = await _resolve_binding_slot_for_grant_authority(
+        svc=svc,
+        server_id=server_id,
+        slot_name=slot_name,
+    )
+    if slot_row is not None:
+        _require_credential_grant_authority(principal, slot_row.get("privilege_class"))
     try:
         row = await svc.upsert_profile_credential_binding(
             profile_id=profile_id,
@@ -1641,6 +1763,14 @@ async def upsert_assignment_credential_binding(
     """Create or update an external server binding on a policy assignment."""
     _require_mutation_permission(principal)
     await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    if payload.binding_mode == "grant":
+        slot_row = await _resolve_binding_slot_for_grant_authority(
+            svc=svc,
+            server_id=server_id,
+            slot_name=None,
+        )
+        if slot_row is not None:
+            _require_credential_grant_authority(principal, slot_row.get("privilege_class"))
     try:
         row = await svc.upsert_assignment_credential_binding(
             assignment_id=assignment_id,
@@ -1670,6 +1800,14 @@ async def upsert_assignment_slot_credential_binding(
     """Create or update an external server slot binding on a policy assignment."""
     _require_mutation_permission(principal)
     await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    if payload.binding_mode == "grant":
+        slot_row = await _resolve_binding_slot_for_grant_authority(
+            svc=svc,
+            server_id=server_id,
+            slot_name=slot_name,
+        )
+        if slot_row is not None:
+            _require_credential_grant_authority(principal, slot_row.get("privilege_class"))
     try:
         row = await svc.upsert_assignment_credential_binding(
             assignment_id=assignment_id,

@@ -83,6 +83,13 @@ class McpHubConflictError(BadRequestError):
 
 
 _SCOPE_RANK = {"global": 0, "org": 1, "team": 2, "user": 3}
+_CREDENTIAL_SLOT_PRIVILEGE_CLASSES = {"read", "write", "admin"}
+_CREDENTIAL_SLOT_PRIVILEGE_RANK = {"read": 0, "write": 1, "admin": 2}
+_CREDENTIAL_SLOT_REQUIRED_PERMISSIONS = {
+    "read": "grant.credentials.read",
+    "write": "grant.credentials.write",
+    "admin": "grant.credentials.admin",
+}
 
 
 class McpHubService:
@@ -96,6 +103,60 @@ class McpHubService:
     ):
         self.repo = repo
         self.legacy_inventory_service = legacy_inventory_service
+
+    @staticmethod
+    def _normalize_credential_slot_privilege_class(value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in _CREDENTIAL_SLOT_PRIVILEGE_CLASSES:
+            raise BadRequestError(
+                "Credential slot privilege_class must be one of: read, write, admin"
+            )
+        return normalized
+
+    @classmethod
+    def _credential_slot_required_permission(cls, privilege_class: str) -> str:
+        normalized = cls._normalize_credential_slot_privilege_class(privilege_class)
+        return _CREDENTIAL_SLOT_REQUIRED_PERMISSIONS[normalized]
+
+    @classmethod
+    def _credential_slot_broadens(
+        cls,
+        previous_privilege_class: str | None,
+        next_privilege_class: str,
+    ) -> bool:
+        if previous_privilege_class is None:
+            return True
+        previous = cls._normalize_credential_slot_privilege_class(previous_privilege_class)
+        next_value = cls._normalize_credential_slot_privilege_class(next_privilege_class)
+        return _CREDENTIAL_SLOT_PRIVILEGE_RANK[next_value] > _CREDENTIAL_SLOT_PRIVILEGE_RANK[previous]
+
+    async def _binding_audit_privilege_metadata(
+        self,
+        *,
+        external_server_id: str,
+        slot_name: str | None,
+    ) -> dict[str, Any]:
+        slot: dict[str, Any] | None
+        if slot_name:
+            slot = await self.repo.get_external_server_credential_slot(
+                server_id=external_server_id,
+                slot_name=slot_name,
+            )
+        else:
+            slot = await self.repo.get_external_server_default_slot(server_id=external_server_id)
+        if not slot:
+            return {}
+        try:
+            privilege_class = self._normalize_credential_slot_privilege_class(
+                str(slot.get("privilege_class") or "")
+            )
+        except BadRequestError:
+            return {"slot_name": str(slot.get("slot_name") or slot_name or "")}
+        return {
+            "slot_name": str(slot.get("slot_name") or slot_name or ""),
+            "privilege_class": privilege_class,
+            "required_permission": self._credential_slot_required_permission(privilege_class),
+        }
 
     async def _list_legacy_inventory(self) -> list[dict[str, Any]]:
         if self.legacy_inventory_service is not None:
@@ -966,12 +1027,15 @@ class McpHubService:
         server = await self.repo.get_external_server(server_id)
         if not server:
             raise ResourceNotFoundError("mcp_external_server", identifier=server_id)
+        normalized_privilege_class = self._normalize_credential_slot_privilege_class(
+            privilege_class
+        )
         row = await self.repo.create_external_server_credential_slot(
             server_id=server_id,
             slot_name=slot_name,
             display_name=display_name,
             secret_kind=secret_kind,
-            privilege_class=privilege_class,
+            privilege_class=normalized_privilege_class,
             is_required=is_required,
             actor_id=actor_id,
         )
@@ -981,7 +1045,13 @@ class McpHubService:
                 actor_id=actor_id,
                 resource_type="mcp_external_server",
                 resource_id=server_id,
-                metadata={"slot_name": row.get("slot_name")},
+                metadata={
+                    "slot_name": row.get("slot_name"),
+                    "privilege_class": normalized_privilege_class,
+                    "required_permission": self._credential_slot_required_permission(
+                        normalized_privilege_class
+                    ),
+                },
             )
         )
         return row
@@ -997,29 +1067,51 @@ class McpHubService:
         is_required: bool | None = None,
         actor_id: int | None,
     ) -> dict[str, Any]:
+        existing = await self.repo.get_external_server_credential_slot(
+            server_id=server_id,
+            slot_name=slot_name,
+        )
+        previous_privilege_class: str | None = None
+        if existing is not None and existing.get("privilege_class") is not None:
+            previous_privilege_class = str(existing.get("privilege_class") or "").strip().lower() or None
         kwargs: dict[str, Any] = {
             "server_id": server_id,
             "slot_name": slot_name,
             "actor_id": actor_id,
         }
+        next_privilege_class = previous_privilege_class
         if display_name is not None:
             kwargs["display_name"] = display_name
         if secret_kind is not None:
             kwargs["secret_kind"] = secret_kind
         if privilege_class is not None:
-            kwargs["privilege_class"] = privilege_class
+            next_privilege_class = self._normalize_credential_slot_privilege_class(privilege_class)
+            kwargs["privilege_class"] = next_privilege_class
         if is_required is not None:
             kwargs["is_required"] = is_required
         row = await self.repo.update_external_server_credential_slot(**kwargs)
         if not row:
             raise ResourceNotFoundError("mcp_external_server_slot", identifier=f"{server_id}/{slot_name}")
+        metadata: dict[str, Any] = {
+            "slot_name": row.get("slot_name"),
+            "privilege_class": str(row.get("privilege_class") or next_privilege_class or ""),
+        }
+        if next_privilege_class is not None and self._credential_slot_broadens(
+            previous_privilege_class,
+            next_privilege_class,
+        ):
+            metadata["required_permission"] = self._credential_slot_required_permission(
+                next_privilege_class
+            )
+        if previous_privilege_class is not None and next_privilege_class is not None:
+            metadata["previous_privilege_class"] = previous_privilege_class
         await _await_if_needed(
             emit_mcp_hub_audit(
                 action="mcp_hub.external_server_slot.update",
                 actor_id=actor_id,
                 resource_type="mcp_external_server",
                 resource_id=server_id,
-                metadata={"slot_name": row.get("slot_name")},
+                metadata=metadata,
             )
         )
         return row
@@ -1225,7 +1317,17 @@ class McpHubService:
                 actor_id=actor_id,
                 resource_type="mcp_permission_profile",
                 resource_id=str(profile_id),
-                metadata={"external_server_id": external_server_id, "slot_name": slot_name, "binding_mode": "grant"},
+                metadata={
+                    "external_server_id": external_server_id,
+                    "slot_name": slot_name,
+                    "binding_mode": "grant",
+                    **(
+                        await self._binding_audit_privilege_metadata(
+                            external_server_id=external_server_id,
+                            slot_name=slot_name,
+                        )
+                    ),
+                },
             )
         )
         return row
@@ -1298,7 +1400,19 @@ class McpHubService:
                 actor_id=actor_id,
                 resource_type="mcp_policy_assignment",
                 resource_id=str(assignment_id),
-                metadata={"external_server_id": external_server_id, "slot_name": slot_name, "binding_mode": binding_mode},
+                metadata={
+                    "external_server_id": external_server_id,
+                    "slot_name": slot_name,
+                    "binding_mode": binding_mode,
+                    **(
+                        await self._binding_audit_privilege_metadata(
+                            external_server_id=external_server_id,
+                            slot_name=slot_name if binding_mode == "grant" else None,
+                        )
+                        if binding_mode == "grant"
+                        else {}
+                    ),
+                },
             )
         )
         return row

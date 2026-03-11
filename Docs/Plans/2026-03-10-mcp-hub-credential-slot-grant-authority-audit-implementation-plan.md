@@ -12,20 +12,19 @@
 
 ## Status
 
-- Task 1: Not started
-- Task 2: Not started
-- Task 3: Not started
-- Task 4: Not started
-- Task 5: Not started
-- Task 6: Not started
-- Task 7: Not started
+- Task 1: Complete
+- Task 2: Complete
+- Task 3: Complete
+- Task 4: Complete
+- Task 5: Complete
+- Task 6: Complete
+- Task 7: Complete
 
 ### Task 1: Add failing tests for slot grant authority and privilege escalation
 
 **Files:**
 - Modify: `tldw_Server_API/tests/MCP_unified/test_mcp_hub_management_api.py`
 - Modify: `tldw_Server_API/tests/MCP_unified/test_mcp_hub_service.py`
-- Modify: `tldw_Server_API/tests/MCP_unified/test_mcp_hub_external_access_resolver.py`
 
 **Step 1: Add API-level failing tests**
 
@@ -59,7 +58,6 @@ Run:
 source .venv/bin/activate && python -m pytest \
   tldw_Server_API/tests/MCP_unified/test_mcp_hub_management_api.py \
   tldw_Server_API/tests/MCP_unified/test_mcp_hub_service.py \
-  tldw_Server_API/tests/MCP_unified/test_mcp_hub_external_access_resolver.py \
   -k "credential or slot or grant" -v
 ```
 
@@ -70,8 +68,7 @@ Expected: FAIL.
 ```bash
 git add \
   tldw_Server_API/tests/MCP_unified/test_mcp_hub_management_api.py \
-  tldw_Server_API/tests/MCP_unified/test_mcp_hub_service.py \
-  tldw_Server_API/tests/MCP_unified/test_mcp_hub_external_access_resolver.py
+  tldw_Server_API/tests/MCP_unified/test_mcp_hub_service.py
 git commit -m "test: add MCP Hub credential grant authority coverage"
 ```
 
@@ -93,6 +90,9 @@ Normalize and validate `privilege_class` as:
 
 Reject unknown values on slot create/update with `400`.
 
+This tightening applies on public write paths first. Existing legacy rows are
+not silently remapped in this slice.
+
 **Step 2: Ensure repo/service normalization stays consistent**
 
 Update slot create/update flows so:
@@ -107,6 +107,7 @@ Run:
 ```bash
 source .venv/bin/activate && python -m pytest \
   tldw_Server_API/tests/MCP_unified/test_mcp_hub_service.py \
+  tldw_Server_API/tests/MCP_unified/test_mcp_hub_management_api.py \
   -k "privilege or slot" -v
 ```
 
@@ -138,6 +139,10 @@ Implement endpoint-layer helpers for:
 - ladder satisfaction check
 - resolving the effective slot for a binding route
 - resolving whether a slot privilege update broadens access
+
+These helpers are the canonical enforcement boundary for this slice. Do not
+push permission evaluation down into the service layer unless principal
+permissions are also threaded through explicitly.
 
 **Step 2: Keep enforcement narrow and explicit**
 
@@ -183,6 +188,9 @@ Before calling the service for:
 
 enforce the required credential grant authority when the binding mode is
 `grant`.
+
+This includes resolving the compatible default slot for server-level routes so
+single-slot managed servers cannot bypass slot privilege checks.
 
 **Step 2: Apply checks to assignment binding grant routes**
 
@@ -241,6 +249,9 @@ example:
 - `read -> admin`
 
 Lowering or keeping the same class requires only normal mutation permission.
+
+Unknown privilege classes should already be rejected before broadening logic
+runs.
 
 **Step 3: Run focused slot API tests**
 
@@ -341,7 +352,8 @@ Run:
 source .venv/bin/activate && python -m pytest \
   tldw_Server_API/tests/MCP_unified/test_mcp_hub_management_api.py \
   tldw_Server_API/tests/MCP_unified/test_mcp_hub_service.py \
-  tldw_Server_API/tests/MCP_unified/test_mcp_hub_external_access_resolver.py -v
+  tldw_Server_API/tests/MCP_unified/test_mcp_hub_external_access.py \
+  tldw_Server_API/tests/MCP_unified/test_mcp_hub_external_slot_access.py -v
 
 bunx vitest run src/components/Option/MCPHub/__tests__
 

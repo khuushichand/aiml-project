@@ -24,6 +24,7 @@ ToolMetadataSource = Literal["explicit", "heuristic", "fallback"]
 PathScopeMode = Literal["none", "workspace_root", "cwd_descendants"]
 PathScopeEnforcement = Literal["approval_required_when_unenforceable"]
 ExternalAuthTemplateTargetType = Literal["header", "env"]
+CredentialSlotPrivilegeClass = Literal["read", "write", "admin"]
 
 
 class ACPProfileCreateRequest(BaseModel):
@@ -299,14 +300,14 @@ class ExternalServerCredentialSlotCreateRequest(BaseModel):
     slot_name: str = Field(..., min_length=1, max_length=128)
     display_name: str = Field(..., min_length=1, max_length=200)
     secret_kind: str = Field(..., min_length=1, max_length=64)
-    privilege_class: str = Field(..., min_length=1, max_length=64)
+    privilege_class: CredentialSlotPrivilegeClass
     is_required: bool = True
 
 
 class ExternalServerCredentialSlotUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     secret_kind: str | None = Field(default=None, min_length=1, max_length=64)
-    privilege_class: str | None = Field(default=None, min_length=1, max_length=64)
+    privilege_class: CredentialSlotPrivilegeClass | None = None
     is_required: bool | None = None
 
 
@@ -315,7 +316,7 @@ class ExternalServerCredentialSlotResponse(BaseModel):
     slot_name: str
     display_name: str
     secret_kind: str
-    privilege_class: str
+    privilege_class: CredentialSlotPrivilegeClass
     is_required: bool
     secret_configured: bool = False
     created_by: int | None = None
