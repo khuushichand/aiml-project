@@ -309,4 +309,43 @@ test.describe("Extension companion capture", () => {
       await context.close()
     }
   })
+
+  test("shows settings but keeps lifecycle controls out of the sidepanel workspace", async () => {
+    const { context, openSidepanel } = await launchWithBuiltExtension({
+      allowOffline: true,
+      seedConfig: {
+        __tldw_first_run_complete: true,
+        __tldw_allow_offline: true
+      }
+    })
+
+    await installCompanionApiMock(context)
+
+    const sidepanel = await openSidepanel()
+
+    try {
+      await sidepanel.waitForFunction(
+        () => typeof (window as any).__tldwNavigate === "function"
+      )
+      await sidepanel.evaluate(() => {
+        ;(window as any).__tldwNavigate?.("/companion")
+      })
+      await expect(sidepanel.getByRole("heading", { name: "Settings" })).toBeVisible()
+      await expect(
+        sidepanel.getByRole("checkbox", { name: "Daily reflections" })
+      ).toBeVisible()
+      await expect(
+        sidepanel.getByRole("button", { name: "Purge knowledge" })
+      ).toHaveCount(0)
+    } finally {
+      try {
+        await sidepanel.evaluate(() => {
+          ;(window as any).__restoreCompanionPatch?.()
+        })
+      } catch {
+        // ignore cleanup failures if page already closed
+      }
+      await context.close()
+    }
+  })
 })

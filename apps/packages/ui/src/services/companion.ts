@@ -41,6 +41,11 @@ export type CompanionKnowledgeCard = {
   updated_at: string
 }
 
+export type CompanionKnowledgeDetail = CompanionKnowledgeCard & {
+  evidence_events: CompanionActivityItem[]
+  evidence_goals: CompanionGoal[]
+}
+
 export type CompanionGoal = {
   id: string
   title: string
@@ -80,6 +85,19 @@ export type CompanionReflection = {
   created_at: string
 }
 
+export type CompanionReflectionDetail = {
+  id: string
+  title: string
+  cadence: string | null
+  summary: string
+  evidence: Array<Record<string, unknown>>
+  provenance: Record<string, unknown>
+  created_at: string
+  activity_events: CompanionActivityItem[]
+  knowledge_cards: CompanionKnowledgeCard[]
+  goals: CompanionGoal[]
+}
+
 export type CompanionNotification = {
   id: number
   user_id?: string
@@ -96,7 +114,33 @@ export type CompanionNotification = {
 
 export type PersonalizationProfile = {
   enabled: boolean
+  proactive_enabled?: boolean
+  companion_reflections_enabled?: boolean
+  companion_daily_reflections_enabled?: boolean
+  companion_weekly_reflections_enabled?: boolean
   updated_at: string
+}
+
+export type CompanionPreferencesUpdate = {
+  proactive_enabled?: boolean
+  companion_reflections_enabled?: boolean
+  companion_daily_reflections_enabled?: boolean
+  companion_weekly_reflections_enabled?: boolean
+}
+
+export type CompanionLifecycleScope =
+  | "knowledge"
+  | "reflections"
+  | "derived_goals"
+  | "goal_progress"
+
+export type CompanionLifecycleResponse = {
+  status: string
+  scope: CompanionLifecycleScope
+  deleted_counts?: Record<string, number>
+  rebuilt_counts?: Record<string, number>
+  job_id?: number | null
+  job_uuid?: string | null
 }
 
 type CompanionActivityListResponse = {
@@ -248,6 +292,17 @@ export const updatePersonalizationOptIn = async (
   })
 }
 
+export const updateCompanionPreferences = async (
+  payload: CompanionPreferencesUpdate
+): Promise<PersonalizationProfile> => {
+  return bgRequest<PersonalizationProfile>({
+    path: "/api/v1/personalization/preferences" as any,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: payload
+  })
+}
+
 export const recordExplicitCompanionCapture = async (
   payload: CompanionActivityCreate
 ): Promise<CompanionActivityItem> => {
@@ -280,12 +335,30 @@ export const fetchCompanionKnowledge = async (params?: {
   })
 }
 
+export const fetchCompanionKnowledgeDetail = async (
+  cardId: string
+): Promise<CompanionKnowledgeDetail> => {
+  return bgRequest<CompanionKnowledgeDetail>({
+    path: `/api/v1/companion/knowledge/${cardId}` as any,
+    method: "GET"
+  })
+}
+
 export const fetchCompanionGoals = async (params?: {
   status?: string
 }): Promise<CompanionGoalListResponse> => {
   const qs = buildQuery(params || {})
   return bgRequest<CompanionGoalListResponse>({
     path: `/api/v1/companion/goals${qs}` as any,
+    method: "GET"
+  })
+}
+
+export const fetchCompanionReflectionDetail = async (
+  reflectionId: string
+): Promise<CompanionReflectionDetail> => {
+  return bgRequest<CompanionReflectionDetail>({
+    path: `/api/v1/companion/reflections/${reflectionId}` as any,
     method: "GET"
   })
 }
@@ -371,4 +444,26 @@ export const fetchCompanionWorkspaceSnapshot = async (
       (item) => item.kind === "companion_reflection"
     )
   }
+}
+
+export const purgeCompanionScope = async (
+  scope: CompanionLifecycleScope
+): Promise<CompanionLifecycleResponse> => {
+  return bgRequest<CompanionLifecycleResponse>({
+    path: "/api/v1/companion/purge" as any,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { scope }
+  })
+}
+
+export const queueCompanionRebuild = async (
+  scope: CompanionLifecycleScope
+): Promise<CompanionLifecycleResponse> => {
+  return bgRequest<CompanionLifecycleResponse>({
+    path: "/api/v1/companion/rebuild" as any,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { scope }
+  })
 }

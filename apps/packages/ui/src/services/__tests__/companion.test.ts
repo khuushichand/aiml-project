@@ -10,10 +10,13 @@ vi.mock("@/services/background-proxy", () => ({
 
 import {
   createCompanionGoal,
+  fetchCompanionReflectionDetail,
   fetchCompanionWorkspaceSnapshot,
+  queueCompanionRebuild,
   recordCompanionCheckIn,
   recordExplicitCompanionCapture,
-  setCompanionGoalStatus
+  setCompanionGoalStatus,
+  updateCompanionPreferences
 } from "../companion"
 
 describe("companion service", () => {
@@ -345,6 +348,78 @@ describe("companion service", () => {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: { status: "paused" }
+      })
+    )
+  })
+
+  it("updates companion reflection preferences through personalization preferences", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      enabled: true,
+      companion_reflections_enabled: true,
+      companion_daily_reflections_enabled: false,
+      companion_weekly_reflections_enabled: true,
+      proactive_enabled: true,
+      updated_at: "2026-03-10T15:00:00Z"
+    })
+
+    await updateCompanionPreferences({
+      companion_daily_reflections_enabled: false
+    })
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/personalization/preferences",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: {
+          companion_daily_reflections_enabled: false
+        }
+      })
+    )
+  })
+
+  it("loads a reflection detail payload through the provenance endpoint", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      id: "reflection-1",
+      title: "Daily reflection",
+      cadence: "daily",
+      summary: "You revisited project alpha.",
+      evidence: [],
+      provenance: { source_event_ids: ["activity-1"] },
+      created_at: "2026-03-10T13:00:00Z",
+      activity_events: [],
+      knowledge_cards: [],
+      goals: []
+    })
+
+    await fetchCompanionReflectionDetail("reflection-1")
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/companion/reflections/reflection-1",
+        method: "GET"
+      })
+    )
+  })
+
+  it("queues a scoped rebuild through the companion lifecycle endpoint", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      status: "queued",
+      scope: "knowledge",
+      job_id: 51,
+      job_uuid: "job-uuid-51"
+    })
+
+    await queueCompanionRebuild("knowledge")
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/companion/rebuild",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: {
+          scope: "knowledge"
+        }
       })
     )
   })

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   },
   fetchPersonalizationProfile: vi.fn(),
   updatePersonalizationOptIn: vi.fn(),
+  updateCompanionPreferences: vi.fn(),
   isCompanionConsentRequiredError: vi.fn((error: { status?: number; message?: string }) => {
     return (
       error?.status === 409 &&
@@ -40,6 +41,8 @@ vi.mock("@/services/companion", () => ({
   fetchPersonalizationProfile: (...args: unknown[]) =>
     mocks.fetchPersonalizationProfile(...args),
   updatePersonalizationOptIn: (...args: unknown[]) => mocks.updatePersonalizationOptIn(...args),
+  updateCompanionPreferences: (...args: unknown[]) =>
+    mocks.updateCompanionPreferences(...args),
   isCompanionConsentRequiredError: (...args: unknown[]) =>
     mocks.isCompanionConsentRequiredError(...args),
   fetchCompanionWorkspaceSnapshot: (...args: unknown[]) =>
@@ -93,6 +96,14 @@ describe("SidepanelCompanion", () => {
     })
     mocks.updatePersonalizationOptIn.mockResolvedValue({
       enabled: true,
+      updated_at: "2026-03-10T15:00:00Z"
+    })
+    mocks.updateCompanionPreferences.mockResolvedValue({
+      enabled: true,
+      proactive_enabled: true,
+      companion_reflections_enabled: true,
+      companion_daily_reflections_enabled: true,
+      companion_weekly_reflections_enabled: true,
       updated_at: "2026-03-10T15:00:00Z"
     })
     mocks.fetchCompanionWorkspaceSnapshot.mockResolvedValue({
@@ -206,5 +217,18 @@ describe("SidepanelCompanion", () => {
     )
     expect(screen.queryByRole("link", { name: "Open collections" })).not.toBeInTheDocument()
     expect(screen.queryByRole("link", { name: "Open watchlists" })).not.toBeInTheDocument()
+  })
+
+  it("keeps destructive lifecycle controls out of the sidepanel surface", async () => {
+    renderRoute()
+
+    await screen.findByTestId("companion-page")
+    expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Purge knowledge" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Rebuild knowledge" })
+    ).not.toBeInTheDocument()
   })
 })
