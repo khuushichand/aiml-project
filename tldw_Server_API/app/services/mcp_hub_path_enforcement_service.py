@@ -7,6 +7,9 @@ from typing import Any
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+from tldw_Server_API.app.services.mcp_hub_multi_root_path_service import (
+    McpHubMultiRootPathService,
+)
 from tldw_Server_API.app.services.mcp_hub_path_scope_service import McpHubPathScopeService
 from tldw_Server_API.app.services.mcp_hub_workspace_root_resolver import McpHubWorkspaceRootResolver
 
@@ -173,8 +176,13 @@ def _extract_candidate_paths(tool_args: Any, hints: list[str]) -> list[str]:
 class McpHubPathEnforcementService:
     """Evaluate path-scoped MCP Hub policy for a concrete tool call."""
 
-    def __init__(self, path_scope_service: McpHubPathScopeService | Any | None = None) -> None:
+    def __init__(
+        self,
+        path_scope_service: McpHubPathScopeService | Any | None = None,
+        multi_root_path_service: McpHubMultiRootPathService | Any | None = None,
+    ) -> None:
         self._path_scope_service = path_scope_service or McpHubPathScopeService()
+        self._multi_root_path_service = multi_root_path_service or McpHubMultiRootPathService()
 
     async def evaluate_tool_call(
         self,
@@ -246,6 +254,96 @@ class McpHubPathEnforcementService:
         workspace_root = Path(workspace_root_text).expanduser().resolve(strict=False)
         base_path = Path(str(scope.get("cwd") or workspace_root)).expanduser().resolve(strict=False)
         path_allowlist_prefixes = _policy_allowlist_prefixes(effective_policy)
+        is_multi_root_candidate = (
+            str(scope.get("path_scope_mode") or "").strip() == "workspace_root"
+            and len(allowed_workspace_ids) > 1
+        )
+
+        if is_multi_root_candidate:
+            multi_root_result = await self._multi_root_path_service.resolve_path_bundle(
+                raw_paths=raw_paths,
+                active_workspace_id=active_workspace_id,
+                active_workspace_root=str(scope.get("workspace_root") or "").strip() or None,
+                active_base_path=str(scope.get("cwd") or workspace_root),
+                allowed_workspace_ids=allowed_workspace_ids,
+                user_id=str(getattr(context, "user_id", None) or "").strip() or None,
+                workspace_trust_source=str(scope.get("selected_workspace_trust_source") or "").strip() or None,
+                owner_scope_type=str(scope.get("selected_workspace_scope_type") or "").strip() or None,
+                owner_scope_id=scope.get("selected_workspace_scope_id"),
+            )
+            if not bool(multi_root_result.get("ok")):
+                return self._blocked_result(
+                    scope=scope,
+                    reason=str(multi_root_result.get("reason") or "path_outside_workspace_bundle"),
+                    normalized_paths=list(multi_root_result.get("normalized_paths") or []),
+                    path_allowlist_prefixes=path_allowlist_prefixes,
+                    force_approval=False,
+                    allowed_workspace_ids=allowed_workspace_ids,
+                    workspace_bundle_ids=list(multi_root_result.get("workspace_bundle_ids") or []),
+                    workspace_bundle_roots=list(multi_root_result.get("workspace_bundle_roots") or []),
+                    path_workspace_map=dict(multi_root_result.get("path_workspace_map") or {}),
+                )
+
+            normalized_paths = list(multi_root_result.get("normalized_paths") or [])
+            path_workspace_map = dict(multi_root_result.get("path_workspace_map") or {})
+            resolved_workspace_roots_by_id = dict(
+                multi_root_result.get("resolved_workspace_roots_by_id") or {}
+            )
+            for normalized_text in normalized_paths:
+                matched_workspace_id = str(path_workspace_map.get(normalized_text) or "").strip()
+                matched_root_text = str(resolved_workspace_roots_by_id.get(matched_workspace_id) or "").strip()
+                if not matched_root_text:
+                    return self._blocked_result(
+                        scope=scope,
+                        reason="path_outside_workspace_bundle",
+                        normalized_paths=normalized_paths,
+                        path_allowlist_prefixes=path_allowlist_prefixes,
+                        force_approval=False,
+                        allowed_workspace_ids=allowed_workspace_ids,
+                        workspace_bundle_ids=list(multi_root_result.get("workspace_bundle_ids") or []),
+                        workspace_bundle_roots=list(multi_root_result.get("workspace_bundle_roots") or []),
+                        path_workspace_map=path_workspace_map,
+                    )
+                normalized = Path(normalized_text).expanduser().resolve(strict=False)
+                matched_root = Path(matched_root_text).expanduser().resolve(strict=False)
+                allowlist_roots = _allowlist_roots(
+                    workspace_root=matched_root,
+                    allowlist_prefixes=path_allowlist_prefixes,
+                )
+                if not _is_within(matched_root, normalized):
+                    return self._blocked_result(
+                        scope=scope,
+                        reason="path_outside_workspace_scope",
+                        normalized_paths=normalized_paths,
+                        path_allowlist_prefixes=path_allowlist_prefixes,
+                        allowed_workspace_ids=allowed_workspace_ids,
+                        workspace_bundle_ids=list(multi_root_result.get("workspace_bundle_ids") or []),
+                        workspace_bundle_roots=list(multi_root_result.get("workspace_bundle_roots") or []),
+                        path_workspace_map=path_workspace_map,
+                    )
+                if allowlist_roots and not any(_is_within(root, normalized) for root in allowlist_roots):
+                    return self._blocked_result(
+                        scope=scope,
+                        reason="path_outside_allowlist_scope",
+                        normalized_paths=normalized_paths,
+                        path_allowlist_prefixes=path_allowlist_prefixes,
+                        allowed_workspace_ids=allowed_workspace_ids,
+                        workspace_bundle_ids=list(multi_root_result.get("workspace_bundle_ids") or []),
+                        workspace_bundle_roots=list(multi_root_result.get("workspace_bundle_roots") or []),
+                        path_workspace_map=path_workspace_map,
+                    )
+            result["normalized_paths"] = normalized_paths
+            result["scope_payload"] = self._scope_payload(
+                scope=scope,
+                normalized_paths=normalized_paths,
+                path_allowlist_prefixes=path_allowlist_prefixes,
+                allowed_workspace_ids=allowed_workspace_ids,
+                workspace_bundle_ids=list(multi_root_result.get("workspace_bundle_ids") or []),
+                workspace_bundle_roots=list(multi_root_result.get("workspace_bundle_roots") or []),
+                path_workspace_map=path_workspace_map,
+            )
+            return result
+
         allowlist_roots = _allowlist_roots(
             workspace_root=workspace_root,
             allowlist_prefixes=path_allowlist_prefixes,
@@ -292,6 +390,9 @@ class McpHubPathEnforcementService:
         reason: str | None = None,
         path_allowlist_prefixes: list[str] | None = None,
         allowed_workspace_ids: list[str] | None = None,
+        workspace_bundle_ids: list[str] | None = None,
+        workspace_bundle_roots: list[str] | None = None,
+        path_workspace_map: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         scope_root = _scope_root_from_scope(scope)
         payload = {
@@ -309,6 +410,16 @@ class McpHubPathEnforcementService:
             payload["path_allowlist_prefixes"] = list(path_allowlist_prefixes)
         if allowed_workspace_ids:
             payload["allowed_workspace_ids"] = list(allowed_workspace_ids)
+        if workspace_bundle_ids:
+            payload["workspace_bundle_ids"] = sorted(_unique(list(workspace_bundle_ids)))
+        if workspace_bundle_roots:
+            payload["workspace_bundle_roots"] = sorted(_unique(list(workspace_bundle_roots)))
+        if path_workspace_map:
+            payload["path_workspace_map"] = {
+                key: value
+                for key, value in sorted(path_workspace_map.items(), key=lambda item: item[0])
+                if str(key or "").strip() and str(value or "").strip()
+            }
         if reason:
             payload["reason"] = reason
         return {key: value for key, value in payload.items() if value not in (None, "", [])}
@@ -322,6 +433,9 @@ class McpHubPathEnforcementService:
         path_allowlist_prefixes: list[str] | None = None,
         force_approval: bool = True,
         allowed_workspace_ids: list[str] | None = None,
+        workspace_bundle_ids: list[str] | None = None,
+        workspace_bundle_roots: list[str] | None = None,
+        path_workspace_map: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         return {
             "enabled": bool(scope.get("enabled")),
@@ -335,6 +449,9 @@ class McpHubPathEnforcementService:
                 reason=reason,
                 path_allowlist_prefixes=path_allowlist_prefixes,
                 allowed_workspace_ids=allowed_workspace_ids,
+                workspace_bundle_ids=workspace_bundle_ids,
+                workspace_bundle_roots=workspace_bundle_roots,
+                path_workspace_map=path_workspace_map,
             ),
         }
 
@@ -344,8 +461,12 @@ async def get_mcp_hub_path_enforcement_service() -> McpHubPathEnforcementService
     pool = await get_db_pool()
     repo = McpHubRepo(pool)
     await repo.ensure_tables()
+    workspace_root_resolver = McpHubWorkspaceRootResolver(repo=repo)
     return McpHubPathEnforcementService(
         path_scope_service=McpHubPathScopeService(
-            workspace_root_resolver=McpHubWorkspaceRootResolver(repo=repo),
-        )
+            workspace_root_resolver=workspace_root_resolver,
+        ),
+        multi_root_path_service=McpHubMultiRootPathService(
+            workspace_root_resolver=workspace_root_resolver,
+        ),
     )

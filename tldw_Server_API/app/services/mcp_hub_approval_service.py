@@ -140,6 +140,25 @@ def _scope_fingerprint_payload(
             values = [str(entry).strip() for entry in allowed_workspace_ids if str(entry).strip()]
             if values:
                 scope_context["allowed_workspace_ids"] = sorted(values)[:_SUMMARY_MAX_ITEMS]
+        workspace_bundle_ids = scope_payload.get("workspace_bundle_ids")
+        if isinstance(workspace_bundle_ids, list):
+            values = [str(entry).strip() for entry in workspace_bundle_ids if str(entry).strip()]
+            if values:
+                scope_context["workspace_bundle_ids"] = sorted(values)[:_SUMMARY_MAX_ITEMS]
+        workspace_bundle_roots = scope_payload.get("workspace_bundle_roots")
+        if isinstance(workspace_bundle_roots, list):
+            values = [str(entry).strip() for entry in workspace_bundle_roots if str(entry).strip()]
+            if values:
+                scope_context["workspace_bundle_roots"] = sorted(values)[:_SUMMARY_MAX_ITEMS]
+        path_workspace_map = scope_payload.get("path_workspace_map")
+        if isinstance(path_workspace_map, dict):
+            values = [
+                f"{str(key).strip()}->{str(value).strip()}"
+                for key, value in sorted(path_workspace_map.items(), key=lambda item: str(item[0]))
+                if str(key).strip() and str(value).strip()
+            ]
+            if values:
+                scope_context["path_workspace_map"] = values[:_SUMMARY_MAX_ITEMS]
         for key in ("requested_slots", "bound_slots", "missing_bound_slots", "missing_secret_slots"):
             raw = scope_payload.get(key)
             if isinstance(raw, list):

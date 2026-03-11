@@ -101,6 +101,9 @@ type PersonaGovernanceScopeContext = {
   missing_bound_slots?: string[]
   missing_secret_slots?: string[]
   workspace_id?: string | null
+  workspace_bundle_ids?: string[]
+  workspace_bundle_roots?: string[]
+  normalized_paths?: string[]
   selected_workspace_trust_source?: string | null
   selected_assignment_id?: number | null
   blocked_reason?: string | null
@@ -213,6 +216,9 @@ const _coerceGovernanceContext = (value: unknown): PersonaGovernanceScopeContext
     missing_bound_slots: _normalizeStringList(raw.missing_bound_slots),
     missing_secret_slots: _normalizeStringList(raw.missing_secret_slots),
     workspace_id: raw.workspace_id ? String(raw.workspace_id) : null,
+    workspace_bundle_ids: _normalizeStringList(raw.workspace_bundle_ids),
+    workspace_bundle_roots: _normalizeStringList(raw.workspace_bundle_roots),
+    normalized_paths: _normalizeStringList(raw.normalized_paths),
     selected_workspace_trust_source: raw.selected_workspace_trust_source
       ? String(raw.selected_workspace_trust_source)
       : null,
@@ -234,6 +240,9 @@ const _coerceGovernanceContext = (value: unknown): PersonaGovernanceScopeContext
       context.blocked_reason ||
       context.reason
     ) ||
+    Boolean(context.workspace_bundle_ids?.length) ||
+    Boolean(context.workspace_bundle_roots?.length) ||
+    Boolean(context.normalized_paths?.length) ||
     Boolean(context.requested_slots?.length) ||
     Boolean(context.bound_slots?.length) ||
     Boolean(context.missing_bound_slots?.length) ||
@@ -262,6 +271,12 @@ const _formatGovernanceDenyMessage = (
   }
   if (normalizedReason === "workspace_unresolvable_for_trust_source") {
     return "Blocked: workspace is not resolvable through the required trust source."
+  }
+  if (normalizedReason === "path_matches_multiple_workspace_roots") {
+    return "Blocked: path matched multiple trusted workspace roots."
+  }
+  if (normalizedReason === "path_outside_workspace_bundle") {
+    return "Blocked: path falls outside the allowed workspace bundle."
   }
   return null
 }
@@ -1493,7 +1508,8 @@ const SidepanelPersona = () => {
                     </div>
                     {approval.scope_context?.server_name ||
                     approval.scope_context?.server_id ||
-                    approval.scope_context?.workspace_id ? (
+                    approval.scope_context?.workspace_id ||
+                    approval.scope_context?.workspace_bundle_ids?.length ? (
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-muted">
                         {approval.scope_context?.server_name || approval.scope_context?.server_id ? (
                           <Tag color="cyan">
@@ -1503,6 +1519,16 @@ const SidepanelPersona = () => {
                         {approval.scope_context?.workspace_id ? (
                           <Tag color="cyan">{approval.scope_context.workspace_id}</Tag>
                         ) : null}
+                        {(approval.scope_context?.workspace_bundle_ids || []).map(
+                          (workspaceId) => (
+                            <Tag
+                              key={`${approval.key}-workspace-bundle-${workspaceId}`}
+                              color="purple"
+                            >
+                              {workspaceId}
+                            </Tag>
+                          )
+                        )}
                         {approval.scope_context?.selected_workspace_trust_source ? (
                           <Tag color="blue">
                             {approval.scope_context.selected_workspace_trust_source}
@@ -1511,6 +1537,11 @@ const SidepanelPersona = () => {
                         {(approval.scope_context.requested_slots || []).map((slotName) => (
                           <Tag key={`${approval.key}-${slotName}`} color="geekblue">
                             {slotName}
+                          </Tag>
+                        ))}
+                        {(approval.scope_context.normalized_paths || []).map((pathValue) => (
+                          <Tag key={`${approval.key}-path-${pathValue}`} color="magenta">
+                            {pathValue}
                           </Tag>
                         ))}
                       </div>

@@ -985,6 +985,163 @@ describe("SidepanelPersona", () => {
     expect(screen.queryByRole("button", { name: "Approve and retry" })).not.toBeInTheDocument()
   })
 
+  it("renders explicit hard-deny multi-root ambiguity messaging without approval controls", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-multiroot-deny" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        session_id: "sess-multiroot-deny",
+        step_idx: 0,
+        step_type: "mcp_tool",
+        tool: "files.read",
+        args: { paths: ["/tmp/workspace-alpha/docs/shared.md"] },
+        ok: false,
+        error: "Blocked path-scoped tool use",
+        reason_code: "path_matches_multiple_workspace_roots",
+        path_scope: {
+          workspace_bundle_ids: ["workspace-alpha", "workspace-alpha-docs"],
+          normalized_paths: ["/tmp/workspace-alpha/docs/shared.md"],
+          reason: "path_matches_multiple_workspace_roots"
+        }
+      })
+    )
+
+    await screen.findByText("Blocked: path matched multiple trusted workspace roots.")
+    expect(screen.queryByRole("button", { name: "Approve and retry" })).not.toBeInTheDocument()
+  })
+
+  it("renders multi-root approval context with exact workspace bundle and path set", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-multiroot-approval" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        session_id: "sess-multiroot-approval",
+        step_idx: 0,
+        step_type: "mcp_tool",
+        tool: "files.read",
+        args: {
+          paths: [
+            "/tmp/workspace-alpha/src/README.md",
+            "/tmp/workspace-beta/docs/index.md"
+          ]
+        },
+        ok: false,
+        error: "Runtime approval required",
+        reason_code: "APPROVAL_REQUIRED",
+        approval: {
+          approval_policy_id: 17,
+          mode: "ask_outside_profile",
+          tool_name: "files.read",
+          context_key: "user:1|group:|persona:research_assistant",
+          conversation_id: "sess-multiroot-approval",
+          scope_key: "tool:files.read|args:456",
+          reason: "path_outside_allowlist_scope",
+          duration_options: ["once", "session"],
+          arguments_summary: {
+            paths: [
+              "/tmp/workspace-alpha/src/README.md",
+              "/tmp/workspace-beta/docs/index.md"
+            ]
+          },
+          scope_context: {
+            workspace_bundle_ids: ["workspace-alpha", "workspace-beta"],
+            normalized_paths: [
+              "/tmp/workspace-alpha/src/README.md",
+              "/tmp/workspace-beta/docs/index.md"
+            ],
+            reason: "path_outside_allowlist_scope"
+          }
+        }
+      })
+    )
+
+    await screen.findByText("Runtime approval required")
+    await screen.findByText("workspace-alpha")
+    await screen.findByText("workspace-beta")
+    await screen.findByText("/tmp/workspace-alpha/src/README.md")
+    await screen.findByText("/tmp/workspace-beta/docs/index.md")
+  })
+
   it("renders policy metadata and keeps blocked steps out of approvals", async () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",

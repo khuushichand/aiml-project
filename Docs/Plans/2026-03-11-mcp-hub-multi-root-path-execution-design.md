@@ -1,6 +1,6 @@
 # MCP Hub Multi-Root Path Execution Design
 
-Status: Approved for planning
+Status: Implemented
 
 ## Goal
 
