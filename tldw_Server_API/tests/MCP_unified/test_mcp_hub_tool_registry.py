@@ -98,4 +98,3 @@ async def test_tool_registry_derives_execution_risk_and_groups_modules() -> None
     assert groups[0]["module"] == "probe"
     assert groups[0]["tool_count"] == 3
     assert groups[0]["risk_summary"]["high"] == 1
-
