@@ -25,6 +25,8 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     EffectiveExternalAccessResponse,
     ExternalSecretSetRequest,
     ExternalSecretSetResponse,
+    ExternalServerAuthTemplateResponse,
+    ExternalServerAuthTemplateUpdateRequest,
     ExternalServerCredentialSlotCreateRequest,
     ExternalServerCredentialSlotResponse,
     ExternalServerCredentialSlotUpdateRequest,
@@ -1303,6 +1305,51 @@ async def import_external_server(
     except McpHubConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _external_row_to_response(row)
+
+
+@router.get(
+    "/external-servers/{server_id}/auth-template",
+    response_model=ExternalServerAuthTemplateResponse,
+)
+async def get_external_server_auth_template(
+    server_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ExternalServerAuthTemplateResponse:
+    """Fetch the managed auth template for an external server."""
+    _ = principal
+    try:
+        row = await svc.get_external_server_auth_template(server_id=server_id)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ExternalServerAuthTemplateResponse.model_validate(row)
+
+
+@router.put(
+    "/external-servers/{server_id}/auth-template",
+    response_model=ExternalServerAuthTemplateResponse,
+)
+async def update_external_server_auth_template(
+    server_id: str,
+    payload: ExternalServerAuthTemplateUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ExternalServerAuthTemplateResponse:
+    """Create or update the managed auth template for an external server."""
+    _require_mutation_permission(principal)
+    try:
+        row = await svc.update_external_server_auth_template(
+            server_id=server_id,
+            auth_template=payload.model_dump(),
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ExternalServerAuthTemplateResponse.model_validate(row)
 
 
 @router.get(

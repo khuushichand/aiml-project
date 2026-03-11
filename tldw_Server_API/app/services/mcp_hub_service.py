@@ -1107,6 +1107,48 @@ class McpHubService:
             )
         return cleared
 
+    async def get_external_server_auth_template(
+        self,
+        *,
+        server_id: str,
+    ) -> dict[str, Any]:
+        server = await self.repo.get_external_server(server_id)
+        if not server:
+            raise ResourceNotFoundError("mcp_external_server", identifier=server_id)
+        config = dict(server.get("config") or {})
+        auth = dict(config.get("auth") or {})
+        try:
+            mappings = ManagedExternalAuthBridge._extract_template_mappings(auth) or []
+        except ValueError as exc:
+            raise BadRequestError(str(exc)) from exc
+        return {
+            "mode": "template",
+            "mappings": mappings,
+        }
+
+    async def update_external_server_auth_template(
+        self,
+        *,
+        server_id: str,
+        auth_template: dict[str, Any],
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        server = await self.repo.get_external_server(server_id)
+        if not server:
+            raise ResourceNotFoundError("mcp_external_server", identifier=server_id)
+        existing_config: dict[str, Any] = dict(server.get("config") or {})
+        next_config = dict(existing_config)
+        next_config["auth"] = {
+            "mode": "template",
+            "mappings": list(auth_template.get("mappings") or []),
+        }
+        await self.update_external_server(
+            server_id,
+            config=next_config,
+            actor_id=actor_id,
+        )
+        return await self.get_external_server_auth_template(server_id=server_id)
+
     async def import_legacy_external_server(
         self,
         *,
