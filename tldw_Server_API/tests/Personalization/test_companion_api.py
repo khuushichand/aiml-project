@@ -93,6 +93,49 @@ def test_companion_knowledge_endpoint_returns_cards(client_with_companion_db) ->
     assert payload["items"][0]["evidence"] == [{"source_id": "42"}]
 
 
+def test_companion_knowledge_detail_returns_evidence_rows(client_with_companion_db) -> None:
+    client, db = client_with_companion_db
+    event_id = db.insert_companion_activity_event(
+        user_id="1",
+        event_type="reading.saved",
+        source_type="reading_item",
+        source_id="42",
+        surface="reading",
+        dedupe_key="reading.saved:reading_item:42",
+        tags=["research", "project-alpha"],
+        provenance={"source_ids": ["42"], "capture_mode": "explicit"},
+        metadata={"title": "Example article"},
+    )
+    goal_id = db.create_companion_goal(
+        user_id="1",
+        title="Review alpha notes",
+        description="Follow up on the saved alpha reading.",
+        goal_type="manual",
+        config={},
+        progress={},
+        origin_kind="manual",
+        progress_mode="computed",
+        evidence=[{"event_id": event_id}],
+        status="active",
+    )
+    card_id = db.upsert_companion_knowledge_card(
+        user_id="1",
+        card_type="project_focus",
+        title="Current focus",
+        summary="Recent explicit activity clusters around 'project-alpha'.",
+        evidence=[{"event_id": event_id}, {"goal_id": goal_id}],
+        score=0.9,
+    )
+
+    response = client.get(f"/api/v1/companion/knowledge/{card_id}")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["id"] == card_id
+    assert payload["evidence_events"][0]["id"] == event_id
+    assert payload["evidence_goals"][0]["id"] == goal_id
+
+
 def test_companion_activity_create_records_explicit_capture(client_with_companion_db) -> None:
     client, db = client_with_companion_db
 
@@ -200,6 +243,75 @@ def test_companion_check_in_create_accepts_surface_override(client_with_companio
     rows, total = db.list_companion_activity_events("1", limit=10, offset=0)
     assert total == 1
     assert rows[0]["surface"] == "persona.sidepanel"
+
+
+def test_companion_reflection_detail_returns_provenance_and_evidence(client_with_companion_db) -> None:
+    client, db = client_with_companion_db
+    source_event_id = db.insert_companion_activity_event(
+        user_id="1",
+        event_type="reading.saved",
+        source_type="reading_item",
+        source_id="42",
+        surface="reading",
+        dedupe_key="reading.saved:reading_item:42",
+        tags=["research", "project-alpha"],
+        provenance={"source_ids": ["42"], "capture_mode": "explicit"},
+        metadata={"title": "Example article"},
+    )
+    goal_id = db.create_companion_goal(
+        user_id="1",
+        title="Review alpha notes",
+        description="Follow up on the saved alpha reading.",
+        goal_type="manual",
+        config={},
+        progress={},
+        origin_kind="manual",
+        progress_mode="computed",
+        evidence=[{"event_id": source_event_id}],
+        status="active",
+    )
+    card_id = db.upsert_companion_knowledge_card(
+        user_id="1",
+        card_type="project_focus",
+        title="Current focus",
+        summary="Recent explicit activity clusters around 'project-alpha'.",
+        evidence=[{"event_id": source_event_id}],
+        score=0.9,
+    )
+    reflection_id = db.insert_companion_activity_event(
+        user_id="1",
+        event_type="companion_reflection_generated",
+        source_type="companion_reflection",
+        source_id="2026-03-10",
+        surface="jobs.companion",
+        dedupe_key="companion.reflection:daily:2026-03-10",
+        provenance={
+            "capture_mode": "explicit",
+            "source_event_ids": [source_event_id],
+            "knowledge_card_ids": [card_id],
+            "goal_ids": [goal_id],
+        },
+        metadata={
+            "title": "Daily reflection",
+            "summary": "Existing reflection",
+            "cadence": "daily",
+            "evidence": [
+                {"kind": "knowledge_card", "card_id": card_id},
+                {"kind": "goal", "goal_id": goal_id},
+                {"kind": "activity_event", "source_event_id": source_event_id},
+            ],
+        },
+    )
+
+    response = client.get(f"/api/v1/companion/reflections/{reflection_id}")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["id"] == reflection_id
+    assert payload["provenance"]["source_event_ids"] == [source_event_id]
+    assert payload["knowledge_cards"][0]["id"] == card_id
+    assert payload["goals"][0]["id"] == goal_id
+    assert payload["activity_events"][0]["id"] == source_event_id
 
 
 def test_companion_goals_create_and_list(client_with_companion_db) -> None:

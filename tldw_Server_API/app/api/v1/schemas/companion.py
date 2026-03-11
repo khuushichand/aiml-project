@@ -31,6 +31,10 @@ class CompanionActivityListResponse(BaseModel):
     offset: int
 
 
+class CompanionActivityDetail(CompanionActivityItem):
+    """One detailed companion activity entry."""
+
+
 class CompanionActivityCreate(BaseModel):
     """Request payload for explicit companion activity capture."""
 
@@ -107,6 +111,13 @@ class CompanionKnowledgeListResponse(BaseModel):
     total: int
 
 
+class CompanionKnowledgeDetail(CompanionKnowledgeCard):
+    """Detailed response for one companion knowledge card."""
+
+    evidence_events: list[CompanionActivityItem] = Field(default_factory=list)
+    evidence_goals: list["CompanionGoal"] = Field(default_factory=list)
+
+
 class CompanionGoal(BaseModel):
     """One tracked companion goal."""
 
@@ -165,6 +176,21 @@ class CompanionReflectionItem(BaseModel):
     created_at: datetime
 
 
+class CompanionReflectionDetail(BaseModel):
+    """Detailed response for one companion reflection entry."""
+
+    id: str
+    title: str
+    cadence: str | None = None
+    summary: str
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    activity_events: list[CompanionActivityItem] = Field(default_factory=list)
+    knowledge_cards: list[CompanionKnowledgeCard] = Field(default_factory=list)
+    goals: list[CompanionGoal] = Field(default_factory=list)
+
+
 CompanionLifecycleScope = Literal["knowledge", "reflections", "derived_goals", "goal_progress"]
 
 
@@ -193,3 +219,6 @@ class CompanionLifecycleResponse(BaseModel):
     rebuilt_counts: dict[str, int] = Field(default_factory=dict)
     job_id: int | None = None
     job_uuid: str | None = None
+
+
+CompanionKnowledgeDetail.model_rebuild()

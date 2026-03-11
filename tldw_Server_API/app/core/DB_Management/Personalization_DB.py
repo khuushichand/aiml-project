@@ -817,6 +817,36 @@ class PersonalizationDB:
             finally:
                 conn.close()
 
+    def get_companion_activity_event(self, user_id: str, event_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id, event_type, source_type, source_id, surface, tags,
+                           provenance_json, metadata_json, created_at
+                    FROM companion_activity_events
+                    WHERE user_id = ? AND id = ?
+                    LIMIT 1
+                    """,
+                    (str(user_id), str(event_id)),
+                ).fetchone()
+                if row is None:
+                    return None
+                return {
+                    "id": row["id"],
+                    "event_type": row["event_type"],
+                    "source_type": row["source_type"],
+                    "source_id": row["source_id"],
+                    "surface": row["surface"],
+                    "tags": json.loads(row["tags"]) if row["tags"] else [],
+                    "provenance": json.loads(row["provenance_json"] or "{}"),
+                    "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else {},
+                    "created_at": row["created_at"],
+                }
+            finally:
+                conn.close()
+
     def delete_companion_reflection_activity_events(self, user_id: str) -> tuple[list[str], int]:
         """Delete persisted reflection activity rows and return their ids."""
         with self._lock:
@@ -945,6 +975,34 @@ class PersonalizationDB:
                     }
                     for row in rows
                 ]
+            finally:
+                conn.close()
+
+    def get_companion_knowledge_card(self, user_id: str, card_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id, card_type, title, summary, evidence_json, score, status, updated_at
+                    FROM companion_knowledge_cards
+                    WHERE user_id = ? AND id = ?
+                    LIMIT 1
+                    """,
+                    (str(user_id), str(card_id)),
+                ).fetchone()
+                if row is None:
+                    return None
+                return {
+                    "id": row["id"],
+                    "card_type": row["card_type"],
+                    "title": row["title"],
+                    "summary": row["summary"],
+                    "evidence": json.loads(row["evidence_json"] or "[]"),
+                    "score": float(row["score"]),
+                    "status": row["status"],
+                    "updated_at": row["updated_at"],
+                }
             finally:
                 conn.close()
 
@@ -1150,6 +1208,41 @@ class PersonalizationDB:
                     }
                     for row in rows
                 ]
+            finally:
+                conn.close()
+
+    def get_companion_goal(self, goal_id: str, user_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id, title, description, goal_type, config_json, progress_json,
+                           origin_kind, progress_mode, derivation_key, evidence_json,
+                           status, created_at, updated_at
+                    FROM companion_goals
+                    WHERE id = ? AND user_id = ?
+                    LIMIT 1
+                    """,
+                    (str(goal_id), str(user_id)),
+                ).fetchone()
+                if row is None:
+                    return None
+                return {
+                    "id": row["id"],
+                    "title": row["title"],
+                    "description": row["description"],
+                    "goal_type": row["goal_type"],
+                    "config": json.loads(row["config_json"] or "{}"),
+                    "progress": json.loads(row["progress_json"] or "{}"),
+                    "origin_kind": row["origin_kind"],
+                    "progress_mode": row["progress_mode"],
+                    "derivation_key": row["derivation_key"],
+                    "evidence": json.loads(row["evidence_json"] or "[]"),
+                    "status": row["status"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
             finally:
                 conn.close()
 
