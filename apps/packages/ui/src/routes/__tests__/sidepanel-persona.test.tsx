@@ -571,6 +571,82 @@ describe("SidepanelPersona", () => {
     })
   })
 
+  it("renders external runtime approval context with server and slot set", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-ext-approval" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        session_id: "sess-ext-approval",
+        step_idx: 0,
+        step_type: "mcp_tool",
+        tool: "ext.docs.search",
+        args: { query: "approval needed" },
+        ok: false,
+        error: "Runtime approval required",
+        reason_code: "APPROVAL_REQUIRED",
+        approval: {
+          approval_policy_id: 17,
+          mode: "ask_outside_profile",
+          tool_name: "ext.docs.search",
+          context_key: "user:1|group:|persona:research_assistant",
+          conversation_id: "sess-ext-approval",
+          scope_key: "tool:ext.docs.search|args:123",
+          reason: "external_confirmation_required",
+          duration_options: ["once", "session"],
+          arguments_summary: { query: "approval needed" },
+          scope_context: {
+            server_id: "docs",
+            requested_slots: ["token_readonly"]
+          }
+        }
+      })
+    )
+
+    await screen.findByText("Runtime approval required")
+    await screen.findByText("docs")
+    await screen.findByText("token_readonly")
+  })
+
   it("records deny as current-request-only and does not retry the tool", async () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",
@@ -679,6 +755,93 @@ describe("SidepanelPersona", () => {
       expect(sentPayloads.some((payload) => payload.type === "retry_tool_call")).toBe(false)
     })
   })
+
+  it.each([
+    {
+      reasonCode: "required_slot_not_granted",
+      label: "Credential slots not granted: token_readonly",
+      payload: {
+        external_access: {
+          server_id: "docs",
+          missing_bound_slots: ["token_readonly"],
+          blocked_reason: "required_slot_not_granted"
+        }
+      }
+    },
+    {
+      reasonCode: "required_slot_secret_missing",
+      label: "Credential secrets missing: token_readonly",
+      payload: {
+        external_access: {
+          server_id: "docs",
+          missing_secret_slots: ["token_readonly"],
+          blocked_reason: "required_slot_secret_missing"
+        }
+      }
+    }
+  ])(
+    "renders explicit hard-deny external slot messaging for $reasonCode",
+    async ({ reasonCode, label, payload }) => {
+      mocks.getConfig.mockResolvedValue({
+        serverUrl: "http://127.0.0.1:8000",
+        authMode: "single-user",
+        apiKey: "persona-key"
+      })
+      mocks.fetchWithAuth.mockImplementation((path: string) => {
+        if (path.includes("/persona/catalog")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+          })
+        }
+        if (path.includes("/persona/sessions")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => []
+          })
+        }
+        if (path.includes("/persona/session")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ session_id: "sess-ext-deny" })
+          })
+        }
+        return Promise.resolve({
+          ok: false,
+          error: `unhandled path: ${path}`,
+          json: async () => ({})
+        })
+      })
+
+      render(<SidepanelPersona />)
+      fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+      await waitFor(() => {
+        expect(MockWebSocket.instances).toHaveLength(1)
+      })
+
+      const ws = MockWebSocket.instances[0]
+      ws.emitOpen()
+
+      ws.emitMessage(
+        JSON.stringify({
+          event: "tool_result",
+          session_id: "sess-ext-deny",
+          step_idx: 0,
+          step_type: "mcp_tool",
+          tool: "ext.docs.search",
+          args: { query: "blocked" },
+          ok: false,
+          error: "Blocked external credential use",
+          reason_code: reasonCode,
+          ...payload
+        })
+      )
+
+      await screen.findByText(label)
+      expect(screen.queryByRole("button", { name: "Approve and retry" })).not.toBeInTheDocument()
+    }
+  )
 
   it("renders policy metadata and keeps blocked steps out of approvals", async () => {
     mocks.getConfig.mockResolvedValue({

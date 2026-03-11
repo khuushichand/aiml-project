@@ -911,6 +911,115 @@ def test_persona_tool_result_surfaces_runtime_approval_payload(tmp_path, monkeyp
             }
 
 
+def test_persona_tool_result_surfaces_external_access_hard_deny(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    base = tmp_path / "user_db_mcp_external_deny"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-ws-mcp-external-deny-test")
+    try:
+        persona_id = db.create_persona_profile(
+            {
+                "id": "research_assistant",
+                "user_id": "1",
+                "name": "Research Assistant",
+                "mode": "session_scoped",
+                "system_prompt": "Helper",
+                "is_active": True,
+            }
+        )
+        _ = db.replace_persona_policy_rules(
+            persona_id=persona_id,
+            user_id="1",
+            rules=[{"rule_kind": "mcp_tool", "rule_name": "ext.docs.search", "allowed": True}],
+        )
+        _ = db.create_persona_session(
+            {
+                "id": "sess_policy_external_deny_mcp",
+                "persona_id": persona_id,
+                "user_id": "1",
+                "mode": "session_scoped",
+                "reuse_allowed": False,
+                "status": "active",
+                "scope_snapshot_json": {},
+            }
+        )
+    finally:
+        db.close_connection()
+
+    manager = SessionManager()
+    manager.put_plan(
+        session_id="sess_policy_external_deny_mcp",
+        user_id="1",
+        persona_id="research_assistant",
+        plan_id="plan_policy_external_deny_mcp",
+        steps=[
+            {
+                "idx": 0,
+                "step_type": "mcp_tool",
+                "tool": "ext.docs.search",
+                "args": {"query": "blocked"},
+            }
+        ],
+    )
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            return SimpleNamespace(
+                error=SimpleNamespace(
+                    message="Blocked external credential use",
+                    data={
+                        "governance": {
+                            "action": "deny",
+                            "status": "deny",
+                            "reason_code": "required_slot_secret_missing",
+                            "external_access": {
+                                "server_id": "docs",
+                                "requested_slots": ["token_readonly"],
+                                "missing_secret_slots": ["token_readonly"],
+                                "blocked_reason": "required_slot_secret_missing",
+                            },
+                        }
+                    },
+                ),
+                result=None,
+            )
+
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: _FakeServer())
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": "sess_policy_external_deny_mcp",
+                        "plan_id": "plan_policy_external_deny_mcp",
+                        "approved_steps": [0],
+                    }
+                )
+            )
+
+            evt_result = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+            assert evt_result.get("ok") is False
+            assert evt_result.get("reason_code") == "required_slot_secret_missing"
+            assert evt_result.get("tool") == "ext.docs.search"
+            assert evt_result.get("external_access", {}).get("server_id") == "docs"
+            assert evt_result.get("external_access", {}).get("missing_secret_slots") == [
+                "token_readonly"
+            ]
+
+
 def test_persona_retry_tool_call_reexecutes_mcp_step(tmp_path, monkeypatch):
     from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB

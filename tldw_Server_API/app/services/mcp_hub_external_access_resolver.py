@@ -5,6 +5,9 @@ from typing import Any
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+from tldw_Server_API.app.services.mcp_hub_external_auth_service import (
+    ManagedExternalAuthBridge,
+)
 
 
 @dataclass
@@ -12,6 +15,11 @@ class McpHubExternalAccessResolver:
     """Resolve effective external server access for an assignment."""
 
     repo: McpHubRepo
+    auth_bridge: ManagedExternalAuthBridge | None = None
+
+    def __post_init__(self) -> None:
+        if self.auth_bridge is None:
+            self.auth_bridge = ManagedExternalAuthBridge()
 
     async def resolve(
         self,
@@ -155,6 +163,7 @@ class McpHubExternalAccessResolver:
             if slots:
                 slot_rows: list[dict[str, Any]] = []
                 active_slot_states = dict(state.get("slots") or {})
+                requested_slots = self.auth_bridge.get_required_slot_names(server_config=server)
                 for slot in slots:
                     slot_name = str(slot.get("slot_name") or "").strip().lower()
                     slot_state = dict(active_slot_states.get(slot_name) or {})
@@ -197,11 +206,49 @@ class McpHubExternalAccessResolver:
                         }
                     )
 
-                runtime_executable = any(bool(slot.get("runtime_usable")) for slot in slot_rows)
+                slot_by_name = {
+                    str(slot.get("slot_name") or "").strip().lower(): slot
+                    for slot in slot_rows
+                    if str(slot.get("slot_name") or "").strip()
+                }
+                bound_slots = [
+                    slot_name
+                    for slot_name in requested_slots
+                    if isinstance(slot_by_name.get(slot_name), dict)
+                    and bool(slot_by_name[slot_name].get("granted_by"))
+                    and not bool(slot_by_name[slot_name].get("disabled_by_assignment"))
+                ]
+                missing_bound_slots = [
+                    slot_name for slot_name in requested_slots if slot_name not in bound_slots
+                ]
+                missing_secret_slots = [
+                    slot_name
+                    for slot_name in requested_slots
+                    if slot_name in bound_slots
+                    and isinstance(slot_by_name.get(slot_name), dict)
+                    and not bool(slot_by_name[slot_name].get("secret_available"))
+                ]
+                runtime_executable = (
+                    bool(requested_slots)
+                    and not missing_bound_slots
+                    and not missing_secret_slots
+                    and allows_external
+                    and server_source == "managed"
+                    and not superseded_by
+                    and enabled
+                ) if requested_slots else any(bool(slot.get("runtime_usable")) for slot in slot_rows)
                 disabled = any(bool(slot.get("disabled_by_assignment")) for slot in slot_rows)
-                secret_available = any(bool(slot.get("secret_available")) for slot in slot_rows)
+                secret_available = all(
+                    bool(slot.get("secret_available"))
+                    for slot in slot_rows
+                    if str(slot.get("slot_name") or "").strip().lower() in requested_slots
+                ) if requested_slots else any(bool(slot.get("secret_available")) for slot in slot_rows)
                 blocked_reason = None
-                if disabled and not runtime_executable:
+                if requested_slots and missing_bound_slots:
+                    blocked_reason = "required_slot_not_granted"
+                elif requested_slots and missing_secret_slots:
+                    blocked_reason = "required_slot_secret_missing"
+                elif disabled and not runtime_executable:
                     blocked_reason = "disabled_by_assignment"
                 elif server_source != "managed":
                     blocked_reason = "legacy_server_not_bindable"
@@ -227,6 +274,10 @@ class McpHubExternalAccessResolver:
                         "secret_available": secret_available,
                         "runtime_executable": runtime_executable,
                         "blocked_reason": blocked_reason,
+                        "requested_slots": requested_slots,
+                        "bound_slots": bound_slots,
+                        "missing_bound_slots": missing_bound_slots,
+                        "missing_secret_slots": missing_secret_slots,
                         "slots": slot_rows,
                     }
                 )

@@ -1782,18 +1782,45 @@ class MCPProtocol:
         tool_name: str,
         context: RequestContext,
     ) -> dict[str, Any]:
+        deny_only_reasons = {
+            "external_access_unavailable",
+            "external_server_not_bound",
+            "invalid_external_tool_name",
+            "required_slot_not_granted",
+            "required_slot_secret_missing",
+        }
         if not str(tool_name or "").startswith("ext."):
-            return {"enabled": False, "within_scope": True, "reason": None, "scope_payload": None}
+            return {
+                "enabled": False,
+                "within_scope": True,
+                "reason": None,
+                "scope_payload": None,
+                "hard_deny": False,
+            }
         policy = dict(effective_policy or {})
         if not bool(policy.get("enabled", False)):
-            return {"enabled": False, "within_scope": True, "reason": None, "scope_payload": None}
+            return {
+                "enabled": False,
+                "within_scope": True,
+                "reason": None,
+                "scope_payload": None,
+                "hard_deny": False,
+            }
         sources = policy.get("sources")
         if not isinstance(sources, list):
             return {
                 "enabled": True,
                 "within_scope": False,
                 "reason": "external_access_unavailable",
-                "scope_payload": {"server_id": tool_name.split(".", 2)[1], "reason": "external_access_unavailable"},
+                "scope_payload": {
+                    "server_id": tool_name.split(".", 2)[1],
+                    "reason": "external_access_unavailable",
+                    "blocked_reason": "external_access_unavailable",
+                    "requested_slots": [],
+                    "missing_bound_slots": [],
+                    "missing_secret_slots": [],
+                },
+                "hard_deny": True,
             }
         parts = str(tool_name or "").split(".", 2)
         if len(parts) != 3 or not parts[1]:
@@ -1801,7 +1828,14 @@ class MCPProtocol:
                 "enabled": True,
                 "within_scope": False,
                 "reason": "invalid_external_tool_name",
-                "scope_payload": {"reason": "invalid_external_tool_name"},
+                "scope_payload": {
+                    "reason": "invalid_external_tool_name",
+                    "blocked_reason": "invalid_external_tool_name",
+                    "requested_slots": [],
+                    "missing_bound_slots": [],
+                    "missing_secret_slots": [],
+                },
+                "hard_deny": True,
             }
         server_id = parts[1]
         metadata = context.metadata if isinstance(getattr(context, "metadata", None), dict) else {}
@@ -1824,7 +1858,15 @@ class MCPProtocol:
                     "enabled": True,
                     "within_scope": False,
                     "reason": "external_access_unavailable",
-                    "scope_payload": {"server_id": server_id, "reason": "external_access_unavailable"},
+                    "scope_payload": {
+                        "server_id": server_id,
+                        "reason": "external_access_unavailable",
+                        "blocked_reason": "external_access_unavailable",
+                        "requested_slots": [],
+                        "missing_bound_slots": [],
+                        "missing_secret_slots": [],
+                    },
+                    "hard_deny": True,
                 }
 
         rows = cached.get("servers") if isinstance(cached, dict) else None
@@ -1840,13 +1882,47 @@ class MCPProtocol:
                 "enabled": True,
                 "within_scope": False,
                 "reason": "external_server_not_bound",
-                "scope_payload": {"server_id": server_id, "reason": "external_server_not_bound"},
+                "scope_payload": {
+                    "server_id": server_id,
+                    "reason": "external_server_not_bound",
+                    "blocked_reason": "external_server_not_bound",
+                    "requested_slots": [],
+                    "missing_bound_slots": [],
+                    "missing_secret_slots": [],
+                },
+                "hard_deny": True,
             }
         runtime_executable = bool(server_row.get("runtime_executable"))
         reason = str(server_row.get("blocked_reason") or "").strip() or None
+        requested_slots = [
+            str(slot).strip()
+            for slot in (server_row.get("requested_slots") or [])
+            if str(slot).strip()
+        ]
+        bound_slots = [
+            str(slot).strip()
+            for slot in (server_row.get("bound_slots") or [])
+            if str(slot).strip()
+        ]
+        missing_bound_slots = [
+            str(slot).strip()
+            for slot in (server_row.get("missing_bound_slots") or [])
+            if str(slot).strip()
+        ]
+        missing_secret_slots = [
+            str(slot).strip()
+            for slot in (server_row.get("missing_secret_slots") or [])
+            if str(slot).strip()
+        ]
         scope_payload = {
             "server_id": server_id,
+            "server_name": str(server_row.get("server_name") or "").strip() or None,
             "reason": reason or ("external_server_allowed" if runtime_executable else "external_server_not_bound"),
+            "blocked_reason": reason or ("external_server_allowed" if runtime_executable else "external_server_not_bound"),
+            "requested_slots": requested_slots,
+            "bound_slots": bound_slots,
+            "missing_bound_slots": missing_bound_slots,
+            "missing_secret_slots": missing_secret_slots,
         }
         if not runtime_executable:
             return {
@@ -1854,12 +1930,14 @@ class MCPProtocol:
                 "within_scope": False,
                 "reason": reason or "external_server_not_bound",
                 "scope_payload": scope_payload,
+                "hard_deny": (reason or "external_server_not_bound") in deny_only_reasons,
             }
         return {
             "enabled": True,
             "within_scope": True,
             "reason": None,
             "scope_payload": scope_payload,
+            "hard_deny": False,
         }
 
     async def _handle_tools_call(
@@ -1895,6 +1973,31 @@ class MCPProtocol:
             raise PermissionError(f"Tool '{tool_name}' not allowed by execution context")
         effective_policy = await self._resolve_effective_tool_policy(context)
         within_effective_policy = self._is_tool_allowed_by_effective_policy(tool_name, tool_args, effective_policy)
+        external_access_result = await self._evaluate_external_access(
+            effective_policy=effective_policy,
+            tool_name=tool_name,
+            context=context,
+        )
+        external_block_reason = str(external_access_result.get("reason") or "").strip()
+        if bool(external_access_result.get("hard_deny")) or external_block_reason in {
+            "required_slot_not_granted",
+            "required_slot_secret_missing",
+        }:
+            external_scope = (
+                dict(external_access_result.get("scope_payload") or {})
+                if isinstance(external_access_result.get("scope_payload"), dict)
+                else {}
+            )
+            blocked_reason = external_block_reason or "external_access_denied"
+            raise GovernanceDeniedError(
+                "Blocked external credential use",
+                governance={
+                    "action": "deny",
+                    "status": "deny",
+                    "reason_code": blocked_reason,
+                    "external_access": external_scope,
+                },
+            )
 
         # Find module for tool
         module = await self.module_registry.find_module_for_tool(tool_name)
@@ -2032,11 +2135,6 @@ class MCPProtocol:
             tool_args=tool_args,
             context=context,
             tool_def=tool_def if isinstance(tool_def, dict) else None,
-        )
-        external_access_result = await self._evaluate_external_access(
-            effective_policy=effective_policy,
-            tool_name=tool_name,
-            context=context,
         )
         within_resolved_scope = bool(path_scope_result.get("within_scope", True)) and bool(
             external_access_result.get("within_scope", True)

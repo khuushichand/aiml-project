@@ -35,13 +35,13 @@ class _FakeRegistry:
         self.module = module
 
     async def find_module_for_tool(self, tool_name: str):  # noqa: ANN001
-        if tool_name == "files.read":
+        if tool_name == self.module._tool_def.get("name"):
             return self.module
         return None
 
     def get_module_id_for_tool(self, tool_name: str) -> str | None:
-        if tool_name == "files.read":
-            return "files"
+        if tool_name == self.module._tool_def.get("name"):
+            return self.module.name
         return None
 
 
@@ -72,6 +72,15 @@ class _FakeApprovalService:
                 "arguments_summary": {"path": "../README.md"},
             },
         }
+
+
+class _NoopApprovalService:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def evaluate_tool_call(self, **kwargs) -> dict:  # noqa: ANN003
+        self.calls.append(dict(kwargs))
+        return {"status": "approval_required", "approval": {"tool_name": kwargs["tool_name"]}}
 
 
 @pytest.mark.asyncio
@@ -170,3 +179,143 @@ async def test_handle_tools_call_raises_approval_for_path_scope_violation(monkey
     assert fake_approval_service.calls[0]["within_effective_policy"] is False
     assert fake_approval_service.calls[0]["force_approval"] is True
     assert fake_approval_service.calls[0]["approval_reason"] == "path_outside_current_folder_scope"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("blocked_reason", "scope_payload"),
+    [
+        (
+            "required_slot_not_granted",
+            {
+                "server_id": "docs",
+                "requested_slots": ["token_readonly"],
+                "missing_bound_slots": ["token_readonly"],
+                "blocked_reason": "required_slot_not_granted",
+            },
+        ),
+        (
+            "required_slot_secret_missing",
+            {
+                "server_id": "docs",
+                "requested_slots": ["token_readonly"],
+                "missing_secret_slots": ["token_readonly"],
+                "blocked_reason": "required_slot_secret_missing",
+            },
+        ),
+    ],
+)
+async def test_handle_tools_call_hard_denies_external_slot_blockers_without_approval(
+    monkeypatch,
+    blocked_reason: str,
+    scope_payload: dict,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
+    from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+    from tldw_Server_API.app.services import mcp_hub_approval_service as approval_service_mod
+
+    tool_def = {
+        "name": "ext.docs.search",
+        "description": "Search docs",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        "metadata": {
+            "category": "retrieval",
+            "uses_network": True,
+        },
+    }
+    fake_module = _FakeModule(tool_def)
+    fake_approval_service = _NoopApprovalService()
+
+    async def _fake_get_approval_service():
+        return fake_approval_service
+
+    monkeypatch.setattr(approval_service_mod, "get_mcp_hub_approval_service", _fake_get_approval_service)
+
+    protocol = MCPProtocol()
+    protocol.module_registry = _FakeRegistry(fake_module)
+
+    async def _resolve_effective_policy(_context):
+        return {
+            "enabled": True,
+            "allowed_tools": ["ext.docs.search"],
+            "approval_policy_id": 1,
+            "approval_mode": "ask_outside_profile",
+            "sources": [{"assignment_id": 11, "profile_id": 7}],
+        }
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    async def _path_scope(*_args, **_kwargs):
+        return {"enabled": False, "within_scope": True, "reason": None, "scope_payload": None}
+
+    async def _external_access(*_args, **_kwargs):
+        return {
+            "enabled": True,
+            "within_scope": False,
+            "reason": blocked_reason,
+            "scope_payload": dict(scope_payload),
+        }
+
+    protocol._resolve_effective_tool_policy = _resolve_effective_policy  # type: ignore[method-assign]
+    protocol._has_module_permission = _allow  # type: ignore[method-assign]
+    protocol._has_tool_permission = _allow  # type: ignore[method-assign]
+    protocol._is_tool_allowed_by_context = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+    protocol._evaluate_path_scope = _path_scope  # type: ignore[method-assign]
+    protocol._evaluate_external_access = _external_access  # type: ignore[method-assign]
+
+    context = RequestContext(
+        request_id=f"req-{blocked_reason}",
+        user_id="7",
+        client_id="test-client",
+        session_id="sess-ext-deny",
+        metadata={"persona_id": "researcher"},
+    )
+
+    with pytest.raises(PermissionError):
+        await protocol._handle_tools_call(
+            {"name": "ext.docs.search", "arguments": {"query": "approval needed"}},
+            context,
+        )
+
+    assert fake_approval_service.calls == []
+
+
+def test_external_slot_scope_key_includes_requested_slots() -> None:
+    from tldw_Server_API.app.services.mcp_hub_approval_service import _scope_key_for_tool_call
+
+    scope_key_a = _scope_key_for_tool_call(
+        "ext.docs.search",
+        {"query": "same"},
+        scope_payload={
+            "server_id": "docs",
+            "requested_slots": ["token_readonly"],
+            "blocked_reason": "external_confirmation_required",
+        },
+    )
+    scope_key_b = _scope_key_for_tool_call(
+        "ext.docs.search",
+        {"query": "same"},
+        scope_payload={
+            "server_id": "docs",
+            "requested_slots": ["token_readonly", "token_write"],
+            "blocked_reason": "external_confirmation_required",
+        },
+    )
+    scope_key_c = _scope_key_for_tool_call(
+        "ext.docs.write",
+        {"query": "same"},
+        scope_payload={
+            "server_id": "docs",
+            "requested_slots": ["token_readonly"],
+            "blocked_reason": "external_confirmation_required",
+        },
+    )
+
+    assert scope_key_a != scope_key_b
+    assert scope_key_a != scope_key_c

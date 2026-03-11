@@ -110,16 +110,26 @@ def _scope_fingerprint_payload(
             "workspace_root",
             "scope_root",
             "server_id",
+            "server_name",
             "reason",
         ):
             value = str(scope_payload.get(key) or "").strip()
             if value:
                 scope_context[key] = value
+        blocked_reason = str(scope_payload.get("blocked_reason") or "").strip()
+        if blocked_reason:
+            scope_context["blocked_reason"] = blocked_reason
         normalized_paths = scope_payload.get("normalized_paths")
         if isinstance(normalized_paths, list):
             values = [str(entry).strip() for entry in normalized_paths if str(entry).strip()]
             if values:
                 scope_context["normalized_paths"] = values[:_SUMMARY_MAX_ITEMS]
+        for key in ("requested_slots", "bound_slots", "missing_bound_slots", "missing_secret_slots"):
+            raw = scope_payload.get(key)
+            if isinstance(raw, list):
+                values = [str(entry).strip() for entry in raw if str(entry).strip()]
+                if values:
+                    scope_context[key] = sorted(values)[:_SUMMARY_MAX_ITEMS]
         if scope_context:
             payload["scope_context"] = scope_context
     return payload

@@ -436,6 +436,10 @@ class EffectiveExternalAccessEntryResponse(BaseModel):
     secret_available: bool = False
     runtime_executable: bool = False
     blocked_reason: str | None = None
+    requested_slots: list[str] = Field(default_factory=list)
+    bound_slots: list[str] = Field(default_factory=list)
+    missing_bound_slots: list[str] = Field(default_factory=list)
+    missing_secret_slots: list[str] = Field(default_factory=list)
     slots: list[EffectiveExternalAccessSlotResponse] = Field(default_factory=list)
 
 

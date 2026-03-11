@@ -464,6 +464,7 @@ def _build_tool_result(
     reason_code: str | None = None,
     policy: dict[str, Any] | None = None,
     approval: dict[str, Any] | None = None,
+    external_access: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "ok": bool(ok),
@@ -479,6 +480,8 @@ def _build_tool_result(
         payload["policy"] = dict(policy)
     if isinstance(approval, dict):
         payload["approval"] = dict(approval)
+    if isinstance(external_access, dict):
+        payload["external_access"] = dict(external_access)
     return payload
 
 
@@ -2625,6 +2628,22 @@ async def persona_stream(
                     if isinstance(error_data, dict) and isinstance(error_data.get("approval"), dict)
                     else None
                 )
+                governance_payload = (
+                    dict(error_data.get("governance") or {})
+                    if isinstance(error_data, dict) and isinstance(error_data.get("governance"), dict)
+                    else None
+                )
+                external_access_payload = (
+                    dict(governance_payload.get("external_access") or {})
+                    if isinstance(governance_payload, dict)
+                    and isinstance(governance_payload.get("external_access"), dict)
+                    else None
+                )
+                reason_code = (
+                    str(governance_payload.get("reason_code") or "").strip()
+                    if isinstance(governance_payload, dict)
+                    else ""
+                )
                 _increment_persona_metric(
                     "persona_ws_tool_calls_total",
                     {"kind": "mcp", "status": "error"},
@@ -2633,9 +2652,14 @@ async def persona_stream(
                     ok=False,
                     output=None,
                     error=resp.error.message,
-                    reason_code="APPROVAL_REQUIRED" if approval_payload else "TOOL_EXECUTION_ERROR",
+                    reason_code=(
+                        "APPROVAL_REQUIRED"
+                        if approval_payload
+                        else reason_code or "TOOL_EXECUTION_ERROR"
+                    ),
                     policy=policy,
                     approval=approval_payload,
+                    external_access=external_access_payload,
                 )
             _increment_persona_metric(
                 "persona_ws_tool_calls_total",

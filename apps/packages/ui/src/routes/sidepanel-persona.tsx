@@ -65,6 +65,7 @@ type PersonaRuntimeApprovalPayload = {
   reason?: string | null
   duration_options?: string[]
   arguments_summary?: Record<string, unknown>
+  scope_context?: PersonaExternalAccessContext | null
 }
 
 type PersonaRuntimeApprovalDuration = "once" | "session" | "conversation"
@@ -80,6 +81,7 @@ type PersonaRuntimeApprovalRequest = {
   reason?: string | null
   duration_options: PersonaRuntimeApprovalDuration[]
   arguments_summary: Record<string, unknown>
+  scope_context?: PersonaExternalAccessContext | null
   selected_duration: PersonaRuntimeApprovalDuration
   session_id?: string | null
   plan_id?: string | null
@@ -89,6 +91,16 @@ type PersonaRuntimeApprovalRequest = {
   args?: Record<string, unknown>
   why?: string | null
   description?: string | null
+}
+
+type PersonaExternalAccessContext = {
+  server_id?: string | null
+  server_name?: string | null
+  requested_slots?: string[]
+  bound_slots?: string[]
+  missing_bound_slots?: string[]
+  missing_secret_slots?: string[]
+  blocked_reason?: string | null
 }
 
 type PersonaSessionSummary = {
@@ -177,6 +189,56 @@ const _approvalDecisionPayload = (
     return { duration: "session" }
   }
   return { duration: "once" }
+}
+
+const _normalizeStringList = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => String(entry || "").trim())
+    .filter((entry) => entry.length > 0)
+}
+
+const _coerceExternalAccessContext = (value: unknown): PersonaExternalAccessContext | null => {
+  if (!value || typeof value !== "object") return null
+  const raw = value as Record<string, unknown>
+  const context: PersonaExternalAccessContext = {
+    server_id: raw.server_id ? String(raw.server_id) : null,
+    server_name: raw.server_name ? String(raw.server_name) : null,
+    requested_slots: _normalizeStringList(raw.requested_slots),
+    bound_slots: _normalizeStringList(raw.bound_slots),
+    missing_bound_slots: _normalizeStringList(raw.missing_bound_slots),
+    missing_secret_slots: _normalizeStringList(raw.missing_secret_slots),
+    blocked_reason: raw.blocked_reason ? String(raw.blocked_reason) : null
+  }
+  const hasContent =
+    Boolean(context.server_id || context.server_name || context.blocked_reason) ||
+    Boolean(context.requested_slots?.length) ||
+    Boolean(context.bound_slots?.length) ||
+    Boolean(context.missing_bound_slots?.length) ||
+    Boolean(context.missing_secret_slots?.length)
+  return hasContent ? context : null
+}
+
+const _formatExternalAccessDenyMessage = (
+  context: PersonaExternalAccessContext | null,
+  reasonCode: string | null
+): string | null => {
+  const normalizedReason = String(reasonCode || context?.blocked_reason || "")
+    .trim()
+    .toLowerCase()
+  if (normalizedReason === "required_slot_not_granted") {
+    const slots = context?.missing_bound_slots?.length
+      ? context.missing_bound_slots
+      : context?.requested_slots || []
+    return slots.length ? `Credential slots not granted: ${slots.join(", ")}` : null
+  }
+  if (normalizedReason === "required_slot_secret_missing") {
+    const slots = context?.missing_secret_slots?.length
+      ? context.missing_secret_slots
+      : context?.requested_slots || []
+    return slots.length ? `Credential secrets missing: ${slots.join(", ")}` : null
+  }
+  return null
 }
 
 const _readBoolPreference = (key: string, fallback: boolean): boolean => {
@@ -459,6 +521,7 @@ const SidepanelPersona = () => {
             ? (payload.approval as PersonaRuntimeApprovalPayload)
             : null
         if (approvalPayload) {
+          const scopeContext = _coerceExternalAccessContext(approvalPayload.scope_context)
           const durationOptions = Array.isArray(approvalPayload.duration_options)
             ? approvalPayload.duration_options
                 .map((entry) => String(entry || "").trim())
@@ -493,6 +556,7 @@ const SidepanelPersona = () => {
               typeof approvalPayload.arguments_summary === "object"
                 ? (approvalPayload.arguments_summary as Record<string, unknown>)
                 : {},
+            scope_context: scopeContext,
             session_id: payload?.session_id ? String(payload.session_id) : sessionId,
             plan_id: payload?.plan_id ? String(payload.plan_id) : null,
             step_idx:
@@ -513,6 +577,15 @@ const SidepanelPersona = () => {
             return [...next, request]
           })
           appendLog("notice", `Runtime approval required for ${request.tool_name}`)
+          return
+        }
+        const externalAccess = _coerceExternalAccessContext(payload?.external_access)
+        const externalDenyMessage = _formatExternalAccessDenyMessage(
+          externalAccess,
+          payload?.reason_code ? String(payload.reason_code) : null
+        )
+        if (externalDenyMessage) {
+          appendLog("notice", externalDenyMessage)
           return
         }
         const output = payload?.output ?? payload?.result
@@ -1391,6 +1464,18 @@ const SidepanelPersona = () => {
                       {approval.mode ? <Tag color="blue">{approval.mode}</Tag> : null}
                       {approval.reason ? <Tag color="red">{approval.reason}</Tag> : null}
                     </div>
+                    {approval.scope_context?.server_name || approval.scope_context?.server_id ? (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-muted">
+                        <Tag color="cyan">
+                          {approval.scope_context.server_name || approval.scope_context.server_id}
+                        </Tag>
+                        {(approval.scope_context.requested_slots || []).map((slotName) => (
+                          <Tag key={`${approval.key}-${slotName}`} color="geekblue">
+                            {slotName}
+                          </Tag>
+                        ))}
+                      </div>
+                    ) : null}
                     {Object.keys(approval.arguments_summary).length ? (
                       <pre className="mt-2 overflow-auto rounded bg-bg p-2 text-[11px] text-text">
                         {JSON.stringify(approval.arguments_summary, null, 2)}
