@@ -1,12 +1,14 @@
 import { useState } from "react"
 import { Tabs, Typography } from "antd"
 
-import { AcpProfilesTab } from "./AcpProfilesTab"
+import { ApprovalPoliciesTab } from "./ApprovalPoliciesTab"
+import { PermissionProfilesTab } from "./PermissionProfilesTab"
+import { PolicyAssignmentsTab } from "./PolicyAssignmentsTab"
 import { ToolCatalogsTab } from "./ToolCatalogsTab"
 import { ExternalServersTab } from "./ExternalServersTab"
 
 export const McpHubPage = () => {
-  const [activeTab, setActiveTab] = useState("acp-profiles")
+  const [activeTab, setActiveTab] = useState("profiles")
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 p-4">
@@ -18,18 +20,28 @@ export const McpHubPage = () => {
         onChange={setActiveTab}
         items={[
           {
-            key: "acp-profiles",
-            label: "ACP Profiles",
-            children: <AcpProfilesTab />
+            key: "profiles",
+            label: "Profiles",
+            children: <PermissionProfilesTab />
+          },
+          {
+            key: "assignments",
+            label: "Assignments",
+            children: <PolicyAssignmentsTab />
+          },
+          {
+            key: "approvals",
+            label: "Approvals",
+            children: <ApprovalPoliciesTab />
           },
           {
             key: "tool-catalogs",
-            label: "Tool Catalogs",
+            label: "Catalog",
             children: <ToolCatalogsTab />
           },
           {
-            key: "external-servers",
-            label: "External Servers",
+            key: "credentials",
+            label: "Credentials",
             children: <ExternalServersTab />
           }
         ]}

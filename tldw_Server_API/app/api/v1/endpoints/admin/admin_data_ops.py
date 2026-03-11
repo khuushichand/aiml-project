@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone as dt_timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -20,25 +19,33 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     BackupScheduleUpdateRequest,
     BackupRestoreRequest,
     BackupRestoreResponse,
+    DataSubjectRequestCreateRequest,
+    DataSubjectRequestCreateResponse,
+    DataSubjectRequestItem,
+    DataSubjectRequestListResponse,
+    DataSubjectRequestPreviewRequest,
+    DataSubjectRequestPreviewResponse,
     RetentionPoliciesResponse,
     RetentionPolicy,
     RetentionPolicyUpdateRequest,
 )
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, is_single_user_principal
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.repos.data_subject_requests_repo import (
+    AuthnzDataSubjectRequestsRepo,
+)
+from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.services.admin_data_ops_service import (
     create_backup_snapshot as svc_create_backup_snapshot,
-)
-from tldw_Server_API.app.services.admin_data_ops_service import (
     list_backup_items as svc_list_backup_items,
-)
-from tldw_Server_API.app.services.admin_data_ops_service import (
     list_retention_policies as svc_list_retention_policies,
-)
-from tldw_Server_API.app.services.admin_data_ops_service import (
     restore_backup_snapshot as svc_restore_backup_snapshot,
-)
-from tldw_Server_API.app.services.admin_data_ops_service import (
     update_retention_policy as svc_update_retention_policy,
+)
+from tldw_Server_API.app.services.admin_data_subject_requests_service import (
+    list_data_subject_requests as svc_list_data_subject_requests,
+    preview_data_subject_request as svc_preview_data_subject_request,
+    record_data_subject_request as svc_record_data_subject_request,
 )
 from tldw_Server_API.app.services.admin_backup_schedules_service import (
     AdminBackupSchedulesService,
@@ -66,6 +73,14 @@ _DATA_OPS_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     HTTPException,
 )
+
+
+async def _build_dsr_repos() -> tuple[AuthnzUsersRepo, AuthnzDataSubjectRequestsRepo]:
+    db_pool = await get_db_pool()
+    return (
+        AuthnzUsersRepo(db_pool=db_pool),
+        AuthnzDataSubjectRequestsRepo(db_pool=db_pool),
+    )
 
 
 async def _enforce_admin_user_scope(
@@ -109,8 +124,6 @@ async def _emit_admin_audit_event(
 
 _BACKUP_DATASETS = {"media", "chacha", "prompts", "evaluations", "audit", "authnz"}
 _PER_USER_BACKUP_DATASETS = _BACKUP_DATASETS - {"authnz"}
-_BACKUP_SCHEDULE_PLATFORM_ROLES = {"owner", "super_admin"}
-_WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 
 def _require_user_id_for_dataset(dataset: str, user_id: int | None) -> None:
@@ -118,41 +131,9 @@ def _require_user_id_for_dataset(dataset: str, user_id: int | None) -> None:
         raise HTTPException(status_code=400, detail="user_id_required")
 
 
-def _require_target_user_for_schedule(dataset: str, target_user_id: int | None) -> None:
-    if dataset in _PER_USER_BACKUP_DATASETS and target_user_id is None:
-        raise HTTPException(status_code=400, detail="target_user_required")
-    if dataset == "authnz" and target_user_id is not None:
-        raise HTTPException(status_code=400, detail="target_user_forbidden")
-
-
-def _is_backup_schedule_platform_admin(principal: AuthPrincipal) -> bool:
-    if is_single_user_principal(principal):
-        return True
-    roles = {str(role).strip().lower() for role in (principal.roles or []) if role}
-    return bool(roles & _BACKUP_SCHEDULE_PLATFORM_ROLES)
-
-
-def _require_backup_schedule_platform_admin(principal: AuthPrincipal) -> None:
-    if _is_backup_schedule_platform_admin(principal):
-        return
-    raise HTTPException(status_code=403, detail="platform_admin_required")
-
-
 def _build_schedule_description(item: dict[str, Any]) -> str:
-    frequency = str(item.get("frequency") or "").strip().lower()
-    time_of_day = str(item.get("time_of_day") or "00:00")
-    timezone_name = str(item.get("timezone") or "UTC")
-    if frequency == "weekly":
-        weekday_idx = item.get("anchor_day_of_week")
-        if isinstance(weekday_idx, int) and 0 <= weekday_idx <= 6:
-            return f"Weekly on {_WEEKDAY_NAMES[weekday_idx]} at {time_of_day} {timezone_name}"
-        return f"Weekly at {time_of_day} {timezone_name}"
-    if frequency == "monthly":
-        month_day = item.get("anchor_day_of_month")
-        if isinstance(month_day, int):
-            return f"Monthly on day {month_day} at {time_of_day} {timezone_name}"
-        return f"Monthly at {time_of_day} {timezone_name}"
-    return f"Daily at {time_of_day} {timezone_name}"
+    service = AdminBackupSchedulesService(repo=None)
+    return service.describe_schedule(item)
 
 
 def _serialize_backup_schedule_item(item: dict[str, Any]) -> BackupScheduleItem:
@@ -180,7 +161,6 @@ def _serialize_backup_schedule_item(item: dict[str, Any]) -> BackupScheduleItem:
 
 
 async def _get_backup_schedules_repo():
-    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     from tldw_Server_API.app.core.AuthNZ.repos.backup_schedules_repo import (
         AuthnzBackupSchedulesRepo,
     )
@@ -196,21 +176,8 @@ async def _get_backup_schedule_service() -> AdminBackupSchedulesService:
     return AdminBackupSchedulesService(repo=repo)
 
 
-def _derive_schedule_anchors(
-    *,
-    frequency: str,
-    current: dict[str, Any] | None = None,
-) -> tuple[int | None, int | None]:
-    normalized_frequency = frequency.strip().lower()
-    if normalized_frequency == "weekly":
-        if current and current.get("anchor_day_of_week") is not None:
-            return int(current["anchor_day_of_week"]), None
-        return datetime.now(dt_timezone.utc).weekday(), None
-    if normalized_frequency == "monthly":
-        if current and current.get("anchor_day_of_month") is not None:
-            return None, int(current["anchor_day_of_month"])
-        return None, datetime.now(dt_timezone.utc).day
-    return None, None
+def _dsr_item_from_record(record: dict[str, Any]) -> DataSubjectRequestItem:
+    return DataSubjectRequestItem(**record)
 
 
 @router.get("/backups", response_model=BackupListResponse)
@@ -570,6 +537,8 @@ async def delete_backup_schedule(
         elif current.get("target_user_id") is not None:
             await _enforce_admin_user_scope(principal, int(current["target_user_id"]), require_hierarchy=False)
 
+        from datetime import datetime, timezone as dt_timezone
+
         deleted_at = datetime.now(dt_timezone.utc).isoformat()
         deleted = await repo.delete_schedule(schedule_id, deleted_at=deleted_at)
         if not deleted:
@@ -594,6 +563,119 @@ async def delete_backup_schedule(
     except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to delete backup schedule: {exc}")
         raise HTTPException(status_code=500, detail="Failed to delete backup schedule") from exc
+
+
+@router.post("/data-subject-requests/preview", response_model=DataSubjectRequestPreviewResponse)
+async def preview_data_subject_request(
+    payload: DataSubjectRequestPreviewRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> DataSubjectRequestPreviewResponse:
+    try:
+        users_repo, _ = await _build_dsr_repos()
+        preview = await svc_preview_data_subject_request(
+            requester_identifier=payload.requester_identifier,
+            request_type=payload.request_type,
+            categories=payload.categories,
+            principal=principal,
+            users_repo=users_repo,
+        )
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.read",
+            category="compliance",
+            resource_type="data_subject_request",
+            resource_id=str(preview["resolved_user_id"]),
+            action="data_subject_request.preview",
+            metadata={
+                "requester_identifier": preview["requester_identifier"],
+                "resolved_user_id": preview["resolved_user_id"],
+                "selected_categories": preview["selected_categories"],
+            },
+        )
+        return DataSubjectRequestPreviewResponse(**preview)
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to preview data subject request: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to preview data subject request") from exc
+
+
+@router.post("/data-subject-requests", response_model=DataSubjectRequestCreateResponse)
+async def create_data_subject_request(
+    payload: DataSubjectRequestCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> DataSubjectRequestCreateResponse:
+    try:
+        users_repo, requests_repo = await _build_dsr_repos()
+        preview = await svc_preview_data_subject_request(
+            requester_identifier=payload.requester_identifier,
+            request_type=payload.request_type,
+            categories=payload.categories,
+            principal=principal,
+            users_repo=users_repo,
+        )
+        record = await svc_record_data_subject_request(
+            principal=principal,
+            client_request_id=payload.client_request_id,
+            requester_identifier=payload.requester_identifier,
+            request_type=payload.request_type,
+            categories=payload.categories,
+            users_repo=users_repo,
+            requests_repo=requests_repo,
+            preview=preview,
+            notes=payload.notes,
+        )
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.write",
+            category="compliance",
+            resource_type="data_subject_request",
+            resource_id=str(record.get("id") or payload.client_request_id),
+            action="data_subject_request.record",
+            metadata={
+                "requester_identifier": record.get("requester_identifier"),
+                "resolved_user_id": record.get("resolved_user_id"),
+                "request_type": record.get("request_type"),
+                "selected_categories": record.get("selected_categories"),
+            },
+        )
+        return DataSubjectRequestCreateResponse(item=_dsr_item_from_record(record))
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to record data subject request: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to record data subject request") from exc
+
+
+@router.get("/data-subject-requests", response_model=DataSubjectRequestListResponse)
+async def list_data_subject_requests(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> DataSubjectRequestListResponse:
+    try:
+        _, requests_repo = await _build_dsr_repos()
+        items, total = await svc_list_data_subject_requests(
+            principal,
+            limit=limit,
+            offset=offset,
+            requests_repo=requests_repo,
+        )
+        return DataSubjectRequestListResponse(
+            items=[_dsr_item_from_record(item) for item in items],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to list data subject requests: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list data subject requests") from exc
 
 
 @router.get("/retention-policies", response_model=RetentionPoliciesResponse)

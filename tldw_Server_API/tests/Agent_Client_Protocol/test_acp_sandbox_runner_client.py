@@ -13,6 +13,9 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.sandbox_runner_client import
     _is_self_referential_agent_command,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
+from tldw_Server_API.app.core.Sandbox.models import RuntimeType
+from tldw_Server_API.app.core.Sandbox.runtime_capabilities import RuntimePreflightResult
+from tldw_Server_API.app.core.Sandbox.runners.lima_runner import LimaRunner
 
 
 @pytest.mark.unit
@@ -137,6 +140,75 @@ async def test_create_session_requires_authenticated_user_id() -> None:
 
     with pytest.raises(ACPResponseError, match="require an authenticated user_id"):
         await manager.create_session(cwd="/workspace")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_create_session_rejects_unavailable_vz_macos_runtime(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            runtime="vz_macos",
+            network_policy="deny_all",
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "1")
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_VZ_MACOS_AVAILABLE", "0")
+
+    with pytest.raises(ACPResponseError, match="vz_macos"):
+        await manager.create_session(cwd="/workspace", user_id=7)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_create_session_rejects_seatbelt_without_standard_opt_in(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            runtime="seatbelt",
+            network_policy="deny_all",
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "1")
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_SEATBELT_AVAILABLE", "1")
+    monkeypatch.delenv("TLDW_SANDBOX_SEATBELT_STANDARD_ENABLED", raising=False)
+
+    with pytest.raises(ACPResponseError, match="seatbelt_standard_disabled"):
+        await manager.create_session(cwd="/workspace", user_id=7)
+
+
+@pytest.mark.unit
+def test_validate_runtime_requirements_uses_single_lima_preflight(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            runtime="lima",
+            network_policy="deny_all",
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    calls = {"count": 0}
+
+    def _fake_preflight(self, network_policy: str | None = None):
+        del self, network_policy
+        calls["count"] += 1
+        return RuntimePreflightResult(
+            runtime=RuntimeType.lima,
+            available=True,
+            reasons=[],
+            host={"os": "darwin"},
+            enforcement_ready={"deny_all": True, "allowlist": True},
+        )
+
+    monkeypatch.setattr(LimaRunner, "preflight", _fake_preflight)
+
+    manager._validate_runtime_requirements(RuntimeType.lima)
+
+    assert calls["count"] == 1
 
 
 @pytest.mark.unit

@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_reg
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.knowledge_module import KnowledgeModule
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module import MediaModule
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.sandbox_module import SandboxModule
+from tldw_Server_API.app.core.MCP_unified.server import get_mcp_server
 
 
 class AllowAllRBAC:
@@ -157,7 +158,14 @@ async def test_knowledge_search_reports_has_more():
     await km.on_initialize()
     ctx = RequestContext(request_id="rk", user_id="1", client_id="cli")
 
-    out = await km.execute_tool("knowledge.search", {"query": "x", "limit": 1, "offset": 0}, context=ctx)
+    server = get_mcp_server()
+    original_rbac = server.protocol.rbac_policy
+    server.protocol.rbac_policy = AllowAllRBAC()
+    try:
+        out = await km.execute_tool("knowledge.search", {"query": "x", "limit": 1, "offset": 0}, context=ctx)
+    finally:
+        server.protocol.rbac_policy = original_rbac
+
     assert out["has_more"] is True
     assert out["next_offset"] == 1
 

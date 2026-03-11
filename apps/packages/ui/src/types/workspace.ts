@@ -91,7 +91,7 @@ export interface OutputTypeConfig {
 export const OUTPUT_TYPES: OutputTypeConfig[] = [
   {
     type: "audio_overview",
-    label: "Audio Overview",
+    label: "Audio Summary",
     icon: "Headphones",
     description: "Generate a spoken summary of your sources",
     requiresSelectedSources: true

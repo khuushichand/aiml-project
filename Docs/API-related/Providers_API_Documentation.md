@@ -65,6 +65,9 @@
 ### 2) GET /api/v1/llm/providers
 - Summary: List configured LLM providers and their models.
 - Query params: `include_deprecated` (bool, default false)
+- llama.cpp note:
+  - The `Llama.cpp` provider entry may include a first-class `llama_cpp_controls` block for UI-facing capability discovery.
+  - This block is separate from `extra_body_compat`. `extra_body_compat` documents raw passthrough keys; `llama_cpp_controls` documents the stable app-level contract for llama.cpp grammar/thinking controls.
 - Response (example):
 ```json
 {
@@ -108,6 +111,35 @@
   "total_configured": 1
 }
 ```
+
+llama.cpp capability example:
+```json
+{
+  "name": "llama",
+  "display_name": "Llama.cpp",
+  "llama_cpp_controls": {
+    "grammar": {
+      "supported": true,
+      "effective_reason": "supported in current deployment",
+      "source": "first_class+extra_body"
+    },
+    "thinking_budget": {
+      "supported": false,
+      "request_key": null,
+      "effective_reason": "no configured thinking-budget mapping for this deployment"
+    },
+    "reserved_extra_body_keys": ["grammar"]
+  }
+}
+```
+
+`llama_cpp_controls` semantics:
+- `grammar.supported=false` means llama.cpp advanced controls are disabled for the current runtime, typically because `strict_openai_compat` is effective.
+- `thinking_budget.supported=true` only when the deployment explicitly maps the app-level field to an upstream llama.cpp request key.
+- `thinking_budget.request_key` is populated from:
+  - environment: `LLAMA_CPP_THINKING_BUDGET_PARAM`
+  - config: `Local-API.llama_cpp_thinking_budget_param`
+- `reserved_extra_body_keys` is the list UIs should treat as first-class/reserved when editing raw `extra_body`.
 
 ### 3) GET /api/v1/llm/providers/{provider_name}
 - Summary: Details for a single provider.
@@ -181,6 +213,7 @@ Tip: For chat-only models, use `/api/v1/llm/models?type=chat`.
 - By default, deprecated models are filtered from responses; set `include_deprecated=true` to include them.
 - Health information reflects in-process runtime state, including circuit-breaker status and queue statistics.
 - Provider objects may include additional fields when present in config, such as `endpoint` (for local providers), `default_temperature`, `max_tokens`, `supports_streaming`, `requires_api_key`, `capabilities`, and a `health` sub-object when the provider manager is initialized.
+- `models_info[]` entries may also repeat provider-level llama.cpp control metadata so clients that work from model selections can gate controls without hard-coding provider-specific rules.
 - Note: `total_configured` reflects the number of providers returned in the response; individual providers indicate configuration with the `is_configured` flag.
 - The response from `/llm/providers` may also include `diagnostics_ui` with UI auto-refresh intervals for queue status/activity, derived from the server configuration.
 - Recognized providers include (commercial): OpenAI, AWS Bedrock, Anthropic, Google, Mistral, Cohere, Groq, HuggingFace, OpenRouter, DeepSeek, Qwen, Moonshot, Z.AI; and (local/OpenAI-compatible): Llama.cpp, Kobold.cpp, Oobabooga, TabbyAPI, vLLM, Local LLM, Ollama, Aphrodite, Custom OpenAI API (1/2).

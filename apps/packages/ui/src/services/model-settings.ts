@@ -41,6 +41,11 @@ type ModelSettings = {
   minP?: number
   useMlock?: boolean
   reasoningEffort?: any
+  llamaThinkingBudgetTokens?: number
+  llamaGrammarMode?: "none" | "library" | "inline"
+  llamaGrammarId?: string
+  llamaGrammarInline?: string
+  llamaGrammarOverride?: string
 }
 
 const MODEL_SETTING_KEYS = [
@@ -74,7 +79,12 @@ const MODEL_SETTING_KEYS = [
   "vocabOnly",
   "minP",
   "useMlock",
-  "reasoningEffort"
+  "reasoningEffort",
+  "llamaThinkingBudgetTokens",
+  "llamaGrammarMode",
+  "llamaGrammarId",
+  "llamaGrammarInline",
+  "llamaGrammarOverride"
 ] as const satisfies readonly (keyof ModelSettings)[]
 
 type ModelSettingKey = (typeof MODEL_SETTING_KEYS)[number]

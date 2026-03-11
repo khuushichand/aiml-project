@@ -30,6 +30,11 @@ from tldw_Server_API.app.core.Collections.utils import (
     find_highlight_span,
     hash_text_sha256,
 )
+from tldw_Server_API.app.core.Personalization.companion_activity import (
+    record_reading_highlight_created,
+    record_reading_highlight_deleted,
+    record_reading_highlight_updated,
+)
 
 router = APIRouter(tags=["reading-highlights"])  # no prefix; use absolute paths below
 
@@ -57,6 +62,14 @@ def _extract_item_text_and_hash(db, item_id: int) -> tuple[Optional[str], Option
 
     content_hash = item.content_hash or hash_text_sha256(text)
     return text, content_hash
+
+
+def _item_title_or_none(db, item_id: int) -> str | None:
+    try:
+        item = db.get_content_item(item_id)
+    except KeyError:
+        return None
+    return getattr(item, "title", None)
 
 
 @router.post("/reading/items/{item_id}/highlight", response_model=Highlight, summary="Create highlight for an item")
@@ -98,6 +111,12 @@ async def create_highlight(
     except Exception as e:
         logger.error(f"create_highlight failed: {e}")
         raise HTTPException(status_code=500, detail="highlight_create_failed") from e
+    item_title = _item_title_or_none(db, item_id)
+    record_reading_highlight_created(
+        user_id=current_user.id,
+        highlight=row,
+        item_title=item_title,
+    )
     return Highlight(
         id=row.id,
         item_id=row.item_id,
@@ -154,6 +173,13 @@ async def update_highlight(
         row = db.update_highlight(highlight_id=highlight_id, patch=patch)
     except KeyError:
         raise HTTPException(status_code=404, detail="highlight_not_found") from None
+    item_title = _item_title_or_none(db, row.item_id)
+    record_reading_highlight_updated(
+        user_id=current_user.id,
+        highlight=row,
+        item_title=item_title,
+        patch=patch,
+    )
     return Highlight(
         id=row.id,
         item_id=row.item_id,
@@ -177,7 +203,17 @@ async def delete_highlight(
     current_user: User = Depends(get_request_user),
     db = Depends(get_collections_db_for_user),
 ) -> dict[str, Any]:
+    try:
+        row = db.get_highlight(highlight_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="highlight_not_found") from None
     ok = db.delete_highlight(highlight_id=highlight_id)
     if not ok:
         raise HTTPException(status_code=404, detail="highlight_not_found")
+    item_title = _item_title_or_none(db, row.item_id)
+    record_reading_highlight_deleted(
+        user_id=current_user.id,
+        highlight=row,
+        item_title=item_title,
+    )
     return {"success": True}

@@ -1423,86 +1423,209 @@ def migration_055_create_mcp_hub_tables(conn: sqlite3.Connection) -> None:
     logger.info("Migration 055: Created MCP Hub tables")
 
 
-def migration_056_create_backup_schedule_tables(conn: sqlite3.Connection) -> None:
-    """Create backup schedule persistence tables (SQLite)."""
+def migration_056_create_mcp_hub_policy_tables(conn: sqlite3.Connection) -> None:
+    """Create MCP Hub policy and approval tables (SQLite)."""
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS backup_schedules (
-            id TEXT PRIMARY KEY,
-            dataset TEXT NOT NULL,
-            target_user_id INTEGER,
-            target_scope_key TEXT NOT NULL,
-            frequency TEXT NOT NULL,
-            time_of_day TEXT NOT NULL,
-            timezone TEXT NOT NULL,
-            anchor_day_of_week INTEGER,
-            anchor_day_of_month INTEGER,
-            retention_count INTEGER NOT NULL,
-            is_paused INTEGER NOT NULL DEFAULT 0,
-            created_by_user_id INTEGER,
-            updated_by_user_id INTEGER,
-            created_at TIMESTAMP NOT NULL,
-            updated_at TIMESTAMP NOT NULL,
-            next_run_at TIMESTAMP,
-            last_run_at TIMESTAMP,
-            last_status TEXT,
-            last_job_id TEXT,
-            last_error TEXT,
-            deleted_at TIMESTAMP
+        CREATE TABLE IF NOT EXISTS mcp_permission_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            mode TEXT NOT NULL DEFAULT 'custom',
+            policy_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(name, owner_scope_type, owner_scope_id)
         )
         """
     )
     conn.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_backup_schedules_target_scope_active
-        ON backup_schedules(target_scope_key)
-        WHERE deleted_at IS NULL
-        """
+        "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_scope "
+        "ON mcp_permission_profiles(owner_scope_type, owner_scope_id)"
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_backup_schedules_next_run_at "
-        "ON backup_schedules(next_run_at)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_backup_schedules_deleted_at "
-        "ON backup_schedules(deleted_at)"
-    )
+
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS backup_schedule_runs (
-            id TEXT PRIMARY KEY,
-            schedule_id TEXT NOT NULL,
-            scheduled_for TIMESTAMP NOT NULL,
-            run_slot_key TEXT NOT NULL UNIQUE,
-            status TEXT NOT NULL,
-            job_id TEXT,
-            error TEXT,
-            enqueued_at TIMESTAMP,
-            started_at TIMESTAMP,
-            completed_at TIMESTAMP,
-            FOREIGN KEY (schedule_id) REFERENCES backup_schedules(id) ON DELETE CASCADE
+        CREATE TABLE IF NOT EXISTS mcp_policy_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_type TEXT NOT NULL,
+            target_id TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            profile_id INTEGER,
+            inline_policy_document_json TEXT NOT NULL DEFAULT '{}',
+            approval_policy_id INTEGER,
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (profile_id) REFERENCES mcp_permission_profiles(id) ON DELETE SET NULL
         )
         """
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_schedule_id "
-        "ON backup_schedule_runs(schedule_id)"
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_scope "
+        "ON mcp_policy_assignments(owner_scope_type, owner_scope_id)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_scheduled_for "
-        "ON backup_schedule_runs(scheduled_for)"
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_target "
+        "ON mcp_policy_assignments(target_type, target_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_overrides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            assignment_id INTEGER NOT NULL UNIQUE,
+            override_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            broadens_access INTEGER DEFAULT 0,
+            grant_authority_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (assignment_id) REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_policy_overrides_assignment "
+        "ON mcp_policy_overrides(assignment_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_approval_policies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            mode TEXT NOT NULL,
+            rules_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_policies_scope "
+        "ON mcp_approval_policies(owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_approval_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            approval_policy_id INTEGER,
+            context_key TEXT NOT NULL,
+            conversation_id TEXT,
+            tool_name TEXT NOT NULL,
+            scope_key TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            consume_on_match INTEGER DEFAULT 0,
+            expires_at TIMESTAMP,
+            consumed_at TIMESTAMP,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (approval_policy_id) REFERENCES mcp_approval_policies(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_decisions_context "
+        "ON mcp_approval_decisions(context_key, conversation_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_credential_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            binding_target_type TEXT NOT NULL,
+            binding_target_id TEXT,
+            external_server_id TEXT NOT NULL,
+            credential_ref TEXT NOT NULL,
+            usage_rules_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (external_server_id) REFERENCES mcp_external_servers(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_credential_bindings_target "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_audit_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            previous_value_json TEXT NOT NULL DEFAULT '{}',
+            new_value_json TEXT NOT NULL DEFAULT '{}',
+            broadened_access INTEGER DEFAULT 0,
+            actor_id INTEGER,
+            grant_authority_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_audit_history_resource "
+        "ON mcp_policy_audit_history(resource_type, resource_id)"
     )
 
     conn.commit()
-    logger.info("Migration 056: Created backup schedule tables")
+    logger.info("Migration 056: Created MCP Hub policy tables")
 
 
-def rollback_056_drop_backup_schedule_tables(conn: sqlite3.Connection) -> None:
-    """Drop backup schedule persistence tables (SQLite rollback)."""
-    conn.execute("DROP TABLE IF EXISTS backup_schedule_runs")
-    conn.execute("DROP TABLE IF EXISTS backup_schedules")
+def migration_057_add_consumable_mcp_approval_decision_columns(conn: sqlite3.Connection) -> None:
+    """Add explicit single-use approval columns to MCP Hub approval decisions."""
+
+    def add_col(name: str, decl: str) -> None:
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_approval_decisions)").fetchall()}
+        if name not in cols:
+            conn.execute(f"ALTER TABLE mcp_approval_decisions ADD COLUMN {decl}")
+
+    add_col("consume_on_match", "consume_on_match INTEGER DEFAULT 0")
+    add_col("consumed_at", "consumed_at TIMESTAMP")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_decisions_active "
+        "ON mcp_approval_decisions(context_key, conversation_id, tool_name, scope_key, decision, consumed_at)"
+    )
+
     conn.commit()
-    logger.info("Rollback 056: Dropped backup schedule tables")
+    logger.info("Migration 057: Added MCP approval decision consumption columns")
+
+
+def migration_058_harden_mcp_policy_override_schema(conn: sqlite3.Connection) -> None:
+    """Add override activity tracking and enforce a 1:1 assignment override mapping."""
+
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_policy_overrides)").fetchall()}
+    if "is_active" not in cols:
+        conn.execute("ALTER TABLE mcp_policy_overrides ADD COLUMN is_active INTEGER DEFAULT 1")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_policy_overrides_assignment "
+        "ON mcp_policy_overrides(assignment_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 058: Hardened MCP policy override schema")
 
 
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
@@ -2553,6 +2676,140 @@ def rollback_048_drop_org_team_config_overrides(conn: sqlite3.Connection) -> Non
     logger.info("Rollback 048: Dropped org/team config overrides tables")
 
 
+def migration_059_create_data_subject_requests_table(conn: sqlite3.Connection) -> None:
+    """Create data_subject_requests table for authoritative DSR intake."""
+    logger.info("Migration 059: START data_subject_requests table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_subject_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_request_id TEXT NOT NULL UNIQUE,
+            requester_identifier TEXT NOT NULL,
+            resolved_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            request_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            selected_categories TEXT NOT NULL DEFAULT '[]',
+            preview_summary TEXT NOT NULL DEFAULT '[]',
+            coverage_metadata TEXT DEFAULT '{}',
+            requested_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            notes TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requester "
+        "ON data_subject_requests(requester_identifier)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_resolved_user "
+        "ON data_subject_requests(resolved_user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_type "
+        "ON data_subject_requests(request_type)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_status "
+        "ON data_subject_requests(status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requested_at "
+        "ON data_subject_requests(requested_at)"
+    )
+    conn.commit()
+    logger.info("Migration 059: Created data_subject_requests table")
+
+
+def rollback_059_drop_data_subject_requests_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 059 by dropping data_subject_requests."""
+    conn.execute("DROP TABLE IF EXISTS data_subject_requests")
+    conn.commit()
+    logger.info("Rollback 059: Dropped data_subject_requests table")
+
+
+def migration_060_create_backup_schedule_tables(conn: sqlite3.Connection) -> None:
+    """Create backup schedule persistence tables (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedules (
+            id TEXT PRIMARY KEY,
+            dataset TEXT NOT NULL,
+            target_user_id INTEGER,
+            target_scope_key TEXT NOT NULL,
+            frequency TEXT NOT NULL,
+            time_of_day TEXT NOT NULL,
+            timezone TEXT NOT NULL,
+            anchor_day_of_week INTEGER,
+            anchor_day_of_month INTEGER,
+            retention_count INTEGER NOT NULL,
+            is_paused INTEGER NOT NULL DEFAULT 0,
+            created_by_user_id INTEGER,
+            updated_by_user_id INTEGER,
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL,
+            next_run_at TIMESTAMP,
+            last_run_at TIMESTAMP,
+            last_status TEXT,
+            last_job_id TEXT,
+            last_error TEXT,
+            deleted_at TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_backup_schedules_target_scope_active
+        ON backup_schedules(target_scope_key)
+        WHERE deleted_at IS NULL
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedules_next_run_at "
+        "ON backup_schedules(next_run_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedules_deleted_at "
+        "ON backup_schedules(deleted_at)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedule_runs (
+            id TEXT PRIMARY KEY,
+            schedule_id TEXT NOT NULL,
+            scheduled_for TIMESTAMP NOT NULL,
+            run_slot_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            job_id TEXT,
+            error TEXT,
+            enqueued_at TIMESTAMP,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            FOREIGN KEY (schedule_id) REFERENCES backup_schedules(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_schedule_id "
+        "ON backup_schedule_runs(schedule_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_scheduled_for "
+        "ON backup_schedule_runs(scheduled_for)"
+    )
+
+    conn.commit()
+    logger.info("Migration 060: Created backup schedule tables")
+
+
+def rollback_060_drop_backup_schedule_tables(conn: sqlite3.Connection) -> None:
+    """Drop backup schedule persistence tables (SQLite rollback)."""
+    conn.execute("DROP TABLE IF EXISTS backup_schedule_runs")
+    conn.execute("DROP TABLE IF EXISTS backup_schedules")
+    conn.commit()
+    logger.info("Rollback 060: Dropped backup schedule tables")
+
+
 def migration_041_add_llm_provider_overrides(conn: sqlite3.Connection) -> None:
     """Add llm_provider_overrides table for runtime provider overrides."""
     logger.info("Migration 041: START llm_provider_overrides table")
@@ -2940,9 +3197,30 @@ def get_authnz_migrations() -> list[Migration]:
         ),
         Migration(
             56,
+            "Create MCP Hub policy tables",
+            migration_056_create_mcp_hub_policy_tables,
+        ),
+        Migration(
+            57,
+            "Add consumable MCP approval decision columns",
+            migration_057_add_consumable_mcp_approval_decision_columns,
+        ),
+        Migration(
+            58,
+            "Harden MCP policy override schema",
+            migration_058_harden_mcp_policy_override_schema,
+        ),
+        Migration(
+            59,
+            "Create data subject requests table",
+            migration_059_create_data_subject_requests_table,
+            rollback_059_drop_data_subject_requests_table,
+        ),
+        Migration(
+            60,
             "Create backup schedule tables",
-            migration_056_create_backup_schedule_tables,
-            rollback_056_drop_backup_schedule_tables,
+            migration_060_create_backup_schedule_tables,
+            rollback_060_drop_backup_schedule_tables,
         ),
     ]
 

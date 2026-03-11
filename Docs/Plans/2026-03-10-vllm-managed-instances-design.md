@@ -15,6 +15,8 @@ Add first-class managed `vLLM` instances to `tldw_server` so operators can:
 
 The design keeps inference on the existing OpenAI-compatible `vllm` provider adapter, but moves lifecycle management into a dedicated control plane with durable instance storage, request-scoped routing, pluggable executors, and job-backed lifecycle operations.
 
+Implementation scope for v1 is a single `tldw_server` control-plane deployment with SQLite-backed durable instance storage behind a repository abstraction. Postgres-backed shared-state deployments remain a follow-on unless a matching Postgres repository is added during implementation.
+
 ## 2. User-Approved Decisions
 
 1. `tldw_server` should own `vLLM` process lifecycle.
@@ -87,6 +89,10 @@ Each instance record stores:
 
 - identity: `instance_id`, display name, description, tags
 - execution mode: `local`, `ssh`, `agent`
+- transport configuration:
+  - `local`: optional bind-address, working directory, environment/profile references
+  - `ssh`: remote host, port, user, launcher path, optional remote workdir, and secret or connection-profile references
+  - `agent`: reserved agent host/registration metadata and secret references
 - launch spec: structured `vLLM` settings and constrained `extra_args`
 - routing policy: enabled, default-route eligibility, optional future tenant/org policy
 - capability metadata:
@@ -103,6 +109,8 @@ Each instance record stores:
   - last error
 
 The registry is the source of truth for instance configuration. In-memory executor/session state is only a cache of current observation.
+
+Transport/auth material must be stored by reference where possible. Secret-bearing fields should resolve through existing secret/config mechanisms and must not be echoed back verbatim in operator APIs or logs.
 
 ### 6.2 Request-Scoped Routing
 
@@ -297,6 +305,19 @@ The instance API should return job metadata and current state summaries instead 
 
 This follows the repository guidance that new user-visible/admin-visible operational work should default to Jobs.
 
+### 9.1 Worker Contract
+
+Jobs-backed lifecycle support also requires a dedicated worker entrypoint for the `vllm_management` domain.
+
+That worker should:
+
+- use `WorkerSDK` with a `vllm_management` domain/queue contract
+- dispatch `start`, `stop`, `restart`, and `probe` handlers
+- update repository state transitions and persisted errors
+- share the same repository, command-builder, executor, and reconciler abstractions as the API layer
+
+Enqueuing lifecycle jobs without a corresponding worker is explicitly out of scope for an acceptable implementation.
+
 ## 10. API Surface
 
 ### 10.1 Instance CRUD
@@ -342,6 +363,8 @@ Initial behavior:
 
 This avoids schema churn if other providers gain managed-instance routing later.
 
+For request types that already distinguish provider and model, the managed-instance extension must preserve that explicit provider selection. In practice, embeddings request schemas should add a `provider` field alongside `provider_instance_id` rather than relying on model-only heuristics.
+
 ## 11. Data Model
 
 ### 11.1 Persistent Instance Record
@@ -353,6 +376,7 @@ Suggested durable fields:
 - `description`
 - `tags`
 - `execution_mode`
+- `transport_config_json`
 - `launch_spec_json`
 - `routing_policy_json`
 - `declared_capabilities_json`

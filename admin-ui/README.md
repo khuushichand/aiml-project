@@ -46,6 +46,11 @@ The server-side API-key login route also requires `AUTH_MODE=single_user`; it is
 multi-user deployments even if the UI toggle is enabled.
 Leave both disabled for enterprise/live-customer admin use.
 
+`NEXT_PUBLIC_ADMIN_UI_ENABLE_UNSAFE_LOCAL_TOOLS=true` re-enables local-only helper flows in the
+admin UI for development and staging only. When unset or `false`, local-only DSR processing,
+backup scheduling, and monitoring mutations stay disabled so the UI remains production-safe by
+default.
+
 Optional JWT local verification (middleware) reads `JWT_SECRET_KEY`, `JWT_SECONDARY_SECRET`,
 and `JWT_ALGORITHM` (HS256/384/512). If missing or invalid, the middleware falls back
 to backend verification.

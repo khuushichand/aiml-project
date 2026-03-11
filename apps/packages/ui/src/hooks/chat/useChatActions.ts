@@ -86,6 +86,11 @@ import {
   discardAbortedTurnIfRequested,
   isAbortLikeError
 } from "@/hooks/chat/abort-turn-cleanup"
+import { ensurePersonaServerChat } from "@/hooks/chat/personaServerChat"
+import {
+  isPersonaAssistantSelection,
+  type AssistantSelection
+} from "@/types/assistant-selection"
 import type { Character } from "@/types/character"
 import type {
   MessageSteeringMode,
@@ -153,6 +158,9 @@ type TldwChatMeta =
       external_ref?: string | null
       title?: string | null
       character_id?: string | number | null
+      assistant_kind?: "character" | "persona" | null
+      assistant_id?: string | number | null
+      persona_memory_mode?: "read_only" | "read_write" | null
     }
   | string
   | number
@@ -195,7 +203,9 @@ type UseChatActionsOptions = {
     messagesOrUpdater: Message[] | ((prev: Message[]) => Message[])
   ) => void
   history: ChatHistory
-  setHistory: (history: ChatHistory) => void
+  setHistory: (
+    historyOrUpdater: ChatHistory | ((prev: ChatHistory) => ChatHistory)
+  ) => void
   historyId: string | null
   setHistoryId: (
     historyId: string | null,
@@ -224,6 +234,9 @@ type UseChatActionsOptions = {
   serverChatId: string | null
   serverChatTitle: string | null
   serverChatCharacterId: string | number | null
+  serverChatAssistantKind: "character" | "persona" | null
+  serverChatAssistantId: string | null
+  serverChatPersonaMemoryMode: "read_only" | "read_write" | null
   serverChatState: ConversationState | null
   serverChatTopic: string | null
   serverChatClusterId: string | null
@@ -232,6 +245,13 @@ type UseChatActionsOptions = {
   setServerChatId: (id: string | null) => void
   setServerChatTitle: (title: string | null) => void
   setServerChatCharacterId: (id: string | number | null) => void
+  setServerChatAssistantKind: (
+    kind: "character" | "persona" | null
+  ) => void
+  setServerChatAssistantId: (id: string | null) => void
+  setServerChatPersonaMemoryMode: (
+    mode: "read_only" | "read_write" | null
+  ) => void
   setServerChatMetaLoaded: (loaded: boolean) => void
   setServerChatState: (state: ConversationState | null) => void
   setServerChatVersion: (version: number | null) => void
@@ -260,6 +280,7 @@ type UseChatActionsOptions = {
   setSelectedSystemPrompt: (prompt: string) => void
   invalidateServerChatHistory: () => void
   selectedCharacter: Character | null
+  selectedAssistant: AssistantSelection | null
   messageSteeringMode: MessageSteeringMode
   messageSteeringForceNarrate: boolean
   clearMessageSteering: () => void
@@ -299,6 +320,9 @@ export const useChatActions = ({
   serverChatId,
   serverChatTitle,
   serverChatCharacterId,
+  serverChatAssistantKind,
+  serverChatAssistantId,
+  serverChatPersonaMemoryMode,
   serverChatState,
   serverChatTopic,
   serverChatClusterId,
@@ -307,6 +331,9 @@ export const useChatActions = ({
   setServerChatId,
   setServerChatTitle,
   setServerChatCharacterId,
+  setServerChatAssistantKind,
+  setServerChatAssistantId,
+  setServerChatPersonaMemoryMode,
   setServerChatMetaLoaded,
   setServerChatState,
   setServerChatVersion,
@@ -332,6 +359,7 @@ export const useChatActions = ({
   setSelectedSystemPrompt,
   invalidateServerChatHistory,
   selectedCharacter,
+  selectedAssistant,
   messageSteeringMode,
   messageSteeringForceNarrate,
   clearMessageSteering
@@ -597,13 +625,17 @@ export const useChatActions = ({
         : payload?.conversationId != null
           ? String(payload.conversationId)
           : null
-    const isServerConversation =
-      payloadConversationId && serverChatId
-        ? payloadConversationId === String(serverChatId)
-        : false
+    const resolvedServerConversationId =
+      payloadConversationId ??
+      (serverChatId != null ? String(serverChatId) : null)
     const serverConversationMatches = payloadConversationId
-      ? payloadConversationId === String(serverChatId)
+      ? serverChatId != null
+        ? payloadConversationId === String(serverChatId)
+        : true
       : true
+    const isServerConversation = Boolean(
+      resolvedServerConversationId && serverConversationMatches
+    )
     const isImageGenerationNoOp =
       isImageGenerationMessageType(payload?.userMessageType) ||
       isImageGenerationMessageType(payload?.assistantMessageType)
@@ -624,7 +656,7 @@ export const useChatActions = ({
 
     // When resuming a server-backed chat, mirror new turns to /api/v1/chats.
     if (
-      serverChatId &&
+      resolvedServerConversationId &&
       serverConversationMatches &&
       !skipServerWrite
     ) {
@@ -725,10 +757,13 @@ export const useChatActions = ({
             imageDataUrl: latestPreview
           })
 
-          const mirroredMessage = await tldwClient.addChatMessage(serverChatId, {
+          const mirroredMessage = await tldwClient.addChatMessage(
+            resolvedServerConversationId,
+            {
             role: "assistant",
             content: mirroredContent
-          })
+            }
+          )
 
           await updateImageEventSyncMetadata(payload, {
             status: "synced",
@@ -757,7 +792,7 @@ export const useChatActions = ({
         typeof payload?.fullText === "string"
       ) {
         try {
-          const cid = serverChatId
+          const cid = resolvedServerConversationId
           const userContent = payload.message.trim()
           const assistantContent = payload.fullText.trim()
 
@@ -860,6 +895,81 @@ export const useChatActions = ({
       ...overrides
     }
   }
+
+  const ensurePersonaServerChatWithState = React.useCallback(
+    async ({
+      assistant,
+      serverChatIdOverride
+    }: {
+      assistant: AssistantSelection & { kind: "persona" }
+      serverChatIdOverride?: string | null
+    }): Promise<{
+      chatId: string
+      historyId: string | null
+      personaMemoryMode: "read_only" | "read_write"
+    }> =>
+      ensurePersonaServerChat({
+        assistant,
+        serverChatIdOverride,
+        serverChatId,
+        serverChatTitle,
+        serverChatAssistantKind,
+        serverChatAssistantId,
+        serverChatPersonaMemoryMode,
+        serverChatState,
+        serverChatTopic,
+        serverChatClusterId,
+        serverChatSource,
+        serverChatExternalRef,
+        historyId,
+        temporaryChat,
+        createChat: (payload) => tldwClient.createChat(payload),
+        ensureServerChatHistoryId,
+        invalidateServerChatHistory,
+        setServerChatId,
+        setServerChatTitle,
+        setServerChatCharacterId,
+        setServerChatAssistantKind,
+        setServerChatAssistantId,
+        setServerChatPersonaMemoryMode,
+        setServerChatMetaLoaded,
+        setServerChatState,
+        setServerChatVersion,
+        setServerChatTopic,
+        setServerChatClusterId,
+        setServerChatSource,
+        setServerChatExternalRef
+      }),
+    [
+      ensureServerChatHistoryId,
+      historyId,
+      invalidateServerChatHistory,
+      serverChatAssistantId,
+      serverChatAssistantKind,
+      serverChatClusterId,
+      serverChatExternalRef,
+      serverChatId,
+      serverChatPersonaMemoryMode,
+      serverChatSource,
+      serverChatState,
+      serverChatTitle,
+      serverChatTopic,
+      setServerChatAssistantId,
+      setServerChatAssistantKind,
+      setServerChatCharacterId,
+      setServerChatClusterId,
+      setServerChatExternalRef,
+      setServerChatId,
+      setServerChatMetaLoaded,
+      setServerChatPersonaMemoryMode,
+      setServerChatSource,
+      setServerChatState,
+      setServerChatTitle,
+      setServerChatTopic,
+      setServerChatVersion,
+      temporaryChat
+    ]
+  )
 
   const characterChatMode = async ({
     message,
@@ -2019,6 +2129,7 @@ export const useChatActions = ({
     })
     const baseMessages = chatHistory || messages
     const baseHistory = memory || history
+    const capturedReplyTargetId = replyTarget?.id ?? null
     const replyActive =
       Boolean(replyTarget) &&
       !compareModeActive &&
@@ -2250,6 +2361,53 @@ export const useChatActions = ({
             })
             return
           }
+
+          if (isPersonaAssistantSelection(selectedAssistant)) {
+            const resolvedModel = effectiveSelectedModel?.trim()
+            if (!resolvedModel) {
+              notification.error({
+                message: t("error"),
+                description: t("validationSelectModel")
+              })
+              setIsProcessing(false)
+              setStreaming(false)
+              setAbortController(null)
+              return
+            }
+
+            const personaServerChat = await ensurePersonaServerChatWithState({
+              assistant: selectedAssistant,
+              serverChatIdOverride
+            })
+            const assistantIdentity = {
+              name: selectedAssistant.name,
+              avatarUrl:
+                typeof selectedAssistant.avatar_url === "string"
+                  ? selectedAssistant.avatar_url
+                  : undefined
+            }
+            markSteeringApplied()
+            await normalChatMode(
+              message,
+              image,
+              isRegenerate,
+              baseMessages,
+              baseHistory,
+              signal,
+              {
+                ...enhancedChatModeParams,
+                assistantIdentity,
+                historyId: personaServerChat.historyId,
+                serverChatId: personaServerChat.chatId,
+                saveMessageOnSuccess: (data: SaveMessageData) =>
+                  saveMessageOnSuccess({
+                    ...data,
+                    conversationId: personaServerChat.chatId
+                  })
+              }
+            )
+            return
+          }
         }
 
         if (!compareModeActive) {
@@ -2300,7 +2458,11 @@ export const useChatActions = ({
           const compareUserParentMessageId = lastMessage?.id || null
           const resolvedImage =
             image.length > 0
-              ? `data:image/jpeg;base64,${image.split(",")[1]}`
+              ? image.startsWith("data:")
+                ? image
+                : image.includes(",")
+                  ? `data:image/jpeg;base64,${image.split(",")[1]}`
+                  : `data:image/jpeg;base64,${image}`
               : ""
           const compareUserMessage: Message = {
             isBot: false,
@@ -2323,6 +2485,15 @@ export const useChatActions = ({
           }
 
           setMessages((prev) => [...prev, compareUserMessage])
+          setHistory((prev) => [
+            ...prev,
+            {
+              role: "user" as const,
+              content: compareUserMessage.message,
+              image: compareUserMessage.images?.[0],
+              messageType: compareUserMessage.messageType
+            }
+          ])
 
           let activeHistoryId = historyId
           if (temporaryChat) {
@@ -2429,8 +2600,11 @@ export const useChatActions = ({
       setIsProcessing(false)
       setStreaming(false)
     } finally {
-      if (replyActive) {
-        clearReplyTarget()
+      if (replyActive && capturedReplyTargetId != null) {
+        const currentReplyTarget = useStoreMessageOption.getState().replyTarget
+        if (currentReplyTarget?.id === capturedReplyTargetId) {
+          clearReplyTarget()
+        }
       }
       if (steeringApplied) {
         clearMessageSteering()
@@ -2579,9 +2753,10 @@ export const useChatActions = ({
         message: t("error"),
         description: errorMessage
       })
-      setIsProcessing(false)
-      setStreaming(false)
     } finally {
+      setStreaming(false)
+      setIsProcessing(false)
+      setAbortController(null)
       if (shouldConsumeSteering) {
         clearMessageSteering()
       }
@@ -2717,39 +2892,58 @@ export const useChatActions = ({
       const target = messages[index]
       if (!target) return
 
+      // Capture values synchronously before any awaits
       const targetId = target.serverMessageId ?? target.id
+      const serverMessageId = target.serverMessageId
+      const serverMessageVersion = target.serverMessageVersion
+      const historyRole = target.role ?? (target.isBot ? "assistant" : "user")
+      const historyContent = target.message ?? ""
+
       if (replyTarget?.id && targetId && replyTarget.id === targetId) {
         clearReplyTarget()
       }
 
-      if (target.serverMessageId) {
-        await tldwClient.initialize().catch(() => null)
-        let expectedVersion = target.serverMessageVersion
-        if (expectedVersion == null) {
-          const serverMessage = await tldwClient.getMessage(target.serverMessageId)
-          expectedVersion = serverMessage?.version
+      try {
+        if (serverMessageId) {
+          await tldwClient.initialize().catch(() => null)
+          let expectedVersion = serverMessageVersion
+          if (expectedVersion == null) {
+            const serverMessage = await tldwClient.getMessage(serverMessageId)
+            expectedVersion = serverMessage?.version
+          }
+          if (expectedVersion == null) {
+            throw new Error("Missing server message version")
+          }
+          await tldwClient.deleteMessage(
+            serverMessageId,
+            Number(expectedVersion),
+            serverChatId ?? undefined
+          )
+          invalidateServerChatHistory()
         }
-        if (expectedVersion == null) {
-          throw new Error("Missing server message version")
+
+        if (historyId) {
+          await removeMessageByIndex(historyId, index)
         }
-        await tldwClient.deleteMessage(
-          target.serverMessageId,
-          Number(expectedVersion),
-          serverChatId ?? undefined
-        )
-        invalidateServerChatHistory()
+      } catch (err) {
+        console.error("[deleteMessage] Failed to delete message", err)
+        return
       }
 
-      if (historyId) {
-        await removeMessageByIndex(historyId, index)
-      }
-
-      setMessages(messages.filter((_, idx) => idx !== index))
-      setHistory(history.filter((_, idx) => idx !== index))
+      setMessages((prev) => prev.filter((m) => m.id !== targetId))
+      setHistory((prev) => {
+        let removed = false
+        return prev.filter((h) => {
+          if (!removed && h.role === historyRole && h.content === historyContent) {
+            removed = true
+            return false
+          }
+          return true
+        })
+      })
     },
     [
       clearReplyTarget,
-      history,
       historyId,
       invalidateServerChatHistory,
       messages,
@@ -2765,31 +2959,41 @@ export const useChatActions = ({
       const target = messages[index]
       if (!target) return
 
+      // Capture values synchronously before any awaits
+      const targetId = target.id
       const nextPinned = !Boolean(target.pinned)
+      const serverMessageId = target.serverMessageId
+      const serverMessageVersion = target.serverMessageVersion
+      const messageText = String(target.message || "")
 
-      if (target.serverMessageId) {
-        await tldwClient.initialize().catch(() => null)
-        let expectedVersion = target.serverMessageVersion
-        if (expectedVersion == null) {
-          const serverMessage = await tldwClient.getMessage(target.serverMessageId)
-          expectedVersion = serverMessage?.version
+      try {
+        if (serverMessageId) {
+          await tldwClient.initialize().catch(() => null)
+          let expectedVersion = serverMessageVersion
+          if (expectedVersion == null) {
+            const serverMessage = await tldwClient.getMessage(serverMessageId)
+            expectedVersion = serverMessage?.version
+          }
+          if (expectedVersion == null) {
+            throw new Error("Missing server message version")
+          }
+          await tldwClient.editMessage(
+            serverMessageId,
+            messageText,
+            Number(expectedVersion),
+            serverChatId ?? undefined,
+            { pinned: nextPinned }
+          )
+          invalidateServerChatHistory()
         }
-        if (expectedVersion == null) {
-          throw new Error("Missing server message version")
-        }
-        await tldwClient.editMessage(
-          target.serverMessageId,
-          String(target.message || ""),
-          Number(expectedVersion),
-          serverChatId ?? undefined,
-          { pinned: nextPinned }
-        )
-        invalidateServerChatHistory()
+      } catch (err) {
+        console.error("[toggleMessagePinned] Failed to toggle pin", err)
+        return
       }
 
-      setMessages(
-        messages.map((message, messageIndex) =>
-          messageIndex === index ? { ...message, pinned: nextPinned } : message
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === targetId ? { ...m, pinned: nextPinned } : m
         )
       )
     },

@@ -13,6 +13,7 @@ import { ActorEditor } from "@/components/Common/Settings/ActorEditor"
 import { useActorEditorPrefs, useActorStore } from "@/store/actor"
 import { shallow } from "zustand/shallow"
 import type { Character } from "@/types/character"
+import { useSelectedAssistant } from "@/hooks/useSelectedAssistant"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 
 type Props = {
@@ -24,8 +25,9 @@ const loadActorSettings = () => import("@/services/actor-settings")
 
 export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
   const { t } = useTranslation(["playground", "common"])
-  const { historyId, serverChatId } = useMessageOption()
+  const { historyId, serverChatId, serverChatAssistantKind } = useMessageOption()
   const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
+  const [selectedAssistant] = useSelectedAssistant(null)
   const [form] = Form.useForm()
   const {
     settings,
@@ -51,6 +53,8 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
   const actorPositionValue = Form.useWatch("actorChatPosition", form)
   const hydratedRef = React.useRef(false)
   const timeoutRef = React.useRef<number | undefined>()
+  const personaChatActive =
+    serverChatAssistantKind === "persona" || selectedAssistant?.kind === "persona"
 
   React.useEffect(() => {
     if (!open || settings) return
@@ -79,7 +83,7 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
   }, [form, open, setPreviewAndTokens, setSettings, settings])
 
   const hydrate = React.useCallback(async () => {
-    if (!open) return
+    if (!open || personaChatActive) return
     setLoading(true)
     try {
       const { getActorSettingsForChatWithCharacterFallback } =
@@ -115,6 +119,7 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
   }, [
     form,
     historyId,
+    personaChatActive,
     selectedCharacter?.id,
     serverChatId,
     setPreviewAndTokens,
@@ -122,6 +127,10 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
   ])
 
   React.useEffect(() => {
+    if (personaChatActive) {
+      hydratedRef.current = false
+      return
+    }
     if (open && !hydratedRef.current) {
       if (import.meta?.env?.DEV) {
         console.count("ActorPopout/hydrate")
@@ -132,7 +141,7 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
     if (!open) {
       hydratedRef.current = false
     }
-  }, [open, hydrate])
+  }, [open, hydrate, personaChatActive])
 
   React.useEffect(() => {
     return () => {
@@ -183,9 +192,17 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
       open={open}
       onClose={() => setOpen(false)}
       title={t("playground:composer.actorTitle", "Scene Director (Actor)")}>
-      {loading && !settings ? (
+      {personaChatActive ? (
+        <div className="rounded-lg border border-border bg-surface2 p-4 text-sm text-text-muted">
+          {t(
+            "playground:composer.actorPersonaUnsupported",
+            "Scene Director is currently available only for character-backed chats."
+          )}
+        </div>
+      ) : null}
+      {!personaChatActive && loading && !settings ? (
         <Skeleton active />
-      ) : (
+      ) : !personaChatActive ? (
         <Form
           form={form}
           layout="vertical"
@@ -275,7 +292,7 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
             </div>
           </div>
         </Form>
-      )}
+      ) : null}
     </Drawer>
   )
 }

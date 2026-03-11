@@ -134,6 +134,56 @@ class PersonalizationDB:
                     );
                     CREATE INDEX IF NOT EXISTS idx_topics_user ON topic_profiles(user_id);
                     CREATE INDEX IF NOT EXISTS idx_topics_score ON topic_profiles(user_id, score DESC);
+
+                    CREATE TABLE IF NOT EXISTS companion_activity_events (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        source_type TEXT NOT NULL,
+                        source_id TEXT NOT NULL,
+                        surface TEXT NOT NULL,
+                        dedupe_key TEXT NOT NULL,
+                        tags TEXT,
+                        provenance_json TEXT NOT NULL,
+                        metadata_json TEXT,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (user_id) REFERENCES profiles(user_id),
+                        UNIQUE(user_id, dedupe_key)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_companion_activity_user_created
+                        ON companion_activity_events(user_id, created_at DESC);
+
+                    CREATE TABLE IF NOT EXISTS companion_knowledge_cards (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        card_type TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        summary TEXT NOT NULL,
+                        evidence_json TEXT NOT NULL,
+                        score REAL NOT NULL DEFAULT 0,
+                        status TEXT NOT NULL DEFAULT 'active',
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (user_id) REFERENCES profiles(user_id),
+                        UNIQUE(user_id, card_type, title)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_companion_knowledge_user_score
+                        ON companion_knowledge_cards(user_id, score DESC, updated_at DESC);
+
+                    CREATE TABLE IF NOT EXISTS companion_goals (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        description TEXT,
+                        goal_type TEXT NOT NULL,
+                        config_json TEXT NOT NULL,
+                        progress_json TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'active',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (user_id) REFERENCES profiles(user_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_companion_goals_user_updated
+                        ON companion_goals(user_id, updated_at DESC);
                     """
                 )
                 conn.commit()
@@ -572,12 +622,444 @@ class PersonalizationDB:
             finally:
                 conn.close()
 
+    # Companion
+    def insert_companion_activity_event(
+        self,
+        *,
+        user_id: str,
+        event_type: str,
+        source_type: str,
+        source_id: str,
+        surface: str,
+        dedupe_key: str,
+        tags: list[str] | None = None,
+        provenance: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        import uuid
+
+        self.get_or_create_profile(user_id)
+        event_id = uuid.uuid4().hex
+        created_at = _utcnow_iso()
+        tags_json = json.dumps(tags) if tags is not None else None
+        provenance_json = json.dumps(provenance or {})
+        metadata_json = json.dumps(metadata) if metadata is not None else None
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO companion_activity_events (
+                        id, user_id, event_type, source_type, source_id, surface,
+                        dedupe_key, tags, provenance_json, metadata_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event_id,
+                        str(user_id),
+                        str(event_type),
+                        str(source_type),
+                        str(source_id),
+                        str(surface),
+                        str(dedupe_key),
+                        tags_json,
+                        provenance_json,
+                        metadata_json,
+                        created_at,
+                    ),
+                )
+                conn.commit()
+                return event_id
+            finally:
+                conn.close()
+
+    def insert_companion_activity_events_bulk(
+        self,
+        *,
+        user_id: str,
+        events: list[dict[str, Any]],
+    ) -> list[str]:
+        """Insert multiple companion activity events in a single transaction."""
+        if not events:
+            return []
+
+        import uuid
+
+        self.get_or_create_profile(user_id)
+        rows: list[tuple[Any, ...]] = []
+        event_ids: list[str] = []
+        for event in events:
+            event_id = uuid.uuid4().hex
+            event_ids.append(event_id)
+            rows.append(
+                (
+                    event_id,
+                    str(user_id),
+                    str(event["event_type"]),
+                    str(event["source_type"]),
+                    str(event["source_id"]),
+                    str(event["surface"]),
+                    str(event["dedupe_key"]),
+                    json.dumps(event.get("tags")) if event.get("tags") is not None else None,
+                    json.dumps(event.get("provenance") or {}),
+                    json.dumps(event.get("metadata")) if event.get("metadata") is not None else None,
+                    _utcnow_iso(),
+                )
+            )
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.executemany(
+                    """
+                    INSERT INTO companion_activity_events (
+                        id, user_id, event_type, source_type, source_id, surface,
+                        dedupe_key, tags, provenance_json, metadata_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+                conn.commit()
+                return event_ids
+            finally:
+                conn.close()
+
+    def get_companion_activity_event_id_by_dedupe_key(
+        self,
+        *,
+        user_id: str,
+        dedupe_key: str,
+    ) -> str | None:
+        """Return the event id for a user's dedupe key, if one exists."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id
+                    FROM companion_activity_events
+                    WHERE user_id = ? AND dedupe_key = ?
+                    LIMIT 1
+                    """,
+                    (str(user_id), str(dedupe_key)),
+                ).fetchone()
+                if row is None:
+                    return None
+                return str(row["id"])
+            finally:
+                conn.close()
+
+    def list_companion_activity_events(
+        self,
+        user_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    SELECT id, event_type, source_type, source_id, surface, tags,
+                           provenance_json, metadata_json, created_at
+                    FROM companion_activity_events
+                    WHERE user_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (str(user_id), int(limit), int(offset)),
+                )
+                rows = cur.fetchall()
+                items: list[dict[str, Any]] = []
+                for row in rows:
+                    items.append(
+                        {
+                            "id": row["id"],
+                            "event_type": row["event_type"],
+                            "source_type": row["source_type"],
+                            "source_id": row["source_id"],
+                            "surface": row["surface"],
+                            "tags": json.loads(row["tags"]) if row["tags"] else [],
+                            "provenance": json.loads(row["provenance_json"] or "{}"),
+                            "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else {},
+                            "created_at": row["created_at"],
+                        }
+                    )
+                total_row = conn.execute(
+                    "SELECT COUNT(*) FROM companion_activity_events WHERE user_id = ?",
+                    (str(user_id),),
+                ).fetchone()
+                total = int(total_row[0] if total_row else 0)
+                return items, total
+            finally:
+                conn.close()
+
+    def upsert_companion_knowledge_card(
+        self,
+        *,
+        user_id: str,
+        card_type: str,
+        title: str,
+        summary: str,
+        evidence: list[dict[str, Any]] | None = None,
+        score: float = 0.0,
+        status: str = "active",
+    ) -> str:
+        import uuid
+
+        self.get_or_create_profile(user_id)
+        updated_at = _utcnow_iso()
+        evidence_json = json.dumps(evidence or [])
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                existing = conn.execute(
+                    """
+                    SELECT id FROM companion_knowledge_cards
+                    WHERE user_id = ? AND card_type = ? AND title = ?
+                    """,
+                    (str(user_id), str(card_type), str(title)),
+                ).fetchone()
+                if existing:
+                    card_id = str(existing["id"])
+                    conn.execute(
+                        """
+                        UPDATE companion_knowledge_cards
+                        SET summary = ?, evidence_json = ?, score = ?, status = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (str(summary), evidence_json, float(score), str(status), updated_at, card_id),
+                    )
+                else:
+                    card_id = uuid.uuid4().hex
+                    conn.execute(
+                        """
+                        INSERT INTO companion_knowledge_cards (
+                            id, user_id, card_type, title, summary, evidence_json, score, status, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            card_id,
+                            str(user_id),
+                            str(card_type),
+                            str(title),
+                            str(summary),
+                            evidence_json,
+                            float(score),
+                            str(status),
+                            updated_at,
+                        ),
+                    )
+                conn.commit()
+                return card_id
+            finally:
+                conn.close()
+
+    def list_companion_knowledge_cards(self, user_id: str, status: str | None = "active") -> list[dict[str, Any]]:
+        if status is None:
+            sql = (
+                "SELECT id, card_type, title, summary, evidence_json, score, status, updated_at "
+                "FROM companion_knowledge_cards "
+                "WHERE user_id = ? "
+                "ORDER BY score DESC, updated_at DESC"
+            )
+            params: list[Any] = [str(user_id)]
+        else:
+            sql = (
+                "SELECT id, card_type, title, summary, evidence_json, score, status, updated_at "
+                "FROM companion_knowledge_cards "
+                "WHERE user_id = ? AND status = ? "
+                "ORDER BY score DESC, updated_at DESC"
+            )
+            params = [str(user_id), str(status)]
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(sql, params).fetchall()
+                return [
+                    {
+                        "id": row["id"],
+                        "card_type": row["card_type"],
+                        "title": row["title"],
+                        "summary": row["summary"],
+                        "evidence": json.loads(row["evidence_json"] or "[]"),
+                        "score": float(row["score"]),
+                        "status": row["status"],
+                        "updated_at": row["updated_at"],
+                    }
+                    for row in rows
+                ]
+            finally:
+                conn.close()
+
+    def create_companion_goal(
+        self,
+        *,
+        user_id: str,
+        title: str,
+        description: str | None,
+        goal_type: str,
+        config: dict[str, Any] | None = None,
+        progress: dict[str, Any] | None = None,
+        status: str = "active",
+    ) -> str:
+        import uuid
+
+        self.get_or_create_profile(user_id)
+        goal_id = uuid.uuid4().hex
+        now = _utcnow_iso()
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO companion_goals (
+                        id, user_id, title, description, goal_type, config_json,
+                        progress_json, status, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        goal_id,
+                        str(user_id),
+                        str(title),
+                        None if description is None else str(description),
+                        str(goal_type),
+                        json.dumps(config or {}),
+                        json.dumps(progress or {}),
+                        str(status),
+                        now,
+                        now,
+                    ),
+                )
+                conn.commit()
+                return goal_id
+            finally:
+                conn.close()
+
+    def update_companion_goal(self, goal_id: str, user_id: str, **updates: Any) -> dict[str, Any] | None:
+        allowed_fields = {"title", "description", "config", "progress", "status"}
+        filtered_updates = {key: value for key, value in updates.items() if key in allowed_fields}
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                if filtered_updates:
+                    cur = conn.execute(
+                        """
+                        UPDATE companion_goals
+                        SET title = CASE WHEN ? THEN ? ELSE title END,
+                            description = CASE WHEN ? THEN ? ELSE description END,
+                            config_json = CASE WHEN ? THEN ? ELSE config_json END,
+                            progress_json = CASE WHEN ? THEN ? ELSE progress_json END,
+                            status = CASE WHEN ? THEN ? ELSE status END,
+                            updated_at = ?
+                        WHERE id = ? AND user_id = ?
+                        """,
+                        (
+                            int("title" in filtered_updates),
+                            filtered_updates.get("title"),
+                            int("description" in filtered_updates),
+                            filtered_updates.get("description"),
+                            int("config" in filtered_updates),
+                            json.dumps(filtered_updates.get("config") or {}),
+                            int("progress" in filtered_updates),
+                            json.dumps(filtered_updates.get("progress") or {}),
+                            int("status" in filtered_updates),
+                            filtered_updates.get("status"),
+                            _utcnow_iso(),
+                            str(goal_id),
+                            str(user_id),
+                        ),
+                    )
+                    if (cur.rowcount or 0) == 0:
+                        return None
+                    conn.commit()
+
+                row = conn.execute(
+                    """
+                    SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at
+                    FROM companion_goals
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (str(goal_id), str(user_id)),
+                ).fetchone()
+                if row is None:
+                    return None
+                return {
+                    "id": row["id"],
+                    "title": row["title"],
+                    "description": row["description"],
+                    "goal_type": row["goal_type"],
+                    "config": json.loads(row["config_json"] or "{}"),
+                    "progress": json.loads(row["progress_json"] or "{}"),
+                    "status": row["status"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            finally:
+                conn.close()
+
+    def list_companion_goals(self, user_id: str, status: str | None = None) -> list[dict[str, Any]]:
+        if status is None:
+            sql = (
+                "SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at "
+                "FROM companion_goals "
+                "WHERE user_id = ? "
+                "ORDER BY updated_at DESC"
+            )
+            params: list[Any] = [str(user_id)]
+        else:
+            sql = (
+                "SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at "
+                "FROM companion_goals "
+                "WHERE user_id = ? AND status = ? "
+                "ORDER BY updated_at DESC"
+            )
+            params = [str(user_id), str(status)]
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(sql, params).fetchall()
+                return [
+                    {
+                        "id": row["id"],
+                        "title": row["title"],
+                        "description": row["description"],
+                        "goal_type": row["goal_type"],
+                        "config": json.loads(row["config_json"] or "{}"),
+                        "progress": json.loads(row["progress_json"] or "{}"),
+                        "status": row["status"],
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                    }
+                    for row in rows
+                ]
+            finally:
+                conn.close()
+
     def purge_user(self, user_id: str) -> dict[str, int]:
         with self._lock:
             conn = self._connect()
             try:
                 counts: dict[str, int] = {}
-                for table in ("usage_events", "semantic_memories", "episodic_memories", "topic_profiles"):
+                for table in (
+                    "usage_events",
+                    "semantic_memories",
+                    "episodic_memories",
+                    "topic_profiles",
+                    "companion_activity_events",
+                    "companion_knowledge_cards",
+                    "companion_goals",
+                ):
                     delete_table_sql_template = "DELETE FROM {table} WHERE user_id = ?"
                     delete_table_sql = delete_table_sql_template.format_map(locals())  # nosec B608
                     cur = conn.execute(delete_table_sql, (str(user_id),))

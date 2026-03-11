@@ -75,6 +75,26 @@ export type PromptCollectionUpdatePayload = {
   prompt_ids?: number[]
 }
 
+export type StructuredPromptPreviewRequest = {
+  prompt_format: "legacy" | "structured"
+  system_prompt?: string | null
+  user_prompt?: string | null
+  prompt_schema_version?: number | null
+  prompt_definition?: Record<string, any> | null
+  variables?: Record<string, any>
+}
+
+export type StructuredPromptPreviewResponse = {
+  prompt_format: "legacy" | "structured"
+  prompt_schema_version?: number | null
+  assembled_messages: Array<{
+    role: string
+    content: string
+  }>
+  legacy_system_prompt: string
+  legacy_user_prompt: string
+}
+
 export const buildPromptSearchQuery = ({
   searchQuery,
   searchFields = [],
@@ -187,6 +207,22 @@ export async function updatePromptCollectionServer(
 
   if (!response.ok || !response.data) {
     throw new Error(response.error || "Failed to update prompt collection")
+  }
+
+  return response.data
+}
+
+export async function previewStructuredPromptServer(
+  payload: StructuredPromptPreviewRequest
+): Promise<StructuredPromptPreviewResponse> {
+  const response = await apiSend<StructuredPromptPreviewResponse>({
+    path: toAllowedPath("/api/v1/prompts/preview"),
+    method: "POST",
+    body: payload
+  })
+
+  if (!response.ok || !response.data) {
+    throw new Error(response.error || "Failed to preview structured prompt")
   }
 
   return response.data

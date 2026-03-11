@@ -5,15 +5,18 @@ Scaffold only - minimal models to enable endpoint stubs.
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 PersonaMode = Literal["session_scoped", "persistent_scoped"]
 PersonaScopeRuleType = Literal["conversation_id", "character_id", "media_id", "media_tag", "note_id"]
 PersonaPolicyRuleKind = Literal["mcp_tool", "skill"]
 PersonaSessionStatus = Literal["active", "paused", "closed", "archived"]
+PersonaExemplarKind = Literal["style", "catchphrase", "boundary", "scenario_demo", "tool_behavior"]
+PersonaExemplarSourceType = Literal["manual", "transcript_import", "character_seed", "generated_candidate"]
+PersonaExemplarReviewAction = Literal["approve", "reject"]
 
 
 class PersonaInfo(BaseModel):
@@ -30,6 +33,15 @@ class PersonaSessionRequest(BaseModel):
     persona_id: str
     project_id: str | None = None
     resume_session_id: str | None = None
+    surface: str | None = Field(default=None, max_length=120)
+
+    @field_validator("project_id", "resume_session_id", "surface", mode="before")
+    @classmethod
+    def _strip_optional_text(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        return stripped or None
 
 
 class PersonaSessionResponse(BaseModel):
@@ -83,6 +95,9 @@ class PersonaProfileResponse(BaseModel):
     id: str
     name: str
     character_card_id: int | None = None
+    origin_character_id: int | None = None
+    origin_character_name: str | None = None
+    origin_character_snapshot_at: str | None = None
     mode: PersonaMode
     system_prompt: str | None = None
     is_active: bool = True
@@ -129,6 +144,71 @@ class PersonaPolicyRulesResponse(BaseModel):
 class PersonaDeleteResponse(BaseModel):
     status: str
     persona_id: str
+
+
+class PersonaExemplarCreate(BaseModel):
+    id: str | None = Field(default=None, min_length=1, max_length=200)
+    kind: PersonaExemplarKind = "style"
+    content: str = Field(..., min_length=1, max_length=20_000)
+    tone: str | None = Field(default=None, min_length=1, max_length=200)
+    scenario_tags: list[str] = Field(default_factory=list)
+    capability_tags: list[str] = Field(default_factory=list)
+    priority: int = 0
+    enabled: bool = True
+    source_type: PersonaExemplarSourceType = "manual"
+    source_ref: str | None = Field(default=None, max_length=2048)
+    notes: str | None = Field(default=None, max_length=10_000)
+
+
+class PersonaExemplarUpdate(BaseModel):
+    kind: PersonaExemplarKind | None = None
+    content: str | None = Field(default=None, min_length=1, max_length=20_000)
+    tone: str | None = Field(default=None, min_length=1, max_length=200)
+    scenario_tags: list[str] | None = None
+    capability_tags: list[str] | None = None
+    priority: int | None = None
+    enabled: bool | None = None
+    source_type: PersonaExemplarSourceType | None = None
+    source_ref: str | None = Field(default=None, max_length=2048)
+    notes: str | None = Field(default=None, max_length=10_000)
+
+
+class PersonaExemplarResponse(BaseModel):
+    id: str
+    persona_id: str
+    user_id: str
+    kind: PersonaExemplarKind
+    content: str
+    tone: str | None = None
+    scenario_tags: list[str] = Field(default_factory=list)
+    capability_tags: list[str] = Field(default_factory=list)
+    priority: int = 0
+    enabled: bool = True
+    source_type: PersonaExemplarSourceType
+    source_ref: str | None = None
+    notes: str | None = None
+    created_at: str
+    last_modified: str
+    deleted: bool = False
+    version: int = 1
+
+
+class PersonaExemplarImportRequest(BaseModel):
+    transcript: str = Field(..., min_length=1, max_length=100_000)
+    source_ref: str | None = Field(default=None, max_length=2048)
+    notes: str | None = Field(default=None, max_length=10_000)
+    max_candidates: int = Field(default=5, ge=1, le=10)
+
+
+class PersonaExemplarReviewRequest(BaseModel):
+    action: PersonaExemplarReviewAction
+    notes: str | None = Field(default=None, max_length=10_000)
+
+
+class PersonaExemplarDeleteResponse(BaseModel):
+    status: str
+    persona_id: str
+    exemplar_id: str
 
 
 class PersonaStateUpdateRequest(BaseModel):
