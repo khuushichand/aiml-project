@@ -1422,7 +1422,6 @@ def migration_055_create_mcp_hub_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
     logger.info("Migration 055: Created MCP Hub tables")
 
-
 def migration_056_create_mcp_hub_policy_tables(conn: sqlite3.Connection) -> None:
     """Create MCP Hub policy and approval tables (SQLite)."""
     conn.execute(
@@ -1633,6 +1632,7 @@ def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
     conn.commit()
     logger.info("Rollback 053: Dropped byok_oauth_state table")
+
 
 
 def rollback_051_drop_storage_quotas_table(conn: sqlite3.Connection) -> None:
@@ -2728,7 +2728,94 @@ def rollback_059_drop_data_subject_requests_table(conn: sqlite3.Connection) -> N
     logger.info("Rollback 059: Dropped data_subject_requests table")
 
 
-def migration_060_create_backup_schedule_tables(conn: sqlite3.Connection) -> None:
+def migration_060_create_admin_monitoring_tables(conn: sqlite3.Connection) -> None:
+    """Create admin monitoring control-plane tables for SQLite backends."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            metric TEXT NOT NULL,
+            operator TEXT NOT NULL,
+            threshold REAL NOT NULL,
+            duration_minutes INTEGER NOT NULL,
+            severity TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            created_by_user_id INTEGER,
+            updated_by_user_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_rules_created_at ON admin_alert_rules(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_rules_metric_enabled "
+        "ON admin_alert_rules(metric, enabled)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_state (
+            alert_identity TEXT PRIMARY KEY,
+            assigned_to_user_id INTEGER,
+            snoozed_until TIMESTAMP,
+            escalated_severity TEXT,
+            acknowledged_at TIMESTAMP,
+            dismissed_at TIMESTAMP,
+            updated_by_user_id INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (assigned_to_user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_state_updated_at ON admin_alert_state(updated_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_state_assigned_user "
+        "ON admin_alert_state(assigned_to_user_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_identity TEXT NOT NULL,
+            action TEXT NOT NULL,
+            actor_user_id INTEGER,
+            details_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_events_identity_created "
+        "ON admin_alert_events(alert_identity, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_events_created_at ON admin_alert_events(created_at)"
+    )
+
+    conn.commit()
+    logger.info("Migration 060: Created admin monitoring tables")
+
+
+def rollback_060_drop_admin_monitoring_tables(conn: sqlite3.Connection) -> None:
+    """Rollback migration 060 by dropping admin monitoring tables."""
+    conn.execute("DROP TABLE IF EXISTS admin_alert_events")
+    conn.execute("DROP TABLE IF EXISTS admin_alert_state")
+    conn.execute("DROP TABLE IF EXISTS admin_alert_rules")
+    conn.commit()
+    logger.info("Rollback 060: Dropped admin monitoring tables")
+
+
+def migration_061_create_backup_schedule_tables(conn: sqlite3.Connection) -> None:
     """Create backup schedule persistence tables (SQLite)."""
     conn.execute(
         """
@@ -2799,15 +2886,15 @@ def migration_060_create_backup_schedule_tables(conn: sqlite3.Connection) -> Non
     )
 
     conn.commit()
-    logger.info("Migration 060: Created backup schedule tables")
+    logger.info("Migration 061: Created backup schedule tables")
 
 
-def rollback_060_drop_backup_schedule_tables(conn: sqlite3.Connection) -> None:
+def rollback_061_drop_backup_schedule_tables(conn: sqlite3.Connection) -> None:
     """Drop backup schedule persistence tables (SQLite rollback)."""
     conn.execute("DROP TABLE IF EXISTS backup_schedule_runs")
     conn.execute("DROP TABLE IF EXISTS backup_schedules")
     conn.commit()
-    logger.info("Rollback 060: Dropped backup schedule tables")
+    logger.info("Rollback 061: Dropped backup schedule tables")
 
 
 def migration_041_add_llm_provider_overrides(conn: sqlite3.Connection) -> None:
@@ -3218,9 +3305,15 @@ def get_authnz_migrations() -> list[Migration]:
         ),
         Migration(
             60,
+            "Create admin monitoring tables",
+            migration_060_create_admin_monitoring_tables,
+            rollback_060_drop_admin_monitoring_tables,
+        ),
+        Migration(
+            61,
             "Create backup schedule tables",
-            migration_060_create_backup_schedule_tables,
-            rollback_060_drop_backup_schedule_tables,
+            migration_061_create_backup_schedule_tables,
+            rollback_061_drop_backup_schedule_tables,
         ),
     ]
 

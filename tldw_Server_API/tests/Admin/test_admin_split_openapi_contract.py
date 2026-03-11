@@ -63,6 +63,13 @@ EXPECTED_SPLIT_ADMIN_OPERATIONS: set[tuple[str, str]] = {
     ("DELETE", "/api/v1/admin/incidents/{incident_id}"),
     ("POST", "/api/v1/admin/llm-usage/pricing/reload"),
     ("POST", "/api/v1/admin/chat/model-aliases/reload"),
+    ("GET", "/api/v1/admin/monitoring/alert-rules"),
+    ("POST", "/api/v1/admin/monitoring/alert-rules"),
+    ("DELETE", "/api/v1/admin/monitoring/alert-rules/{rule_id}"),
+    ("POST", "/api/v1/admin/monitoring/alerts/{alert_identity}/assign"),
+    ("POST", "/api/v1/admin/monitoring/alerts/{alert_identity}/snooze"),
+    ("POST", "/api/v1/admin/monitoring/alerts/{alert_identity}/escalate"),
+    ("GET", "/api/v1/admin/monitoring/alerts/history"),
 }
 
 
@@ -125,6 +132,18 @@ def test_admin_split_openapi_schema_contracts(monkeypatch, tmp_path) -> None:
     rate_limit_post = paths["/api/v1/admin/roles/{role_id}/rate-limits"]["post"]
     rate_limit_schema = rate_limit_post["responses"]["200"]["content"]["application/json"]["schema"]
     assert rate_limit_schema["$ref"].endswith("/RateLimitResponse")
+
+    monitoring_rules_get = paths["/api/v1/admin/monitoring/alert-rules"]["get"]
+    monitoring_rules_schema = monitoring_rules_get["responses"]["200"]["content"]["application/json"]["schema"]
+    assert monitoring_rules_schema["$ref"].endswith("/AdminAlertRuleListResponse")
+
+    monitoring_assign_post = paths["/api/v1/admin/monitoring/alerts/{alert_identity}/assign"]["post"]
+    monitoring_assign_schema = monitoring_assign_post["responses"]["200"]["content"]["application/json"]["schema"]
+    assert monitoring_assign_schema["$ref"].endswith("/AdminAlertStateMutationResponse")
+
+    monitoring_history_get = paths["/api/v1/admin/monitoring/alerts/history"]["get"]
+    monitoring_history_schema = monitoring_history_get["responses"]["200"]["content"]["application/json"]["schema"]
+    assert monitoring_history_schema["$ref"].endswith("/AdminAlertHistoryListResponse")
 
 
 def test_admin_root_module_has_no_route_handlers() -> None:
