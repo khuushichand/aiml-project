@@ -45,6 +45,9 @@ export interface UseDocumentTTSReturn {
   state: TTSState
   voice: string
   speed: number
+  volume: number
+  progress: number
+  audioUrl: string | null
   voices: TTSVoice[]
   voicesLoading: boolean
 
@@ -55,6 +58,7 @@ export interface UseDocumentTTSReturn {
   stop: () => void
   setVoice: (voiceId: string) => void
   setSpeed: (speed: number) => void
+  setVolume: (volume: number) => void
 }
 
 // Default voice (Kokoro)
@@ -82,6 +86,14 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
     const saved = localStorage.getItem("tts-speed")
     return saved ? parseFloat(saved) : DEFAULT_SPEED
   })
+
+  const [volume, setVolumeState] = useState(() => {
+    if (typeof window === "undefined") return 1
+    const saved = localStorage.getItem("tts-volume")
+    return saved ? parseFloat(saved) : 1
+  })
+
+  const [progress, setProgress] = useState(0)
 
   const [state, setState] = useState<TTSState>({
     isPlaying: false,
@@ -153,6 +165,8 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
       URL.revokeObjectURL(audioUrlRef.current)
       audioUrlRef.current = null
     }
+
+    setProgress(0)
 
     setState((prev) => ({
       isPlaying: false,
@@ -230,6 +244,14 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
         }
       }
 
+      audio.ontimeupdate = () => {
+        if (audio.duration > 0) {
+          setProgress((audio.currentTime / audio.duration) * 100)
+        }
+      }
+
+      audio.volume = volume
+
       await audio.play()
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "TTS failed"
@@ -242,7 +264,7 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
         lastSpokenText: prev.lastSpokenText
       }))
     }
-  }, [voice, speed])
+  }, [voice, speed, volume])
 
   // Pause playback
   const pause = useCallback(() => {
@@ -269,6 +291,7 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
       URL.revokeObjectURL(audioUrlRef.current)
       audioUrlRef.current = null
     }
+    setProgress(0)
     setState((prev) => ({
       isPlaying: false,
       isPaused: false,
@@ -289,6 +312,18 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
     }
   }, [])
 
+  // Set volume with persistence
+  const setVolume = useCallback((newVolume: number) => {
+    const clamped = Math.max(0, Math.min(1, newVolume))
+    setVolumeState(clamped)
+    if (audioRef.current) {
+      audioRef.current.volume = clamped
+    }
+    try {
+      localStorage.setItem("tts-volume", String(clamped))
+    } catch { /* ignore */ }
+  }, [])
+
   // Set speed with persistence
   const setSpeed = useCallback((newSpeed: number) => {
     const clampedSpeed = Math.max(0.25, Math.min(4, newSpeed))
@@ -304,6 +339,9 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
     state,
     voice,
     speed,
+    volume,
+    progress,
+    audioUrl: audioUrlRef.current,
     voices,
     voicesLoading,
     speak,
@@ -311,7 +349,8 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
     resume,
     stop,
     setVoice: handleSetVoice,
-    setSpeed
+    setSpeed,
+    setVolume
   }
 }
 

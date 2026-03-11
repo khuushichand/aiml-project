@@ -1,12 +1,13 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { Popover, Select, Slider, Tooltip, Spin } from "antd"
+import { Popover, Select, Slider, Tooltip, Spin, Progress } from "antd"
 import {
   Volume2,
   Play,
   Pause,
   Square,
-  VolumeX
+  VolumeX,
+  Download
 } from "lucide-react"
 import { useDocumentTTS } from "@/hooks/document-workspace/useDocumentTTS"
 
@@ -29,6 +30,9 @@ export const TTSPanel: React.FC<TTSPanelProps> = ({ defaultText }) => {
     state,
     voice,
     speed,
+    volume,
+    progress,
+    audioUrl,
     voices,
     voicesLoading,
     speak,
@@ -36,7 +40,8 @@ export const TTSPanel: React.FC<TTSPanelProps> = ({ defaultText }) => {
     resume,
     stop,
     setVoice,
-    setSpeed
+    setSpeed,
+    setVolume
   } = useDocumentTTS()
 
   const textToSpeak = defaultText || state.lastSpokenText
@@ -154,6 +159,53 @@ export const TTSPanel: React.FC<TTSPanelProps> = ({ defaultText }) => {
           tooltip={{ formatter: (v) => `${v}x` }}
         />
       </div>
+
+      {/* Volume control */}
+      <div>
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-xs font-medium text-text-secondary">
+            {t("option:documentWorkspace.volume", "Volume")}
+          </span>
+          <span className="text-xs text-text-muted">{Math.round(volume * 100)}%</span>
+        </div>
+        <Slider
+          min={0}
+          max={100}
+          step={1}
+          value={Math.round(volume * 100)}
+          onChange={(v) => setVolume(v / 100)}
+          tooltip={{ formatter: (v) => `${v}%` }}
+        />
+      </div>
+
+      {/* Playback progress */}
+      {(state.isPlaying || state.isPaused) && (
+        <div>
+          <Progress
+            percent={Math.round(progress)}
+            size="small"
+            showInfo={false}
+            strokeColor="var(--color-primary)"
+          />
+          <div className="flex justify-between text-[10px] text-text-muted mt-0.5">
+            <span>{Math.round(progress)}%</span>
+          </div>
+        </div>
+      )}
+
+      {/* Download audio */}
+      {audioUrl && (
+        <div className="flex justify-center">
+          <a
+            href={audioUrl}
+            download="tts-audio.mp3"
+            className="flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            <Download className="h-3 w-3" />
+            {t("option:documentWorkspace.downloadAudio", "Download audio")}
+          </a>
+        </div>
+      )}
     </div>
   )
 

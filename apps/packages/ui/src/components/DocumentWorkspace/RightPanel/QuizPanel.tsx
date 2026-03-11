@@ -25,6 +25,7 @@ import {
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import {
   useDocumentQuiz,
+  useQuizHistory,
   QUESTION_TYPE_INFO,
   DIFFICULTY_INFO,
   type QuestionType,
@@ -216,7 +217,8 @@ export const QuizPanel: React.FC = () => {
     } catch { /* noop */ }
   }, [numQuestions, questionType, difficulty])
 
-  const { quiz, isGenerating, error, generateQuiz, clearQuiz } = useDocumentQuiz(activeDocumentId)
+  const { quiz, isGenerating, error, generateQuiz, clearQuiz, loadQuiz } = useDocumentQuiz(activeDocumentId)
+  const { history: quizHistory, refresh: refreshHistory } = useQuizHistory(activeDocumentId)
 
   const handleGenerate = useCallback(() => {
     generateQuiz({
@@ -358,6 +360,52 @@ export const QuizPanel: React.FC = () => {
                 {DIFFICULTY_INFO[difficulty].description}
               </p>
             </div>
+
+            {/* Quiz History */}
+            {quizHistory.length > 0 && (
+              <div className="border-t border-border pt-4">
+                <h4 className="text-xs font-medium text-text-secondary mb-2">
+                  {t("option:documentWorkspace.quizHistory", "Previous Quizzes")}
+                </h4>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {quizHistory.slice(0, 5).map((entry) => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      className="w-full text-left rounded-lg border border-border p-2 hover:border-primary/50 transition-colors"
+                      onClick={() => {
+                        loadQuiz(entry.quiz)
+                        setShowConfig(false)
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-text-secondary">
+                          {entry.quiz.questions.length} {t("option:documentWorkspace.questions", "questions")}
+                        </span>
+                        {entry.score !== undefined && (
+                          <Tag color={entry.score >= 70 ? "success" : entry.score >= 40 ? "warning" : "error"} className="m-0">
+                            {entry.score}%
+                          </Tag>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-text-muted mt-1">
+                        {new Date(entry.createdAt).toLocaleDateString(undefined, {
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit"
+                        })}
+                        {!entry.completedAt && (
+                          <span className="ml-2 text-primary">
+                            {t("option:documentWorkspace.resumeQuiz", "Resume")}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Generate button */}
             <Button

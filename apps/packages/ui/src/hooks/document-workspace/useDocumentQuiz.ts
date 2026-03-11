@@ -1,10 +1,12 @@
+import { useState, useEffect, useCallback } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { tldwClient } from "@/services/tldw"
+import { saveQuizToHistory, getQuizHistory, updateQuizAnswers, type QuizHistoryEntry } from "./offlineQueue"
 
 /**
  * Question type options
  */
-export type QuestionType = "multiple_choice" | "true_false" | "short_answer"
+export type QuestionType = "multiple_choice" | "true_false" | "short_answer" | "mixed"
 
 /**
  * Difficulty level options
@@ -108,6 +110,15 @@ export function useDocumentQuiz(documentId: number | null) {
     onSuccess: (data) => {
       // Cache the generated quiz
       queryClient.setQueryData(["document-quiz", documentId], data)
+      // Persist to IndexedDB
+      if (documentId) {
+        saveQuizToHistory({
+          documentId,
+          quiz: data,
+          answers: {},
+          createdAt: Date.now()
+        })
+      }
     }
   })
 
@@ -128,6 +139,10 @@ export function useDocumentQuiz(documentId: number | null) {
     // Actions
     generateQuiz: (options?: QuizGenerationOptions) => generateMutation.mutate(options),
     clearQuiz: () => queryClient.removeQueries({ queryKey: ["document-quiz", documentId] }),
+    loadQuiz: (quiz: QuizResponse) => {
+      generateMutation.reset()
+      queryClient.setQueryData(["document-quiz", documentId], quiz)
+    },
 
     // Reset mutation state
     reset: generateMutation.reset
@@ -149,6 +164,10 @@ export const QUESTION_TYPE_INFO: Record<QuestionType, { label: string; descripti
   short_answer: {
     label: "Short Answer",
     description: "Open-ended questions requiring brief responses"
+  },
+  mixed: {
+    label: "Mixed",
+    description: "A variety of question types"
   }
 }
 
@@ -168,6 +187,36 @@ export const DIFFICULTY_INFO: Record<DifficultyLevel, { label: string; descripti
     label: "Hard",
     description: "Complex questions requiring synthesis"
   }
+}
+
+/**
+ * Hook to load quiz history from IndexedDB.
+ */
+export function useQuizHistory(documentId: number | null) {
+  const [history, setHistory] = useState<QuizHistoryEntry[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+
+  const loadHistory = useCallback(async () => {
+    if (!documentId) {
+      setHistory([])
+      return
+    }
+    setIsLoading(true)
+    try {
+      const entries = await getQuizHistory(documentId)
+      setHistory(entries)
+    } catch {
+      setHistory([])
+    } finally {
+      setIsLoading(false)
+    }
+  }, [documentId])
+
+  useEffect(() => {
+    loadHistory()
+  }, [loadHistory])
+
+  return { history, isLoading, refresh: loadHistory }
 }
 
 export default useDocumentQuiz

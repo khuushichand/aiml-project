@@ -48,6 +48,7 @@ import {
   useReadingProgress,
   useReadingProgressAutoSave,
   useReadingProgressSaveOnClose,
+  useResizablePanel,
 } from "@/hooks/document-workspace"
 
 const DocumentPickerModal = React.lazy(() => import("./DocumentPickerModal"))
@@ -337,6 +338,10 @@ export const DocumentWorkspacePage: React.FC = () => {
   useReadingProgress(activeDocumentId)
   const { forceSave } = useReadingProgressAutoSave(activeDocumentId, 5000) // Save every 5 seconds
   useReadingProgressSaveOnClose(activeDocumentId, forceSave)
+
+  // Resizable panel widths
+  const leftPanel = useResizablePanel({ key: "left", defaultWidth: 288, min: 200, max: 400 })
+  const rightPanel = useResizablePanel({ key: "right", defaultWidth: 320, min: 240, max: 480 })
 
   // Pane state with persistence
   const [leftPaneOpen, setLeftPaneOpen] = useStorage(STORAGE_KEY_LEFT_PANE, true)
@@ -821,9 +826,18 @@ export const DocumentWorkspacePage: React.FC = () => {
         <div className="flex min-h-0 flex-1">
           {/* Left pane - Sidebar (desktop) */}
           {leftPaneOpen && (
-            <aside className="hidden h-full min-h-0 w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col">
+            <aside className="hidden h-full min-h-0 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col" style={{ width: leftPanel.width }}>
               <LeftSidebarContent />
             </aside>
+          )}
+          {leftPaneOpen && (
+            <div
+              className="hidden lg:flex h-full w-1 cursor-col-resize items-center justify-center hover:bg-primary/30 active:bg-primary/50 transition-colors"
+              onMouseDown={leftPanel.handleMouseDown}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize left sidebar"
+            />
           )}
 
           {/* Left pane - Sidebar (tablet drawer) */}
@@ -856,7 +870,16 @@ export const DocumentWorkspacePage: React.FC = () => {
 
           {/* Right pane - Chat/Annotations (desktop) */}
           {rightPaneOpen && (
-            <aside className="hidden w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col">
+            <div
+              className="hidden lg:flex h-full w-1 cursor-col-resize items-center justify-center hover:bg-primary/30 active:bg-primary/50 transition-colors"
+              onMouseDown={rightPanel.handleMouseDown}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize right panel"
+            />
+          )}
+          {rightPaneOpen && (
+            <aside className="hidden shrink-0 border-l border-border bg-surface lg:flex lg:flex-col" style={{ width: rightPanel.width }}>
               <RightPanelContent />
             </aside>
           )}

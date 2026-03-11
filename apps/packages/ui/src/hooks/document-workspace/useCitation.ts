@@ -4,7 +4,7 @@ import { useDocumentMetadata } from "./useDocumentMetadata"
 /**
  * Citation format options
  */
-export type CitationFormat = "mla" | "apa" | "chicago" | "harvard" | "ieee"
+export type CitationFormat = "mla" | "apa" | "chicago" | "harvard" | "ieee" | "bibtex"
 
 /**
  * Citation format display information
@@ -32,6 +32,10 @@ export const CITATION_FORMAT_INFO: Record<
   ieee: {
     label: "IEEE",
     description: "Institute of Electrical and Electronics Engineers"
+  },
+  bibtex: {
+    label: "BibTeX",
+    description: "BibTeX format for LaTeX documents"
   }
 }
 
@@ -296,6 +300,64 @@ export function formatIEEE(metadata: CitationMetadata): string {
 }
 
 /**
+ * Format citation in BibTeX style
+ */
+export function formatBibTeX(metadata: CitationMetadata): string {
+  const date = formatDate(metadata.date)
+
+  // Generate a cite key from first author's last name + year
+  let citeKey = "document"
+  if (metadata.authors && metadata.authors.length > 0) {
+    const firstAuthor = metadata.authors[0].trim().split(" ")
+    citeKey = (firstAuthor[firstAuthor.length - 1] || "unknown").toLowerCase()
+  }
+  citeKey += date.year !== "n.d." ? date.year : ""
+
+  const lines: string[] = []
+  lines.push(`@article{${citeKey},`)
+
+  // Title
+  lines.push(`  title = {${metadata.title}},`)
+
+  // Authors
+  if (metadata.authors && metadata.authors.length > 0) {
+    lines.push(`  author = {${metadata.authors.join(" and ")}},`)
+  }
+
+  // Year
+  if (date.year !== "n.d.") {
+    lines.push(`  year = {${date.year}},`)
+  }
+
+  // DOI
+  if (metadata.doi) {
+    lines.push(`  doi = {${metadata.doi}},`)
+  }
+
+  // URL
+  if (metadata.url) {
+    lines.push(`  url = {${metadata.url}},`)
+  }
+
+  // Publisher
+  if (metadata.publisher) {
+    lines.push(`  publisher = {${metadata.publisher}},`)
+  }
+
+  // Volume and issue
+  if (metadata.volume) {
+    lines.push(`  volume = {${metadata.volume}},`)
+  }
+  if (metadata.issue) {
+    lines.push(`  number = {${metadata.issue}},`)
+  }
+
+  lines.push("}")
+
+  return lines.join("\n")
+}
+
+/**
  * Generate citation in the specified format
  */
 export function generateCitation(
@@ -313,6 +375,8 @@ export function generateCitation(
       return formatHarvard(metadata)
     case "ieee":
       return formatIEEE(metadata)
+    case "bibtex":
+      return formatBibTeX(metadata)
   }
 }
 
@@ -360,7 +424,8 @@ export function useCitation(documentId: number | null) {
         apa: placeholder,
         chicago: placeholder,
         harvard: placeholder,
-        ieee: placeholder
+        ieee: placeholder,
+        bibtex: placeholder
       }
     }
 
@@ -369,7 +434,8 @@ export function useCitation(documentId: number | null) {
       apa: formatAPA(citationMetadata),
       chicago: formatChicago(citationMetadata),
       harvard: formatHarvard(citationMetadata),
-      ieee: formatIEEE(citationMetadata)
+      ieee: formatIEEE(citationMetadata),
+      bibtex: formatBibTeX(citationMetadata)
     }
   }, [citationMetadata])
 

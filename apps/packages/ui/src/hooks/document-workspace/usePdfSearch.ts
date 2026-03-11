@@ -24,6 +24,45 @@ interface SearchIndex {
 }
 
 /**
+ * Escape special regex characters in a string.
+ */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/**
+ * Find all matches of a query in text, respecting case sensitivity and word boundary options.
+ */
+function findMatches(
+  text: string,
+  query: string,
+  matchCase: boolean,
+  wordBoundary: boolean
+): number[] {
+  if (!query) return []
+
+  let pattern = escapeRegex(query)
+  if (wordBoundary) {
+    pattern = `\\b${pattern}\\b`
+  }
+
+  const flags = matchCase ? "g" : "gi"
+  const regex = new RegExp(pattern, flags)
+  const positions: number[] = []
+
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(text)) !== null) {
+    positions.push(match.index)
+    // Prevent infinite loop on zero-length matches
+    if (match.index === regex.lastIndex) {
+      regex.lastIndex++
+    }
+  }
+
+  return positions
+}
+
+/**
  * Hook for PDF in-document text search.
  *
  * Provides search functionality including:
@@ -50,6 +89,8 @@ export function usePdfSearch(
   const setActiveSearchIndex = useDocumentWorkspaceStore((s) => s.setActiveSearchIndex)
   const clearSearch = useDocumentWorkspaceStore((s) => s.clearSearch)
   const setCurrentPage = useDocumentWorkspaceStore((s) => s.setCurrentPage)
+  const searchMatchCase = useDocumentWorkspaceStore((s) => s.searchMatchCase)
+  const searchWordBoundary = useDocumentWorkspaceStore((s) => s.searchWordBoundary)
 
   /**
    * Build search index from PDF document.
@@ -105,18 +146,12 @@ export function usePdfSearch(
         return
       }
 
-      const normalizedQuery = query.toLowerCase()
       const results: SearchResult[] = []
 
       searchIndex.pageTexts.forEach((pageText, page) => {
-        const normalizedText = pageText.toLowerCase()
-        let matchIndex = 0
-        let startPos = 0
+        const positions = findMatches(pageText, query, searchMatchCase, searchWordBoundary)
 
-        while (true) {
-          const pos = normalizedText.indexOf(normalizedQuery, startPos)
-          if (pos === -1) break
-
+        positions.forEach((pos, matchIndex) => {
           // Find which item this match belongs to
           const items = searchIndex.pageItems.get(page) || []
           let currentPos = 0
@@ -137,10 +172,7 @@ export function usePdfSearch(
             matchIndex,
             itemIndex
           })
-
-          matchIndex++
-          startPos = pos + 1
-        }
+        })
       })
 
       // Sort by page number
@@ -148,7 +180,7 @@ export function usePdfSearch(
 
       setSearchResults(results)
     },
-    [searchIndex, setSearchResults]
+    [searchIndex, setSearchResults, searchMatchCase, searchWordBoundary]
   )
 
   /**
