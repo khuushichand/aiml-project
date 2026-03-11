@@ -195,6 +195,10 @@ class Qwen3TTSAdapter(TTSAdapter):
 
     def _build_runtime(self) -> Qwen3Runtime:
         runtime_name = self._resolve_runtime_name()
+        if runtime_name == "mlx":
+            from .qwen3_runtime_mlx import Qwen3MlxRuntime
+
+            return Qwen3MlxRuntime(self)
         if runtime_name != "upstream":
             logger.warning(
                 f"{self.provider_name}: runtime '{runtime_name}' is not implemented yet; "
@@ -875,6 +879,15 @@ class Qwen3TTSAdapter(TTSAdapter):
             supports_emotion_control=True,
             sample_rate=self.sample_rate,
             default_format=AudioFormat.PCM,
+            metadata={
+                "runtime": "upstream",
+                "supported_modes": [
+                    "custom_voice_preset",
+                    "uploaded_custom_voice",
+                    "voice_design",
+                ],
+                "supports_uploaded_custom_voices": True,
+            },
         )
 
     async def get_capabilities(self) -> TTSCapabilities:
