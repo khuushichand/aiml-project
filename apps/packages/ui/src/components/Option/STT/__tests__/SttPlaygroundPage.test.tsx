@@ -179,7 +179,6 @@ describe("SttPlaygroundPage", () => {
   it("shows an inline retry control when model loading times out", async () => {
     getTranscriptionModelsMock
       .mockRejectedValueOnce(new Error("timeout while loading transcription models"))
-      .mockRejectedValueOnce(new Error("timeout while loading transcription models"))
       .mockResolvedValueOnce({ all_models: ["whisper-1", "parakeet-tdt"] })
     isTimeoutLikeErrorMock.mockReturnValue(true)
 
@@ -189,7 +188,10 @@ describe("SttPlaygroundPage", () => {
     fireEvent.click(retryButton)
 
     await waitFor(() => {
-      expect(getTranscriptionModelsMock).toHaveBeenCalledTimes(3)
+      expect(getTranscriptionModelsMock).toHaveBeenCalledTimes(2)
+    })
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull()
     })
   })
 })

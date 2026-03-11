@@ -22,6 +22,8 @@ type NavigateOptions = {
   state?: unknown
 }
 
+type RouteParams = Record<string, string | undefined>
+
 type BlockerHookArg = boolean | ((...args: unknown[]) => boolean)
 
 type ShimBlocker = {

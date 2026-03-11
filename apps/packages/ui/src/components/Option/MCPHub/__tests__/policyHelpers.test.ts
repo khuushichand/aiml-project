@@ -95,6 +95,15 @@ describe("policyHelpers", () => {
     expect(capabilities).toEqual(["filesystem.read"])
   })
 
+  it("adds and removes string options without creating duplicates", () => {
+    expect(toggleStringValue(["session"], "conversation", true)).toEqual([
+      "session",
+      "conversation"
+    ])
+    expect(toggleStringValue(["session"], "session", true)).toEqual(["session"])
+    expect(toggleStringValue(["session", "conversation"], "session", false)).toEqual([
+      "conversation"
+    ])
   it("toggles string selections without duplicating enabled entries", () => {
     expect(toggleStringValue(["session"], "once", true)).toEqual(["session", "once"])
     expect(toggleStringValue(["session", "once"], "once", true)).toEqual(["session", "once"])

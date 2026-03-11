@@ -180,3 +180,29 @@ def test_macos_diagnostics_runtime_reasons_align_with_feature_discovery(monkeypa
     assert diagnostics["runtimes"]["vz_linux"]["reasons"] == discovery["vz_linux"]["reasons"]
     assert diagnostics["runtimes"]["vz_macos"]["reasons"] == discovery["vz_macos"]["reasons"]
     assert diagnostics["runtimes"]["seatbelt"]["supported_trust_levels"] == discovery["seatbelt"]["supported_trust_levels"]
+
+
+def test_runtimes_discovery_keeps_seatbelt_network_claims_best_effort(monkeypatch) -> None:
+    import tldw_Server_API.app.core.Sandbox.runners.seatbelt_runner as seatbelt_module
+
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
+    monkeypatch.setenv("TLDW_SANDBOX_SEATBELT_AVAILABLE", "1")
+    monkeypatch.delenv("TLDW_SANDBOX_SEATBELT_STANDARD_ENABLED", raising=False)
+    monkeypatch.setattr(seatbelt_module.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        seatbelt_module,
+        "vz_host_facts",
+        lambda: {"os": "darwin", "arch": "arm64", "apple_silicon": True},
+    )
+    monkeypatch.setattr(seatbelt_module, "_sandbox_exec_exists", lambda: True)
+    clear_config_cache()
+
+    with TestClient(app) as client:
+        data = client.get("/api/v1/sandbox/runtimes").json()
+        seatbelt = next(item for item in data["runtimes"] if item["name"] == "seatbelt")
+
+    assert seatbelt["available"] is True
+    assert seatbelt["strict_deny_all_supported"] is False
+    assert "best-effort" in seatbelt["notes"]
+    assert "VM-grade" in seatbelt["notes"]
