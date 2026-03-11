@@ -24,6 +24,7 @@ import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useStoreMessageOption } from "@/store/option"
 import { useFolderStore } from "@/store/folder"
 import { useRouteTransitionStore } from "@/store/route-transition"
+import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator"
 import { cn } from "@/libs/utils"
 import { ServerChatList } from "./ChatSidebar/ServerChatList"
 import { FolderChatList } from "./ChatSidebar/FolderChatList"
@@ -70,6 +71,9 @@ export function ChatSidebar({
   )
   const showShortcuts = shortcutsCollapsed !== true
   const [shortcutSelection] = useSetting(SIDEBAR_SHORTCUT_SELECTION_SETTING)
+  const setPanelVisible = useChatSurfaceCoordinatorStore(
+    (state) => state.setPanelVisible
+  )
 
   const clearChat = useClearChat()
   const temporaryChat = useStoreMessageOption((state) => state.temporaryChat)
@@ -188,6 +192,14 @@ export function ChatSidebar({
       setSelectionMode(false)
     }
   }, [currentTab, selectionMode])
+
+  React.useEffect(() => {
+    setPanelVisible("server-history", currentTab === "server" && !collapsed)
+
+    return () => {
+      setPanelVisible("server-history", false)
+    }
+  }, [collapsed, currentTab, setPanelVisible])
 
   const previousPathRef = React.useRef(location.pathname)
   React.useEffect(() => {
