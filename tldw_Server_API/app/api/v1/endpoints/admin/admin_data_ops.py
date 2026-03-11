@@ -14,25 +14,33 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     BackupListResponse,
     BackupRestoreRequest,
     BackupRestoreResponse,
+    DataSubjectRequestCreateRequest,
+    DataSubjectRequestCreateResponse,
+    DataSubjectRequestItem,
+    DataSubjectRequestListResponse,
+    DataSubjectRequestPreviewRequest,
+    DataSubjectRequestPreviewResponse,
     RetentionPoliciesResponse,
     RetentionPolicy,
     RetentionPolicyUpdateRequest,
 )
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.repos.data_subject_requests_repo import (
+    AuthnzDataSubjectRequestsRepo,
+)
+from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.services.admin_data_ops_service import (
     create_backup_snapshot as svc_create_backup_snapshot,
-)
-from tldw_Server_API.app.services.admin_data_ops_service import (
     list_backup_items as svc_list_backup_items,
-)
-from tldw_Server_API.app.services.admin_data_ops_service import (
     list_retention_policies as svc_list_retention_policies,
-)
-from tldw_Server_API.app.services.admin_data_ops_service import (
     restore_backup_snapshot as svc_restore_backup_snapshot,
-)
-from tldw_Server_API.app.services.admin_data_ops_service import (
     update_retention_policy as svc_update_retention_policy,
+)
+from tldw_Server_API.app.services.admin_data_subject_requests_service import (
+    list_data_subject_requests as svc_list_data_subject_requests,
+    preview_data_subject_request as svc_preview_data_subject_request,
+    record_data_subject_request as svc_record_data_subject_request,
 )
 
 router = APIRouter()
@@ -57,6 +65,14 @@ _DATA_OPS_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     HTTPException,
 )
+
+
+async def _build_dsr_repos() -> tuple[AuthnzUsersRepo, AuthnzDataSubjectRequestsRepo]:
+    db_pool = await get_db_pool()
+    return (
+        AuthnzUsersRepo(db_pool=db_pool),
+        AuthnzDataSubjectRequestsRepo(db_pool=db_pool),
+    )
 
 
 async def _enforce_admin_user_scope(
@@ -105,6 +121,10 @@ _PER_USER_BACKUP_DATASETS = _BACKUP_DATASETS - {"authnz"}
 def _require_user_id_for_dataset(dataset: str, user_id: int | None) -> None:
     if dataset in _PER_USER_BACKUP_DATASETS and user_id is None:
         raise HTTPException(status_code=400, detail="user_id_required")
+
+
+def _dsr_item_from_record(record: dict[str, Any]) -> DataSubjectRequestItem:
+    return DataSubjectRequestItem(**record)
 
 
 @router.get("/backups", response_model=BackupListResponse)
@@ -247,6 +267,119 @@ async def restore_backup(
     except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to restore backup: {exc}")
         raise HTTPException(status_code=500, detail="Failed to restore backup") from exc
+
+
+@router.post("/data-subject-requests/preview", response_model=DataSubjectRequestPreviewResponse)
+async def preview_data_subject_request(
+    payload: DataSubjectRequestPreviewRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> DataSubjectRequestPreviewResponse:
+    try:
+        users_repo, _ = await _build_dsr_repos()
+        preview = await svc_preview_data_subject_request(
+            requester_identifier=payload.requester_identifier,
+            request_type=payload.request_type,
+            categories=payload.categories,
+            principal=principal,
+            users_repo=users_repo,
+        )
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.read",
+            category="compliance",
+            resource_type="data_subject_request",
+            resource_id=str(preview["resolved_user_id"]),
+            action="data_subject_request.preview",
+            metadata={
+                "requester_identifier": preview["requester_identifier"],
+                "resolved_user_id": preview["resolved_user_id"],
+                "selected_categories": preview["selected_categories"],
+            },
+        )
+        return DataSubjectRequestPreviewResponse(**preview)
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to preview data subject request: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to preview data subject request") from exc
+
+
+@router.post("/data-subject-requests", response_model=DataSubjectRequestCreateResponse)
+async def create_data_subject_request(
+    payload: DataSubjectRequestCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> DataSubjectRequestCreateResponse:
+    try:
+        users_repo, requests_repo = await _build_dsr_repos()
+        preview = await svc_preview_data_subject_request(
+            requester_identifier=payload.requester_identifier,
+            request_type=payload.request_type,
+            categories=payload.categories,
+            principal=principal,
+            users_repo=users_repo,
+        )
+        record = await svc_record_data_subject_request(
+            principal=principal,
+            client_request_id=payload.client_request_id,
+            requester_identifier=payload.requester_identifier,
+            request_type=payload.request_type,
+            categories=payload.categories,
+            users_repo=users_repo,
+            requests_repo=requests_repo,
+            preview=preview,
+            notes=payload.notes,
+        )
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.write",
+            category="compliance",
+            resource_type="data_subject_request",
+            resource_id=str(record.get("id") or payload.client_request_id),
+            action="data_subject_request.record",
+            metadata={
+                "requester_identifier": record.get("requester_identifier"),
+                "resolved_user_id": record.get("resolved_user_id"),
+                "request_type": record.get("request_type"),
+                "selected_categories": record.get("selected_categories"),
+            },
+        )
+        return DataSubjectRequestCreateResponse(item=_dsr_item_from_record(record))
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to record data subject request: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to record data subject request") from exc
+
+
+@router.get("/data-subject-requests", response_model=DataSubjectRequestListResponse)
+async def list_data_subject_requests(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> DataSubjectRequestListResponse:
+    try:
+        _, requests_repo = await _build_dsr_repos()
+        items, total = await svc_list_data_subject_requests(
+            principal,
+            limit=limit,
+            offset=offset,
+            requests_repo=requests_repo,
+        )
+        return DataSubjectRequestListResponse(
+            items=[_dsr_item_from_record(item) for item in items],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to list data subject requests: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list data subject requests") from exc
 
 
 @router.get("/retention-policies", response_model=RetentionPoliciesResponse)

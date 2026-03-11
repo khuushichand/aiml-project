@@ -2676,6 +2676,58 @@ def rollback_048_drop_org_team_config_overrides(conn: sqlite3.Connection) -> Non
     logger.info("Rollback 048: Dropped org/team config overrides tables")
 
 
+def migration_059_create_data_subject_requests_table(conn: sqlite3.Connection) -> None:
+    """Create data_subject_requests table for authoritative DSR intake."""
+    logger.info("Migration 059: START data_subject_requests table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_subject_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_request_id TEXT NOT NULL UNIQUE,
+            requester_identifier TEXT NOT NULL,
+            resolved_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            request_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            selected_categories TEXT NOT NULL DEFAULT '[]',
+            preview_summary TEXT NOT NULL DEFAULT '[]',
+            coverage_metadata TEXT DEFAULT '{}',
+            requested_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            notes TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requester "
+        "ON data_subject_requests(requester_identifier)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_resolved_user "
+        "ON data_subject_requests(resolved_user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_type "
+        "ON data_subject_requests(request_type)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_status "
+        "ON data_subject_requests(status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requested_at "
+        "ON data_subject_requests(requested_at)"
+    )
+    conn.commit()
+    logger.info("Migration 059: Created data_subject_requests table")
+
+
+def rollback_059_drop_data_subject_requests_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 059 by dropping data_subject_requests."""
+    conn.execute("DROP TABLE IF EXISTS data_subject_requests")
+    conn.commit()
+    logger.info("Rollback 059: Dropped data_subject_requests table")
+
+
 def migration_041_add_llm_provider_overrides(conn: sqlite3.Connection) -> None:
     """Add llm_provider_overrides table for runtime provider overrides."""
     logger.info("Migration 041: START llm_provider_overrides table")
@@ -3075,6 +3127,12 @@ def get_authnz_migrations() -> list[Migration]:
             58,
             "Harden MCP policy override schema",
             migration_058_harden_mcp_policy_override_schema,
+        ),
+        Migration(
+            59,
+            "Create data subject requests table",
+            migration_059_create_data_subject_requests_table,
+            rollback_059_drop_data_subject_requests_table,
         ),
     ]
 

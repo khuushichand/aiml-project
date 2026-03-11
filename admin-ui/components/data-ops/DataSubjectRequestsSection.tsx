@@ -1,27 +1,27 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ShieldAlert } from 'lucide-react';
+
+import { Field } from '@/components/data-ops/Field';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
-import { isUnsafeLocalToolsEnabled } from '@/lib/admin-ui-flags';
-import { ShieldAlert } from 'lucide-react';
-import { Field } from '@/components/data-ops/Field';
 
 type DataSubjectRequestsSectionProps = {
   refreshSignal: number;
 };
 
 type DataSubjectRequestType = 'export' | 'erasure' | 'access';
-type DataSubjectRequestStatus = 'completed' | 'failed';
+type DataSubjectRequestStatus = 'recorded' | 'completed' | 'failed' | 'rejected' | 'in_review';
 
 type DataCategoryCount = {
   key: string;
@@ -31,22 +31,19 @@ type DataCategoryCount = {
 
 type DataSubjectRequestLogItem = {
   id: string;
-  requester: string;
+  requester_identifier: string;
   request_type: DataSubjectRequestType;
   status: DataSubjectRequestStatus;
   requested_at: string;
-  completed_at?: string;
-  selected_categories?: string[];
+  selected_categories: string[];
+  preview_summary: DataCategoryCount[];
 };
-
-const REQUEST_LOG_STORAGE_KEY = 'data_ops_data_subject_requests_log_v1';
 
 const CATEGORY_DEFS: Array<{ key: string; label: string }> = [
   { key: 'media_records', label: 'Media records' },
   { key: 'chat_messages', label: 'Chat sessions/messages' },
   { key: 'notes', label: 'Notes' },
   { key: 'audit_events', label: 'Audit log events' },
-  { key: 'embeddings', label: 'Embeddings' },
 ];
 
 const REQUEST_TYPE_OPTIONS: Array<{ value: DataSubjectRequestType; label: string }> = [
@@ -60,40 +57,36 @@ const parseNonNegativeInteger = (value: unknown): number | null => {
   return Math.floor(value);
 };
 
-const parseRequestLogStorage = (value: unknown): DataSubjectRequestLogItem[] => {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((entry): DataSubjectRequestLogItem | null => {
+const parseSummaryArray = (value: unknown): DataCategoryCount[] | null => {
+  if (!Array.isArray(value)) return null;
+  const parsed = value
+    .map((entry) => {
       if (!entry || typeof entry !== 'object') return null;
-      const record = entry as Partial<DataSubjectRequestLogItem>;
-      if (typeof record.id !== 'string' || !record.id) return null;
-      if (typeof record.requester !== 'string' || !record.requester.trim()) return null;
-      if (!record.request_type || !['export', 'erasure', 'access'].includes(record.request_type)) return null;
-      if (!record.status || !['completed', 'failed'].includes(record.status)) return null;
-      if (typeof record.requested_at !== 'string' || !record.requested_at) return null;
-      return {
-        id: record.id,
-        requester: record.requester,
-        request_type: record.request_type,
-        status: record.status,
-        requested_at: record.requested_at,
-        completed_at: typeof record.completed_at === 'string' ? record.completed_at : undefined,
-        selected_categories: Array.isArray(record.selected_categories)
-          ? record.selected_categories.filter((value): value is string => typeof value === 'string')
-          : undefined,
-      };
+      const record = entry as Record<string, unknown>;
+      const key = typeof record.key === 'string' ? record.key : null;
+      const label = typeof record.label === 'string' ? record.label : null;
+      const count = parseNonNegativeInteger(record.count);
+      if (!key || !label || count === null) return null;
+      return { key, label, count };
     })
-    .filter((entry): entry is DataSubjectRequestLogItem => entry !== null)
-    .slice(0, 50);
+    .filter((entry): entry is DataCategoryCount => entry !== null);
+  return parsed.length > 0 ? parsed : null;
 };
 
 const parseCategorySummary = (value: unknown): DataCategoryCount[] | null => {
+  const fromArray = parseSummaryArray(value);
+  if (fromArray) return fromArray;
   if (!value || typeof value !== 'object') return null;
+
   const root = value as Record<string, unknown>;
+  const nestedArray = parseSummaryArray(root.summary);
+  if (nestedArray) return nestedArray;
 
   const sourceSummary = (() => {
-    if (root.summary && typeof root.summary === 'object') return root.summary as Record<string, unknown>;
     if (root.counts && typeof root.counts === 'object') return root.counts as Record<string, unknown>;
+    if (root.summary && typeof root.summary === 'object' && !Array.isArray(root.summary)) {
+      return root.summary as Record<string, unknown>;
+    }
     if (root.categories && typeof root.categories === 'object') return root.categories as Record<string, unknown>;
     return root;
   })();
@@ -104,7 +97,6 @@ const parseCategorySummary = (value: unknown): DataCategoryCount[] | null => {
       chat_messages: ['chat_messages', 'chats', 'chat_sessions'],
       notes: ['notes', 'note_items'],
       audit_events: ['audit_events', 'audit_logs', 'audit_log_entries'],
-      embeddings: ['embeddings', 'embedding_vectors', 'vectors'],
     };
     const keys = aliases[def.key] ?? [def.key];
     for (const key of keys) {
@@ -119,104 +111,78 @@ const parseCategorySummary = (value: unknown): DataCategoryCount[] | null => {
   return mapped;
 };
 
-const buildLocalCategorySummary = (requester: string): DataCategoryCount[] => {
-  const seed = requester
-    .split('')
-    .reduce((accumulator, character, index) => accumulator + (character.charCodeAt(0) * (index + 3)), 0);
+const parseRequestLogItem = (value: unknown): DataSubjectRequestLogItem | null => {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
 
-  return CATEGORY_DEFS.map((def, index) => {
-    const base = (seed * (index + 5)) % 240;
-    return {
-      key: def.key,
-      label: def.label,
-      count: base + (index + 1) * 3,
-    };
-  });
+  const rawId = record.client_request_id ?? record.id;
+  const id = typeof rawId === 'string' || typeof rawId === 'number' ? String(rawId) : '';
+  const requesterIdentifier = typeof record.requester_identifier === 'string'
+    ? record.requester_identifier
+    : typeof record.requester === 'string'
+      ? record.requester
+      : '';
+  const requestType = typeof record.request_type === 'string'
+    ? record.request_type
+    : '';
+  const status = typeof record.status === 'string'
+    ? record.status
+    : '';
+  const requestedAt = typeof record.requested_at === 'string'
+    ? record.requested_at
+    : '';
+
+  if (!id || !requesterIdentifier || !requestedAt) return null;
+  if (!['export', 'erasure', 'access'].includes(requestType)) return null;
+  if (!['recorded', 'completed', 'failed', 'rejected', 'in_review'].includes(status)) return null;
+
+  const previewSummary = parseCategorySummary(record.preview_summary) ?? [];
+  const selectedCategories = Array.isArray(record.selected_categories)
+    ? record.selected_categories.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+
+  return {
+    id,
+    requester_identifier: requesterIdentifier,
+    request_type: requestType as DataSubjectRequestType,
+    status: status as DataSubjectRequestStatus,
+    requested_at: requestedAt,
+    selected_categories: selectedCategories,
+    preview_summary: previewSummary,
+  };
 };
 
-const downloadExportArchive = (requester: string, categories: DataCategoryCount[]) => {
-  const payload = {
-    requester,
-    generated_at: new Date().toISOString(),
-    datasets: categories,
-  };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const objectUrl = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = objectUrl;
-  link.download = `data-subject-export-${requester.replace(/[^a-zA-Z0-9_-]/g, '_') || 'user'}.json`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(objectUrl);
+const parseRequestLogResponse = (value: unknown): DataSubjectRequestLogItem[] => {
+  if (!value || typeof value !== 'object') return [];
+  const root = value as Record<string, unknown>;
+  const items = Array.isArray(root.items) ? root.items : [];
+  return items
+    .map(parseRequestLogItem)
+    .filter((entry): entry is DataSubjectRequestLogItem => entry !== null);
+};
+
+const badgeVariantForStatus = (status: DataSubjectRequestStatus) => {
+  if (status === 'failed' || status === 'rejected') return 'destructive';
+  if (status === 'recorded' || status === 'in_review') return 'secondary';
+  return 'default';
 };
 
 export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequestsSectionProps) => {
   const { success, error: showError } = useToast();
-  const unsafeLocalToolsEnabled = isUnsafeLocalToolsEnabled();
 
   const [requesterIdentifier, setRequesterIdentifier] = useState('');
   const [requestType, setRequestType] = useState<DataSubjectRequestType>('access');
   const [submitting, setSubmitting] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [requestLogLoading, setRequestLogLoading] = useState(true);
   const [formError, setFormError] = useState('');
+  const [requestLogError, setRequestLogError] = useState('');
 
   const [accessSummary, setAccessSummary] = useState<DataCategoryCount[] | null>(null);
   const [erasurePreview, setErasurePreview] = useState<DataCategoryCount[] | null>(null);
   const [selectedErasureCategories, setSelectedErasureCategories] = useState<Record<string, boolean>>({});
   const [erasureConfirmed, setErasureConfirmed] = useState(false);
-
   const [requestLog, setRequestLog] = useState<DataSubjectRequestLogItem[]>([]);
-
-  useEffect(() => {
-    if (refreshSignal === 0) return;
-    setRequesterIdentifier('');
-    setRequestType('access');
-    setFormError('');
-    setAccessSummary(null);
-    setErasurePreview(null);
-    setSelectedErasureCategories({});
-    setErasureConfirmed(false);
-  }, [refreshSignal]);
-
-  useEffect(() => {
-    if (!unsafeLocalToolsEnabled) {
-      setRequestLog([]);
-      return;
-    }
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(REQUEST_LOG_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = parseRequestLogStorage(JSON.parse(raw));
-      setRequestLog(parsed);
-    } catch (error) {
-      console.warn('Failed to read data subject request log storage:', error);
-      setRequestLog([]);
-    }
-  }, [unsafeLocalToolsEnabled]);
-
-  const persistRequestLog = (nextLog: DataSubjectRequestLogItem[]) => {
-    if (!unsafeLocalToolsEnabled) return;
-    setRequestLog(nextLog);
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(REQUEST_LOG_STORAGE_KEY, JSON.stringify(nextLog.slice(0, 50)));
-    } catch (error) {
-      console.warn('Failed to persist data subject request log:', error);
-    }
-  };
-
-  const resolveCategorySummary = async (requester: string) => {
-    try {
-      const response = await api.previewDataSubjectRequest({ requester_identifier: requester });
-      const parsed = parseCategorySummary(response);
-      if (parsed) return parsed;
-    } catch {
-      // Fallback to local estimate when backend preview endpoint is unavailable.
-    }
-    return buildLocalCategorySummary(requester);
-  };
 
   const selectedErasureKeys = useMemo(() => {
     return Object.entries(selectedErasureCategories)
@@ -224,13 +190,80 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
       .map(([key]) => key);
   }, [selectedErasureCategories]);
 
-  const addRequestLogEntry = (entry: DataSubjectRequestLogItem) => {
-    const deduped = requestLog.filter((item) => item.id !== entry.id);
-    persistRequestLog([entry, ...deduped].slice(0, 50));
+  const loadRequestLog = async () => {
+    setRequestLogLoading(true);
+    setRequestLogError('');
+    try {
+      const response = await api.listDataSubjectRequests({ limit: '50', offset: '0' });
+      setRequestLog(parseRequestLogResponse(response));
+    } catch (error: unknown) {
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to load data subject requests';
+      setRequestLog([]);
+      setRequestLogError(message);
+      showError('Request log unavailable', message);
+    } finally {
+      setRequestLogLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadInitialRequestLog = async () => {
+      setRequestLogLoading(true);
+      setRequestLogError('');
+      try {
+        const response = await api.listDataSubjectRequests({ limit: '50', offset: '0' });
+        if (cancelled) return;
+        setRequestLog(parseRequestLogResponse(response));
+      } catch (error: unknown) {
+        if (cancelled) return;
+        const message = error instanceof Error && error.message
+          ? error.message
+          : 'Failed to load data subject requests';
+        setRequestLog([]);
+        setRequestLogError(message);
+        showError('Request log unavailable', message);
+      } finally {
+        if (!cancelled) {
+          setRequestLogLoading(false);
+        }
+      }
+    };
+
+    setRequesterIdentifier('');
+    setRequestType('access');
+    setFormError('');
+    setAccessSummary(null);
+    setErasurePreview(null);
+    setSelectedErasureCategories({});
+    setErasureConfirmed(false);
+    void loadInitialRequestLog();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshSignal, showError]);
+
+  const resolveCategorySummary = async (
+    requester: string,
+    request: { requestType?: DataSubjectRequestType; categories?: string[] } = {},
+  ) => {
+    const response = await api.previewDataSubjectRequest({
+      requester_identifier: requester,
+      request_type: request.requestType,
+      categories: request.categories,
+    });
+    const parsed = parseCategorySummary(response);
+    if (!parsed) {
+      throw new Error('Preview response did not include a valid category summary');
+    }
+    return parsed;
   };
 
   const handlePreviewErasure = async () => {
-    if (!unsafeLocalToolsEnabled) return;
     const normalizedRequester = requesterIdentifier.trim();
     if (!normalizedRequester) {
       setFormError('User identifier (email or user ID) is required.');
@@ -240,7 +273,10 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
     setPreviewLoading(true);
     setFormError('');
     try {
-      const summary = await resolveCategorySummary(normalizedRequester);
+      const summary = await resolveCategorySummary(normalizedRequester, {
+        requestType: 'erasure',
+        categories: CATEGORY_DEFS.map((entry) => entry.key),
+      });
       setErasurePreview(summary);
       setSelectedErasureCategories({});
       setErasureConfirmed(false);
@@ -253,7 +289,6 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
   };
 
   const handleSubmitRequest = async () => {
-    if (!unsafeLocalToolsEnabled) return;
     const normalizedRequester = requesterIdentifier.trim();
     if (!normalizedRequester) {
       setFormError('User identifier (email or user ID) is required.');
@@ -277,58 +312,35 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
     setFormError('');
 
     const requestId = `dsr-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-    const requestedAt = new Date().toISOString();
 
     try {
-      const summary = requestType === 'erasure'
-        ? (erasurePreview as DataCategoryCount[])
-        : await resolveCategorySummary(normalizedRequester);
-
-      try {
-        await api.createDataSubjectRequest({
-          request_id: requestId,
-          requester_identifier: normalizedRequester,
-          request_type: requestType,
-          categories: requestType === 'erasure' ? selectedErasureKeys : undefined,
-        });
-      } catch {
-        // Continue with local fallback handling.
-      }
-
-      if (requestType === 'export') {
-        downloadExportArchive(normalizedRequester, summary);
-        success('Export generated', 'A downloadable archive for this user was generated.');
-      } else if (requestType === 'access') {
-        setAccessSummary(summary);
-        success('Access summary ready', 'User data category summary is available below.');
-      } else {
-        const deletedCount = summary
-          .filter((entry) => selectedErasureKeys.includes(entry.key))
-          .reduce((total, entry) => total + entry.count, 0);
-        success('Erasure request completed', `Marked ${deletedCount} records for deletion across selected categories.`);
-      }
-
-      addRequestLogEntry({
-        id: requestId,
-        requester: normalizedRequester,
+      const response = await api.createDataSubjectRequest({
+        client_request_id: requestId,
+        requester_identifier: normalizedRequester,
         request_type: requestType,
-        status: 'completed',
-        requested_at: requestedAt,
-        completed_at: new Date().toISOString(),
-        selected_categories: requestType === 'erasure' ? selectedErasureKeys : undefined,
+        categories: requestType === 'erasure' ? selectedErasureKeys : undefined,
       });
+      const createdItem = parseRequestLogItem(
+        response && typeof response === 'object'
+          ? (response as Record<string, unknown>).item
+          : null,
+      );
+      const createdSummary = createdItem?.preview_summary ?? [];
+
+      if (requestType === 'access' && createdSummary.length > 0) {
+        setAccessSummary(createdSummary);
+        success('Request recorded', 'The access request was recorded and the authoritative summary is shown below.');
+      } else {
+        success(
+          'Request recorded',
+          'The request was recorded for review. Export and erasure are not executed automatically in this release.',
+        );
+      }
+
+      await loadRequestLog();
     } catch (error: unknown) {
       const message = error instanceof Error && error.message ? error.message : 'Failed to process data subject request';
       showError('Request failed', message);
-      addRequestLogEntry({
-        id: requestId,
-        requester: normalizedRequester,
-        request_type: requestType,
-        status: 'failed',
-        requested_at: requestedAt,
-        completed_at: new Date().toISOString(),
-        selected_categories: requestType === 'erasure' ? selectedErasureKeys : undefined,
-      });
     } finally {
       setSubmitting(false);
     }
@@ -341,22 +353,14 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
           <ShieldAlert className="h-5 w-5" />
           Data Subject Requests
         </CardTitle>
-        <CardDescription>Handle GDPR-style export, erasure, and access requests.</CardDescription>
+        <CardDescription>Record GDPR-style access, export, and erasure requests with authoritative backend data.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {!unsafeLocalToolsEnabled ? (
-          <Alert>
-            <AlertDescription>
-              Data subject request workflows are unavailable until server-backed APIs are available.
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <Alert>
-            <AlertDescription>
-              Local-only mode is enabled for development. Results shown here are not persisted server-side.
-            </AlertDescription>
-          </Alert>
-        )}
+        <Alert>
+          <AlertDescription>
+            Requests are recorded server-side for review. Export and erasure are not executed automatically in this release.
+          </AlertDescription>
+        </Alert>
 
         <div className="grid gap-3 md:grid-cols-3">
           <Field id="dsr-requester" label="User identifier (email or user ID)">
@@ -365,19 +369,18 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
               value={requesterIdentifier}
               onChange={(event) => setRequesterIdentifier(event.target.value)}
               placeholder="user@example.com or 42"
-              disabled={!unsafeLocalToolsEnabled}
             />
           </Field>
           <Field id="dsr-request-type" label="Request type">
             <Select
               id="dsr-request-type"
               value={requestType}
-              disabled={!unsafeLocalToolsEnabled}
               onChange={(event) => {
-                setRequestType(event.target.value as DataSubjectRequestType);
+                const nextValue = event.target.value as DataSubjectRequestType;
+                setRequestType(nextValue);
                 setFormError('');
                 setAccessSummary(null);
-                if (event.target.value !== 'erasure') {
+                if (nextValue !== 'erasure') {
                   setErasurePreview(null);
                   setSelectedErasureCategories({});
                   setErasureConfirmed(false);
@@ -396,7 +399,7 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
               <Button
                 variant="outline"
                 onClick={() => { void handlePreviewErasure(); }}
-                disabled={previewLoading || !unsafeLocalToolsEnabled}
+                disabled={previewLoading}
                 loading={previewLoading}
                 loadingText="Previewing..."
               >
@@ -405,7 +408,7 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
             )}
             <Button
               onClick={() => { void handleSubmitRequest(); }}
-              disabled={submitting || !unsafeLocalToolsEnabled}
+              disabled={submitting}
               loading={submitting}
               loadingText="Submitting..."
             >
@@ -417,6 +420,12 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
         {formError && (
           <Alert variant="destructive">
             <AlertDescription>{formError}</AlertDescription>
+          </Alert>
+        )}
+
+        {requestLogError && (
+          <Alert variant="destructive">
+            <AlertDescription>{requestLogError}</AlertDescription>
           </Alert>
         )}
 
@@ -487,26 +496,28 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
                 <TableHead>Type</TableHead>
                 <TableHead>Requester</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Completed</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {requestLog.length === 0 ? (
+              {requestLogLoading ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-muted-foreground">No requests submitted yet.</TableCell>
+                  <TableCell colSpan={4} className="text-muted-foreground">Loading requests…</TableCell>
+                </TableRow>
+              ) : requestLog.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-muted-foreground">No recorded requests yet.</TableCell>
                 </TableRow>
               ) : (
                 requestLog.map((entry) => (
                   <TableRow key={entry.id} data-testid="dsr-request-log-row">
                     <TableCell>{formatDateTime(entry.requested_at, { fallback: '—' })}</TableCell>
                     <TableCell className="capitalize">{entry.request_type}</TableCell>
-                    <TableCell>{entry.requester}</TableCell>
+                    <TableCell>{entry.requester_identifier}</TableCell>
                     <TableCell>
-                      <Badge variant={entry.status === 'completed' ? 'default' : 'destructive'}>
+                      <Badge variant={badgeVariantForStatus(entry.status)}>
                         {entry.status}
                       </Badge>
                     </TableCell>
-                    <TableCell>{formatDateTime(entry.completed_at, { fallback: '—' })}</TableCell>
                   </TableRow>
                 ))
               )}
