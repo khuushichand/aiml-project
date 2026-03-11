@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+import { isCompanionConsentRequiredResponse } from "@/services/companion"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { buildPersonaWebSocketUrl } from "@/services/persona-stream"
 import { SidepanelHeaderSimple } from "~/components/Sidepanel/Chat/SidepanelHeaderSimple"
@@ -1076,6 +1077,9 @@ const SidepanelPersona = ({
         }
       })
       if (!response.ok) {
+        if (isCompanionConsentRequiredResponse(response)) {
+          throw new Error("Enable personalization before saving to companion.")
+        }
         throw new Error(response.error || "Failed to save companion check-in")
       }
       appendLog("notice", "Saved draft to companion")

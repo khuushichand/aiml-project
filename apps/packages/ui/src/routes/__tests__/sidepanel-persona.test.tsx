@@ -360,6 +360,35 @@ describe("SidepanelPersona", () => {
     expect(screen.getByText("Saved draft to companion")).toBeInTheDocument()
   })
 
+  it("shows a consent-required error when saving a companion check-in without opt-in", async () => {
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/api/v1/companion/check-ins")) {
+        return Promise.resolve({
+          ok: false,
+          status: 409,
+          error: "Enable personalization before using companion.",
+          json: async () => ({ detail: "Enable personalization before using companion." })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    fireEvent.change(screen.getByPlaceholderText("Ask Persona..."), {
+      target: { value: "Do not save this silently." }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save check-in" }))
+
+    expect(
+      await screen.findByText("Enable personalization before saving to companion.")
+    ).toBeInTheDocument()
+  })
+
   it.each([390, 1280])(
     "keeps new-session and memory controls discoverable at %ipx viewport width",
     (width) => {

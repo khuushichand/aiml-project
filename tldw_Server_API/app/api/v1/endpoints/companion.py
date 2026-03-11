@@ -35,6 +35,15 @@ def _ensure_personalization_enabled() -> None:
         raise HTTPException(status_code=404, detail="Personalization disabled")
 
 
+def _ensure_companion_opt_in(db: PersonalizationDB, user_id: str) -> None:
+    profile = db.get_or_create_profile(user_id)
+    if not bool(profile.get("enabled")):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Enable personalization before using companion.",
+        )
+
+
 @router.post(
     "/activity",
     response_model=CompanionActivityItem,
@@ -47,6 +56,7 @@ async def create_companion_activity(
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionActivityItem:
     _ensure_personalization_enabled()
+    _ensure_companion_opt_in(db, log.user_id)
     dedupe_key = (
         payload.dedupe_key
         or f"{payload.event_type}:{payload.source_type}:{payload.source_id}"
@@ -100,6 +110,7 @@ async def create_companion_check_in(
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionActivityItem:
     _ensure_personalization_enabled()
+    _ensure_companion_opt_in(db, log.user_id)
     created_at = datetime.now(timezone.utc)
     source_id = f"checkin-{uuid4().hex}"
     activity_payload = build_manual_check_in_activity(
@@ -138,6 +149,7 @@ async def list_companion_activity(
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionActivityListResponse:
     _ensure_personalization_enabled()
+    _ensure_companion_opt_in(db, log.user_id)
     items, total = db.list_companion_activity_events(log.user_id, limit=limit, offset=offset)
     log.log_event("companion.activity.view", metadata={"count": len(items)})
     return CompanionActivityListResponse(items=items, total=total, limit=limit, offset=offset)
@@ -150,6 +162,7 @@ async def list_companion_knowledge(
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionKnowledgeListResponse:
     _ensure_personalization_enabled()
+    _ensure_companion_opt_in(db, log.user_id)
     items = db.list_companion_knowledge_cards(log.user_id, status=status_filter)
     log.log_event("companion.knowledge.view", metadata={"count": len(items)})
     return CompanionKnowledgeListResponse(items=items, total=len(items))
@@ -162,6 +175,7 @@ async def list_companion_goals(
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionGoalListResponse:
     _ensure_personalization_enabled()
+    _ensure_companion_opt_in(db, log.user_id)
     items = db.list_companion_goals(log.user_id, status=status_filter)
     log.log_event("companion.goals.view", metadata={"count": len(items)})
     return CompanionGoalListResponse(items=items, total=len(items))
@@ -174,6 +188,7 @@ async def create_companion_goal(
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionGoal:
     _ensure_personalization_enabled()
+    _ensure_companion_opt_in(db, log.user_id)
     goal_id = db.create_companion_goal(
         user_id=log.user_id,
         title=payload.title,
@@ -203,6 +218,7 @@ async def update_companion_goal(
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionGoal:
     _ensure_personalization_enabled()
+    _ensure_companion_opt_in(db, log.user_id)
     fields = payload.model_dump(exclude_unset=True)
     invalid_null_fields = sorted(
         key for key in ("title", "config", "progress", "status") if key in fields and fields[key] is None

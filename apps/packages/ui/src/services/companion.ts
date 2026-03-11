@@ -94,6 +94,11 @@ export type CompanionNotification = {
   dismissed_at?: string | null
 }
 
+export type PersonalizationProfile = {
+  enabled: boolean
+  updated_at: string
+}
+
 type CompanionActivityListResponse = {
   items: CompanionActivityItem[]
   total: number
@@ -133,6 +138,9 @@ export type FetchCompanionWorkspaceOptions = {
   notificationsLimit?: number
 }
 
+export const COMPANION_CONSENT_REQUIRED_MESSAGE =
+  "Enable personalization before using companion."
+
 const buildQuery = (params?: Record<string, unknown>): string => {
   if (!params) return ""
   const query = new URLSearchParams()
@@ -147,6 +155,41 @@ const buildQuery = (params?: Record<string, unknown>): string => {
 const isCompanionReflectionActivity = (item: CompanionActivityItem): boolean =>
   item.event_type === "companion_reflection_generated" ||
   item.source_type === "companion_reflection"
+
+const containsConsentRequiredMessage = (value: unknown): boolean => {
+  const normalized = String(value || "").trim().toLowerCase()
+  return normalized.includes("enable personalization before using companion")
+}
+
+export const isCompanionConsentRequiredError = (error: unknown): boolean => {
+  const candidate = error as
+    | {
+        status?: number
+        message?: string
+        details?: { detail?: unknown } | null
+      }
+    | null
+    | undefined
+  return (
+    candidate?.status === 409 &&
+    (containsConsentRequiredMessage(candidate?.message) ||
+      containsConsentRequiredMessage(candidate?.details?.detail))
+  )
+}
+
+export const isCompanionConsentRequiredResponse = (
+  response:
+    | {
+        status?: number
+        error?: string | null
+      }
+    | null
+    | undefined
+): boolean => {
+  return (
+    response?.status === 409 && containsConsentRequiredMessage(response?.error)
+  )
+}
 
 const toReflection = (item: CompanionActivityItem): CompanionReflection => {
   const metadata = item.metadata || {}
@@ -184,6 +227,24 @@ export const fetchCompanionActivity = async (params?: {
   return bgRequest<CompanionActivityListResponse>({
     path: `/api/v1/companion/activity${qs}` as any,
     method: "GET"
+  })
+}
+
+export const fetchPersonalizationProfile = async (): Promise<PersonalizationProfile> => {
+  return bgRequest<PersonalizationProfile>({
+    path: "/api/v1/personalization/profile" as any,
+    method: "GET"
+  })
+}
+
+export const updatePersonalizationOptIn = async (
+  enabled: boolean
+): Promise<PersonalizationProfile> => {
+  return bgRequest<PersonalizationProfile>({
+    path: "/api/v1/personalization/opt-in" as any,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { enabled }
   })
 }
 

@@ -6,13 +6,16 @@ import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import {
   createCompanionGoal,
+  fetchPersonalizationProfile,
   fetchCompanionWorkspaceSnapshot,
   recordCompanionCheckIn,
   setCompanionGoalStatus,
   type CompanionActivityItem,
   type CompanionGoal,
+  type PersonalizationProfile,
   type CompanionReflection,
-  type CompanionWorkspaceSnapshot
+  type CompanionWorkspaceSnapshot,
+  updatePersonalizationOptIn
 } from "@/services/companion"
 
 const formatTimestamp = (value: string): string => {
@@ -74,9 +77,13 @@ const reflectionInboxLabel = (
 
 type CompanionPageProps = {
   surface?: "options" | "sidepanel"
+  onCompanionEnabled?: () => void
 }
 
-export const CompanionPage = ({ surface = "options" }: CompanionPageProps) => {
+export const CompanionPage = ({
+  surface = "options",
+  onCompanionEnabled
+}: CompanionPageProps) => {
   const { t } = useTranslation(["option", "common"])
   const isOnline = useServerOnline()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
@@ -84,6 +91,7 @@ export const CompanionPage = ({ surface = "options" }: CompanionPageProps) => {
   const [snapshot, setSnapshot] = React.useState<CompanionWorkspaceSnapshot | null>(
     null
   )
+  const [profile, setProfile] = React.useState<PersonalizationProfile | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [reloadToken, setReloadToken] = React.useState(0)
@@ -95,12 +103,14 @@ export const CompanionPage = ({ surface = "options" }: CompanionPageProps) => {
   const [goalDescription, setGoalDescription] = React.useState("")
   const [creatingGoal, setCreatingGoal] = React.useState(false)
   const [updatingGoalId, setUpdatingGoalId] = React.useState<string | null>(null)
+  const [enablingCompanion, setEnablingCompanion] = React.useState(false)
 
   React.useEffect(() => {
     if (!isOnline || capsLoading) return
     if (!capabilities?.hasPersonalization) {
       setLoading(false)
       setSnapshot(null)
+      setProfile(null)
       return
     }
 
@@ -108,13 +118,21 @@ export const CompanionPage = ({ surface = "options" }: CompanionPageProps) => {
     setLoading(true)
     setError(null)
 
-    fetchCompanionWorkspaceSnapshot()
-      .then((nextSnapshot) => {
+    fetchPersonalizationProfile()
+      .then(async (nextProfile) => {
+        if (cancelled) return
+        setProfile(nextProfile)
+        if (!nextProfile.enabled) {
+          setSnapshot(null)
+          return
+        }
+        const nextSnapshot = await fetchCompanionWorkspaceSnapshot()
         if (cancelled) return
         setSnapshot(nextSnapshot)
       })
       .catch((nextError) => {
         if (cancelled) return
+        setSnapshot(null)
         const message =
           nextError instanceof Error
             ? nextError.message
@@ -134,6 +152,25 @@ export const CompanionPage = ({ surface = "options" }: CompanionPageProps) => {
 
   const handleRefresh = () => {
     setReloadToken((current) => current + 1)
+  }
+
+  const handleEnableCompanion = async () => {
+    setEnablingCompanion(true)
+    setError(null)
+    try {
+      const nextProfile = await updatePersonalizationOptIn(true)
+      setProfile(nextProfile)
+      onCompanionEnabled?.()
+      handleRefresh()
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Failed to enable companion."
+      )
+    } finally {
+      setEnablingCompanion(false)
+    }
   }
 
   const handleCreateGoal = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -242,6 +279,48 @@ export const CompanionPage = ({ surface = "options" }: CompanionPageProps) => {
           This workspace depends on the personalization module. Enable that backend
           feature to view activity, knowledge cards, goals, and reflections here.
         </p>
+      </section>
+    )
+  }
+
+  if (!profile?.enabled) {
+    return (
+      <section
+        className="mx-auto max-w-4xl px-6 py-10"
+        data-testid="companion-consent-required"
+      >
+        <div className="rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-orange-50 p-8 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700">
+            Explicit consent required
+          </p>
+          <h1 className="mt-3 text-3xl font-semibold text-slate-950">
+            {t("option:header.companion", "Companion")}
+          </h1>
+          <p className="mt-4 text-base font-medium text-slate-900">
+            Enable personalization before using Companion.
+          </p>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+            Companion stores explicit captures, manual check-ins, and derived
+            knowledge in your personalization profile only after you turn it on.
+            Until then, this workspace stays read-only and extension saves should
+            not persist anything.
+          </p>
+          {error ? (
+            <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {error}
+            </div>
+          ) : null}
+          <div className="mt-6 flex flex-wrap gap-3">
+            <button
+              className="rounded-full border border-slate-900 bg-slate-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={enablingCompanion}
+              onClick={handleEnableCompanion}
+              type="button"
+            >
+              {enablingCompanion ? "Enabling..." : "Enable Companion"}
+            </button>
+          </div>
+        </div>
       </section>
     )
   }

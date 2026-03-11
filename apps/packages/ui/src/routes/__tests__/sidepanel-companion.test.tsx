@@ -12,6 +12,14 @@ const mocks = vi.hoisted(() => ({
     capabilities: { hasPersonalization: boolean; hasPersona?: boolean } | null
     loading: boolean
   },
+  fetchPersonalizationProfile: vi.fn(),
+  updatePersonalizationOptIn: vi.fn(),
+  isCompanionConsentRequiredError: vi.fn((error: { status?: number; message?: string }) => {
+    return (
+      error?.status === 409 &&
+      String(error?.message || "").includes("Enable personalization before using companion.")
+    )
+  }),
   fetchCompanionWorkspaceSnapshot: vi.fn(),
   recordExplicitCompanionCapture: vi.fn()
 }))
@@ -29,6 +37,11 @@ vi.mock("@/components/Common/RouteErrorBoundary", () => ({
 }))
 
 vi.mock("@/services/companion", () => ({
+  fetchPersonalizationProfile: (...args: unknown[]) =>
+    mocks.fetchPersonalizationProfile(...args),
+  updatePersonalizationOptIn: (...args: unknown[]) => mocks.updatePersonalizationOptIn(...args),
+  isCompanionConsentRequiredError: (...args: unknown[]) =>
+    mocks.isCompanionConsentRequiredError(...args),
   fetchCompanionWorkspaceSnapshot: (...args: unknown[]) =>
     mocks.fetchCompanionWorkspaceSnapshot(...args),
   recordExplicitCompanionCapture: (...args: unknown[]) =>
@@ -74,6 +87,14 @@ describe("SidepanelCompanion", () => {
     mocks.isOnline = true
     mocks.capabilitiesState.capabilities = { hasPersonalization: true, hasPersona: true }
     mocks.capabilitiesState.loading = false
+    mocks.fetchPersonalizationProfile.mockResolvedValue({
+      enabled: true,
+      updated_at: "2026-03-10T08:00:00Z"
+    })
+    mocks.updatePersonalizationOptIn.mockResolvedValue({
+      enabled: true,
+      updated_at: "2026-03-10T15:00:00Z"
+    })
     mocks.fetchCompanionWorkspaceSnapshot.mockResolvedValue({
       activity: [],
       activityTotal: 0,
@@ -146,6 +167,33 @@ describe("SidepanelCompanion", () => {
         })
       )
     })
+  })
+
+  it("keeps a pending capture and shows a consent-required banner when opt-in is missing", async () => {
+    window.sessionStorage.setItem(
+      "tldw:companion:pendingCapture",
+      JSON.stringify({
+        id: "capture-1",
+        selectionText: "Remember this paragraph.",
+        pageUrl: "https://example.com/article",
+        pageTitle: "Example article",
+        action: "save_selection"
+      })
+    )
+    mocks.recordExplicitCompanionCapture.mockRejectedValue(
+      Object.assign(new Error("Enable personalization before using companion."), {
+        status: 409
+      })
+    )
+
+    renderRoute()
+
+    expect(
+      await screen.findByText("Enable personalization before saving to companion.")
+    ).toBeInTheDocument()
+    expect(window.sessionStorage.getItem("tldw:companion:pendingCapture")).toContain(
+      "\"capture-1\""
+    )
   })
 
   it("offers the companion conversation route and hides option-only navigation links", async () => {

@@ -12,9 +12,9 @@ from tldw_Server_API.app.main import app as fastapi_app
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture()
-def client_with_companion_db(tmp_path):
+def _build_client_with_companion_db(tmp_path, *, enabled: bool):
     db = PersonalizationDB(str(tmp_path / "personalization.db"))
+    db.update_profile("1", enabled=1 if enabled else 0)
 
     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
@@ -29,6 +29,16 @@ def client_with_companion_db(tmp_path):
         yield client, db
 
     fastapi_app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def client_with_companion_db(tmp_path):
+    yield from _build_client_with_companion_db(tmp_path, enabled=True)
+
+
+@pytest.fixture()
+def client_with_companion_db_opted_out(tmp_path):
+    yield from _build_client_with_companion_db(tmp_path, enabled=False)
 
 
 def test_companion_activity_endpoint_returns_provenance(client_with_companion_db) -> None:
@@ -258,3 +268,48 @@ def test_companion_goal_patch_rejects_null_for_non_nullable_fields(client_with_c
     )
 
     assert response.status_code == 422, response.text
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("GET", "/api/v1/companion/activity", None),
+        (
+            "POST",
+            "/api/v1/companion/activity",
+            {
+                "event_type": "extension.selection_saved",
+                "source_type": "browser_selection",
+                "source_id": "capture-1",
+                "surface": "extension.sidepanel",
+                "provenance": {
+                    "capture_mode": "explicit",
+                    "route": "extension.context_menu",
+                    "action": "save_selection",
+                },
+            },
+        ),
+        (
+            "POST",
+            "/api/v1/companion/check-ins",
+            {
+                "summary": "Tried to save without explicit consent.",
+            },
+        ),
+        ("GET", "/api/v1/companion/knowledge", None),
+    ],
+)
+def test_companion_endpoints_require_personalization_opt_in(
+    client_with_companion_db_opted_out,
+    method: str,
+    path: str,
+    payload: dict | None,
+) -> None:
+    client, _db = client_with_companion_db_opted_out
+
+    response = client.request(method, path, json=payload)
+
+    assert response.status_code == 409, response.text
+    assert response.json() == {
+        "detail": "Enable personalization before using companion."
+    }

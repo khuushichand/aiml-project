@@ -4,7 +4,10 @@ import { useTranslation } from "react-i18next"
 import { RouteErrorBoundary } from "@/components/Common/RouteErrorBoundary"
 import { CompanionPage } from "@/components/Option/Companion"
 import { SidepanelHeaderSimple } from "~/components/Sidepanel/Chat/SidepanelHeaderSimple"
-import { recordExplicitCompanionCapture } from "@/services/companion"
+import {
+  isCompanionConsentRequiredError,
+  recordExplicitCompanionCapture
+} from "@/services/companion"
 import {
   buildExplicitCompanionCapture,
   clearPendingCompanionCapture,
@@ -35,6 +38,11 @@ const SidepanelCompanion = () => {
       setReloadNonce((value) => value + 1)
     } catch (caught) {
       const requestError = caught as Error & { status?: number }
+      if (isCompanionConsentRequiredError(requestError)) {
+        setError("Enable personalization before saving to companion.")
+        lastHandledCaptureIdRef.current = null
+        return
+      }
       if (requestError?.status === 409) {
         clearPendingCompanionCapture(capture.id)
         setBanner("Selection already saved to companion.")
@@ -45,6 +53,12 @@ const SidepanelCompanion = () => {
       lastHandledCaptureIdRef.current = null
     }
   }, [])
+
+  const handleCompanionEnabled = React.useCallback(() => {
+    const pending = readPendingCompanionCapture()
+    if (!pending) return
+    void handleCapture(pending)
+  }, [handleCapture])
 
   React.useEffect(() => {
     const pending = readPendingCompanionCapture()
@@ -86,7 +100,11 @@ const SidepanelCompanion = () => {
               </div>
             </div>
           ) : null}
-          <CompanionPage key={reloadNonce} surface="sidepanel" />
+          <CompanionPage
+            key={reloadNonce}
+            onCompanionEnabled={handleCompanionEnabled}
+            surface="sidepanel"
+          />
         </div>
       </div>
     </RouteErrorBoundary>

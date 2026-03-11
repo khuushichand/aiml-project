@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => ({
     loading: boolean
   },
   fetchSnapshot: vi.fn(),
+  fetchProfile: vi.fn(),
+  updateOptIn: vi.fn(),
   setGoalStatus: vi.fn(),
   createGoal: vi.fn(),
   recordCheckIn: vi.fn()
@@ -66,6 +68,8 @@ vi.mock("react-i18next", () => ({
 }))
 
 vi.mock("@/services/companion", () => ({
+  fetchPersonalizationProfile: (...args: unknown[]) => mocks.fetchProfile(...args),
+  updatePersonalizationOptIn: (...args: unknown[]) => mocks.updateOptIn(...args),
   fetchCompanionWorkspaceSnapshot: (...args: unknown[]) =>
     mocks.fetchSnapshot(...args),
   setCompanionGoalStatus: (...args: unknown[]) => mocks.setGoalStatus(...args),
@@ -187,6 +191,14 @@ describe("option companion route", () => {
       hasPersona: true
     }
     mocks.capabilitiesState.loading = false
+    mocks.fetchProfile.mockResolvedValue({
+      enabled: true,
+      updated_at: "2026-03-10T08:00:00Z"
+    })
+    mocks.updateOptIn.mockResolvedValue({
+      enabled: true,
+      updated_at: "2026-03-10T15:00:00Z"
+    })
     mocks.fetchSnapshot.mockResolvedValue(activeSnapshot)
     mocks.setGoalStatus.mockResolvedValue({
       ...activeSnapshot.goals[0],
@@ -329,6 +341,44 @@ describe("option companion route", () => {
 
     expect(await screen.findByText("Companion unavailable")).toBeInTheDocument()
     expect(mocks.fetchSnapshot).not.toHaveBeenCalled()
+  })
+
+  it("shows a consent screen when personalization is available but not enabled", async () => {
+    mocks.fetchProfile.mockResolvedValue({
+      enabled: false,
+      updated_at: "2026-03-10T08:00:00Z"
+    })
+
+    renderRoute()
+
+    expect(await screen.findByTestId("companion-consent-required")).toBeInTheDocument()
+    expect(
+      screen.getByText("Enable personalization before using Companion.")
+    ).toBeInTheDocument()
+    expect(mocks.fetchSnapshot).not.toHaveBeenCalled()
+  })
+
+  it("enables personalization from the consent screen and then loads the workspace", async () => {
+    mocks.fetchProfile
+      .mockResolvedValueOnce({
+        enabled: false,
+        updated_at: "2026-03-10T08:00:00Z"
+      })
+      .mockResolvedValueOnce({
+        enabled: true,
+        updated_at: "2026-03-10T15:00:00Z"
+      })
+
+    renderRoute()
+
+    await screen.findByTestId("companion-consent-required")
+    fireEvent.click(screen.getByRole("button", { name: "Enable Companion" }))
+
+    await waitFor(() => {
+      expect(mocks.updateOptIn).toHaveBeenCalledWith(true)
+    })
+    expect(await screen.findByTestId("companion-page")).toBeInTheDocument()
+    expect(mocks.fetchSnapshot).toHaveBeenCalled()
   })
 
   it("registers the companion workspace route in the route registry", () => {
